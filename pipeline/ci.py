@@ -52,6 +52,15 @@ PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "300
 # slow builds who don't want a build re‑run at the merge gate.
 PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != "0"
 
+# ---------- Retro backlog cap (RH-06) ----------
+# ``_record_retro_pending`` appends one marker line per completed
+# pipeline-self-repo plan to ``retros/PENDING.md``. Drain is manual, so an
+# unbounded append turns that to-do list into an archive (43 new markers in the
+# week of Sep 22-29 against zero removals). When the marker count crosses this
+# threshold the writer emits ONE notification naming the backlog size, and
+# stays quiet until the file is drained back below the threshold.
+_RETRO_BACKLOG_NOTIFY_AT = 100
+
 
 def _repo_has_ci_configured() -> bool:
     """Return ``True`` if the repo declares any GitHub Actions workflows.
@@ -746,10 +755,34 @@ def _record_retro_pending(plan_name: str, story_count: int) -> None:
     marker = f"- {plan_name} "
     if any(line.startswith(marker) for line in existing_lines):
         return
+    # Backlog size BEFORE this append. The crossing test below is derived from
+    # the file on every call, so it re-arms by itself once the backlog is
+    # drained back below the threshold - no module-level "already notified"
+    # flag to reset.
+    before = sum(1 for line in existing_lines if line.startswith("- "))
     date = datetime.now(timezone.utc).date().isoformat()
     noun = "story" if story_count == 1 else "stories"
     with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
         f.write(f"- {plan_name} \u2014 completed {date}, {story_count} {noun}\n")
+    after = before + 1
+    # The threshold lives in this module, but this function is rebound onto
+    # ``pipeline.server``'s namespace (see ``bind_to_server``), so a bare global
+    # read would raise NameError there. Honour a same-named override in the
+    # calling namespace (tests patch ``pipeline.server``), else read the
+    # constant off this module (tests patch ``pipeline.ci``).
+    notify_at = globals().get("_RETRO_BACKLOG_NOTIFY_AT")
+    if notify_at is None:
+        # ``__import__`` is a builtin, so it resolves even though this function's
+        # globals are ``pipeline.server``'s namespace after ``bind_to_server``.
+        notify_at = __import__(f"{__package__}.ci", fromlist=["ci"])._RETRO_BACKLOG_NOTIFY_AT
+    if before < notify_at <= after:
+        _notify_user(  # noqa: F821
+            plan_name,
+            f"retro backlog is {after} plans (threshold {notify_at}) \u2014 "
+            "drain retros/PENDING.md",
+            event="retro_backlog_threshold",
+            severity="warning",
+        )
 
 
 def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:

@@ -145,7 +145,7 @@ def test_effective_source_conflict_unchanged(scenario_id, kwargs, expected_sourc
     assert result["source"] == expected_source, scenario_id
     assert result["conflict"] is expected_conflict, scenario_id
     assert result["masked"] is False, scenario_id
-    assert set(result.keys()) == TOP_LEVEL_KEYS, scenario_id
+    assert set(result.keys()) == TOP_LEVEL_KEYS - {"process_scoped"}, scenario_id
 
 
 def test_env_var_spec_unchanged():

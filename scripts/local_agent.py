@@ -57,33 +57,12 @@ from pathlib import Path
 
 import httpx
 
-# Rough chars-per-token estimate (no tokenizer available here). Observed live
-# 2026-07-20: a resumed transcript sat at ~129544 chars / ~32386 tokens
-# (~4.0 chars/token) right before hitting NUM_CTX=32768 and truncating -
-# llama.cpp then returned a 500 on every retry (the truncated request is
-# identical each time, so CHAT_MAX_ATTEMPTS's retry can never help). A rework
-# resume reuses the ENTIRE prior transcript and appends more (reviewer
-# feedback, a tech-lead fix checklist) with no bound, so repeated rework
-# cycles on the same story compound: story 93fdc371 died this way on its
-# 2nd AND 3rd rework attempts, both times on the model's very first turn.
-# LA-CHAT: the constant itself moved to scripts/local_agent_chat.py; the name
-# is re-exported below (after the sys.path setup, so bare-script execution
-# resolves the scripts package) and the moved _effective_chars_per_token reads
-# it via its own module constant.
-
-# Calibrated at runtime from ollama's own measured prompt_eval_count (the
-# streamed done chunk's real token count for everything sent in that
-# request). The fixed guess above is frequently wrong: live on the ollama
-# server log 2026-07-29, a real 41,921-token gpt-oss prompt measured ~2.35
-# chars/token against the 4.0 guess, so a budget computed from 4.0 alone was
-# already ~28% over NUM_CTX by the time a 500 forced a reactive trim. Set by
-# _stream_one_turn on every ollama turn that reports a count; never set by
-# _provider_chat_turn, whose contract deliberately returns only the bare
-# message (see test_provider_chat_turn_extracts_message_from_envelope) - an
-# lmstudio/mlx dispatch falls back to the fixed guess via
-# _effective_chars_per_token(). Reset to None at the top of main() so
-# calibration never leaks between dispatches (or, in-process, test runs)
-# that share this module.
+# Calibrated at runtime from ollama's measured prompt_eval_count; the fixed
+# 4.0 chars/token guess was ~28% over NUM_CTX live (2026-07-29, gpt-oss).
+# Set by _stream_one_turn on every ollama turn that reports a count (never by
+# _provider_chat_turn, which returns only the bare message); lmstudio/mlx fall
+# back to the fixed guess. Reset to None at the top of main() so calibration
+# never leaks between dispatches (or in-process test runs).
 _measured_chars_per_token: float | None = None
 _last_prompt_eval_count: int | None = None
 
@@ -206,15 +185,12 @@ from scripts.local_agent_repair import (  # noqa: F401 (re-exported: run_tool re
     _try_repair_indentation,
     _var_drop_is_confirmed_loss,
 )
-
-
-def read_correlation_id() -> str:
-    """The orchestrator-minted correlation ID for this dispatch (W4L-02 mints
-    one per story and exports it as PIPELINE_CORRELATION_ID into the agent
-    subprocess env). Read at call time — never cached at import — so a fresh
-    exec of this module under a mutated environment sees the current value.
-    Empty string when unset; callers treat "" as "no correlation id"."""
-    return os.environ.get("PIPELINE_CORRELATION_ID", "")
+from scripts.local_agent_runstate import (  # noqa: F401 (re-exported: RH-10 moved these; run_tool_impl reads the sets via origin[...])
+    _CREATED_THIS_RUN,
+    _DONE_REASONS,
+    _VIEWED_THIS_RUN,
+    read_correlation_id,
+)
 
 
 def emit_step_line(step: int, message: str, correlation_id: str = "") -> str:
@@ -338,34 +314,6 @@ def _step_cap_auto_done() -> bool:
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:
     """L1: feed a full-suite failure back as a user turn and announce the rejection. Used at both `done`-rejection sites (clean tree, and the dirty-tree auto-accept escape) so the raised rework done-bar holds and the agent can't dodge it by interleaving dirty/clean done calls. The caller increments `suite_rejections` and `break`s out of the tool-call loop so the next step re-enters with this fed-back excerpt."""
     return _reject_done_for_suite_impl(globals(), messages, step, suite_tail, gate)
-# Paths successfully written via create_file THIS process run. The
-# non-destructive-editor guard (see run_tool's create_file branch) exists to
-# protect PRE-EXISTING repo/seed files from being clobbered by a confused
-# model - it was never meant to also block the model from overwriting a file
-# it wrote itself moments ago. A weak model that can't construct a correct
-# str_replace old_str often has "rewrite the whole small file" as its only
-# real recovery strategy; forcing surgical edits it can't produce just
-# deadlocks it. Observed live 2026-07-15 (lru_cache): a model alternated
-# rejected create_file / rejected str_replace calls for dozens of steps,
-# never finishing, because create_file on its own just-created file was
-# unconditionally rejected. Scoped to this process's lifetime (module-level,
-# reset on every fresh dispatch/rework subprocess) so a REWORK's inherited
-# file - which may need a surgical fix, not a wholesale rewrite - is still
-# protected until the model creates it again itself in the new process.
-_CREATED_THIS_RUN: set[str] = set()
-
-# Companion to _CREATED_THIS_RUN for the RESUME/rework case. On a step-cap
-# resume, the impl and test files already exist on disk from the interrupted
-# run, so they are NOT in _CREATED_THIS_RUN in the fresh process - and the
-# create_file guard would force the weak model onto str_replace it cannot
-# construct. Requiring the model to view_file the target first makes the
-# overwrite an INFORMED one (it read the current contents before replacing
-# them), which preserves the guard's real purpose - stopping a blind clobber
-# of a file the model has never seen - while unblocking the whole-file rewrite
-# recovery path. Observed live 2026-07-16 (interval_merge resume): the guard
-# steered a resumed run to str_replace, which then ground through 28+ rejected
-# surgical-edit cycles (~2310s) instead of one whole-file rewrite.
-_VIEWED_THIS_RUN: set[str] = set()
 
 
 def run_tool(fn, args) -> str:
@@ -383,44 +331,13 @@ _TOOL_SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in TOO
 
 
 def safe_run_tool(fn, args) -> str:
-    """Run a tool, turning any exception into a recoverable error message.
-
-    A model that omits a required argument (e.g. str_replace without old_str,
-    observed with weaker local models) would otherwise raise an uncaught
-    KeyError and crash the whole unattended agent. Feeding the error back as a
-    tool result lets the model correct itself, bounded by the loop guard / step
-    cap, instead of taking the run down.
-
-    When the exception coincides with a missing declared-required argument,
-    append what the tool actually requires and what was passed instead
-    (TDD_SPLIT_PRODUCTION_PLAN.md Phase 5 live validation, 2026-07-18:
-    gpt-oss:20b called view_file with hallucinated {"line_start", "line_end"}
-    in place of the declared {"path"}; the bare "ERROR running view_file:
-    KeyError: 'path'" this used to return names what's missing but not the
-    tool's actual shape, and the model needed several malformed retries to
-    self-correct, tripping the per-target repetition guard into a park). This
-    only ever appends to the existing message - the base "ERROR running
-    {fn}: ..." text is unchanged, so it stays a strict superset.
-    """
+    """See scripts/local_agent_tools.py::safe_run_tool_impl (full contract)."""
     from scripts.local_agent_tools import safe_run_tool_impl
     return safe_run_tool_impl(globals(), fn, args)
 
 
 def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
-    """Recover from a backend error on an oversized transcript by retrying
-    with an escalating (shrinking) context budget before giving up. A single
-    trim-retry can also fail on a still-oversized payload, so shrink harder
-    each round, and pause between rounds so a load-induced failure gets time
-    to clear. Returns the assistant message dict on success, or None if every
-    round fails (caller gives up). Mutates ``messages`` in place. Bounded:
-    3 rounds.
-
-    When the trim cannot shrink the payload the request is retried UNCHANGED
-    rather than abandoned. An unshrinkable payload is positive evidence that
-    the failure was not an overflow at all - which is exactly the case where
-    waiting works. The old code returned None here, which is how a transient
-    Ollama 500 killed a ~95%-complete converging run on 2026-07-30.
-    """
+    """See scripts/local_agent_recovery.py::recover_from_oversized_5xx_impl (full contract)."""
     from scripts.local_agent_recovery import recover_from_oversized_5xx_impl
 
     return recover_from_oversized_5xx_impl(globals(), messages, chat_fn, step=step)
@@ -1039,8 +956,6 @@ def _main_impl() -> int:
     print("[ended without done — step cap reached]", flush=True)
     return 2
 
-
-_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
 def main() -> int:

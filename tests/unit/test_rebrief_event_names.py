@@ -121,24 +121,27 @@ def test_all_three_names_distinguishable_in_one_rollup():
     assert classified["clean"] is False
 
     rollup = compute_story_metrics(records)
-    payload = rollup[STORY_KEY]
+    payload = rollup[CORRELATION]
     assert payload["disqualifying_events"] == 3, (
         f"each of the three causes must disqualify once, got {payload}"
     )
     assert payload["first_pass_clean"] is False
 
 
-def test_each_automated_name_disqualifies_a_first_pass_clean_rollup():
-    """Both renamed paths must still disqualify a first pass on their own."""
-    for event in (STEP_CAP, GIVE_UP):
-        rollup = compute_story_metrics([_merged(), _record(event)])
-        payload = rollup[STORY_KEY]
-        assert payload["disqualifying_events"] == 1, (
-            f"a {event} record must disqualify a first pass, got {payload}"
-        )
-        assert payload["first_pass_clean"] is False, (
-            f"a {event} record must make the story not first-pass-clean"
-        )
+def _assert_disqualifies_first_pass(event):
+    payload = compute_story_metrics([_merged(), _record(event)])[CORRELATION]
+    assert payload["disqualifying_events"] == 1, (
+        f"a {event} record must disqualify a first pass, got {payload}"
+    )
+    assert payload["first_pass_clean"] is False
+
+
+def test_step_cap_rebrief_disqualifies_a_first_pass_clean_rollup():
+    _assert_disqualifies_first_pass(STEP_CAP)
+
+
+def test_give_up_rebrief_disqualifies_a_first_pass_clean_rollup():
+    _assert_disqualifies_first_pass(GIVE_UP)
 
 
 # ---------------------------------------------------------------------------

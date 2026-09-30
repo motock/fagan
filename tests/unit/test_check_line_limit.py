@@ -62,7 +62,7 @@ def _run(root, *extra):
 def test_blocking_allowlist_contains_known_entry(checker):
     # Membership only: the six split stories each delete one entry, so any
     # size/equality assertion here would freeze the registry.
-    assert "app/dashboard.py" in checker._BLOCKING_ALLOWLIST
+    assert "scripts/local_agent.py" in checker._BLOCKING_ALLOWLIST
 
 
 def test_production_file_at_limit_passes(checker, tmp_path):

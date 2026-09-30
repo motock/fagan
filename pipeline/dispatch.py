@@ -21,6 +21,7 @@ from .dispatch_baseline import (
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
 )
+from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
     _dispatch_fallback_provider,  # noqa: F401
     _resolve_dispatch_backend,  # noqa: F401
@@ -361,35 +362,11 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             and transcript_path.exists()
             and not _transcript_ends_with_done(transcript_path)
         )
-        # Detect an operator's patch_story edit to agent_instructions since
-        # the story's last dispatch. A transcript-resume rework otherwise
-        # hands the resumed agent only the reviewer's raw feedback appended
-        # to the verbatim prior transcript - it never re-reads the current
-        # agent_instructions field - so a corrected instruction (e.g. "delete
-        # the redundant wrapper" instead of "add a new one") is silently
-        # dropped and the agent re-derives its own, possibly wrong, fix
-        # (root-caused live 2026-07-28). Diff against the snapshot this
-        # function records on every dispatch (_dispatched_agent_instructions,
-        # written below); only surface a note when the instructions actually
-        # changed, so an unchanged rework round adds no noise. Fails open
-        # (no note) when no prior snapshot exists - the first rework after
-        # this feature ships has no baseline to diff against.
         revised_instructions = story.get("agent_instructions", "")
         prior_dispatched = story.get("_dispatched_agent_instructions")
-        revised_instructions_note = ""
-        if (
-            resume_via_transcript
-            and prior_dispatched is not None
-            and revised_instructions != prior_dispatched
-        ):
-            revised_instructions_note = (
-                "\n\n--- Revised instructions from your tech lead ---\n"
-                "Your tech lead has REVISED your task instructions since "
-                "your last attempt. These supersede the original "
-                "instructions in your transcript above. Follow them when "
-                "addressing the review feedback:\n"
-                f"{revised_instructions}"
-            )
+        revised_instructions_note = _revised_instructions_note(
+            resume_via_transcript, revised_instructions, prior_dispatched
+        )
 
         spec = _build_dispatch_command(
             story,

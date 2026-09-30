@@ -9,9 +9,10 @@ git state contradicted - the overlord must never act on ``parked_reason`` text.
 It reports three facts as a ``GIT STATE:`` section:
 
   (1) the worktree's current HEAD sha;
-  (2) whether the story's branch has NEW COMMITS vs the base branch, reusing
-      ``pipeline.git_ops._worktree_has_new_commits`` and resolving the base
-      branch the way its existing callers do (``_default_branch()``);
+  (2) whether the story's branch has NEW COMMITS vs the base branch, via
+      ``pipeline.git_ops._worktree_new_commits``, which resolves the base
+      branch in the worktree's own repo starting from ``_default_branch()``'s
+      answer;
   (3) the story's ``pr_url`` when present.
 
 These tests are written FIRST (TDD). They import ``pipeline.triage``, which does
@@ -63,18 +64,18 @@ def _make_run(returncode=0, stdout="", stderr=""):
 
 
 def _patch_has_new(monkeypatch, fn):
-    """Patch ``_worktree_has_new_commits`` in every namespace it may be read from.
+    """Patch ``_worktree_new_commits`` in every namespace it may be read from.
 
     The implementation may bind it at module level
-    (``triage._worktree_has_new_commits``) or import it lazily from
+    (``triage._worktree_new_commits``) or import it lazily from
     ``pipeline.git_ops``; patch both so the behavioural tests grade behaviour
     rather than import style. ``git_ops`` is imported lazily here to avoid a
     circular import at test-module load time.
     """
     from pipeline import git_ops
 
-    monkeypatch.setattr(triage, "_worktree_has_new_commits", fn, raising=False)
-    monkeypatch.setattr(git_ops, "_worktree_has_new_commits", fn)
+    monkeypatch.setattr(triage, "_worktree_new_commits", fn, raising=False)
+    monkeypatch.setattr(git_ops, "_worktree_new_commits", fn)
 
 
 def _story(**extra):
@@ -102,7 +103,7 @@ def _patch_git(monkeypatch, *, sha=SHA, has_new=True, base=BASE, run=None):
         captured["worktree"] = worktree
         captured["story_key"] = story_key
         captured["base_branch"] = base_branch
-        return has_new
+        return ("yes" if has_new else "no"), base
 
     # Patch both the triage-namespace binding (module-level import) and the
     # git_ops-namespace one (lazy `from .git_ops import ...`), so the test works
@@ -125,10 +126,10 @@ def _patch_git(monkeypatch, *, sha=SHA, has_new=True, base=BASE, run=None):
 # Module-level import contract
 # ---------------------------------------------------------------------------
 
-def test_module_imports_worktree_has_new_commits():
-    """The module must import _worktree_has_new_commits at module level so it is
-    patchable as triage._worktree_has_new_commits (codebase convention)."""
-    assert hasattr(triage, "_worktree_has_new_commits")
+def test_module_imports_worktree_new_commits():
+    """The module must import _worktree_new_commits at module level so it is
+    patchable as triage._worktree_new_commits (codebase convention)."""
+    assert hasattr(triage, "_worktree_new_commits")
 
 
 def test_current_git_state_in_all():
@@ -160,7 +161,7 @@ def test_empty_worktree_returns_empty_and_never_runs(monkeypatch):
     monkeypatch.setattr(triage, "subprocess.run", _never_run)
     _patch_has_new(
         monkeypatch,
-        lambda *a, **k: pytest.fail("_worktree_has_new_commits must NOT be called"),
+        lambda *a, **k: pytest.fail("_worktree_new_commits must NOT be called"),
     )
     assert triage._current_git_state("", _story()) == ""
 
@@ -169,7 +170,7 @@ def test_none_worktree_returns_empty_and_never_runs(monkeypatch):
     monkeypatch.setattr(triage, "subprocess.run", _never_run)
     _patch_has_new(
         monkeypatch,
-        lambda *a, **k: pytest.fail("_worktree_has_new_commits must NOT be called"),
+        lambda *a, **k: pytest.fail("_worktree_new_commits must NOT be called"),
     )
     assert triage._current_git_state(None, _story()) == ""
 
@@ -358,7 +359,7 @@ def test_never_raises_on_arbitrary_story(monkeypatch):
     monkeypatch.setattr(triage, "subprocess.run", _never_run)
     _patch_has_new(
         monkeypatch,
-        lambda *a, **k: pytest.fail("_worktree_has_new_commits must NOT be called"),
+        lambda *a, **k: pytest.fail("_worktree_new_commits must NOT be called"),
     )
     assert triage._current_git_state("", {"pr_url": object(), "key": object()}) == ""
 

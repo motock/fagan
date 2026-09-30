@@ -29,7 +29,7 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
-from .git_ops import _worktree_has_new_commits
+from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
 from .triage_repo_issue import _execute_repo_issue  # noqa: E402
 from .triage_patch_acceptance import _FIXTURE_END_MARKER, _FIXTURE_START_MARKER, _acceptance_with_source, _execute_patch_acceptance, _parse_fixture_rewrite, _story_checkout  # noqa: E402,F401
@@ -643,16 +643,19 @@ def _current_git_state(worktree: str, story: dict) -> str:
     block = _current_git_state_impl(worktree, story)
     if not block:
         return ""
-    base = ""
+    hint = ""
     try:
         # Lazy import: pipeline.server imports this module at module level, so
         # a module-level import here would be circular.
         from .server import _default_branch
 
-        base = _default_branch()
+        hint = _default_branch()
     except Exception:  # noqa: BLE001
-        base = ""
-    header = f"CHANGED FILES vs {base}:"
+        hint = ""
+    # Resolve in the worktree's own repo: the server's answer need not describe
+    # it, and a base that does not exist here makes the diff unavailable.
+    base = _resolve_base_branch(Path(worktree), hint)
+    header = f"CHANGED FILES vs {base or hint}:"
     try:
         if not base:
             return block + "\n" + header + "\n(unavailable)"
@@ -692,11 +695,11 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
     contradicted):
 
       (1) the worktree's current HEAD sha;
-      (2) whether the story's branch has NEW COMMITS vs the base branch,
-          reusing :func:`pipeline.git_ops._worktree_has_new_commits` and
-          resolving the base branch the way its existing callers do, via
-          :func:`pipeline.server._default_branch`. If the base branch cannot
-          be resolved, that fact is reported rather than guessing a name;
+      (2) whether the story's branch has NEW COMMITS vs the base branch, via
+          :func:`pipeline.git_ops._worktree_new_commits`, which resolves the
+          base branch in the worktree's own repo starting from
+          :func:`pipeline.server._default_branch`'s answer. If no base branch
+          resolves there, that fact is reported rather than guessing a name;
       (3) the story's ``pr_url``, when present.
     """
     if not isinstance(worktree, str) or not worktree:
@@ -722,14 +725,20 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
         except Exception:  # noqa: BLE001
             base = ""
         if base:
-            has_new = _worktree_has_new_commits(
+            state, resolved = _worktree_new_commits(
                 Path(worktree), str(story.get("story_key") or story.get("key") or ""), base,
             )
-            lines.append(
-                f"BRANCH HAS NEW COMMITS vs {base}: yes"
-                if has_new
-                else f"BRANCH HAS NO NEW COMMITS vs {base} (0 new commits beyond base)"
-            )
+            if state == "unknown":
+                lines.append(
+                    f"BASE BRANCH {base} UNRESOLVED in this worktree; "
+                    "new-commits check INCONCLUSIVE"
+                )
+            else:
+                lines.append(
+                    f"BRANCH HAS NEW COMMITS vs {resolved}: yes"
+                    if state == "yes"
+                    else f"BRANCH HAS NO NEW COMMITS vs {resolved} (0 new commits beyond base)"
+                )
         else:
             lines.append("base branch unresolved; new-commits check skipped")
         pr_url = story.get("pr_url")
@@ -742,7 +751,13 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
 
 def _evidence_shows_no_new_commits(evidence: str) -> bool:
     """True iff collect_triage_evidence's git-state section reports the
-    branch has zero commits beyond base (see _current_git_state_impl)."""
+    branch has zero commits beyond base (see _current_git_state_impl).
+
+    An INCONCLUSIVE section — no base branch resolved in the worktree, so
+    nothing was compared — is not that fact, and must never be read as one.
+    """
+    if "INCONCLUSIVE" in evidence:
+        return False
     return "0 new commits" in evidence or "NO NEW COMMITS" in evidence
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ TOP_LEVEL_KEYS = {
     "conflict",
     "masked",
     "layers",
+    "process_scoped",
 }
 LAYER_KEYS = {"layer", "value", "restart_required", "effective_in_process"}
 

@@ -1016,6 +1016,14 @@ Use `get_effective_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before
 running that plan.
 
+Each env-var entry in that view carries `effective` (the value *this process*
+resolves, not necessarily the deployment's) and a boolean `process_scoped`.
+`process_scoped` is `true` when `source` is `code_default` but a launcher layer
+(`launchd_plist` / `mcp_server_env`) supplies a different value — the
+launchd-served scheduler and MCP server would then not run `effective`; read
+the launcher value from `layers`. It is `false` when the process env sets the
+var or no launcher layer differs from the default.
+
 ---
 
 ## Dispatch implementation resolution

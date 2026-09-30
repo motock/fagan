@@ -362,7 +362,15 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
     Returns
     -------
     list[dict]
-        One dictionary per catalog entry, sorted by variable name.
+        One dictionary per catalog entry, sorted by variable name.  Each is a
+        :func:`resolve_env_var` result plus ``process_scoped``.
+
+        ``effective`` is what *this* process resolves, not necessarily what
+        the deployment runs.  ``process_scoped`` is ``True`` when ``source``
+        is ``code_default`` yet a launcher layer (``launchd_plist`` /
+        ``mcp_server_env``) supplies a different value, i.e. the launchd-served
+        scheduler or MCP server would not run ``effective``.  The launcher
+        values are in ``layers`` (masked for secrets).
     """
     if environ is None:
         environ = os.environ
@@ -373,10 +381,15 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
     # Resolve each catalog entry using the same env snapshots.
     results: list[dict] = []
     for spec in sorted(ENV_VAR_CATALOG, key=lambda s: s.name):
-        results.append(
-            resolve_env_var(spec.name, default=spec.default,
-                            environ=environ, plist_env=plist_env, mcp_env=mcp_env)
+        entry = resolve_env_var(spec.name, default=spec.default,
+                                environ=environ, plist_env=plist_env, mcp_env=mcp_env)
+        # Compare raw values: entry["effective"] and layer values are masked
+        # for secrets, so they cannot be used to detect a difference.
+        entry["process_scoped"] = entry["source"] == "code_default" and any(
+            spec.name in env and env[spec.name] != spec.default
+            for env in (plist_env, mcp_env)
         )
+        results.append(entry)
     return results
 
 def resolve_role_provenance(

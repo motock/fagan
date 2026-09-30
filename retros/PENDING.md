@@ -239,3 +239,5 @@ if a precise date is needed when writing one of these up.
 - harness-rework-gates — completed 2026-09-21, 2 stories
 - agent-side-baseline-exemption — completed 2026-09-21, 2 stories
 - review-feedback-rework-done-bar — completed 2026-09-21, 2 stories
+- triage-git-evidence-base-branch — completed 2026-09-30, 2 stories
+- language-agnostic-gates — completed 2026-09-30, 10 stories

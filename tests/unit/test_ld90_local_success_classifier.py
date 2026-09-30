@@ -800,3 +800,97 @@ def test_step_cap_headers_match_the_rebrief_module():
 def test_module_docstring_names_step_cap_rebrief_blocks():
     doc = _ls().__doc__ or ""
     assert "step-cap rebrief" in doc.lower() or "step_cap_rebrief" in doc
+
+
+# --------------------------------------------------------------------------
+# line-start anchoring: a brief that merely MENTIONS a header is not a block
+#
+# Three stories in the Sep 22-29 window (LDC-9, LDC-12, PLD90-E1-01) were
+# marked not-first-pass-clean purely because their briefs quote the header
+# while describing it.  A block only exists when the header sits at column 0
+# on a line; an inline mention is prose, not a rebrief.
+# --------------------------------------------------------------------------
+
+def test_header_mentioned_inline_in_prose_is_not_flagged():
+    """The real LDC-9 shape: the brief quotes the header while describing it."""
+    story = _story(
+        agent_instructions=(
+            "GOAL: x\n\nNote that the manifest story's agent_instructions now "
+            f"contains {_DIAGNOSIS_HEADER} and the stub's text."
+        )
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_header_ending_a_sentence_is_not_flagged():
+    """The LDC-12 shape: a sentence ending with the header, then prose."""
+    story = _story(
+        agent_instructions=(
+            "GOAL: x\n\nDocumenting the verdict: a brief carrying "
+            f"{_DIAGNOSIS_HEADER} -> reasons include step_cap_rebrief"
+        )
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_facts_header_mentioned_inline_in_prose_is_not_flagged():
+    """The FACTS path is symmetric: an inline mention is not a block either."""
+    story = _story(
+        agent_instructions=(
+            "GOAL: x\n\nNote that the manifest story's agent_instructions now "
+            f"contains {_FACTS_HEADER} and the stub's text."
+        )
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_header_at_column_zero_is_still_flagged():
+    """A real block - the header on its own line - is still a rebrief."""
+    story = _story(agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" in out["reasons"]
+    assert out["clean"] is False
+
+
+def test_header_as_the_first_line_is_flagged():
+    """Boundary: the header at the very start of the brief is column 0."""
+    story = _story(agent_instructions=f"{_DIAGNOSIS_HEADER}\nroot cause")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" in out["reasons"]
+    assert out["clean"] is False
+
+
+def test_indented_header_is_not_flagged():
+    """Two leading spaces means the header is not at column 0."""
+    story = _story(agent_instructions=f"GOAL: x\n\n  {_DIAGNOSIS_HEADER}\nroot cause")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_header_inside_a_longer_word_is_not_flagged():
+    """A header preceded by a non-newline character is not at column 0."""
+    story = _story(
+        agent_instructions=f"GOAL: x\n\nprefix{_DIAGNOSIS_HEADER}\nroot cause"
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_header_with_trailing_text_on_the_same_line_is_flagged():
+    """Known behaviour of line-start anchoring: the header is a prefix of the
+    line, so trailing text after it does not stop the match.  Documented here
+    rather than left untested."""
+    story = _story(
+        agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER} and more\nroot cause"
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" in out["reasons"]
+    assert out["clean"] is False

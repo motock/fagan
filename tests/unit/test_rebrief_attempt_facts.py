@@ -316,6 +316,51 @@ def test_stale_facts_are_dropped_when_the_new_attempt_has_none(repo):
     assert rebrief.compose_attempt_facts(once, "") == "GOAL: x"
 
 
+def test_a_header_mentioned_in_prose_does_not_truncate_the_brief(repo):
+    """A brief that merely mentions the header mid-line must survive intact.
+
+    Truncating at an unanchored `find` silently discarded everything from the
+    mention down - measured live: a 385-character brief returned 188
+    characters, dropping its FILES:, HARD CONSTRAINTS and TESTS: sections.
+    """
+    brief = (
+        "GOAL: make the classifier anchor its header detectors at line start.\n\n"
+        "BACKGROUND: the manifest story's agent_instructions now contains "
+        f"{rebrief.DIAGNOSIS_HEADER} and the stub's text, which is only prose.\n\n"
+        "FILES: pipeline/local_success.py, pipeline/rebrief.py\n\n"
+        "HARD CONSTRAINTS: do not rename the reason string.\n\n"
+        "TESTS: tests/unit/test_ld90_local_success_classifier.py\n"
+    )
+    assert len(brief) > 300
+    out = rebrief.compose_rebriefed_instructions(brief, "root cause")
+    assert "TESTS: tests/unit/test_ld90_local_success_classifier.py" in out
+    assert "HARD CONSTRAINTS" in out
+    assert len(out) > len(brief)
+
+
+def test_a_real_diagnosis_block_is_still_replaced_not_stacked(repo):
+    """A header at column 0 is a real block and is still replaced."""
+    once = rebrief.compose_rebriefed_instructions("GOAL: x", "first cause")
+    twice = rebrief.compose_rebriefed_instructions(once, "second cause")
+    assert twice.count(rebrief.DIAGNOSIS_HEADER) == 1
+    assert "first cause" not in twice
+    assert "second cause" in twice
+
+
+def test_a_facts_header_mentioned_in_prose_does_not_truncate_the_brief(repo):
+    """The FACTS path is symmetric: an inline mention must not truncate."""
+    brief = (
+        "GOAL: make the classifier anchor its header detectors at line start.\n\n"
+        "BACKGROUND: the manifest story's agent_instructions now contains "
+        f"{rebrief.FACTS_HEADER} and the stub's text, which is only prose.\n\n"
+        "FILES: pipeline/local_success.py, pipeline/rebrief.py\n\n"
+        "TESTS: tests/unit/test_ld90_local_success_classifier.py\n"
+    )
+    out = rebrief.compose_attempt_facts(brief, "- measured facts")
+    assert "TESTS: tests/unit/test_ld90_local_success_classifier.py" in out
+    assert len(out) > len(brief)
+
+
 def test_facts_are_included_in_the_evidence_given_to_the_diagnosis_model(repo):
     (repo / "agent.log").write_text("[boot] pid=1\n[step 0] view_file: mod.py\n")
     evidence = rebrief.collect_failure_evidence(repo, {"summary": "s"})

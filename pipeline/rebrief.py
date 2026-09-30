@@ -509,7 +509,8 @@ def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | Non
         return agent_instructions
 
     base = agent_instructions
-    existing = base.find(DIAGNOSIS_HEADER)
+    match = re.search('^' + re.escape(DIAGNOSIS_HEADER), base, re.MULTILINE)
+    existing = match.start() if match else -1
     if existing != -1:
         base = base[:existing].rstrip()
 
@@ -529,7 +530,8 @@ def compose_attempt_facts(agent_instructions: str, facts: str | None) -> str:
     the brief at DIAGNOSIS_HEADER, which would otherwise take a facts block
     appended before it along with no replacement."""
     base = agent_instructions or ""
-    existing = base.find(FACTS_HEADER)
+    match = re.search('^' + re.escape(FACTS_HEADER), base, re.MULTILINE)
+    existing = match.start() if match else -1
     if existing != -1:
         base = base[:existing].rstrip()
     if not facts or not facts.strip():

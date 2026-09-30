@@ -151,11 +151,9 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
 
     # A brief carrying a step-cap rebrief block is not first-pass clean: the
     # executor needed a prior-attempt diagnosis, so this was not a clean pass.
-    if any(header in instr for header in _STEP_CAP_REBRIEF_HEADERS):
+    if any(re.search(r"^" + re.escape(header), instr, re.MULTILINE) for header in _STEP_CAP_REBRIEF_HEADERS):
         reasons.add("step_cap_rebrief")
         clean = False
-
-    
 
     return {
         "story_key": story_key,

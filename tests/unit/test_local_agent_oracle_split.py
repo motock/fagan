@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from scripts import local_agent_oracle_done_marker as new
-
 from tests.unit._local_agent_oracle_test_helpers import lao
 
 REPO = Path(__file__).parent.parent.parent

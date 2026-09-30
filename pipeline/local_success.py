@@ -155,8 +155,6 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         reasons.add("step_cap_rebrief")
         clean = False
 
-    
-
     return {
         "story_key": story_key,
         "in_population": in_population,

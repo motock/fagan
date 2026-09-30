@@ -138,11 +138,15 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     text=True,
                 ).stdout.strip()
                 if is_unchanged_since_review(story, current_sha):
-                    _notify_user(
-                        plan_name,
-                        f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.",
-                        **_cid_kwargs,
-                    )
+                    # Once per SHA: the scheduler re-enters this path every tick
+                    # and the condition does not resolve on its own.
+                    if story.get("skip_notified_sha") != current_sha:
+                        _notify_user(
+                            plan_name,
+                            f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.",
+                            **_cid_kwargs,
+                        )
+                        story["skip_notified_sha"] = current_sha
                     _atomic_write_json(manifest_path, manifest)
                     return {
                         "ok": True,
@@ -724,6 +728,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # Clear any stored SHA when review is approved
         story.pop("last_reviewed_sha", None)
         story.pop(REVIEW_LOGIC_FINGERPRINT_KEY, None)
+        story.pop("skip_notified_sha", None)
         story.pop("last_review_findings", None)
     else:
         # Persist the reviewer's reasoning (not just the verdict) so the

@@ -94,3 +94,6 @@ jobs:
 
       - name: Run ruff check
         run: ruff check .
+
+      - name: Check file line limits
+        run: python scripts/check_line_limit.py

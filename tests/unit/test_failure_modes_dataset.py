@@ -23,10 +23,13 @@ def _entries():
     return json.loads(DATASET.read_text(encoding="utf-8"))
 
 
-def test_dataset_is_a_list_of_57_objects_with_exactly_the_six_keys():
+def test_dataset_is_a_list_of_objects_with_exactly_the_six_keys():
     entries = _entries()
     assert isinstance(entries, list)
-    assert len(entries) == 57
+    assert len(entries) >= 57, (
+        "the catalog may only grow -- 57 entries existed on 2026-08-12 and "
+        "an entry is never removed without a retro recording why"
+    )
     for entry in entries:
         assert isinstance(entry, dict)
         assert set(entry.keys()) == REQUIRED_KEYS
@@ -37,7 +40,9 @@ def test_dataset_is_a_list_of_57_objects_with_exactly_the_six_keys():
 def test_mode_values_are_unique_strings_including_sub_entries():
     modes = [entry["mode"] for entry in _entries()]
     assert all(isinstance(m, str) for m in modes)
-    assert len(set(modes)) == 57
+    assert len(set(modes)) == len(modes), (
+        "mode values must stay unique across the dataset"
+    )
     assert {"16", "16b", "16-recur"} <= set(modes)
 
 

@@ -454,5 +454,45 @@
     "status": "NOT fixed — root cause PINNED 2026-08-12 (replace_lines-range swept 4 unrelated top-level symbols; cross-file-blind orphan guard + unscoped confirm_removals bypass both missed it)",
     "fix_ref": "n/a",
     "guard": "none (root cause pinned, fix not yet shipped)"
+  },
+  {
+    "mode": "56",
+    "date": "2026-09-29",
+    "class": "harness-bug",
+    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
+    "fix_ref": "retros/harness-review_2026-09-29.md §2.2",
+    "guard": "classifier must treat a step-cap kill as not-clean; test a step-capped run"
+  },
+  {
+    "mode": "57",
+    "date": "2026-09-29",
+    "class": "harness-bug",
+    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
+    "fix_ref": "retros/harness-review_2026-09-29.md §2.2",
+    "guard": "match the sentinel anchored/whole-line so a mention is not an occurrence (live `pipeline/local_success.py`, latent `pipeline/rebrief.py`)"
+  },
+  {
+    "mode": "58",
+    "date": "2026-09-29",
+    "class": "harness-bug",
+    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
+    "fix_ref": "retros/harness-review_2026-09-29.md §2.3",
+    "guard": "one event name per cause; assert the reason histogram sums to the event count"
+  },
+  {
+    "mode": "59",
+    "date": "2026-09-29",
+    "class": "harness-bug",
+    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
+    "fix_ref": "retros/harness-review_2026-09-29.md §2.4",
+    "guard": "derive conflicts from the artifact set, not an allowlist; test a conflict outside it"
+  },
+  {
+    "mode": "60",
+    "date": "2026-09-29",
+    "class": "harness-bug",
+    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
+    "fix_ref": "retros/harness-review_2026-09-29.md §2.7 and §2.9",
+    "guard": "monotonic floor + uniqueness test on the dataset (added by this story)"
   }
 ]

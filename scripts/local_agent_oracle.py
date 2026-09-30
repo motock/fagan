@@ -46,7 +46,6 @@ import subprocess
 import sys
 import time
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -968,7 +967,10 @@ def _main_impl() -> int:
     return 2
 
 
-_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
+from scripts.local_agent_oracle_done_marker import (  # noqa: F401 (_DONE_REASONS re-exported for tests)
+    _DONE_REASONS,
+    write_done_marker_impl,
+)
 
 
 def main() -> int:
@@ -988,24 +990,7 @@ def write_done_marker(rc: int) -> None:
     marker failure never changes the run's exit code. Idempotent-safe: main()
     calls this again on the way out, and a non-zero rc must never downgrade an
     already-written done (rc 0) marker."""
-    try:
-        existing_path = CWD / ".agent_done"
-        existing = json.loads(existing_path.read_text(encoding="utf-8"))
-        if isinstance(existing, dict) and existing.get("exit_code") == 0 and rc != 0:
-            return  # keep the proof of completion; a deliberate skip is not a failure
-    except (OSError, ValueError):  # no readable done marker: fall through and write
-        pass
-    try:
-        marker = {
-            "reason": _DONE_REASONS.get(rc, "error"),
-            "exit_code": rc,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        }
-        tmp = CWD / ".agent_done.tmp"
-        tmp.write_text(json.dumps(marker) + "\n", encoding="utf-8")
-        os.replace(tmp, CWD / ".agent_done")
-    except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
-        print(f"[warn] .agent_done marker not written: {e}", flush=True)
+    write_done_marker_impl(CWD, rc)
 
 
 if __name__ == "__main__":

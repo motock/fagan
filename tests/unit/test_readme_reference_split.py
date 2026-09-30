@@ -707,6 +707,40 @@ def test_moved_section_body_is_verbatim(title):
                 reference_body = reference_body.replace(
                     "\n\n" + _PATCH_PLAN_BULLET, ""
                 )
+                # RSGF-1 changed review_story's unchanged-SHA skip to also
+                # require an unchanged reviewing-logic fingerprint and
+                # documented the new last_reviewed_logic_fingerprint key in
+                # this section. The pre-split README at 2cca309~1 predates
+                # that change and still documents the HEAD-only skip, so
+                # require the new wording to be present and the old wording
+                # to be gone, then normalize the new wording back to the
+                # original for the byte comparison — the presence and
+                # absence assertions mean the normalization can never mask
+                # a revert to the HEAD-only skip contract.
+                assert _REVIEW_FINGERPRINT_SENTENCE_NEW in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must document "
+                    f"the fingerprint condition on the unchanged-SHA skip."
+                )
+                assert _REVIEW_FINGERPRINT_SENTENCE_ORIG not in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must not "
+                    f"revert to the HEAD-only skip wording."
+                )
+                assert _REVIEW_FINGERPRINT_TAIL_NEW in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must note "
+                    f"that the fingerprint is cleared on APPROVE."
+                )
+                assert _REVIEW_FINGERPRINT_TAIL_ORIG not in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must not "
+                    f"revert to clearing only last_reviewed_sha on APPROVE."
+                )
+                reference_body = reference_body.replace(
+                    _REVIEW_FINGERPRINT_SENTENCE_NEW,
+                    _REVIEW_FINGERPRINT_SENTENCE_ORIG,
+                )
+                reference_body = reference_body.replace(
+                    _REVIEW_FINGERPRINT_TAIL_NEW,
+                    _REVIEW_FINGERPRINT_TAIL_ORIG,
+                )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

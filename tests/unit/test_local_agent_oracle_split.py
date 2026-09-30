@@ -2,7 +2,7 @@
 scripts/local_agent_oracle.py (RH-11)."""
 from pathlib import Path
 
-from scripts import local_agent_oracle_tamper as new
+from scripts import local_agent_oracle_done_marker as new
 from tests.unit._local_agent_oracle_test_helpers import lao
 
 REPO = Path(__file__).parent.parent.parent
@@ -57,4 +57,4 @@ def test_should_keep_original_module_under_line_limit():
 
 
 def test_should_keep_new_module_under_line_limit():
-    assert _line_count(REPO / "scripts" / "local_agent_oracle_tamper.py") < LINE_LIMIT
+    assert _line_count(REPO / "scripts" / "local_agent_oracle_done_marker.py") < LINE_LIMIT

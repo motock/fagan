@@ -98,6 +98,7 @@ from pipeline.local_agent_common import (
     _trim_resumed_transcript,
     destructive_git_op,
 )
+from scripts.local_agent_oracle_done_marker import restore_tampered_oracle_files_impl
 from scripts.local_agent_oracle_guards import _no_tool_nudge
 from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_tool references these as bare names)
     _SYNTAX_REJECT_COUNTS,
@@ -111,7 +112,6 @@ from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_
     _try_repair_indentation,
     _var_drop_is_confirmed_loss,
 )
-from scripts.local_agent_oracle_tamper import restore_tampered_oracle_files_impl
 
 # _answer_orphaned_calls, _DIGEST_MAX_CHARS, _dropped_span_digest,
 # _evict_tool_outputs, _EVICT_HEAD_CHARS, _EVICT_KEEP_RECENT,

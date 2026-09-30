@@ -34,7 +34,13 @@ def _story(**over):
 def _plan(plan_dir, plan, stories, records=None):
     """Write ``<plan>.manifest.json`` and, when given, its JSONL sidecar."""
     (plan_dir / f"{plan}.manifest.json").write_text(
-        json.dumps({"stories": stories}), encoding="utf-8"
+        json.dumps(
+            {
+                "stories": stories,
+                "repo_root": str(Path(__file__).resolve().parents[2]),
+            }
+        ),
+        encoding="utf-8",
     )
     if records is not None:
         (plan_dir / f"{plan}.notifications.jsonl").write_text(
@@ -223,9 +229,18 @@ def test_legacy_notifications_log_is_ignored(tmp_path, capsys):
 
 def test_non_dict_stories_and_missing_stories_key_are_ignored(tmp_path, capsys):
     (tmp_path / "beta.manifest.json").write_text(
-        json.dumps({"stories": {"good": _story(), "bad": "not-a-dict"}}), encoding="utf-8"
+        json.dumps(
+            {
+                "stories": {"good": _story(), "bad": "not-a-dict"},
+                "repo_root": str(Path(__file__).resolve().parents[2]),
+            }
+        ),
+        encoding="utf-8",
     )
-    (tmp_path / "gamma.manifest.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "gamma.manifest.json").write_text(
+        json.dumps({"repo_root": str(Path(__file__).resolve().parents[2])}),
+        encoding="utf-8",
+    )
     out = _run(capsys, tmp_path)
     assert _header(out, "overall") == "overall: 1/1 clean (100.0%)"
 

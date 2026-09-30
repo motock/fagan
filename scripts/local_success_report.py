@@ -15,7 +15,7 @@ Usage:
 
 ::
 
-    .venv/bin/python scripts/local_success_report.py [--window 30] [--plan-dir DIR]
+    .venv/bin/python scripts/local_success_report.py [--window 30] [--plan-dir DIR] [--repo PATH] [--all-repos]
 
 The ``--window`` flag selects how many of the newest stories in the
 population to report; every tier block is computed over that same cohort
@@ -81,12 +81,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing plan sidecars",
     )
     parser.add_argument(
+        "--repo",
+        type=Path,
+        default=ROOT,
+        help="Restrict to manifests whose repo_root matches PATH (default: this repo).",
+    )
+    parser.add_argument(
+        "--all-repos",
+        action="store_true",
+        help="Ignore the repo filter and report every manifest.",
+    )
+    parser.add_argument(
         "--window",
         type=int,
         default=30,
         help="Size of the rolling window; 0 means all stories",
     )
     args = parser.parse_args(argv)
+
+    # Repo filter
+    if args.all_repos:
+        repo_filter = None
+    else:
+        repo_filter = Path(args.repo).expanduser().resolve()
+
+    
+    def _repo_matches(plan: dict) -> bool:
+        if repo_filter is None:
+            return True
+        raw = plan.get("repo_root")
+        if not raw:
+            return False
+        try:
+            return Path(raw).expanduser().resolve() == repo_filter
+        except (OSError, ValueError):
+            return False
+
 
     plan_dir = Path(args.plan_dir).expanduser()
     if not plan_dir.is_dir():
@@ -98,10 +128,14 @@ def main(argv: list[str] | None = None) -> int:
     for path in sorted(plan_dir.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         records, _malformed = load_notification_records(plan_dir / f"{plan_name}.notifications.jsonl")
+        plan = _load_manifest(path)
+        if plan is None or not _repo_matches(plan):
+            continue
         all_classified.extend(_classify_plan(plan_dir, plan_name, records))
 
     # Header
     print(f"window: {args.window}")
+    print(f"repo: {'all' if repo_filter is None else repo_filter}")
 
     # One cohort for every block: the newest N population stories, selected
     # once here so the tier blocks partition the overall block instead of each

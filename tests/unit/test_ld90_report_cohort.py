@@ -36,7 +36,13 @@ def _story(**over):
 def _plan(plan_dir, plan, stories, records=None):
     """Write ``<plan>.manifest.json`` and, when given, its JSONL sidecar."""
     (plan_dir / f"{plan}.manifest.json").write_text(
-        json.dumps({"stories": stories}), encoding="utf-8"
+        json.dumps(
+            {
+                "stories": stories,
+                "repo_root": str(Path(__file__).resolve().parents[2]),
+            }
+        ),
+        encoding="utf-8",
     )
     if records is not None:
         (plan_dir / f"{plan}.notifications.jsonl").write_text(
@@ -235,13 +241,14 @@ def test_the_cohort_line_names_the_selected_span_and_size(tmp_path, capsys):
     ), lines[0]
 
 
-def test_the_cohort_line_follows_the_window_header(tmp_path, capsys):
+def test_the_repo_line_sits_between_the_window_header_and_the_cohort_line(tmp_path, capsys):
     _plan(tmp_path, "alpha", {"s1": _story()})
     out = _run(capsys, tmp_path, "--window", "5")
     lines = _nonblank(out)
     assert lines[0] == "window: 5"
-    assert lines[1].startswith("cohort: "), lines[:3]
-    assert lines[2].startswith("overall: "), lines[:3]
+    assert lines[1].startswith("repo: "), lines[:3]
+    assert lines[2].startswith("cohort: "), lines[:3]
+    assert lines[3].startswith("overall: "), lines[:3]
 
 
 def test_the_window_header_is_still_the_first_line(tmp_path, capsys):

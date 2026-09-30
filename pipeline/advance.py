@@ -780,7 +780,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                                 f"diagnosis; the re-dispatch carries the "
                                 f"folded diagnosis.",
                                 story_key=key,
-                                event="brief_patched",
+                                event="give_up_rebrief",
                                 **(
                                     {"correlation_id": story["correlation_id"]}
                                     if story.get("correlation_id")

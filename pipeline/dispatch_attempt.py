@@ -171,12 +171,12 @@ def _rebrief_step_cap_struggle(
                 f"{story_key} brief rewritten after a step-cap struggle; the "
                 f"resume carries the folded diagnosis.",
                 story_key=story_key,
-                event="brief_patched",
+                event="step_cap_rebrief",
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
         except Exception:
             logging.getLogger("pipeline").debug(
-                "brief_patched notify failed during step-cap rebrief", exc_info=True)
+                "step_cap_rebrief notify failed during step-cap rebrief", exc_info=True)
 
 
 def _transcript_ends_with_done(transcript_path: Path) -> bool:

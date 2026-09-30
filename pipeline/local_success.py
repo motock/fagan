@@ -135,7 +135,10 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
 
     for rec in matched:
         event = rec.get("event")
-        if event in {"escalated", "model_fallback", "story_parked", "brief_patched"}:
+        if event in {
+            "escalated", "model_fallback", "story_parked", "brief_patched",
+            "step_cap_rebrief", "give_up_rebrief",
+        }:
             reasons.add(event)
             clean = False
         elif event is None:

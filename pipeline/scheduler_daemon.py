@@ -25,7 +25,7 @@ from pipeline.paths import PLAN_DIR
 from pipeline.watchers import scan_all_plans
 
 logger = logging.getLogger(__name__)
-_BENIGN_ONE_SIDED_DIFFS = frozenset()
+
 
 def _checkout_git_state() -> dict:
     """Report the revision of the checkout THIS process imported ``pipeline``
@@ -688,35 +688,43 @@ class SchedulerDaemon:
             if stop_event.is_set():
                 break
 
+# One-sided diffs that are known-benign and must NOT warn. Each entry needs a
+# written justification: a key present in only one layer normally means the two
+# code paths run with different behaviour, which is exactly what this guard
+# exists to surface. Only add a name here when the divergence is provably
+# harmless. Currently empty: every one-sided diff observed in the live config
+# (PIPELINE_AUTO_TRIAGE, PIPELINE_TDD_SPLIT, PIPELINE_DECOMPOSE) is a real
+# divergence, so none may be silenced.
+_BENIGN_ONE_SIDED_DIFFS: frozenset[str] = frozenset()
+
+
 def _report_env_conflicts() -> None:
     """Warn about env var conflicts between launchd plist and MCP server."""
     try:
-        from .config_provenance import read_mcp_server_env, read_plist_env
+        from .config_provenance import _is_secret, read_mcp_server_env, read_plist_env
+
         plist = read_plist_env()
         mcp = read_mcp_server_env()
-        def _mask(name: str, value: str | None) -> str:
-            if any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")):
-                return "***"
-            return value if value is not None else "<unset>"
+
+        def _render(name: str, value: str | None) -> str:
+            if value is None:
+                return "<unset>"
+            # Mask exactly as resolve_env_var does: a catalogued secret never
+            # prints its value.
+            return "***" if _is_secret(name) else value
+
         for name in sorted(set(plist) | set(mcp)):
             if name in _BENIGN_ONE_SIDED_DIFFS:
                 continue
             p_val = plist.get(name)
             m_val = mcp.get(name)
-            if p_val is None or m_val is None:
-                p_str = _mask(name, p_val)
-                m_str = _mask(name, m_val)
-                print(
-                    f"scheduler_daemon: WARNING {name} differs between config layers: launchd_plist={p_str} mcp_server_env={m_str} (this scheduler uses launchd_plist)",
-                    file=sys.stderr,
-                )
+            if p_val is not None and m_val is not None and p_val == m_val:
                 continue
-            if p_val == m_val:
-                continue
-            p_str = _mask(name, p_val)
-            m_str = _mask(name, m_val)
             print(
-                f"scheduler_daemon: WARNING {name} differs between config layers: launchd_plist={p_str} mcp_server_env={m_str} (this scheduler uses launchd_plist)",
+                f"scheduler_daemon: WARNING {name} differs between config layers: "
+                f"launchd_plist={_render(name, p_val)} "
+                f"mcp_server_env={_render(name, m_val)} "
+                f"(this scheduler uses launchd_plist)",
                 file=sys.stderr,
             )
     except Exception as exc:  # noqa: BLE001
@@ -724,6 +732,7 @@ def _report_env_conflicts() -> None:
             f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
             file=sys.stderr,
         )
+
 
 def run_daemon() -> int:
     """Production composition root: build real collaborators and run.

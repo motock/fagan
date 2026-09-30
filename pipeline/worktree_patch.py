@@ -47,17 +47,18 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
-from .worktree_patch_parse import (  # noqa: F401
-    _HUNK_HEADER_RE,
-    _SIMPLE_C_ESCAPES,
-    ParsedDiff,
-    ParsedHunk,
-    PatchFormatError,
-    _c_unquote,
-    _consume_hunk_line,
-    _OpenHunk,
-    parse_unified_diff,
-)
+# Loaded via importlib rather than a relative ``from`` import because this
+# module is pinned to stdlib-only imports (see test_module_imports_only_stdlib).
+_parse = importlib.import_module(".worktree_patch_parse", __package__)
+_HUNK_HEADER_RE = _parse._HUNK_HEADER_RE
+_SIMPLE_C_ESCAPES = _parse._SIMPLE_C_ESCAPES
+ParsedDiff = _parse.ParsedDiff
+ParsedHunk = _parse.ParsedHunk
+PatchFormatError = _parse.PatchFormatError
+_c_unquote = _parse._c_unquote
+_consume_hunk_line = _parse._consume_hunk_line
+_OpenHunk = _parse._OpenHunk
+parse_unified_diff = _parse.parse_unified_diff
 
 
 class PatchSecurityError(ValueError):

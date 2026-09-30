@@ -228,11 +228,11 @@ def test_call_site_threads_plan_name_and_story_key():
 
 
 # ---------------------------------------------------------------------------
-# 5. The rebrief must emit its own brief_patched record when the brief changes.
+# 5. The rebrief must emit its own step_cap_rebrief record when the brief changes.
 # ---------------------------------------------------------------------------
 
 def test_brief_patched_record_is_emitted_when_the_brief_changes(monkeypatch, tmp_path):
-    """A rewritten brief is a brief_patched event, attributed to its story."""
+    """A rewritten brief is a step_cap_rebrief event, attributed to its story."""
     evidence = "AssertionError: expected 2 but got 1"
     _patch_collectors(monkeypatch, evidence)
 
@@ -243,9 +243,9 @@ def test_brief_patched_record_is_emitted_when_the_brief_changes(monkeypatch, tmp
     p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
                                 story_key="story-7")
 
-    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
+    patched = [c for c in recorder.calls if c[2].get("event") == "step_cap_rebrief"]
     assert len(patched) == 1, (
-        f"exactly one brief_patched record must be emitted when the brief "
+        f"exactly one step_cap_rebrief record must be emitted when the brief "
         f"changes, got {patched}"
     )
     plan_name, _message, kwargs = patched[0]
@@ -272,9 +272,9 @@ def test_no_brief_patched_record_when_the_rebrief_is_a_noop(monkeypatch, tmp_pat
     assert story["agent_instructions"] == "GOAL: x", (
         "a no-op rebrief must leave the brief unchanged"
     )
-    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
+    patched = [c for c in recorder.calls if c[2].get("event") == "step_cap_rebrief"]
     assert patched == [], (
-        f"a no-op rebrief must not emit brief_patched, got {patched}"
+        f"a no-op rebrief must not emit step_cap_rebrief, got {patched}"
     )
 
 
@@ -290,8 +290,8 @@ def test_brief_patched_record_omits_correlation_id_when_absent(monkeypatch, tmp_
     p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
                                 story_key="story-7")
 
-    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
-    assert len(patched) == 1, f"expected one brief_patched record, got {patched}"
+    patched = [c for c in recorder.calls if c[2].get("event") == "step_cap_rebrief"]
+    assert len(patched) == 1, f"expected one step_cap_rebrief record, got {patched}"
     kwargs = patched[0][2]
     assert "correlation_id" not in kwargs, (
         f"correlation_id must be absent (not None) when the story has none, "
@@ -338,5 +338,25 @@ def test_brief_patched_record_disqualifies_first_pass_clean():
     payload = with_patch["story-7"]
     assert payload["first_pass_clean"] is False, (
         "a brief_patched record for the same story must disqualify first_pass_clean"
+    )
+    assert payload["disqualifying_events"] == 1
+
+
+def test_step_cap_rebrief_record_disqualifies_first_pass_clean():
+    """RH-02 companion: the renamed step-cap event must still disqualify.
+
+    The operator name ``brief_patched`` keeps its own test above; the automated
+    step-cap rebrief now reports under ``step_cap_rebrief`` and must disqualify
+    a first pass just the same.
+    """
+    from pipeline.story_metrics import compute_story_metrics
+
+    with_rebrief = compute_story_metrics([
+        {"event": "story_merged", "story_key": "story-7"},
+        {"event": "step_cap_rebrief", "story_key": "story-7"},
+    ])
+    payload = with_rebrief["story-7"]
+    assert payload["first_pass_clean"] is False, (
+        "a step_cap_rebrief record for the same story must disqualify first_pass_clean"
     )
     assert payload["disqualifying_events"] == 1

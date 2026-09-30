@@ -556,10 +556,11 @@ Each record has the following keys:
   `brief_patched` is emitted whenever a story's `agent_instructions` are
   rewritten after it has already been dispatched (its manifest entry carries
   `dispatched_at`), so the metrics sidecar and the local-success classifier
-  agree that the story's first attempt did not stand: currently by the
-  `patch_story` MCP tool, the step-cap rebrief in
-  `pipeline/dispatch_attempt.py`, and the give-up rebrief in
-  `pipeline/advance.py`. Patching a never-dispatched story, patching any other
+  agree that the story's first attempt did not stand. Each cause has its own
+  name: `brief_patched` for the operator `patch_story` MCP tool,
+  `step_cap_rebrief` for the step-cap rebrief in
+  `pipeline/dispatch_attempt.py`, and `give_up_rebrief` for the give-up
+  rebrief in `pipeline/advance.py`. Patching a never-dispatched story, patching any other
   field, re-setting identical text, or rebriefing with a no-op diagnosis emits
   nothing.
   One notification is intentionally excluded from this vocabulary: the

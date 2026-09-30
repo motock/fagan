@@ -68,7 +68,10 @@ _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 # The one exception is review_changes_requested: a reviewer sending a story back is a dirty first pass by
 # definition, not an environment fluke, so it is deliberately in BOTH sets.
 _FIRST_PASS_DISQUALIFYING_EVENTS = frozenset(
-    {"escalated", "model_fallback", "story_parked", "brief_patched", "review_changes_requested"}
+    {
+        "escalated", "model_fallback", "story_parked", "brief_patched",
+        "step_cap_rebrief", "give_up_rebrief", "review_changes_requested",
+    }
 )
 
 
@@ -129,7 +132,7 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
 
     ``disqualifying_events`` counts the group's records whose ``event`` is in
     ``_FIRST_PASS_DISQUALIFYING_EVENTS`` (``escalated``, ``model_fallback``,
-    ``story_parked``, ``brief_patched``); it is published because a consumer
+    ``story_parked``, ``brief_patched``, ``step_cap_rebrief``, ``give_up_rebrief``); it is published because a consumer
     that collapses groups sharing a story_key can only recompute
     ``first_pass_clean`` correctly from the count - parks and brief patches
     are not escalations.  ``first_pass_clean`` is ``merged`` with zero

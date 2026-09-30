@@ -1,12 +1,16 @@
-"""RLF-4: the give-up rebrief must emit ``brief_patched``.
+"""RLF-4 / RH-02: the give-up rebrief must emit ``give_up_rebrief``.
 
 ``pipeline/advance.py``'s give-up path rewrites a dispatched story's
 ``agent_instructions`` (folding in the diagnosis) exactly like the step-cap
-rebrief does, but emitted no ``brief_patched`` record.  ``local_success.py``
-sees the rewritten brief and records the story as not a clean first pass,
-while ``compute_story_metrics`` sees no disqualifying event and reports it
-clean -- one report, two verdicts.  Its unsatisfiable notice was also
-unattributed (no ``story_key``), so the record could not be tied to a story.
+rebrief does, but emitted no record at all.  ``local_success.py`` sees the
+rewritten brief and records the story as not a clean first pass, while
+``compute_story_metrics`` sees no disqualifying event and reports it clean --
+one report, two verdicts.  Its unsatisfiable notice was also unattributed (no
+``story_key``), so the record could not be tied to a story.
+
+RH-02 gave each automated rebrief cause its own event name, so this path now
+emits ``give_up_rebrief`` rather than the overloaded ``brief_patched`` (which
+is left to mean exactly the operator ``patch_story`` call).
 
 These tests drive the REAL tick (``_advance_pipeline_locked_impl``) with
 ``check_story_status`` stubbed to report a give_up, so they grade the wiring
@@ -111,11 +115,11 @@ def _read_story(path):
 
 
 def _patched(notify_calls):
-    return [c for c in notify_calls if c["kwargs"].get("event") == "brief_patched"]
+    return [c for c in notify_calls if c["kwargs"].get("event") == "give_up_rebrief"]
 
 
 # ---------------------------------------------------------------------------
-# 1. Positive: the give-up rebrief emits an attributed brief_patched record
+# 1. Positive: the give-up rebrief emits an attributed give_up_rebrief record
 # ---------------------------------------------------------------------------
 
 
@@ -138,7 +142,7 @@ def test_brief_patched_record_is_emitted_on_the_give_up_rebrief(monkeypatch, tmp
     adv._advance_pipeline_locked_impl(PLAN)
 
     records = _patched(notify_calls)
-    assert len(records) == 1, "the give-up rebrief must emit exactly one brief_patched record"
+    assert len(records) == 1, "the give-up rebrief must emit exactly one give_up_rebrief record"
     record = records[0]
     assert record["kwargs"]["story_key"] == KEY
     assert record["kwargs"]["correlation_id"] == CORRELATION
@@ -243,11 +247,11 @@ def test_new_message_matches_no_vocabulary_entry():
         if any(
             kw.arg == "event"
             and isinstance(kw.value, ast.Constant)
-            and kw.value.value == "brief_patched"
+            and kw.value.value == "give_up_rebrief"
             for kw in call.keywords
         )
     ]
-    assert patched_calls, "advance.py must carry an event=\"brief_patched\" literal"
+    assert patched_calls, "advance.py must carry an event=\"give_up_rebrief\" literal"
     for call in patched_calls:
         assert _expected_event(_static_message(call)) is None, (
             f"line {call.lineno}: the brief_patched message matches a census "
@@ -272,3 +276,24 @@ def test_reference_names_advance_as_a_brief_patched_emitter():
     assert "pipeline/dispatch_attempt.py" in paragraph
     # The old claim that advance.py does NOT emit the event must be gone.
     assert "not by `pipeline/advance.py`" not in " ".join(paragraph.split())
+
+
+# ---------------------------------------------------------------------------
+# 7. RH-02 companion: the renamed give-up event must still disqualify
+# ---------------------------------------------------------------------------
+
+
+def test_give_up_rebrief_record_disqualifies_first_pass_clean():
+    """The give-up rebrief now reports as ``give_up_rebrief``; it still counts.
+
+    The operator name ``brief_patched`` keeps its own test above (section 4);
+    this companion pins the renamed automated event to the same verdict.
+    """
+    merged = {"event": "story_merged", "story_key": KEY, "correlation_id": CORRELATION}
+    rebrief = {"event": "give_up_rebrief", "story_key": KEY, "correlation_id": CORRELATION}
+
+    both = compute_story_metrics([dict(merged), dict(rebrief)])
+    assert len(both) == 1
+    payload = next(iter(both.values()))
+    assert payload["disqualifying_events"] == 1
+    assert payload["first_pass_clean"] is False

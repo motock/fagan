@@ -307,7 +307,11 @@ def test_call_site_wires_collapse_after_tail():
     """The single call site must wrap the notification-records read with
     _collapse_duplicate_notifications (tail first, then collapse)."""
     import inspect
-    text = inspect.getsource(d)
+
+    from app import dashboard_routes
+
+    # RH-09: get_plan (and this call site) moved to app/dashboard_routes.py.
+    text = inspect.getsource(dashboard_routes)
     assert (
         '"notification_records": _collapse_duplicate_notifications(\n'
         '            _store.get_notification_records(plan_name)\n'

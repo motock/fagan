@@ -104,16 +104,26 @@ def _get(client, plan="demo", story="S1", query=""):
 # ---------------------------------------------------------------------------
 
 
+def _dashboard_and_routes_source() -> str:
+    return (
+        Path("app/dashboard_routes.py").read_text(encoding="utf-8")
+        + Path("app/dashboard.py").read_text(encoding="utf-8")
+    )
+
+
 class TestRouteRegistration:
     """The brief pins WHERE the route lives and WHAT it delegates to."""
 
     def _source(self) -> str:
-        return Path("app/dashboard.py").read_text(encoding="utf-8")
+        # RH-09: the replay handler now lives in app/dashboard_routes.py and
+        # is registered in app/dashboard.py; the handler source comes first.
+        return _dashboard_and_routes_source()
 
     def test_route_decorator_present(self):
-        assert '@app.get("/api/plans/{plan_name}/stories/{story_key}/replay")' in (
-            self._source()
-        )
+        assert (
+            'app.get("/api/plans/{plan_name}/stories/{story_key}/replay")'
+            "(get_story_replay)"
+        ) in self._source()
 
     def test_route_inserted_after_get_story_checklist(self):
         src = self._source()
@@ -124,7 +134,7 @@ class TestRouteRegistration:
     def test_route_inserted_before_api_config(self):
         src = self._source()
         assert src.index("/api/plans/{plan_name}/stories/{story_key}/replay") < (
-            src.index('@app.get("/api/config")')
+            src.index('app.get("/api/config")(effective_config)')
         )
 
     def test_route_before_static_mount(self):
@@ -754,14 +764,14 @@ class TestAgentLogTsSidecar:
     # -- static assertions on the specified change --------------------------
 
     def test_dashboard_reads_sidecar_via_get_worktree_file(self):
-        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        src = _dashboard_and_routes_source()
         assert '"agent.log.ts"' in src, (
             "get_story_replay must fetch the agent.log.ts sidecar via "
             '_store.get_worktree_file(story, "agent.log.ts")'
         )
 
     def test_sidecar_zip_gated_to_agent_log_only(self):
-        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        src = _dashboard_and_routes_source()
         assert 'if name == "agent.log":' in src, (
             "the sidecar zip must be gated to the agent.log source only"
         )
@@ -769,7 +779,7 @@ class TestAgentLogTsSidecar:
         assert '"review.log.ts"' not in src
 
     def test_fail_open_comment_present(self):
-        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        src = _dashboard_and_routes_source()
         assert "Fail open" in src, (
             "the sidecar branch must document the fail-open contract"
         )

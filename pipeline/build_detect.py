@@ -108,9 +108,8 @@ def failed_node_ids(stdout: str | None) -> list[str]:
     separator - a parametrized id can itself contain spaces, so splitting
     on whitespace would merge two distinct failures into one - and a line
     with nothing after the tag contributes no id rather than raising. A
-    runner that prints no such lines (any non-pytest command) yields an
-    empty list, which callers must treat as "no parseable failures" and
-    never as "nothing failed".
+    runner whose output we don't parse yields an empty list, which callers
+    must treat as "no parseable failures" and never as "nothing failed".
 
     Maven Surefire/Failsafe and Gradle output are parsed too: the JVM ids
     (``Class.method``) are unioned in, so pre-existing baseline failures on
@@ -519,7 +518,7 @@ def _scope_test_cmd_to_acceptance(
     if _is_pytest_cmd(test_cmd):
         return [*test_cmd, *acceptance_paths]
     # mvn/mvnw/gradle/gradlew: scope to the acceptance fixture classes.
-    if test_cmd and os.path.basename(test_cmd[0]) in {
+    if os.path.basename(test_cmd[0]) in {
         "mvn", "mvnw", "gradle", "gradlew",
     }:
         classes = _jvm_acceptance_classes(acceptance_paths)

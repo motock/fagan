@@ -557,9 +557,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # tests can contain wrong assertions (the "graded on own buggy tests"
     # failure mode); the harness-owned oracle is the authoritative bar.
     # _scope_test_cmd_to_acceptance scopes pytest (path args), cargo
-    # (--test <stem>), and npm/yarn-with-node --test; other runners fall back
-    # to the whole suite (the MBW safety net — a story without an acceptance
-    # block, or a runner we can't safely scope, still gets the full re-run).
+    # (--test <stem>), npm/yarn-with-node --test, and Maven/Gradle
+    # (-Dtest/-Dit.test or --tests per fixture class); other runners fall
+    # back to the whole suite (the MBW safety net — a story without an
+    # acceptance block, or a runner we can't safely scope, still gets the
+    # full re-run).
     #
     # Paths are materialized relative to the worktree root (dispatch_story),
     # but test_dir can be a child subdirectory when the buildable project

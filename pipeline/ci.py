@@ -456,7 +456,8 @@ def _reverify_acceptance(
 
     The function first attempts to run only the acceptance paths when the
     story declares an ``acceptance`` block *and* the runner can be safely
-    scoped (pytest path arguments, cargo ``--test``, npm/yarn node ``--test`` –
+    scoped (pytest path arguments, cargo ``--test``, npm/yarn node ``--test``,
+    Maven ``-Dtest``/``-Dit.test`` or Gradle ``--tests`` per fixture class –
     see :func:`_scope_test_cmd_to_acceptance`).  If no acceptance block is
     present, or scoping is not possible, the full test suite is executed.
 

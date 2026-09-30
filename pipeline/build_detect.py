@@ -33,6 +33,7 @@ from .ecosystem_detect import (  # noqa: F401 - re-exported
     detect_lint_command,
     detect_test_command,
 )
+from .failure_parsers import jvm_failed_test_ids
 
 
 def _provision_worktree_venv(worktree: Path) -> None:
@@ -107,9 +108,13 @@ def failed_node_ids(stdout: str | None) -> list[str]:
     separator - a parametrized id can itself contain spaces, so splitting
     on whitespace would merge two distinct failures into one - and a line
     with nothing after the tag contributes no id rather than raising. A
-    runner that prints no such lines (any non-pytest command) yields an
-    empty list, which callers must treat as "no parseable failures" and
-    never as "nothing failed".
+    runner whose output we don't parse yields an empty list, which callers
+    must treat as "no parseable failures" and never as "nothing failed".
+
+    Maven Surefire/Failsafe and Gradle output are parsed too: the JVM ids
+    (``Class.method``) are unioned in, so pre-existing baseline failures on
+    a Maven/Gradle repo can be exempted like pytest ids. Any other runner
+    still yields [] - callers treat that as "no parseable failures".
     """
     ids = set()
     for line in (stdout or "").splitlines():
@@ -119,6 +124,7 @@ def failed_node_ids(stdout: str | None) -> list[str]:
         node_id = match.group(1).split(" - ")[0].strip()
         if node_id:
             ids.add(node_id)
+    ids.update(jvm_failed_test_ids(stdout))
     return sorted(ids)
 
 
@@ -434,6 +440,39 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
     return ("finding", message)
 
 
+def _jvm_acceptance_classes(acceptance_paths: list[str]) -> list[str] | None:
+    """Map acceptance fixture paths to fully-qualified JVM test classes.
+
+    ``src/test/java/com/x/FooTest.java`` -> ``com.x.FooTest``; the
+    ``src/test/java/`` or ``src/test/kotlin/`` marker may appear anywhere in
+    the path (multi-module builds). Returns None if ANY path does not map -
+    the caller falls back to the full suite rather than silently dropping a
+    fixture from grading.
+    """
+    classes: list[str] = []
+    for path in acceptance_paths:
+        norm = path.replace("\\", "/")
+        rel = None
+        for marker in ("src/test/java/", "src/test/kotlin/"):
+            idx = norm.find(marker)
+            if idx != -1:
+                rel = norm[idx + len(marker):]
+                break
+        if rel is None:
+            return None
+        for ext in (".java", ".kt"):
+            if rel.endswith(ext):
+                rel = rel[: -len(ext)]
+                break
+        fqcn = rel.replace("/", ".")
+        if not fqcn:
+            return None
+        classes.append(fqcn)
+    if not classes:
+        return None
+    return classes
+
+
 def _scope_test_cmd_to_acceptance(
     test_cmd: list[str], acceptance_paths: list[str], test_dir: Path
 ) -> list[str] | None:
@@ -455,6 +494,14 @@ def _scope_test_cmd_to_acceptance(
     prior behavior for real-project stories using jest/mocha/etc.):
 
       - pytest: ``[pytest, *paths]`` (path args; unchanged).
+      - Maven (mvn/mvnw): ``-Dtest=<classes>`` / ``-Dit.test=<classes>`` per
+        acceptance fixture under ``src/test/java/`` or ``src/test/kotlin/``
+        (``src/test/java/com/x/FooTest.java`` -> ``com.x.FooTest``), with
+        failIfNoSpecifiedTests disabled so an empty match doesn't fail the
+        build. Gradle (gradle/gradlew): ``--tests <class>`` per fixture.
+        If ANY acceptance path does not map to a test class, return None -
+        the caller falls back to the full suite rather than silently
+        dropping a fixture from grading.
       - cargo:  ``cargo test --test <stem>`` per acceptance fixture under
         ``tests/``. cargo names integration tests by file stem
         (``tests/test_acceptance.rs`` -> ``--test test_acceptance``), so this
@@ -470,6 +517,26 @@ def _scope_test_cmd_to_acceptance(
         return None
     if _is_pytest_cmd(test_cmd):
         return [*test_cmd, *acceptance_paths]
+    # mvn/mvnw/gradle/gradlew: scope to the acceptance fixture classes.
+    if os.path.basename(test_cmd[0]) in {
+        "mvn", "mvnw", "gradle", "gradlew",
+    }:
+        classes = _jvm_acceptance_classes(acceptance_paths)
+        if classes is None:
+            return None
+        if os.path.basename(test_cmd[0]) in {"mvn", "mvnw"}:
+            joined = ",".join(classes)
+            return [
+                *test_cmd,
+                "-Dtest=" + joined,
+                "-Dit.test=" + joined,
+                "-Dsurefire.failIfNoSpecifiedTests=false",
+                "-Dfailsafe.failIfNoSpecifiedTests=false",
+            ]
+        args: list[str] = []
+        for c in classes:
+            args += ["--tests", c]
+        return [*test_cmd, *args]
     # cargo test --test <stem> ...
     if test_cmd[:2] == ["cargo", "test"]:
         stems: list[str] = []

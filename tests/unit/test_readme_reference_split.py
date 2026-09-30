@@ -102,6 +102,51 @@ _PATCH_PLAN_BULLET = (
     '  held it returns `{ok: true, skipped: "locked"}` without touching the manifest.'
 )
 
+# RSGF-1 changed review_story's unchanged-SHA skip to additionally require an
+# unchanged reviewing-logic fingerprint, and documented the new
+# `last_reviewed_logic_fingerprint` manifest key in the "MCP tools reference"
+# section. The pre-split README at 2cca309~1 predates that change and still
+# documents the HEAD-only skip, so the verbatim guard for that section
+# normalizes the new wording back to the original — and separately requires
+# the new wording to be present and the old wording to be gone, so the
+# normalization can never mask a revert to the HEAD-only skip contract.
+_REVIEW_FINGERPRINT_SENTENCE_NEW = (
+    "  the story as `last_reviewed_sha`, together with a fingerprint of the\n"
+    "  reviewing logic that produced the verdict, stored as\n"
+    "  `last_reviewed_logic_fingerprint` (a SHA-256 digest over the bytes of the\n"
+    "  verdict-forming modules — `scope_gate.py`, `review.py`,\n"
+    "  `review_orchestrator.py`, `testfiles.py` — computed by\n"
+    "  `pipeline/review_logic.py`). If `review_story` is called again while HEAD\n"
+    "  is still that same SHA — i.e. no redispatch/rework has landed a new commit\n"
+    "  since the rejection — AND the stored fingerprint still matches the\n"
+    "  reviewing logic now installed, the reviewer is not invoked a second time;"
+)
+_REVIEW_FINGERPRINT_SENTENCE_ORIG = (
+    "  the story as `last_reviewed_sha`. If `review_story` is called again while\n"
+    "  HEAD is still that same SHA — i.e. no redispatch/rework has landed a new\n"
+    "  commit since the rejection — the reviewer is not invoked a second time;"
+)
+_REVIEW_FINGERPRINT_TAIL_NEW = (
+    "  and silently override a real, unaddressed finding. The fingerprint\n"
+    "  condition keeps that guard honest over time: if the rejecting gate's own\n"
+    "  bug has since been fixed and merged, the digest changes and the story is\n"
+    "  re-reviewed on the next tick even though its branch was never touched — a\n"
+    "  stale verdict is never allowed to outlive the logic that produced it. The\n"
+    "  story remains dispatch-eligible at `changes_requested` throughout — a\n"
+    "  genuine rework that lands a new commit naturally clears the guard on its\n"
+    "  next review call, so this only blocks re-reviewing the exact same unchanged\n"
+    "  commit under unchanged reviewing logic, never the story's forward progress.\n"
+    "  Both `last_reviewed_sha` and `last_reviewed_logic_fingerprint` are cleared\n"
+    "  on `APPROVE`."
+)
+_REVIEW_FINGERPRINT_TAIL_ORIG = (
+    "  and silently override a real, unaddressed finding. The story remains\n"
+    "  dispatch-eligible at `changes_requested` throughout — a genuine rework that\n"
+    "  lands a new commit naturally clears the guard on its next review call, so\n"
+    "  this only blocks re-reviewing the exact same unchanged commit, never the\n"
+    "  story's forward progress. `last_reviewed_sha` is cleared on `APPROVE`."
+)
+
 
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
@@ -661,6 +706,40 @@ def test_moved_section_body_is_verbatim(title):
                 )
                 reference_body = reference_body.replace(
                     "\n\n" + _PATCH_PLAN_BULLET, ""
+                )
+                # RSGF-1 changed review_story's unchanged-SHA skip to also
+                # require an unchanged reviewing-logic fingerprint and
+                # documented the new last_reviewed_logic_fingerprint key in
+                # this section. The pre-split README at 2cca309~1 predates
+                # that change and still documents the HEAD-only skip, so
+                # require the new wording to be present and the old wording
+                # to be gone, then normalize the new wording back to the
+                # original for the byte comparison — the presence and
+                # absence assertions mean the normalization can never mask
+                # a revert to the HEAD-only skip contract.
+                assert _REVIEW_FINGERPRINT_SENTENCE_NEW in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must document "
+                    f"the fingerprint condition on the unchanged-SHA skip."
+                )
+                assert _REVIEW_FINGERPRINT_SENTENCE_ORIG not in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must not "
+                    f"revert to the HEAD-only skip wording."
+                )
+                assert _REVIEW_FINGERPRINT_TAIL_NEW in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must note "
+                    f"that the fingerprint is cleared on APPROVE."
+                )
+                assert _REVIEW_FINGERPRINT_TAIL_ORIG not in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must not "
+                    f"revert to clearing only last_reviewed_sha on APPROVE."
+                )
+                reference_body = reference_body.replace(
+                    _REVIEW_FINGERPRINT_SENTENCE_NEW,
+                    _REVIEW_FINGERPRINT_SENTENCE_ORIG,
+                )
+                reference_body = reference_body.replace(
+                    _REVIEW_FINGERPRINT_TAIL_NEW,
+                    _REVIEW_FINGERPRINT_TAIL_ORIG,
                 )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "

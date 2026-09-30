@@ -102,18 +102,30 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   — after that many consecutive inconclusive verdicts the story is **parked**
   for human review instead of retrying forever.
   On `REQUEST_CHANGES`, the worktree's current HEAD commit SHA is recorded on
-  the story as `last_reviewed_sha`. If `review_story` is called again while
-  HEAD is still that same SHA — i.e. no redispatch/rework has landed a new
-  commit since the rejection — the reviewer is not invoked a second time;
+  the story as `last_reviewed_sha`, together with a fingerprint of the
+  reviewing logic that produced the verdict, stored as
+  `last_reviewed_logic_fingerprint` (a SHA-256 digest over the bytes of the
+  verdict-forming modules — `scope_gate.py`, `review.py`,
+  `review_orchestrator.py`, `testfiles.py` — computed by
+  `pipeline/review_logic.py`). If `review_story` is called again while HEAD
+  is still that same SHA — i.e. no redispatch/rework has landed a new commit
+  since the rejection — AND the stored fingerprint still matches the
+  reviewing logic now installed, the reviewer is not invoked a second time;
   the call returns `{"ok": True, "status": <unchanged>, "skipped":
   "unchanged_since_last_review"}` instead. This closes a real gate-integrity
   gap: because LLM review is not fully deterministic, a second call on an
   unchanged diff could otherwise land on a different verdict than the first
-  and silently override a real, unaddressed finding. The story remains
-  dispatch-eligible at `changes_requested` throughout — a genuine rework that
-  lands a new commit naturally clears the guard on its next review call, so
-  this only blocks re-reviewing the exact same unchanged commit, never the
-  story's forward progress. `last_reviewed_sha` is cleared on `APPROVE`.
+  and silently override a real, unaddressed finding. The fingerprint
+  condition keeps that guard honest over time: if the rejecting gate's own
+  bug has since been fixed and merged, the digest changes and the story is
+  re-reviewed on the next tick even though its branch was never touched — a
+  stale verdict is never allowed to outlive the logic that produced it. The
+  story remains dispatch-eligible at `changes_requested` throughout — a
+  genuine rework that lands a new commit naturally clears the guard on its
+  next review call, so this only blocks re-reviewing the exact same unchanged
+  commit under unchanged reviewing logic, never the story's forward progress.
+  Both `last_reviewed_sha` and `last_reviewed_logic_fingerprint` are cleared
+  on `APPROVE`.
   Separately, `review_story` only ever reviews a story whose status is
   `tests_passed` — its sole legitimate entry state, matching the gate
   `advance_pipeline` itself applies before ever calling it. A call on a story

@@ -22,6 +22,11 @@ from typing import Any
 from .parsers import _is_transient_backend_exception
 from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
+from .review_logic import (
+    REVIEW_LOGIC_FINGERPRINT_KEY,
+    is_unchanged_since_review,
+    review_logic_fingerprint,
+)
 from .review_refs import _ServerRef
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 
@@ -132,7 +137,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     capture_output=True,
                     text=True,
                 ).stdout.strip()
-                if current_sha == story["last_reviewed_sha"]:
+                if is_unchanged_since_review(story, current_sha):
                     _notify_user(
                         plan_name,
                         f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.",
@@ -718,6 +723,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("rework_attempts", None)
         # Clear any stored SHA when review is approved
         story.pop("last_reviewed_sha", None)
+        story.pop(REVIEW_LOGIC_FINGERPRINT_KEY, None)
         story.pop("last_review_findings", None)
     else:
         # Persist the reviewer's reasoning (not just the verdict) so the
@@ -803,6 +809,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     capture_output=True,
                     text=True,
                 ).stdout.strip()
+                story[REVIEW_LOGIC_FINGERPRINT_KEY] = review_logic_fingerprint()
             except (subprocess.CalledProcessError, OSError):
                 pass
         if (

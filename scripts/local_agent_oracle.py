@@ -98,6 +98,7 @@ from pipeline.local_agent_common import (
     _trim_resumed_transcript,
     destructive_git_op,
 )
+from scripts.local_agent_oracle_done_marker import restore_tampered_oracle_files_impl
 from scripts.local_agent_oracle_guards import _no_tool_nudge
 from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_tool references these as bare names)
     _SYNTAX_REJECT_COUNTS,
@@ -424,25 +425,7 @@ def _restore_tampered_oracle_files() -> str:
     """Restore any acceptance path whose on-disk content no longer matches
     its snapshot. Returns a warning to append to the bash tool's result, or
     "" if nothing was tampered with."""
-    restored = []
-    for rel, original in _ORACLE_SNAPSHOT.items():
-        path = CWD / rel
-        current = path.read_text() if path.exists() else None
-        if current != original:
-            if original is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(original)
-            restored.append(rel)
-    if not restored:
-        return ""
-    names = ", ".join(restored)
-    return (f"\n\nWARNING: {names} is the read-only acceptance suite and was "
-            f"restored after being modified via bash. It must NOT be edited "
-            f"or deleted by any means, including shell commands. Change the "
-            f"implementation file instead.")
-
+    return restore_tampered_oracle_files_impl(_ORACLE_SNAPSHOT, CWD)
 
 
 # Paths successfully written via create_file THIS process run - lets the

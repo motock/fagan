@@ -7,6 +7,110 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [0.6.0] - 2026-09-30
+
+### Added
+
+**Language-agnostic gates (LAG)**
+
+- A repo can declare its test, lint and build commands, and its
+  `test_globs`, in a root `.fagan.json`; the scope gate treats declared
+  test globs as test files (#1037, #1039).
+- Build, test and lint command detection moved out of `build_detect.py`
+  into `ecosystem_detect.py`, which now also detects Go and .NET and fails
+  visibly on any other unsupported ecosystem (#1036, #1038).
+- Maven and Gradle projects run `verify` / `check` through the project
+  wrapper when one is present, and their test failures are parsed so
+  acceptance runs scope to the failing JVM test classes (#1041, #1044).
+- One test-path classifier is shared by the scope gate, ingest and
+  `plan_conflict_ruling`, and the ingest sizing check recognises any
+  backticked relative source path (#1035, #1040).
+
+**Global rules bundle**
+
+- An opt-in installer (`scripts/install_global_rules.py`, hinted by
+  `install.sh`) writes the engineering standards and the pipeline workflow
+  rules into each supported agent CLI's global instructions file inside a
+  managed block, honouring `XDG_CONFIG_HOME`; documented in the README
+  Quickstart and REFERENCE (#992-#1000, #1019, #1021).
+
+**Security audit tracking**
+
+- The `record_security_audit` MCP tool and a per-repo audit record, with
+  due thresholds and a scheduler notice when a repo is due (#1009-#1012).
+- The security-engineer verdict is posted on the PR, and ingest warns when
+  a brief needs a security review the pipeline will not run (#1007, #1008).
+
+**Scheduler and harness diagnostics**
+
+- The scheduler warns at startup when the launchd plist and the MCP
+  server config disagree, by diffing the two environments rather than a
+  hand-maintained catalog; secret-like and non-`PIPELINE_` values are
+  masked (#1027, #1032, #1059).
+- Each dispatch attempt's log starts with a `[boot]` line, and a watchdog
+  kill snapshots the end of `agent.log` into the plan dir (#1023, #1024).
+- A rejected story is re-reviewed when the reviewing logic has changed,
+  and a skipped re-review is notified once per SHA (#1049, #1052).
+- A two-tier CI gate enforces the 1000-line rule: blocking on production
+  Python, warn-only elsewhere (#1048).
+- The one-line installer finishes Claude Code setup, and the README leads
+  with a demo and the one-line install (#982, #987).
+
+### Changed
+
+- A triage `mark_done` ruling requires a merged PR before it marks a story
+  done, and a PR merged outside the pipeline is recorded as `story_merged`
+  when `mark_story_done` closes it (#1033, #984).
+- Each automated rebrief cause has its own event name, and the rebrief
+  header detectors match an occurrence rather than a mention (#1050,
+  #1031).
+- `effective_env_config`'s `effective` field is labelled as this-process
+  rather than resolved against code defaults (#1058).
+- `scripts/local_agent.py`, `scripts/local_agent_oracle.py`,
+  `app/dashboard.py`, `pipeline/dispatch.py`, `pipeline/story_status.py`
+  and `pipeline/worktree_patch.py` were each brought under 1000 lines.
+  No behavior change (#1051, #1053-#1057).
+- The retro backlog is capped so the pending-marker list stays drainable
+  (#1047).
+
+### Fixed
+
+**Dispatch & merge**
+
+- Dispatch is refused when a plan's `repo_root` no longer exists, and a
+  story that is already done or has an open PR is not re-dispatched
+  (#1016).
+- A story's registry model-name pin resolves to its tag, and the scope
+  gate treats nested and Rust test paths as test files (#1004, #1003).
+- Every pipeline runtime marker is self-excluded in worktrees, and the
+  acceptance oracle is kept out of story commits (#1014, #1015).
+- A dispatch attempt clears the previous attempt's done markers, and the
+  watchdog skips its SIGTERM when the stored pid belongs to a process
+  started after dispatch (#1025, #1026).
+- Triage defers a transient overlord failure instead of parking the story,
+  and reports git evidence against the worktree-resolved base branch
+  (#981, #1042, #1043).
+
+- Triage's sweep no longer writes back a stale whole-manifest snapshot: it
+  re-reads the manifest and applies only the sweep's own changes, so
+  writes made while a ruling was in flight survive (#1061).
+
+**Tests**
+
+- The smoke precondition test no longer depends on the operator's local
+  model registry (#1062).
+
+**Reporting accuracy**
+
+- The local-success report is filtered to a single repo and names its
+  cohort; the plan summary flags a reviewer-bounced story beside its
+  baseline verdict; ruling and sizing notices carry their story key
+  (#1030, #989, #983, #979).
+
+**Dashboard**
+
+- The toast message gets its own full-width line (#990).
+
 ## [0.5.0] - 2026-09-24
 
 ### Added

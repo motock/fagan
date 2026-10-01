@@ -241,3 +241,5 @@ if a precise date is needed when writing one of these up.
 - review-feedback-rework-done-bar — completed 2026-09-21, 2 stories
 - triage-git-evidence-base-branch — completed 2026-09-30, 2 stories
 - language-agnostic-gates — completed 2026-09-30, 10 stories
+- review-skip-gate-fingerprint — completed 2026-09-30, 2 stories
+- retro-2026-09-29-harness — completed 2026-10-01, 15 stories

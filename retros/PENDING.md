@@ -243,3 +243,4 @@ if a precise date is needed when writing one of these up.
 - language-agnostic-gates — completed 2026-09-30, 10 stories
 - review-skip-gate-fingerprint — completed 2026-09-30, 2 stories
 - retro-2026-09-29-harness — completed 2026-10-01, 15 stories
+- harness-gaps-2026-09-30 — completed 2026-10-01, 2 stories

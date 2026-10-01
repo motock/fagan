@@ -59,10 +59,13 @@ def _run(root, *extra):
     )
 
 
-def test_blocking_allowlist_contains_known_entry(checker):
-    # Membership only: the six split stories each delete one entry, so any
-    # size/equality assertion here would freeze the registry.
-    assert "scripts/local_agent.py" in checker._BLOCKING_ALLOWLIST
+def test_blocking_allowlist_entries_are_production_paths_over_the_limit(checker):
+    # Each split story retires its own entry, so assert the registry's shape
+    # (production prefix, recorded count above the limit), never a specific
+    # entry or the total.
+    for path, recorded in checker._BLOCKING_ALLOWLIST.items():
+        assert path.startswith(checker.BLOCKING_PREFIXES) or "/" not in path, path
+        assert recorded > checker.DEFAULT_LIMIT, path
 
 
 def test_production_file_at_limit_passes(checker, tmp_path):

@@ -63,8 +63,8 @@ def test_should_drop_dashboard_allowlist_entry():
     assert "app/dashboard.py" not in check_line_limit._BLOCKING_ALLOWLIST
 
 
-def test_should_leave_other_allowlist_entries_untouched():
-    assert "scripts/local_agent.py" in check_line_limit._BLOCKING_ALLOWLIST
+def test_should_drop_local_agent_allowlist_entry():
+    assert "scripts/local_agent.py" not in check_line_limit._BLOCKING_ALLOWLIST
 
 
 def test_should_pass_line_limit_gate_on_repo():

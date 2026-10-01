@@ -67,7 +67,6 @@ _BLOCKING_ALLOWLIST = {
     "scripts/local_agent.py": 1084,
     "scripts/local_agent_oracle.py": 1012,
     "pipeline/story_status.py": 1012,
-    "pipeline/worktree_patch.py": 1004,
 }
 
 # Non-production text files over the limit today. Growth past the ceiling is

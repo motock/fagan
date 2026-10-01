@@ -65,7 +65,6 @@ BLOCKING_PREFIXES = ("pipeline/", "app/", "scripts/")
 # that brings the file under the limit.
 _BLOCKING_ALLOWLIST = {
     "scripts/local_agent_oracle.py": 1012,
-    "pipeline/story_status.py": 1012,
 }
 
 # Non-production text files over the limit today. Growth past the ceiling is

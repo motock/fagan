@@ -709,9 +709,11 @@ def _report_env_conflicts() -> None:
         def _render(name: str, value: str | None) -> str:
             if value is None:
                 return "<unset>"
-            # Mask exactly as resolve_env_var does: a catalogued secret never
-            # prints its value.
-            return "***" if _is_secret(name) else value
+            # Only non-secret PIPELINE_ names may echo a value; anything else
+            # is reported as differing but never printed.
+            if _is_secret(name) or not name.startswith("PIPELINE_"):
+                return "***"
+            return value
 
         for name in sorted(set(plist) | set(mcp)):
             if name in _BENIGN_ONE_SIDED_DIFFS:

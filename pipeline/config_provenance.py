@@ -263,7 +263,11 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
 )
 
 def _is_secret(name: str) -> bool:
-    return any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
+    upper = name.upper()
+    if any(sub in upper for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")):
+        return True
+    # Token match (not substring): PIPELINE_BACKEND_TEST_AUTHOR must stay unmasked.
+    return any(tok in ("AUTH", "AUTHORIZATION", "PASSWD", "PRIVATE", "DSN") for tok in upper.split("_"))
 
 
 def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env=None):

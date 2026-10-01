@@ -28,6 +28,7 @@ until scripts/smoke_getting_started.py exists.
 import ast
 import importlib.util
 import inspect
+import json
 import os
 import re
 import shutil
@@ -622,6 +623,21 @@ def _subprocess_env(extra=None):
     return env
 
 
+def _write_registry(tmp_path, roles):
+    """A synthetic registry so the subprocess never reads the operator's live one.
+
+    PIPELINE_MODEL_REGISTRY_PATH is the only registry source
+    app.role_registry consults besides the checked-in model_registry.json.
+    """
+    registry = {
+        "providers": {"claude": {"models": {"sonnet": {"tag": "sonnet"}}}},
+        "roles": roles,
+    }
+    path = tmp_path / "model_registry.json"
+    path.write_text(json.dumps(registry))
+    return path
+
+
 def _precondition_flag_from_help():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT_PATH), "--help"],
@@ -660,7 +676,10 @@ def test_help_exits_zero_and_advertises_precondition_mode():
     _precondition_flag_from_help()
 
 
-def test_precondition_mode_exits_0_on_local_backend_before_touching_plan_dir():
+def test_precondition_mode_exits_0_on_local_backend_before_touching_plan_dir(
+    tmp_path,
+):
+    registry_path = _write_registry(tmp_path, roles={})
     flag = _precondition_flag_from_help()
     plan_dir = REPO_ROOT / ".tmp-smoke-precondition-plan-guard"
     if plan_dir.exists():
@@ -670,7 +689,12 @@ def test_precondition_mode_exits_0_on_local_backend_before_touching_plan_dir():
         capture_output=True,
         text=True,
         timeout=120,
-        env=_subprocess_env({"PIPELINE_BACKEND_DISPATCH": "ollama"}),
+        env=_subprocess_env(
+            {
+                "PIPELINE_BACKEND_DISPATCH": "ollama",
+                "PIPELINE_MODEL_REGISTRY_PATH": str(registry_path),
+            }
+        ),
         check=False,
     )
     assert proc.returncode == 0, (
@@ -684,6 +708,29 @@ def test_precondition_mode_exits_0_on_local_backend_before_touching_plan_dir():
         "with PIPELINE_BACKEND_DISPATCH=ollama the script must exit before "
         "touching any plan dir"
     )
+
+
+def test_registry_roles_dispatch_outranks_env_var_in_precondition_mode(tmp_path):
+    registry_path = _write_registry(
+        tmp_path,
+        roles={"dispatch": {"provider": "claude", "model": "sonnet"}},
+    )
+    flag = _precondition_flag_from_help()
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), flag],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=_subprocess_env(
+            {
+                "PIPELINE_BACKEND_DISPATCH": "ollama",
+                "PIPELINE_MODEL_REGISTRY_PATH": str(registry_path),
+            }
+        ),
+        check=False,
+    )
+    assert "validating dispatch on claude/sonnet" in proc.stdout + proc.stderr
+    assert "model_registry.json (roles.dispatch)" in proc.stdout + proc.stderr
 
 
 def test_precondition_mode_with_default_backend_exits_zero_or_one():

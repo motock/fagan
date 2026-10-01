@@ -7,6 +7,7 @@ return a minimal, well‑formed prompt that contains the TRIAGE QU
 and the park‑and‑notify invariant.
 """
 
+import copy
 import os
 import re
 import subprocess
@@ -360,6 +361,32 @@ __all__ = [
     "triage_candidates",
     "DEFERRED_ACTIONS",
     ]
+def _merge_sweep_changes(on_disk: dict, initial: dict, current: dict) -> dict:
+    """Apply only the sweep's own mutations (initial -> current) onto *on_disk*.
+
+    The sweep holds its snapshot across minutes-long LLM rulings, so writing
+    it wholesale would revert anything written to the file meanwhile. A story
+    absent from disk (dropped by a concurrent re-ingest) is not resurrected.
+    """
+    for field, value in current.items():
+        if field != "stories" and initial.get(field) != value:
+            on_disk[field] = value
+    disk_stories = on_disk.setdefault("stories", {})
+    initial_stories = initial.get("stories", {})
+    for key, story in current.get("stories", {}).items():
+        if key not in initial_stories:
+            disk_stories[key] = story
+            continue
+        if key not in disk_stories or initial_stories[key] == story:
+            continue
+        for field, value in story.items():
+            if initial_stories[key].get(field) != value:
+                disk_stories[key][field] = value
+        for field in initial_stories[key].keys() - story.keys():
+            disk_stories[key].pop(field, None)
+    return on_disk
+
+
 def run_triage_sweep(plan_name: str) -> dict:
     if not _auto_triage_enabled():
         return {"ok": True, "skipped": "disabled"}
@@ -372,6 +399,7 @@ def run_triage_sweep(plan_name: str) -> dict:
             return {"ok": True, "skipped": "no_manifest"}
         if manifest.get("paused"):
             return {"ok": True, "skipped": "plan_paused"}
+        initial = copy.deepcopy(manifest)
         candidates = triage_candidates(manifest.get("stories", {}))
         if not candidates:
             return {"ok": True, "triaged": []}
@@ -447,7 +475,10 @@ def run_triage_sweep(plan_name: str) -> dict:
             for s in manifest.get("stories", {}).values():
                 if isinstance(s, dict):
                     s.pop("_patch_acceptance_recorded", None)
-            _atomic_write_json(manifest_path, manifest)
+            _atomic_write_json(
+                manifest_path,
+                _merge_sweep_changes(json.loads(manifest_path.read_text()), initial, manifest),
+            )
         return {
             "ok": True,
             "triaged": triaged_keys,

@@ -319,7 +319,7 @@ def test_role_resource_ok_review_uses_plan_role_config_backend_not_claude(
     touches Claude."""
     usage_state_path.write_text(json.dumps({"session_pct": 100, "week_pct": 100, "paused": True}))
     monkeypatch.setattr(backend.OllamaDriver, "resource_status",
-                        lambda self: {"ok": True, "reason": ""})
+                        lambda self, model_tag=None: {"ok": True, "reason": ""})
 
     ok, reason = p._role_resource_ok(
         "review", plan_role_config={"review": {"provider": "ollama", "model": "glm"}}
@@ -337,7 +337,7 @@ def test_role_resource_ok_review_plan_role_config_gates_when_local_down(
     healthy. The gate follows the plan role_config, not the env default."""
     usage_state_path.write_text(json.dumps({"session_pct": 5, "week_pct": 5, "paused": False}))
     monkeypatch.setattr(backend.OllamaDriver, "resource_status",
-                        lambda self: {"ok": False, "reason": "Ollama unreachable"})
+                        lambda self, model_tag=None: {"ok": False, "reason": "Ollama unreachable"})
 
     ok, reason = p._role_resource_ok(
         "review", plan_role_config={"review": {"provider": "ollama", "model": "glm"}}

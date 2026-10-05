@@ -618,6 +618,14 @@ def _subprocess_env(extra=None):
         if not k.startswith("PIPELINE_")
     }
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    # The child is not a pytest process, so pipeline/__init__.py's import-time
+    # bootstrap will re-read the operator's real <repo>/.pipeline.env and, by
+    # documented precedence (DASHENV-1: the file wins over pre-existing
+    # environ), overwrite the PIPELINE_MODEL_REGISTRY_PATH set below. That
+    # makes the synthetic registry above unreadable on any host with a
+    # .pipeline.env. Opt the child out the same way the module's own pytest
+    # guard does, so the isolation this helper promises actually holds.
+    env["PIPELINE_SKIP_ENV_FILE"] = "1"
     if extra:
         env.update(extra)
     return env

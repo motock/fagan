@@ -134,3 +134,46 @@ def test_role_resource_ok_review_explicit_plan_role_config_still_wins(monkeypatc
     )
 
     assert captured["name"] == "claude"
+
+
+def test_role_resource_ok_review_gates_on_the_model_review_will_actually_use(
+    monkeypatch,
+):
+    """The gate must ask about the resolved review MODEL, not the env default.
+
+    Live 2026-10-01, gemma4_26b bench arm: the plan pinned dispatch to a 15GB
+    on-device model and every other role to a cloud model. resolve_role
+    correctly returned ollama for review, but the gate then called
+    resource_status() with no model_tag, so OllamaDriver fell back to
+    PIPELINE_LOCAL_MODEL_DEFAULT - the arm's dispatch model - and refused
+    review as "14909mb weights > 60% of 24576mb" on every tick, while
+    _run_reviewer was resolving that same review to the cloud model and would
+    never have loaded those weights at all. Same defect class as the backend
+    mismatch this module's other tests guard, one layer deeper: here the gate
+    and the reviewer disagreed about the model.
+    """
+    registry = {
+        "providers": {"ollama": {"models": {"cloudrev": {"tag": "cloudrev:cloud"}}}},
+        "roles": {},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "big-on-device:latest")
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+
+    captured = {}
+
+    class _CapturingDriver(_FakeDriver):
+        def resource_status(self, model_tag=None):
+            captured["model_tag"] = model_tag
+            return {"ok": True, "reason": ""}
+
+    monkeypatch.setattr(
+        u.backend, "get_backend", lambda role, name=None: _CapturingDriver(ok=True)
+    )
+
+    u._role_resource_ok(
+        "review",
+        plan_role_config={"review": {"provider": "ollama", "model": "cloudrev"}},
+    )
+
+    assert captured["model_tag"] == "cloudrev:cloud"

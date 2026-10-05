@@ -322,7 +322,8 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
 _PREFLIGHT_OVERRIDE_REASON = "benchmark harness: synthetic story, no base commit to impact-run"
 
 
-def build_plan(repo: Path, task: dict) -> dict:
+def build_plan(repo: Path, task: dict, *, plan_role_config: dict | None = None,
+               story_model: str | None = None) -> dict:
     """One epic, one story carrying the acceptance fixture as a read-only oracle.
     The acceptance path and the file the agent must write are dispatched on
     the task's ecosystem (Gap 3): pytest writes the acceptance to
@@ -331,7 +332,15 @@ def build_plan(repo: Path, task: dict) -> dict:
     bench_task::*); npm writes test/acceptance.test.js (Node's --test
     runner auto-discovers *.test.js under test/). The agent's impl path
     is also ecosystem-specific - src/lib.rs for cargo, src/merge.js or
-    similar for npm, plain lru_cache.py for pytest."""
+    similar for npm, plain lru_cache.py for pytest.
+
+    plan_role_config/story_model come from the arm (tests/benchmark/models.py)
+    and are what make an arm's model actually run: the plan's role_config
+    outranks the registry's roles.* pins, and _resolve_dispatch_target
+    returns story["model"] unconditionally, so a task's own "sonnet" spec pin
+    must be replaced rather than left to the driver. Both default to None -
+    the pre-2026-10-01 behaviour - for callers building a plan for a Claude
+    arm."""
     ecosystem = task.get("ecosystem", "pytest")
     if ecosystem == "pytest":
         acceptance_path = "test_acceptance.py"
@@ -345,6 +354,7 @@ def build_plan(repo: Path, task: dict) -> dict:
     return {
         "repo_root": str(repo),
         "preflight_override": _PREFLIGHT_OVERRIDE_REASON,
+        **({"role_config": plan_role_config} if plan_role_config else {}),
         "epics": [{
             "summary": f"benchmark: {task['name']}",
             "stories": [{
@@ -352,7 +362,7 @@ def build_plan(repo: Path, task: dict) -> dict:
                 "summary": task["summary"],
                 "agent_instructions": task["agent_instructions"],
                 "persona": task.get("persona", "software-engineer"),
-                "model": task.get("model", "sonnet"),
+                "model": story_model or task.get("model", "sonnet"),
                 "risk": task.get("risk", "low"),
                 "acceptance": [] if task["acceptance_source"] is None else [
                     {"path": acceptance_path, "source": task["acceptance_source"]}
@@ -799,7 +809,9 @@ def main() -> int:
 
     plan_name = f"bench_{args.task}_{args.model}_t{args.trial}"
     story_key = task["name"].upper().replace("_", "-")
-    plan = build_plan(repo, task)
+    plan = build_plan(repo, task,
+                      plan_role_config=model_cfg.get("role_config"),
+                      story_model=model_cfg.get("story_model"))
 
     p.save_plan(plan_name, json.dumps(plan))
     ingest_or_raise(p, plan_name)

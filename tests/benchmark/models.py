@@ -65,14 +65,59 @@ _ARM_ENV = {
 }
 
 
-def _local_arm(tag: str, *, extra: dict | None = None) -> dict:
+def _local_arm(tag: str, *, temperature: str | None = None, extra: dict | None = None) -> dict:
     """A local comparison arm: the shared window and budget, plus per-model extras.
 
     Distinct from _local: only the entries built here opt into the wider
     window, so _local's own defaults are unchanged for every other cell.
     """
-    env = {**_local(tag, num_ctx=_ARM_NUM_CTX)["env"], **_ARM_ENV, **(extra or {})}
+    env = {
+        **_local(tag, temperature=temperature, num_ctx=_ARM_NUM_CTX)["env"],
+        **_ARM_ENV,
+        **(extra or {}),
+    }
     return {"mock": False, "env": env}
+
+
+# Roles a bench cell can invoke: the guided-decomposition planner, dispatch
+# and test_author on the implementation path, review on the merge gate, and
+# overlord if a story escalates. A cell's arm must pin all of them in its
+# plan role_config, because role resolution priority is
+# plan role_config -> registry["roles"][role] -> PIPELINE_BACKEND_<ROLE>
+# (app/role_registry.resolve_role), so a registry that pins roles.* to
+# claude/sonnet outranks every PIPELINE_BACKEND_*/PIPELINE_LOCAL_* env var
+# the arm sets. Without this, an "ollama" arm silently runs Claude agents.
+_BENCH_ROLES = ("planner", "dispatch", "test_author", "review", "overlord")
+
+# The model every non-dispatch role is held at, so that a scorecard
+# difference between arms is attributable to the implementing model alone.
+# deepseek-v4.1-flash is what the 2026-09-27 gptoss_high baseline resolved
+# for every non-dispatch role (its registry pinned dispatch=gpt-oss-20b-high
+# and all other roles to this model -- see
+# model_registry.local.json.ollama-backup-2026-09-30), so holding the gemma
+# arm at the same reviewer reproduces the baseline's review gate exactly.
+# It is also Ollama-cloud-served, which matters on a host where the arm's own
+# 15 GB implementer trips the PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION gate in
+# app/backend_ollama.py: review cannot then be gated behind the model under
+# test being loadable twice.
+_BENCH_OTHER_ROLE_MODEL = os.environ.get("BENCH_OTHER_ROLE_MODEL", "deepseek-v4.1-flash")
+
+
+def _ollama_role_config(dispatch: str, *, others: str | None = None) -> dict:
+    """Pin every role a bench cell can invoke to a declared ollama model.
+
+    `dispatch` is the arm's variable (the model under test); `others` is
+    held constant across arms and defaults to _BENCH_OTHER_ROLE_MODEL.
+
+    Both are *friendly names* declared under providers.ollama.models in the
+    registry in use (resolve_role resolves the tag and rejects a name that is
+    not declared there), not Ollama tags.
+    """
+    others = others or _BENCH_OTHER_ROLE_MODEL
+    return {
+        role: {"provider": "ollama", "model": dispatch if role == "dispatch" else others}
+        for role in _BENCH_ROLES
+    }
 
 
 def _local_provider(
@@ -155,6 +200,200 @@ MODELS: dict[str, dict] = {
     "gptoss_high": _local_arm(
         os.environ.get("BENCH_GPTOSS_HIGH_TAG", "gpt-oss-20b-high:latest")
     ),
+    # Gemma 4 26B-A4B (MoE, QAT q4_0 GGUF) pulled straight from Hugging Face.
+    # Identical window/budget to gptoss_high so the model is the only
+    # variable in the comparison; no PIPELINE_LOCAL_THINK override for the
+    # same reason as gptoss_high. The role pins name the registry's
+    # gemma4-26b-qat entry, whose tag must be the GGUF actually on disk
+    # (checked with `ollama show`; it pointed at an unpulled `gemma4:...`
+    # tag until 2026-10-01, which is why this arm silently ran Claude).
+    # Only dispatch is gemma -- every other role stays at the baseline's
+    # reviewer, both to isolate the implementer as the variable and because
+    # gemma's 14909 MB weights trip the RAM gate when it is asked to review.
+    "gemma4_26b": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_GEMMA4_TAG",
+                "hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest",
+            )
+        ),
+        "role_config": _ollama_role_config("gemma4-26b-qat"),
+        "story_model": "gemma4-26b-qat",
+    },
+    # Qwen3.6-35B-A3B (MoE, 3B active, Unsloth UD-IQ3_XXS GGUF, 14 GB) pulled
+    # from Hugging Face. Same window/budget/role pins as gemma4_26b so the
+    # implementer is the only variable against both gptoss_high and the gemma
+    # arm. PIPELINE_LOCAL_THINK=false is required, not a symmetry call: this
+    # model advertises the `thinking` capability (`ollama show` lists it, and
+    #  thinking is a stop token), and the qwen36 arms above document that an
+    # un-suppressed thinking block makes the driver see no native tool_call
+    # and spin "no tool call" until the step cap.
+    # Its 14 GB of weights sit under the PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION
+    # threshold (14746 MB on this 24 GB host) where gemma's 14909 MB do not, so
+    # unlike gemma this arm could self-review; review is still held at the
+    # baseline reviewer to keep the two arms comparable.
+    "qwen36_35b_a3b": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN36_35B_TAG",
+                "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+            ),
+            extra={"PIPELINE_LOCAL_THINK": "false"},
+        ),
+        "role_config": _ollama_role_config("qwen36-35b-a3b"),
+        "story_model": "qwen36-35b-a3b",
+    },
+    # The same arm at the temperature this model's own card recommends for
+    # non-thinking use (0.7), against the shared bench default of 0.3. The
+    # 0.3 run parked 4 of 12 cells on the read-heavy repetition guard: the
+    # model emitted the identical bare `view_file` three times, took the
+    # nudge, re-emitted it, and was parked -- 64-75s in, impl file untouched,
+    # on exactly the two tasks whose first useful move is "read the spec's
+    # test file". A degenerate fixpoint like that is a low-entropy sampling
+    # artifact, so temperature is the knob; everything else (model, window,
+    # budget, think flag, role pins) is held identical so the probe isolates
+    # it.
+    "qwen36_35b_a3b_temp07": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN36_35B_TAG",
+                "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+            ),
+            temperature="0.7",
+            extra={"PIPELINE_LOCAL_THINK": "false"},
+        ),
+        "role_config": _ollama_role_config("qwen36-35b-a3b"),
+        "story_model": "qwen36-35b-a3b",
+    },
+    # The third point on the same sweep, one step PAST the 0.7 the model's own
+    # card recommends. 0.7 cleared every repetition park but not the reading
+    # fixation behind them: the one cell that stopped re-emitting the identical
+    # `view_file` switched to `cat`-ing the same file and tripped the separate
+    # read-heavy guard instead. The open question this arm answers is whether
+    # that residual fixation is temperature-sensitive at all, or whether it is
+    # a capability floor that hotter sampling only perturbs -- which is why the
+    # 0.7 write-up argued for raising the read-heavy guard rather than pushing
+    # temperature further. Running it is the only way to tell those apart.
+    #
+    # 0.9 is ABOVE the card's recommended 0.7 for non-thinking use, so this is
+    # deliberately outside the tuned range; a degradation here is a legitimate
+    # finding about the recommendation, not a bug in the arm. Everything except
+    # temperature is held identical to qwen36_35b_a3b_temp07 (model, 49152
+    # window, 1800s budget, think=false, all five role pins), so the three arms
+    # 0.3/0.7/0.9 read as a series.
+    "qwen36_35b_a3b_temp09": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN36_35B_TAG",
+                "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+            ),
+            temperature="0.9",
+            extra={"PIPELINE_LOCAL_THINK": "false"},
+        ),
+        "role_config": _ollama_role_config("qwen36-35b-a3b"),
+        "story_model": "qwen36-35b-a3b",
+    },
+    # Same 0.7 arm as above, with thinking turned back ON at the graded level
+    # `high` instead of suppressed. Every other qwen36 arm here runs
+    # think=false, and the reason is documented on `qwen36_35b_a3b`: this model
+    # advertises the `thinking` capability, and an un-suppressed block makes
+    # the driver see no native tool_call. That is a claim about what happens
+    # when thinking is *left alone*, not a measurement of what a graded level
+    # does -- Ollama's `think: "high"` is a different request from an absent
+    # `think` key, and `high` is the level the surrounding arms' suppression
+    # was actually trading against. Running it is the only way to see whether
+    # the suppression was load-bearing or merely cheap insurance, and it is
+    # the natural control for the temperature sweep: if reasoning depth buys
+    # the `lru_cache_rs` cell that neither 0.7 nor 0.9 could, the bottleneck
+    # was never sampling entropy.
+    #
+    # Everything except PIPELINE_LOCAL_THINK is held identical to
+    # qwen36_35b_a3b_temp07 (model, 0.7, 49152 window, 1800s budget, all five
+    # role pins), so a scorecard difference against that arm is attributable
+    # to reasoning depth alone.
+    "qwen36_35b_a3b_temp07_think_high": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN36_35B_TAG",
+                "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+            ),
+            temperature="0.7",
+            extra={"PIPELINE_LOCAL_THINK": "high"},
+        ),
+        "role_config": _ollama_role_config("qwen36-35b-a3b"),
+        "story_model": "qwen36-35b-a3b",
+    },
+    # The lower dose of the probe above. `high` cost three cells against
+    # qwen36_35b_a3b_temp07 and, more tellingly, re-introduced the per-target
+    # repetition park that 0.7 had driven to zero -- while producing no
+    # read-heavy parks at all, so both ends of the temperature sweep and the
+    # thinking arm land on the same guard from opposite directions. That leaves
+    # the dose-response shape unresolved: it is consistent with "any thinking at
+    # all is harmful" (monotone) and equally with an inverted U whose peak sits
+    # below `high`. `medium` is the midpoint that discriminates the two, and it
+    # is the only single point that does -- `low` sits adjacent to `false`, so a
+    # `low` result close to the control cannot separate "flat" from "peak at
+    # off".
+    #
+    # Everything except PIPELINE_LOCAL_THINK is held identical to
+    # qwen36_35b_a3b_temp07 (model, 0.7, 49152 window, 1800s budget, all five
+    # role pins), and two unit tests assert it, one of which resolves the token
+    # through `_tuned_think` so a typo cannot silently run a different
+    # experiment.
+    "qwen36_35b_a3b_temp07_think_medium": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN36_35B_TAG",
+                "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+            ),
+            temperature="0.7",
+            extra={"PIPELINE_LOCAL_THINK": "medium"},
+        ),
+        "role_config": _ollama_role_config("qwen36-35b-a3b"),
+        "story_model": "qwen36-35b-a3b",
+    },
+    # Qwen3.8-27B (dense 27.3B, Unsloth UD-IQ3_XXS GGUF, 11 GB) pulled from
+    # Hugging Face, at the temperature the model's own card recommends for
+    # non-thinking mode. Qwen3.8 is a hybrid thinking model and its card gives
+    # two sets: 0.7/top_p 0.80/presence_penalty 1.5 for instruct (non-thinking)
+    # and 1.0/top_p 0.95/presence_penalty 0.0 for thinking -- the same numbers
+    # on the Unsloth GGUF card, the Unsloth guide, and Qwen's upstream card.
+    # This arm is the non-thinking one (think=false, as for every qwen hybrid
+    # here), so 0.7 it is; note that is NOT the shared bench default of 0.3,
+    # which is what the earlier qwen38 run used.
+    #
+    # Same window/budget/role pins as qwen36_35b_a3b_temp07, so the two arms
+    # differ only in the model tag -- but note its nearest like-for-like
+    # comparison is the existing qwen38_wide run, which measured a DIFFERENT
+    # quant of this same base model (ISTA-DASLab GSQ-RCO IQ3_S) at 0.3 on the
+    # same 4 tasks: 11/12 success, 12/12 GT-pass, 410s mean, 37.5 ticks. So a
+    # difference between that run and this arm confounds quant with
+    # temperature; only the model tag differs from qwen36_35b_a3b_temp07.
+    #
+    # The card's recommended non-thinking set also includes top_p 0.80 and
+    # presence_penalty 1.5, and explicitly suggests tuning presence_penalty
+    # "to reduce endless repetition" -- the exact failure mode the qwen36 0.3
+    # arm showed. Neither is settable: the driver sends only num_ctx and
+    # temperature (OllamaDriver._chat), and no PIPELINE_LOCAL_* env var
+    # exposes them. Wiring them is a driver change, deliberately not smuggled
+    # into this arm.
+    #
+    # Its 11 GB of weights sit under the PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION
+    # threshold (14746 MB on this 24 GB host), so unlike gemma it could
+    # self-review; review stays at the baseline reviewer to keep the arms
+    # comparable.
+    "qwen38_27b": {
+        **_local_arm(
+            os.environ.get(
+                "BENCH_QWEN38_27B_TAG",
+                "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS",
+            ),
+            temperature="0.7",
+            extra={"PIPELINE_LOCAL_THINK": "false"},
+        ),
+        "role_config": _ollama_role_config("qwen38-27b"),
+        "story_model": "qwen38-27b",
+    },
     # qwen3-coder:30b (MoE, non-thinking, proven Metal-stable) implementing
     # AND self-reviewing - the direct qwen counterpart to gptoss_temp03,
     # same temperature/num_ctx, for a like-for-like rework-cycle comparison

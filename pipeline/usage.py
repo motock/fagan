@@ -366,9 +366,20 @@ def _role_resource_ok(
                     raise role_registry.RoleRegistryError(
                         f"review resolved to unknown provider {resolution.provider!r}"
                     )
+                # Gate on the model review will actually run, not the env
+                # default: resource_status() with no model_tag answers for
+                # PIPELINE_LOCAL_MODEL_DEFAULT, which is a DIFFERENT model
+                # whenever the plan pins review away from it (live
+                # 2026-10-01: a plan whose dispatch model was a 15GB local
+                # GGUF and whose review was cloud-served had review deferred
+                # as "review backend gated" on every tick, because the gate
+                # measured the dispatch model's weights while _run_reviewer
+                # was routing the review to a model with none). resolution
+                # .model is None when nothing named a model, which keeps the
+                # env-default fallback intact.
                 status = backend.get_backend(
                     "review", name=resolution.provider
-                ).resource_status()
+                ).resource_status(model_tag=resolution.model)
                 return bool(status.get("ok", True)), status.get("reason", "")
             except (role_registry.RoleRegistryError, NotImplementedError, ValueError):
                 pass  # fall through to the env-based path below

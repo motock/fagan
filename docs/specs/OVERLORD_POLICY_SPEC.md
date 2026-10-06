@@ -100,6 +100,12 @@ When a change has been reviewed and is a candidate to merge unattended:
   decision, and notify the user. A review verdict of "request changes" is
   never merged.
 
+Under the `full` autonomy level a `risk: high` merge is not always held: the
+harness asks the authority to adjudicate the hold, ruling `proceed` or `park`
+with a rationale, and records the ruling for post-hoc audit. In `dry-run` and
+`gated` the high-risk merge is always parked for a human. An adopting harness
+MAY keep the stricter always-hold floor.
+
 ## 5. Escalation protocol and audit trail
 
 When the authority is invoked — an agent blocked on a decision, two agents
@@ -141,6 +147,84 @@ base policy and takes precedence on conflict, and an autonomy level that can
 restrict — but never relax — Tier 3: park-and-ping work is held for human
 review at every autonomy level. An adopting harness MAY add tiers or stricter
 gates; it MUST NOT weaken the standing constraint or the Tier 3 hold.
+
+## 7. Parked-story resolution
+
+A parked story is not necessarily a dead end. When a story is held — a failed
+attempt, an exhausted rework budget, a high-risk merge gate, or an ambiguous
+blocker — the authority MAY be asked to resolve it by choosing one of a small
+set of executable rulings. Each ruling is a decision the harness can carry out,
+not merely advice, and each is bounded by the evidence it requires and by a
+fail-closed rule.
+
+### 7.1 The decision matrix
+
+The authority maps the live evidence it is shown to exactly one ruling:
+
+| Live evidence signal | Ruling |
+| --- | --- |
+| Stale bookkeeping — live state contradicts the recorded park reason (the story's change is already merged) | `mark_done` |
+| Rework exhaustion with only mechanical leftovers | `escalate_model` |
+| Repeated step-cap exhaustion on oversized scope | `split_story` |
+| The acceptance fixture is demonstrably broken at a clean baseline | `patch_acceptance` |
+| A `risk: high` merge hold | held in dry-run and gated; the authority adjudicates it in full |
+| Abandoned or superseded scope | stays parked by ruling, with recorded reasoning |
+
+A story that parks permanently by ruling (abandoned or superseded scope) is a
+correct outcome with recorded reasoning, not a failure.
+
+### 7.2 Rulings
+
+- **`split_story`** — the scope is wrong for any implementer at this tier and
+  the story must be broken up. The ruling carries exactly two child summaries,
+  separated by ` || `; the harness executes it by creating the two child
+  stories. Fail closed: a ruling whose action is absent, unparseable, or
+  unrecognized is treated as `park_for_human`.
+
+- **`patch_acceptance`** — the story's acceptance fixture is demonstrably
+  born-broken: it cannot pass at a clean baseline no matter what an implementer
+  writes, so the fixture itself is the defect. The ruling must carry a one-line
+  `DIAGNOSIS:` naming the defect plus the complete corrected fixture source
+  between `===FIXTURE-START===` and `===FIXTURE-END===` markers. Both markers
+  are required exactly once, the `DIAGNOSIS:` line is required, and the captured
+  source is everything between the marker lines (the markers themselves are
+  stripped). The harness validates before writing: the rewrite must pass the
+  ingest lint/collection check AND must still fail at a clean baseline — a
+  rewrite that passes with no implementation is isolation-only and is rejected.
+  Fail closed: a response missing either marker, the `DIAGNOSIS:` line, or with
+  an empty body is unparseable and parks for a human, leaving the acceptance
+  source untouched.
+
+- **`mark_done`** — correct the story record to done only when live evidence
+  corroborates that the work landed: the story's change is reported merged. New
+  commits, a green suite, or an open change request never corroborate on their
+  own, and branch ancestry proves nothing when changes are squash-merged; the
+  recorded park reason is never evidence. Fail closed: an uncorroborated
+  `mark_done` leaves the story parked and notifies a human.
+
+- **`repo_issue`** — the failure is environmental, not the story's fault: a red
+  lint baseline, a red suite at a clean baseline, a born-broken acceptance
+  oracle, or unavailable CI. The authority NEVER edits the repository; a
+  detected repo issue becomes a normal pipeline story that goes through the
+  same test-first, review, and CI path as anything else. The harness executes it
+  by filing one follow-up story while the original stays parked for a human with
+  a reason naming it.
+
+- **`escalate_model`** — the scope is right but the implementer is too weak;
+  retry the same scope on a stronger rung of the existing ladder.
+
+- **`park_for_human`** — genuinely ambiguous; hold it. This is also the
+  fail-closed default: an absent, unparseable, or unrecognized action resolves
+  to `park_for_human`.
+
+### 7.3 Post-hoc audit
+
+Every ruling the authority executes is recorded in a decisions log that a human
+reviews after the fact. The log captures the ruling, the evidence it was based
+on, and the story's prior state before any mutation, so a human can reconstruct
+and, if necessary, reverse the decision post-hoc. Historical park resolutions
+added human authority, not judgment: the authority holds resolution authority,
+and every executed action is reviewable post-hoc.
 
 ## Appendix A: Mapping to this repository
 

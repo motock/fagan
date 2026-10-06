@@ -633,20 +633,19 @@ def _main_impl() -> int:
                 return 0
 
             if fn == "view_file":
-                # Range-aware: reading several DIFFERENT regions of one large
-                # file (exactly what orienting in a multi-hundred-line
-                # function requires) is not repetition and must not share a
-                # signature with re-reading the SAME region. Bucket by 200-
-                # line window so near-identical ranges (e.g. an off-by-one
-                # retry) still count as the same target, but a genuinely
-                # different region does not. A bare call (no range - the
-                # file's head, truncated) keeps the old path-only signature,
-                # since re-issuing that exact call is always a true repeat.
+                # Range-aware: different regions of one large file are not
+                # repetition. Both bounds given bucket into the 200-line window (an
+                # off-by-one retry still counts as the same target); a one-sided read
+                # is unbounded (to EOF, or from line 1), so its one bound identifies
+                # the region exactly; a bare call keeps the path-only key, since
+                # re-issuing it is always a true repeat.
                 ls, le = args.get("line_start"), args.get("line_end")
-                if isinstance(ls, int) and isinstance(le, int):
+                if ls is None and le is None:
+                    sig = (fn, args.get("path"))
+                elif isinstance(ls, int) and isinstance(le, int):
                     sig = (fn, args.get("path"), ls // 200, le // 200)
                 else:
-                    sig = (fn, args.get("path"))
+                    sig = (fn, args.get("path"), ls, le)
             else:
                 sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
             # str_replace and replace_lines calls are excluded from the

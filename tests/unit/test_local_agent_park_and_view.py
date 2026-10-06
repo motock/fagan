@@ -870,3 +870,50 @@ def test_off_task_edit_nudges_once_and_does_not_park_on_a_single_file(
     )
 
 
+
+
+def test_view_file_one_sided_ranges_do_not_trip_repetition_guard(tmp_path, monkeypatch, capsys):
+    """A one-sided view_file (line_start only) reads to EOF, so its start
+    line identifies the region. Four DIFFERENT one-sided reads of one large
+    file are orientation, not repetition."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 1}),
+        ("view_file", {"path": "big.py", "line_start": 95}),
+        ("view_file", {"path": "big.py", "line_start": 177}),
+        ("view_file", {"path": "big.py", "line_start": 240}),
+        ("done", {"summary": "oriented"}),
+    ]
+    fake, _calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" not in out, (
+        f"four different one-sided regions must not look like repetition; "
+        f"output: {out!r}"
+    )
+
+
+def test_view_file_same_one_sided_range_three_times_still_trips_guard(tmp_path, monkeypatch, capsys):
+    """Negative control: re-reading the SAME one-sided range 3x is still a
+    true repeat, so the guard must still fire."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 177}) for _ in range(4)
+    ]
+    fake, _calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"the SAME one-sided range 3x must still be caught; output: {out!r}"
+    )

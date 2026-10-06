@@ -43,6 +43,12 @@ import subprocess
 RESTORE_FILE_MAX_PER_PATH = 2
 
 
+# Repeat-view detection state (see the view_file branch of run_tool_impl).
+# Process-scoped: one dispatch = one process. Keyed on the RESOLVED path, so
+# distinct worktrees/runs never share a key.
+_VIEW_SEEN: dict[tuple, str] = {}
+
+
 def _cut_view_at_line_boundary(formatted: str, cap: int = 3000) -> tuple[str, int]:
     """Longest prefix of ``formatted`` that ends on a line boundary within ``cap``
     characters, plus how many whole lines it holds. When even the first line is

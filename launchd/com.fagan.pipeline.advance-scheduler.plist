@@ -11,7 +11,7 @@
 		<key>LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS</key>
 		<string>20</string>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/opt/homebrew/bin:/Users/example/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>PIPELINE_AUTONOMY</key>
 		<string>full</string>
 		<key>PIPELINE_AUTO_ESCALATE</key>
@@ -56,19 +56,19 @@
 	<string>com.fagan.pipeline.advance-scheduler</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
+		<string>/Users/example/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
 	<string>-m</string>
 	<string>pipeline.scheduler_daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.err.log</string>
+	<string>/Users/example/.claude/mcp-servers/pipeline/advance-scheduler.err.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.log</string>
+	<string>/Users/example/.claude/mcp-servers/pipeline/advance-scheduler.log</string>
 	<key>KeepAlive</key>
 	<true/>
 	<key>WorkingDirectory</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
+	<string>/Users/example/.claude/mcp-servers/pipeline</string>
 </dict>
 </plist>

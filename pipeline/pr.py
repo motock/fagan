@@ -14,6 +14,7 @@ _format_review_comment and _post_pr_comment provide helpers for automated
 review comments via the gh CLI.
 """
 
+import re
 import subprocess
 from typing import Any
 
@@ -65,6 +66,74 @@ def _resolve_story_branch(worktree: str, story_key: str) -> str:
     return convention
 
 
+# A Conventional Commits header, anchored at the start of a commit subject.
+# The same type alternation pipeline/parsers.py uses for review-suggested
+# messages, but anchored and unquoted: that one matches a backtick-quoted
+# header inside a review body, this one is a literal subject line.
+_CONVENTIONAL_SUBJECT_RE = re.compile(
+    r"^(?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
+    r"(?:\([^)]*\))?!?: \S"
+)
+
+# Candidate default-branch refs, most specific first. Deliberately a local
+# copy of review.py's _first_review_base list rather than an import:
+# rebrief.py keeps its own copy for the same reason -- these private helpers
+# stay independent of one another.
+_DEFAULT_BRANCH_REFS = (
+    "origin/HEAD", "origin/main", "origin/master", "main", "master",
+)
+
+
+def _branch_commit_subject(worktree: str, branch: str) -> str:
+    """The newest Conventional Commits subject among this branch's own
+    commits, or "" when there is none.
+
+    The squash-merge subject on the default branch is the PR title, so it
+    should be the message the agent actually wrote for the story rather than
+    the generated "<key>: <summary>" fallback (_pr_title). The review gate
+    already requires that commit to be a Conventional Commits header, so the
+    branch's newest such subject is the right title and _pr_title stays the
+    fallback.
+
+    `wip(<key>):` checkpoints are skipped: a step-cap run can leave one as the
+    newest commit, and taking it would reproduce PR #821, where a
+    "WIP (step cap reached)" message became master's permanent subject.
+
+    Fails open to "": a probe failure must never block a PR that would
+    otherwise open.
+    """
+    base = ""
+    for ref in _DEFAULT_BRANCH_REFS:
+        try:
+            proc = subprocess.run(
+                ["git", "merge-base", ref, branch],
+                cwd=worktree, check=False, capture_output=True, text=True,
+            )
+        except OSError:
+            return ""
+        if proc.returncode == 0 and proc.stdout.strip():
+            base = proc.stdout.strip()
+            break
+    if not base:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["git", "log", f"{base}..{branch}", "--format=%s"],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+    except OSError:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    for subject in proc.stdout.splitlines():
+        subject = subject.strip()
+        if not subject or subject.lower().startswith("wip("):
+            continue
+        if _CONVENTIONAL_SUBJECT_RE.match(subject):
+            return subject
+    return ""
+
+
 def _pr_title(story_key: str, summary: str) -> str:
     """The PR title for a story: ``<key>: <summary>``, without repeating a key
     the summary already opens with.
@@ -101,7 +170,9 @@ def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     subprocess.run) rather than hitting a real remote.
     """
     branch = _resolve_story_branch(worktree, story_key)
-    title = _pr_title(story_key, story["summary"])
+    title = _branch_commit_subject(worktree, branch) or _pr_title(
+        story_key, story["summary"]
+    )
     body = story.get("pr_body") or (
         f"Automated PR for {story_key} produced by the agent pipeline."
     )

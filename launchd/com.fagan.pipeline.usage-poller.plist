@@ -7,18 +7,18 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
+        <string>/Users/example/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
         <string>-c</string>
         <string>import app.pipeline_mcp_server as p; p.check_usage()</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
+    <string>/Users/example/.claude/mcp-servers/pipeline</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/example/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
     <key>StartInterval</key>
@@ -28,9 +28,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/usage-poller.log</string>
+    <string>/Users/example/.claude/mcp-servers/pipeline/usage-poller.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/usage-poller.err.log</string>
+    <string>/Users/example/.claude/mcp-servers/pipeline/usage-poller.err.log</string>
 </dict>
 </plist>

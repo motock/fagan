@@ -36,11 +36,18 @@ per-instance routing, besides risking import cycles).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import subprocess
 
 RESTORE_FILE_MAX_PER_PATH = 2
+
+
+# Repeat-view detection state (see the view_file branch of run_tool_impl).
+# Process-scoped: one dispatch = one process. Keyed on the RESOLVED path, so
+# distinct worktrees/runs never share a key.
+_VIEW_SEEN: dict[tuple, str] = {}
 
 
 def _cut_view_at_line_boundary(formatted: str, cap: int = 3000) -> tuple[str, int]:
@@ -246,6 +253,14 @@ def run_tool_impl(origin, fn, args) -> str:
             return f"ERROR: {args['path']} does not exist."
         origin["_VIEWED_THIS_RUN"].add(args["path"])
         lines = path.read_text().splitlines(keepends=True)
+        _key = (str(path), args.get("line_start"), args.get("line_end"))
+        _digest = hashlib.sha256("".join(lines).encode()).hexdigest()
+        if _VIEW_SEEN.get(_key) == _digest:
+            return (f"You already viewed {args['path']} with this exact range in this run, "
+                    f"and the file has not changed since. Repeating this exact call cannot "
+                    f"return anything new. Pass a NEW line_start/line_end range to read a "
+                    f"different part, or make your edit with str_replace.")
+        _VIEW_SEEN[_key] = _digest
         line_start, line_end = args.get("line_start"), args.get("line_end")
         if line_start is not None or line_end is not None:
             start = line_start if line_start is not None else 1

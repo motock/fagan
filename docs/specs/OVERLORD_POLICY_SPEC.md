@@ -76,8 +76,11 @@ visibility. Membership:
 ### 3.3 Tier 3 — Park-and-ping (high risk): do NOT act unattended
 
 Behavior: rule that the work is **held for human review**; have the harness
-notify the user; "let the loop proceed with other ready work". The harness MUST
-NOT merge, and MUST NOT take the irreversible action. Membership:
+notify the user; "let the loop proceed with other ready work". In `dry-run` and
+`gated` the harness MUST NOT merge and MUST NOT take the irreversible action.
+Under `full`, a `risk: high` merge gate is the one exception: the authority
+adjudicates the hold (section 4) and records the ruling for post-hoc audit; all
+other Tier 3 work stays held. Membership:
 
 - Anything irreversible or hard to roll back (data deletion or migration,
   dropping columns, destructive scripts).
@@ -122,7 +125,8 @@ rationale of a few sentences stating why this option, what was rejected, and
 what was protected; and whether the user should be notified (yes for Tiers 2
 and 3, no for Tier 1). A Tier 3 ruling MUST be routed to the harness's
 headless adjudicator path, which holds the work and notifies the user; the
-harness MUST NOT act on the held item unattended.
+harness MUST NOT act on the held item unattended, except that under `full` a
+`risk: high` merge gate is adjudicated as section 4 describes.
 
 Every ruling MUST be written to a durable decision log containing, at minimum:
 a **timestamp**; the **question**; the **options** considered; the **ruling**;
@@ -145,8 +149,10 @@ A harness adopting this policy MUST provide three capabilities:
 It SHOULD also support a per-project policy override that is appended to the
 base policy and takes precedence on conflict, and an autonomy level that can
 restrict — but never relax — Tier 3: park-and-ping work is held for human
-review at every autonomy level. An adopting harness MAY add tiers or stricter
-gates; it MUST NOT weaken the standing constraint or the Tier 3 hold.
+review in `dry-run` and `gated`, and under `full` only a `risk: high` merge
+gate is adjudicated (section 4) and audited. An adopting harness MAY add tiers
+or stricter gates, including keeping the stricter always-hold floor; it MUST
+NOT weaken the standing constraint or the Tier 3 hold.
 
 ## 7. Parked-story resolution
 
@@ -222,9 +228,8 @@ correct outcome with recorded reasoning, not a failure.
 Every ruling the authority executes is recorded in a decisions log that a human
 reviews after the fact. The log captures the ruling, the evidence it was based
 on, and the story's prior state before any mutation, so a human can reconstruct
-and, if necessary, reverse the decision post-hoc. Historical park resolutions
-added human authority, not judgment: the authority holds resolution authority,
-and every executed action is reviewable post-hoc.
+and, if necessary, reverse the decision post-hoc. The authority holds resolution
+authority, and every executed action is reviewable after the fact.
 
 ## Appendix A: Mapping to this repository
 

@@ -529,7 +529,7 @@ Deprecated model settings:
 
 Args that start with '--' can also be set in a config file
 (/private/tmp/aider_probe/.aider.conf.yml or
-/Users/jessecarroll/.aider.conf.yml or specified via -c). The config file uses
+~/.aider.conf.yml or specified via -c). The config file uses
 YAML syntax and must represent a YAML 'mapping' (for details, see
 http://learn.getgrav.org/advanced/yaml). In general, command-line values
 override environment variables which override config file values which

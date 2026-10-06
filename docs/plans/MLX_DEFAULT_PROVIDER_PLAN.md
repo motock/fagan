@@ -183,7 +183,7 @@ own, the whole machine went down under it, which is also why its `agent.log` was
 convention, until cross-referenced against `/Library/Logs/DiagnosticReports/`). Re-running the
 same trial against a freshly-started server succeeded cleanly (171.0s, GT-pass, 1/1) —
 confirming the trial itself was never the problem. Separately, the server for that whole S3
-session had been started from `/Users/jessecarroll/git/loveline_search/.venv` — an unrelated
+session had been started from `~/git/loveline_search/.venv` — an unrelated
 project's venv, built by a different session and not documented anywhere in this repo — which
 cost real time to rediscover afterward. Both fixed in the same pass: (1) a dedicated,
 version-pinned `.venv-mlx` in this repo (`uv venv --python 3.14 .venv-mlx && uv pip install
@@ -465,7 +465,7 @@ smaller-model run is the cheap, high-information experiment that either unblocks
 converts "keep patching" into a clean hardware decision.
 
 **Right-size step 1 — DONE (2026-07-14).** Downloaded `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit`
-(sequential-`curl` method, 8.31GB / 2 shards, to `/Users/jessecarroll/.cache/qwen2.5_coder_14b_manual`;
+(sequential-`curl` method, 8.31GB / 2 shards, to `~/.cache/qwen2.5_coder_14b_manual`;
 integrity-checked against the safetensors index). **G1 gate verified by direct template inspection,
 PASS**: the chat template in `tokenizer_config.json` renders tool calls as `<tool_call>\n{"name":
 ..., "arguments": ...}\n</tool_call>` — the exact `json.loads`-able Hermes/Qwen shape

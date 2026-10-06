@@ -3,7 +3,7 @@
 Cross-cutting weekly review of this repo's own pipeline runs, in the shape of
 [`harness-autonomy-review_2026-09-21.md`](harness-autonomy-review_2026-09-21.md).
 Population: the 49 `~/.claude/plans/*.manifest.json` whose `repo_root` is
-`/Users/jessecarroll/git/fagan` (183 stories). All first-pass-clean numbers
+`~/git/fagan` (183 stories). All first-pass-clean numbers
 below are computed by `pipeline.local_success.classify_story` over that
 fagan-only population — see §2.5 for why the unfiltered instrument reads
 differently.

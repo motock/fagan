@@ -67,6 +67,12 @@ class _Gh:
             return _completed(args, stdout=BRANCH + "\n")
         if args[:2] == ["git", "push"]:
             return _completed(args)
+        if args[:2] == ["git", "merge-base"]:
+            return _completed(args, stdout="deadbeef\n")
+        if args[:2] == ["git", "log"]:
+            # No Conventional Commits subject on the branch, so the PR title
+            # falls back to _pr_title -- which is what these tests assert.
+            return _completed(args, stdout="")
         if args[:3] == ["gh", "pr", "create"]:
             if self.create_error is not None:
                 raise subprocess.CalledProcessError(

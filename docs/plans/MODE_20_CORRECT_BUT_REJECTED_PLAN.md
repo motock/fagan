@@ -51,7 +51,7 @@ Sequence:
    exact backward-jump bug the planner had explicitly warned against.
 5. Ground truth failed on backward-jump. Scorecard: 0/1.
 
-Full writeup: `~/.claude/projects/-Users-jessecarroll--claude-mcp-servers-pipeline/memory/project_dispatch_failure_modes.md`,
+Full writeup: `~/.claude/projects/-Users-<you>--claude-mcp-servers-pipeline/memory/project_dispatch_failure_modes.md`,
 Mode 20.
 
 ## Root causes

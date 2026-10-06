@@ -107,6 +107,22 @@ def test_rendered_files_contain_no_personal_home():
         )
 
 
+def test_rendered_files_have_no_unresolved_template_placeholder():
+    """The rendered files are generator OUTPUT, not the templates themselves.
+
+    Cuts off the tempting shortcut of copying a .template over the rendered
+    file (or hand-editing one into the other's shape) instead of doing the
+    mechanical home rewrite: an unsubstituted {{...}} token in a file that
+    launchd/newsyslog would read verbatim is a silent misconfiguration.
+    """
+    for name in RENDERED_FILES:
+        text = _text(name)
+        assert "{{" not in text, (
+            f"{name} still contains an unresolved template placeholder"
+        )
+        assert "}}" not in text, f"{name} contains a stray template delimiter"
+
+
 def test_rendered_plists_still_parse():
     for name in PLIST_FILES:
         data = _plist(name)

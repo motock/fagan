@@ -899,3 +899,33 @@ def test_oracle_view_file_same_one_sided_range_three_times_still_trips_guard(tmp
     assert "[repetition nudge]" in out, (
         f"the SAME one-sided range 3x must still be caught; output: {out!r}"
     )
+
+
+def test_oracle_successful_create_file_rewrites_do_not_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """A successful create_file must reset its own per-target count: the
+    normal write -> test -> rewrite cycle is progress, not a repeat."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    responses = [
+        ("create_file", {"path": "helper.py", "content": "VALUE = 1\n"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "helper.py", "content": "VALUE = 2\n"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "helper.py", "content": "VALUE = 3\n"}),
+        ("done", {"summary": "implemented"}),
+        ("done", {"summary": "implemented"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" not in out, (
+        f"successful create_file rewrites must not trip the guard; output: {out!r}"
+    )
+    assert (tmp_path / "helper.py").read_text() == "VALUE = 3\n", (
+        f"the third create_file must have actually run; output: {out!r}"
+    )
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"

@@ -576,7 +576,7 @@ membership guard that exempts this subsection. Re-opened by
 `retros/harness-review_2026-09-29.md`, which carries the evidence for each
 item below.
 
-- [ ] **P0 — anchor the rebrief-header detectors.** `pipeline/local_success.py`
+- [x] **P0 — anchor the rebrief-header detectors.** DONE (RH-01, `352b75b`). `pipeline/local_success.py`
       and `pipeline/rebrief.py` both locate the prior-attempt block with an
       unanchored substring match. Live effect: three in-window stories are
       graded not-first-pass-clean purely for *mentioning* the header string
@@ -585,13 +585,13 @@ item below.
       losing its `FILES`/`HARD CONSTRAINTS`/`TESTS` sections. Require the
       header at line start, with a regression test asserting a *mention* is
       neither truncated nor classified.
-- [ ] **P0 — split `brief_patched` by cause.** Three emission sites share one
+- [x] **P0 — split `brief_patched` by cause.** DONE (RH-02, `25151b7`). Three emission sites share one
       event name; 30 of the week's 39 emissions are step-cap rebriefs and only
       9 are operator `patch_story` calls, so one story can yield two
       disqualifiers from one event (BENCH-ARM-1: manual patch 15:42:29,
       automated rebrief 15:42:39). Emit `step_cap_rebrief` from the automated
       path; reserve `brief_patched` for operator edits.
-- [ ] **P0 — make the SEW-5 env-conflict guard diff sources, not a catalog.**
+- [x] **P0 — make the SEW-5 env-conflict guard diff sources, not a catalog.** DONE (RH-03, `83d9766`).
       `_report_env_conflicts` iterates the 59-entry `ENV_VAR_CATALOG` and so
       cannot see divergences outside it. Live misses today:
       `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` (8100 in the plist vs 5400 in
@@ -599,7 +599,7 @@ item below.
       `PIPELINE_AUTO_TRIAGE` (1 vs unset), `PIPELINE_TDD_SPLIT` (unset vs on),
       `PIPELINE_DECOMPOSE` (unset vs local). It does correctly fire for the
       four catalogued threshold conflicts.
-- [ ] **P1 — give the success report a repo filter.**
+- [x] **P1 — give the success report a repo filter.** DONE (RH-04, `cd2d429`).
       `scripts/local_success_report.py` globs every manifest under `PLAN_DIR`
       with no `repo_root` predicate, so one repo's bad plan drags every repo's
       number: for the same Sep 26–29 days the unfiltered window-60 reads
@@ -613,7 +613,7 @@ item below.
       dispatch time. 34 `step_cap_reached` entries, 26 on the local model.
       Either raise `PIPELINE_LOCAL_MAX_STEPS` above 60 and re-measure, or stop
       reporting one combined rate.
-- [ ] **P1 — unfreeze the failure-mode catalog.** `docs/failure_modes.json`
+- [x] **P1 — unfreeze the failure-mode catalog.** DONE (RH-05, `7258867`). `docs/failure_modes.json`
       is pinned at 57 entries (newest Mode 55, 2026-08-12) because
       `tests/unit/test_failure_modes_dataset.py` asserts
       `len(entries) == 57` in two places and embeds "57" in a test name —
@@ -621,12 +621,12 @@ item below.
       since has proposed Mode 56+ with nowhere to land them. Relax to `>= 57`
       plus uniqueness, then land Modes 56–60 from the 2026-09-22 and
       2026-09-29 retros.
-- [ ] **P1 — bound the retro backlog.** `pipeline/ci.py::_record_retro_pending`
+- [x] **P1 — bound the retro backlog.** DONE (RH-06, `ca0c0b8`). `pipeline/ci.py::_record_retro_pending`
       appends a marker per completed plan with no cap and no notification;
       `retros/PENDING.md` reached 218 lines against 7 retros, growing by 43 in
       the window. Cap and roll overflow, or notify on threshold.
-- [ ] **P2 — add a CI line-count gate for the 1000-line rule**, or drop the
-      rule. `oversized-module-split` got `story_status.py` and `dispatch.py`
+- [x] **P2 — add a CI line-count gate for the 1000-line rule**, or drop the
+      rule. DONE (RH-08, `410ab92`). `oversized-module-split` got `story_status.py` and `dispatch.py`
       under 1000 on 2026-09-23; both are back over it (1012, 1009) because the
       only check is `pipeline/ingest.py`'s non-blocking warning, which also
       skips `.md` and repo-root files. Seven files are over the line today.

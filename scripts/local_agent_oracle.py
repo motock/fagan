@@ -836,10 +836,7 @@ def _main_impl() -> int:
             if fn in MUTATING_TOOLS:
                 succeeded = isinstance(tool_result, str) and not tool_result.startswith("ERROR")
                 if succeeded:
-                    current = seen.get(sig, 0)
                     seen.clear()
-                    if fn not in ("str_replace", "replace_lines"):
-                        seen[sig] = current
                     last_progress_step = step
 
             # Failing-str_replace loop guard (mirrored from local_agent.py):

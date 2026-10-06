@@ -875,3 +875,33 @@ def test_chat_default_provider_is_ollama():
     assert la.PROVIDER == "ollama"
 
 
+
+
+def test_local_agent_successful_create_file_rewrites_do_not_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """A successful create_file must reset its own per-target count: the
+    normal write -> test -> rewrite cycle is progress, not a repeat."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [
+        ("create_file", {"path": "helper.py", "content": "VALUE = 1\n"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "helper.py", "content": "VALUE = 2\n"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "helper.py", "content": "VALUE = 3\n"}),
+        ("done", {"summary": "implemented"}),
+        ("done", {"summary": "implemented"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" not in out, (
+        f"successful create_file rewrites must not trip the guard; output: {out!r}"
+    )
+    assert (tmp_path / "helper.py").read_text() == "VALUE = 3\n", (
+        f"the third create_file must have actually run; output: {out!r}"
+    )
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"

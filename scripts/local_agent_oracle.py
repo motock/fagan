@@ -765,14 +765,15 @@ def _main_impl() -> int:
                 break
 
             if fn == "view_file":
-                # Range-aware: reading several DIFFERENT regions of one large
-                # file is not repetition. Ported from local_agent.py
-                # (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD).
+                # Range-aware: different regions are not repetition; a one-sided
+                # read's single bound identifies its region exactly.
                 ls, le = args.get("line_start"), args.get("line_end")
-                if isinstance(ls, int) and isinstance(le, int):
+                if ls is None and le is None:
+                    sig = (fn, args.get("path"))
+                elif isinstance(ls, int) and isinstance(le, int):
                     sig = (fn, args.get("path"), ls // 200, le // 200)
                 else:
-                    sig = (fn, args.get("path"))
+                    sig = (fn, args.get("path"), ls, le)
             else:
                 sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
             # str_replace calls are excluded from the per-target repetition

@@ -165,6 +165,7 @@ from scripts.local_agent_oracle_config import (  # noqa: F401 (re-exported: the 
     CONNECT_TIMEOUT_SECONDS,
     ENDPOINT,
     FULL_SUITE_DONE_BAR,
+    GREEN_COMMIT_SUBJECT,
     HARNESS_RULES,
     MAX_STEPS,
     MODEL,
@@ -390,7 +391,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
             return False
     _reset_suite_rejections()
     if worktree_dirty():
-        auto_commit("feat: implement task (acceptance oracle green)")
+        auto_commit(GREEN_COMMIT_SUBJECT)
     print(f"[step {step}] ORACLE GREEN — acceptance tests pass; committed & done.", flush=True)
     write_done_marker(0)
     return True
@@ -755,7 +756,7 @@ def _main_impl() -> int:
                                     "full.")})
                             break
                     if worktree_dirty():
-                        auto_commit("feat: implement task (acceptance oracle green)")
+                        auto_commit(GREEN_COMMIT_SUBJECT)
                     print(f"[step {step}] DONE (oracle green): {args.get('summary', '')}", flush=True)
                     return 0
                 print(f"[step {step}] done rejected — acceptance tests still failing", flush=True)

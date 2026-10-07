@@ -74,6 +74,19 @@ _CLAUDE_TIER_MODEL_PREFIXES = {
 _claude_identity_status: dict | None = None
 
 
+def _usage_pct(state: dict, key: str) -> int:
+    """A cached usage percentage as an int, or 0 when absent or garbled.
+
+    The gate fails OPEN on a garbled reading, matching check_usage's own
+    fail-open behavior, so a non-numeric value must not raise out of
+    resource_status().
+    """
+    try:
+        return int(state.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 class ClaudeCliDriver:
     """Backend driver wrapping the `claude` CLI."""
 
@@ -330,11 +343,19 @@ class ClaudeCliDriver:
     def resource_status(self, model_tag: str | None = None) -> dict:
         """Claude's gate is the poller-fed, hysteresis-stabilized usage state
         (see pipeline_mcp_server.check_usage / _usage_gate), not a live /cost
-        probe — reading the cached `paused` flag here is cheap and reflects the
-        same decision the poller already made. Imported locally because the
-        orchestrator imports this module (a top-level import would cycle); by
-        call time pipeline_mcp_server is fully loaded. Failing open (ok) on
-        missing/garbled state matches check_usage's own fail-open behavior.
+        probe. The cached percentages are what the poller wrote; the PAUSE
+        decision is also re-derived from them here with THIS process's
+        thresholds, rather than taken from the cached `paused` flag alone. That
+        flag is written by whichever process last ran check_usage — normally
+        the usage-poller launchd job, whose PIPELINE_PAUSE_THRESHOLD need not
+        match this one's. (Live 2026-10-06: the poller ran at 101 and the
+        scheduler at 95, so at session_pct=100 the poller stored paused=false
+        and this gate called the backend servable while every Claude call was
+        in fact capped — 52 review deferrals over 51 minutes.) Imported locally
+        because the orchestrator imports this module (a top-level import would
+        cycle); by call time pipeline_mcp_server is fully loaded. Failing open
+        (ok) on missing/garbled state matches check_usage's own fail-open
+        behavior.
         model_tag is accepted for interface parity with the base class and is
         ignored, because Claude's gate is the usage state, not a per-model
         memory check.
@@ -345,7 +366,21 @@ class ClaudeCliDriver:
         usage pause already uses.
         """
         from app import pipeline_mcp_server as _p  # local: avoids an import cycle
-        paused = bool(_p._read_usage_state().get("paused", False))
+        state = _p._read_usage_state()
+        cached_paused = bool(state.get("paused", False))
+        if state.get("stale") or state.get("gate_blind"):
+            # The poller could not read a real usage figure and already applied
+            # its own decision for that case; re-deriving a pause from a reading
+            # it distrusts would only second-guess it.
+            paused = cached_paused
+        else:
+            from pipeline import usage as _usage  # local: usage imports app.backend
+            # OR, never replace: the cached flag is the poller's own latch (it
+            # may be paused on a bar this process does not share), so it can only
+            # ADD a pause here — never remove one these thresholds call for.
+            paused = cached_paused or _usage._usage_gate(
+                False, _usage_pct(state, "session_pct"), _usage_pct(state, "week_pct")
+            )
         if paused:
             return {"ok": False, "reason": "Claude usage gate tripped"}
         if _claude_identity_status is not None and not _claude_identity_status.get("ok", True):

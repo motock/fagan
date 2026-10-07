@@ -172,6 +172,40 @@ try:
 except json.JSONDecodeError:
     ACCEPTANCE_PATHS = []
 
+# The story's own summary, threaded in by the dispatcher when it carries an
+# acceptance block (see app/backend_ollama.py + pipeline/dispatch.py). Used
+# ONLY to build the oracle-green auto-commit subject, so the squash subject
+# master keeps names the story instead of the harness. Empty when unset.
+STORY_SUMMARY = os.environ.get("LOCAL_AGENT_STORY_SUMMARY", "")
+
+
+def green_commit_subject(summary: str) -> str:
+    """The subject line for the oracle-green auto-commit.
+
+    Threading the story summary in means the commit - and therefore, through
+    the squash merge, master's permanent subject - describes the story rather
+    than the harness. Falls back to the historical placeholder when no summary
+    was supplied, so a bare local run is byte-for-byte unchanged. The type is
+    always `feat` because this harness has no basis for choosing another one.
+    """
+    summary = summary.strip()
+    if not summary:
+        return "feat: implement task (acceptance oracle green)"
+    subject = f"feat: {summary}"
+    if len(subject) <= 72:
+        return subject
+    cut = subject[:72]
+    # The 72-char cut lands inside a word; drop that word, then the word before
+    # it, so the subject is a clean run of whole words with no trailing space.
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut
+
+
+GREEN_COMMIT_SUBJECT = green_commit_subject(STORY_SUMMARY)
+
 HARNESS_RULES = (
     "You are working inside a git repository (the current directory). Complete "
     "the task by calling tools — do NOT explain a plan in prose, call a tool. "

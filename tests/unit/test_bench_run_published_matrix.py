@@ -282,13 +282,13 @@ def test_default_interpreter_is_repo_venv_with_python3_fallback(tmp_path):
 
 def test_readme_documents_the_published_run():
     text = README.read_text()
-    m = re.search(r"^## Published run\b", text, flags=re.M)
+    m = re.search(r"^## Published run\b", text, flags=re.MULTILINE)
     assert m, "README needs a '## Published run' section"
-    running = re.search(r"^## Running\b", text, flags=re.M)
+    running = re.search(r"^## Running\b", text, flags=re.MULTILINE)
     assert running and running.start() < m.start(), (
         "'## Published run' must sit under '## Running'"
     )
-    nxt = re.search(r"^## ", text[m.end():], flags=re.M)
+    nxt = re.search(r"^## ", text[m.end():], flags=re.MULTILINE)
     section = text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
     for anchor in (
         "run_published_matrix.sh", "run_meta.json", "PIPELINE_MODEL_REGISTRY_PATH",

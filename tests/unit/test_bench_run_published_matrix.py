@@ -131,12 +131,18 @@ def test_dry_run_prints_the_two_phase_grid(tmp_path):
     )
     argv = _argv(first)
     assert "matrix.py" in argv
-    assert set(MAIN_ARMS) <= set(_flag_args(argv, "--models"))
-    assert set(TASKS) <= set(_flag_args(argv, "--tasks"))
+    assert _flag_args(argv, "--models") == list(MAIN_ARMS), (
+        "the main phase must run exactly the published main arms"
+    )
+    assert _flag_args(argv, "--tasks") == list(TASKS), (
+        "the main phase must run exactly the published task grid"
+    )
     assert _flag_args(argv, "--trials") == ["3"]
     assert "--resume" in argv
 
-    assert STEP_ARM in _flag_args(_argv(second), "--models")
+    assert _flag_args(_argv(second), "--models") == [STEP_ARM], (
+        "the second phase must run exactly the step arm"
+    )
 
 
 def test_run_meta_records_repo_state_and_grid(tmp_path):

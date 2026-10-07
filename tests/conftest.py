@@ -1,4 +1,6 @@
 import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +20,11 @@ _ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_")
 for _key in list(os.environ):
     if _key.startswith(_ISOLATED_ENV_PREFIXES):
         del os.environ[_key]
+
+# CI sets AGENTS_DIR to the repo's checked-in personas (.github/workflows/ci.yml);
+# default it to the same value here so a bare `pytest -q` resolves them too.
+# setdefault, so an explicit AGENTS_DIR (e.g. a user's ~/.claude/agents) still wins.
+os.environ.setdefault("AGENTS_DIR", str(Path(__file__).resolve().parents[1] / "agents"))
 
 # REPO_ROOT is scrubbed by exact name (it carries no PIPELINE_ prefix). The
 # scheduler plist exports REPO_ROOT=/nonexistent-repo-root-set-per-plan-only
@@ -43,3 +50,61 @@ def _isolate_environ():
     yield
     os.environ.clear()
     os.environ.update(snapshot)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _untracked_root_entries():
+    """Untracked top-level entries in the repo root, per git.
+
+    Returns the ``?? `` porcelain lines whose path has no ``/`` except an
+    optional trailing one (a top-level file or directory). Nested untracked
+    paths and tracked/modified files are ignored. An empty set when git cannot
+    be run at all (e.g. a nested pytest with PATH scrubbed).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+    entries = set()
+    for line in proc.stdout.splitlines():
+        if not line.startswith("?? "):
+            continue
+        path = line[3:].strip()
+        if "/" in path.rstrip("/"):
+            continue
+        entries.add(path)
+    return entries
+
+
+_root_entries_at_start = None
+
+
+def pytest_sessionstart(session):
+    """Record the repo root's untracked entries before the run (controller only)."""
+    global _root_entries_at_start
+    if hasattr(session.config, "workerinput"):
+        return
+    _root_entries_at_start = _untracked_root_entries()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if it created NEW untracked entries in the repo root."""
+    if hasattr(session.config, "workerinput"):
+        return
+    if _root_entries_at_start is None:
+        return
+    new_entries = _untracked_root_entries() - _root_entries_at_start
+    if new_entries:
+        print(
+            "ERROR: the test run created untracked files in the repo root: "
+            f"{sorted(new_entries)}"
+        )
+        session.exitstatus = 1

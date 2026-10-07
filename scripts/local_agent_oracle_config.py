@@ -139,6 +139,14 @@ PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 # never set this, so their oracle-green done-bar is byte-for-byte unchanged.
 REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
 
+# Operator knob (LOCAL_AGENT_FULL_SUITE_DONE_BAR, default off): arm the same
+# out-of-band full-suite done-bar on EVERY dispatch, not only on a CI-fail
+# rework round. Ported from local_agent_config.py, which the base harness
+# reads at local_agent.py:585/:614 - an acceptance-bearing story runs on THIS
+# variant instead, so without this the knob was silently inert for exactly
+# the stories most likely to carry a fixture-backed grade.
+FULL_SUITE_DONE_BAR = os.environ.get("LOCAL_AGENT_FULL_SUITE_DONE_BAR") == "1"
+
 # A reviewer-feedback rework round (a reviewer's REQUEST_CHANGES, story
 # ["review_feedback"]) is a DIFFERENT done-bar from a CI-fail rework: the
 # defect is whatever the reviewer asked for, and the acceptance oracle is

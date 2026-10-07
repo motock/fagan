@@ -164,6 +164,7 @@ from scripts.local_agent_oracle_config import (  # noqa: F401 (re-exported: the 
     CHAT_RETRY_BACKOFF,
     CONNECT_TIMEOUT_SECONDS,
     ENDPOINT,
+    FULL_SUITE_DONE_BAR,
     HARNESS_RULES,
     MAX_STEPS,
     MODEL,
@@ -320,19 +321,20 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     """If the oracle passes, auto-commit and end the run: the caller
     terminates the loop.
 
-    On a CI-fail-rework round (REWORK_FULL_SUITE), oracle-green is necessary
-    but no longer sufficient: the full worktree suite must ALSO be green before
+    The oracle is the primary bar, but it is not the only one. On a
+    CI-fail-rework round (REWORK_FULL_SUITE), or on ANY dispatch when the
+    operator knob FULL_SUITE_DONE_BAR is armed, oracle-green is necessary but
+    no longer sufficient: the full worktree suite must ALSO be green before
     the loop may terminate. The acceptance oracle excludes the agent's own
-    committed test file, so without this second gate a CI-fail rework would
-    stop and commit while that test still fails and re-fail the merge gate on
-    the same assertion every round. On a full-suite failure the failing
-    excerpt is fed back into `messages` (a user turn) and False is returned so
-    the loop keeps working the broken test until fixed or the step cap binds;
-    no commit happens on a failure. Cold-start dispatches never set
-    REWORK_FULL_SUITE, so their oracle-green done-bar is unchanged. A
-    reviewer-feedback rework round (REVIEW_FEEDBACK_REWORK) does not terminate
-    on oracle-green at all - the model's own `done` decides it, still suite-
-    and dirty-tree-gated.
+    committed test file, so without this second gate a run would stop and
+    commit while that test still fails and re-fail the merge gate on the same
+    assertion every round. On a full-suite failure the failing excerpt is fed
+    back into `messages` (a user turn) and False is returned so the loop keeps
+    working the broken test until fixed or the step cap binds; no commit
+    happens on a failure. With neither signal set the oracle-green done-bar is
+    unchanged. A reviewer-feedback rework round (REVIEW_FEEDBACK_REWORK) does
+    not terminate on oracle-green at all - the model's own `done` decides it,
+    still suite- and dirty-tree-gated.
     """
     global _SUITE_REJECTIONS, _FEEDBACK_NUDGED
     ok, _ = oracle_result()
@@ -363,7 +365,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
               f"harness will not decide done on oracle-green alone; the "
               f"review findings are the bar.", flush=True)
         return False
-    if REWORK_FULL_SUITE:
+    if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
         full_ok, full_tail, gate = _full_suite_result()
         if not full_ok:
             _SUITE_REJECTIONS += 1
@@ -719,8 +721,8 @@ def _main_impl() -> int:
                     # oracle green, done accepted - bypassed the gate). Close
                     # the bypass: require the full suite green here too, else
                     # feed the failing excerpt back and reject. Cold-start
-                    # dispatchs skip this (REWORK_FULL_SUITE unset).
-                    if REWORK_FULL_SUITE:
+                    # dispatches skip this unless FULL_SUITE_DONE_BAR arms it.
+                    if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
                         full_ok, full_tail, gate = _full_suite_result()
                         if not full_ok:
                             suite_rejections += 1

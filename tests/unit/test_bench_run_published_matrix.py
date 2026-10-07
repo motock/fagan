@@ -48,7 +48,7 @@ def _run(args, cwd, env=None):
     full.update(env or {})
     return subprocess.run(
         ["bash", str(SCRIPT), *args], cwd=str(cwd), env=full,
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
 
 

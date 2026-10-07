@@ -254,6 +254,11 @@ def test_missing_workdir_and_unknown_flag_exit_2_with_usage(tmp_path):
     assert proc.returncode == 2, f"unknown flag: {proc.returncode} {proc.stderr}"
     assert "usage" in proc.stderr.lower()
 
+    # --workdir with no value is a usage error, not a silent empty path.
+    proc = _run(["--workdir"], cwd=tmp_path)
+    assert proc.returncode == 2, f"--workdir without a value: {proc.returncode}"
+    assert "usage" in proc.stderr.lower()
+
 
 def test_every_named_model_and_task_actually_exists(tmp_path):
     proc = _run(["--dry-run", "--workdir", str(tmp_path / "wd")], cwd=tmp_path)

@@ -180,10 +180,41 @@ class SchedulerDaemon:
 
         This method is idempotent for the caller: it calls ``_reconcile_fn``
         exactly once, updates health metrics and interval gating state.
+        The sweep runs through the same bounded watchdog path
+        :meth:`run_once` uses, so a wedged call is abandoned at
+        ``PIPELINE_RECONCILE_JOIN_TIMEOUT_SECONDS`` instead of stalling
+        startup forever; a timeout records the same timeout metrics
+        ``run_once`` records.
         It does not swallow exceptions; any error propagates to the caller.
         """
-        # Perform reconcile immediately.
-        self._reconcile_fn()
+        # Perform reconcile immediately, through the SAME bounded watchdog
+        # path run_once uses. Calling _reconcile_fn() bare here left a stall
+        # unbounded: no join deadline, so the call never reached the
+        # abandonment ledger, never engaged the grace/restart hatch, and -
+        # because health is written only inside run_once - left the process
+        # alive reporting alive=True while the loop had not started.
+        timeout_s = _reconcile_join_timeout_seconds()
+        self._last_reconcile_attempt_timed_out = False
+        completed, outcome = self._run_with_watchdog(
+            self._reconcile_fn,
+            timeout_s=timeout_s,
+            label="reconcile",
+        )
+        if not completed:
+            logger.error(
+                "startup reconcile_fn stalled past the %.1fs join deadline "
+                "(PIPELINE_RECONCILE_JOIN_TIMEOUT_SECONDS); abandoning the "
+                "worker after %.1fs and entering the loop",
+                timeout_s,
+                outcome,
+            )
+            self._reconcile_timed_out += 1
+            self._last_reconcile_timeout_ts = time.time()
+            self._last_reconcile_attempt_timed_out = True
+            self._last_error = (
+                f"reconcile_fn stalled past the join deadline "
+                f"({outcome:.1f}s elapsed); worker abandoned"
+            )
         now_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
         self._last_reconcile_ts = now_ts
         self._reconcile_count += 1

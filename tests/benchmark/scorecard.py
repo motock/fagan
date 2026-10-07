@@ -54,6 +54,7 @@ def aggregate(cells: list[dict]) -> dict:
             "timeouts": sum(bool(c.get("timed_out")) for c in group),
             "avg_elapsed": round(sum(c.get("elapsed_s", 0) for c in group) / n, 1),
             "avg_ticks": round(sum(c.get("ticks", 0) for c in group) / n, 1),
+            "claude_usd": round(sum(c.get("claude_usd") or 0.0 for c in group), 4),
         }
     return stats
 
@@ -87,8 +88,8 @@ def render(cells: list[dict]) -> str:
 
     # --- per-model rollup ---
     lines.append("\n## Per-model totals\n")
-    lines.append("| Model | Success | Merged | GT-pass | Merged-but-wrong | TDD-skip | Timeouts | Avg s | Avg ticks |")
-    lines.append("|-------|---------|--------|---------|------------------|----------|----------|-------|-----------|")
+    lines.append("| Model | Success | Merged | GT-pass | Merged-but-wrong | TDD-skip | Timeouts | Avg s | Avg ticks | Claude $ / success |")
+    lines.append("|-------|---------|--------|---------|------------------|----------|----------|-------|-----------|------------------|")
     for model in models:
         msl = [s for (t, m), s in stats.items() if m == model]
         trials = sum(s["trials"] for s in msl)
@@ -100,9 +101,11 @@ def render(cells: list[dict]) -> str:
         to = sum(s["timeouts"] for s in msl)
         avg_s = round(sum(s["avg_elapsed"] * s["trials"] for s in msl) / trials, 1) if trials else 0
         avg_t = round(sum(s["avg_ticks"] * s["trials"] for s in msl) / trials, 1) if trials else 0
+        claude = sum(s.get("claude_usd") or 0.0 for s in msl)
+        cost = f"{claude / succ:.2f}" if succ else "-"
         lines.append(
             f"| {model} | {succ}/{trials} ({_pct(succ, trials)}) | {merged}/{trials} | "
-            f"{gtp}/{trials} | {mw} | {ts} | {to} | {avg_s} | {avg_t} |"
+            f"{gtp}/{trials} | {mw} | {ts} | {to} | {avg_s} | {avg_t} | {cost} |"
         )
 
     lines.append(
@@ -117,6 +120,10 @@ def render(cells: list[dict]) -> str:
         "weaker than the spec requested. Investigate when TDD-skip is high AND "
         "the cell's only evidence of correctness is the diff, not a re-run "
         "ground-truth.\n"
+    )
+    lines.append(
+        "\n> **Claude $ / success** is Claude spend (dispatch + review) divided "
+        "by successful cells; local-model calls cost $0 here.\n"
     )
     return "\n".join(lines) + "\n"
 

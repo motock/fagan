@@ -37,7 +37,7 @@ if [ -z "$REG_PATH" ]; then
 fi
 
 mkdir -p "$WORKDIR"
-REG_PATH="$REG_PATH" python3 -c '
+REG_PATH="$REG_PATH" REPO="$REPO" python3 -c '
 import datetime, hashlib, json, os, subprocess, sys
 reg = os.environ["REG_PATH"]
 sha = None

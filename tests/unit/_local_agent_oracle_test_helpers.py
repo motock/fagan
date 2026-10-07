@@ -141,6 +141,7 @@ def _finish_if_green_spy(monkeypatch, *, oracle_ok, full_ok, full_tail=""):
     monkeypatch.setattr(lao, "_full_suite_result", _full)
     monkeypatch.setattr(lao, "auto_commit", lambda reason: commits.append(reason))
     monkeypatch.setattr(lao, "worktree_dirty", lambda: True)
+    monkeypatch.setattr(lao, "write_done_marker", lambda rc: None)
     return messages, commits, full_calls
 
 

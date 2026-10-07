@@ -38,8 +38,18 @@ existing, already-committed codebase (via `tasks/<name>/seed/`, see below) that
 the story must modify — currently `ratelimiter_bugfix`: fix a reported bug in an
 existing implementation without breaking its existing test suite, following the
 same diagnose-then-regression-test-then-fix workflow this repo's own `CLAUDE.md`
-prescribes for bug work. Tier 3 (cross-module: a change touching an API, its
-consumer, and documentation together) is not yet implemented.
+prescribes for bug work. **Tier 3** is cross-module: a change touching an API,
+its consumer, and documentation together — currently `inventory_pagination`:
+turn a non-paginated `list_items(limit=100)` into a cursor-paginated API
+(`list_items(cursor=None, limit=50) -> (items, next_cursor)`, limit clamped to
+100, `ValueError` on a bad limit or cursor), page through every record in
+`report.count_all()` (which silently under-counts the 250-record catalog), and
+document the new contract in `README.md` while keeping the seeded test suite
+green. Tier 3 tasks declare `extra_impl_files` in `spec.json` so the ground
+truth can import every module the agent changed, not just `impl_file`. They
+have no `mock_impls.py` entry: the mock backend writes a single `impl_file`
+and cannot express a cross-module change, so a Tier 3 cell must run against a
+real model.
 
 Tiers exist because Tier 1 alone can be a misleading proxy: a model or pipeline
 change that helps on greenfield katas may not transfer to modify-existing-code
@@ -56,10 +66,11 @@ guess — but that wiring doesn't exist yet either.
 ```
 tests/benchmark/
   tasks/<name>/
-    spec.json        story fed to the pipeline (tier, summary, agent_instructions, persona, model, risk, impl_file)
+    spec.json        story fed to the pipeline (tier, summary, agent_instructions, persona, model, risk, impl_file, extra_impl_files)
     seed/            Tier 2+ only: existing codebase mirrored into the repo's initial commit
     acceptance.py    hidden oracle materialized read-only into the worktree; the agent must make it pass
     groundtruth.py   investigator-owned, independent; run against the MERGED code (never enters the worktree)
+  tasks/inventory_pagination/   Tier 3: cursor pagination across the API, its report consumer and the README
   harness.py         single-cell runner (one task x one model x one trial)
   models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, gptoss_devstral_review, lmstudio_gemma4, mlx, sonnet, mock)
   matrix.py          drives the full grid and renders the scorecard

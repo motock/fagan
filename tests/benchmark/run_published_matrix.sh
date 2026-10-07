@@ -45,10 +45,12 @@ if os.path.isfile(reg):
     sha = hashlib.sha256(open(reg, "rb").read()).hexdigest()
 dirty = bool(subprocess.run(
     ["git", "status", "--porcelain"], capture_output=True, text=True,
+    cwd=os.environ["REPO"],
 ).stdout.strip())
 meta = {
     "repo_sha": subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+        cwd=os.environ["REPO"],
     ).stdout.strip(),
     "repo_dirty": dirty,
     "started_utc": datetime.datetime.now(datetime.timezone.utc)

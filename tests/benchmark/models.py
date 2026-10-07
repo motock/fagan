@@ -120,6 +120,20 @@ def _ollama_role_config(dispatch: str, *, others: str | None = None) -> dict:
     }
 
 
+def _published_role_config(dispatch: str | None = None) -> dict:
+    """Role pins for the published matrix: the implementer is the arm's variable
+    (an ollama friendly name), and every other role is held at Claude sonnet.
+    dispatch=None pins every role to Claude (the all-Claude arm)."""
+    return {
+        role: (
+            {"provider": "ollama", "model": dispatch}
+            if dispatch and role == "dispatch"
+            else {"provider": "claude", "model": "sonnet"}
+        )
+        for role in _BENCH_ROLES
+    }
+
+
 def _local_provider(
     provider: str, tag: str, *, endpoint: str,
     temperature: str | None = None, num_ctx: str | None = None,
@@ -532,12 +546,48 @@ MODELS: dict[str, dict] = {
         os.environ.get("BENCH_MLX_TAG", "mlx-community/Qwen2.5-1.5B-Instruct-4bit"),
         endpoint=os.environ.get("BENCH_MLX_ENDPOINT", "http://localhost:8080"),
     ),
+    # --- published matrix arms (tests/benchmark/run_published_matrix.sh) ---
+    # Arm B: a cloud open-weight model implements, Claude plays every other role.
+    "glm_claude_review": {
+        "mock": False,
+        "env": {
+            **_local("glm-5.3-flash:cloud", temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS": "1800",
+        },
+        "role_config": _published_role_config("glm"),
+        "story_model": "glm",
+    },
+    # Arm C at the shipped step budget (60) and at double it (120). Same
+    # timeout in both so the step budget is the only variable.
+    "gptoss_claude_review_s60": {
+        "mock": False,
+        "env": {
+            **_local("gpt-oss:20b", temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS": "1800",
+            "PIPELINE_LOCAL_MAX_STEPS": "60",
+        },
+        "role_config": _published_role_config("gpt-oss"),
+        "story_model": "gpt-oss",
+    },
+    "gptoss_claude_review_s120": {
+        "mock": False,
+        "env": {
+            **_local("gpt-oss:20b", temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS": "1800",
+            "PIPELINE_LOCAL_MAX_STEPS": "120",
+        },
+        "role_config": _published_role_config("gpt-oss"),
+        "story_model": "gpt-oss",
+    },
     # --- cloud (claude CLI) ---
+    # Arm A: Claude implements and reviews. role_config pins every role so a
+    # host registry that routes a role elsewhere cannot change the arm.
     "sonnet": {
         "mock": False,
         "env": {
             "PIPELINE_BACKEND_DISPATCH": "claude",
         },
+        "role_config": _published_role_config(),
     },
     # --- offline self-test of the harness plumbing (no model/network) ---
     "mock": {

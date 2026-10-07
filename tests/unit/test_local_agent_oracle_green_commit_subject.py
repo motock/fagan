@@ -39,7 +39,7 @@ def test_should_cap_long_subject_at_72_chars_without_trailing_space_or_partial_w
 
 def test_should_cut_at_word_boundary_when_summary_is_longer_than_limit():
     summary = ("word " * 30).strip()
-    assert green_commit_subject(summary) == ("feat: " + "word " * 12).rstrip()
+    assert green_commit_subject(summary) == ("feat: " + "word " * 13).rstrip()
 
 
 def test_should_expose_story_derived_subject_when_env_var_set_at_import():

@@ -235,9 +235,9 @@ def test_run_invokes_matrix_py_twice_from_the_script_dir(tmp_path):
     assert os.path.realpath(first["cwd"]) == os.path.realpath(str(SCRIPT.parent))
     assert "--resume" in first["args"] and "--resume" in second["args"]
     assert _flag_args(first["args"], "--trials") == ["3"]
-    assert set(MAIN_ARMS) <= set(_flag_args(first["args"], "--models"))
-    assert set(TASKS) <= set(_flag_args(first["args"], "--tasks"))
-    assert STEP_ARM in _flag_args(second["args"], "--models")
+    assert _flag_args(first["args"], "--models") == list(MAIN_ARMS)
+    assert _flag_args(first["args"], "--tasks") == list(TASKS)
+    assert _flag_args(second["args"], "--models") == [STEP_ARM]
     assert os.path.realpath(_flag_args(first["args"], "--workdir")[0]) == os.path.realpath(str(wd / "main"))
     assert os.path.realpath(_flag_args(second["args"], "--workdir")[0]) == os.path.realpath(str(wd / "steps"))
 

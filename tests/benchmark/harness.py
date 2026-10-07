@@ -778,8 +778,16 @@ def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
         (scratch / impl_file).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(impl_path, scratch / impl_file)
         (scratch / "test_groundtruth.py").write_text(groundtruth)
+        # VENV_PY is the pipeline venv's interpreter, which is where the
+        # bench rig's pytest + deps live on a real dispatch machine. A
+        # machine without that venv (CI installs requirements-dev.txt into
+        # the runner's own Python, so <repo>/.venv does not exist) would
+        # otherwise die with FileNotFoundError before pytest ever starts -
+        # the same `VENV_PY if it exists else sys.executable` fallback
+        # matrix.py and the benchmark test modules already use.
+        py = str(VENV_PY) if VENV_PY.exists() else sys.executable
         r = subprocess.run(
-            [str(VENV_PY), "-m", "pytest", "test_groundtruth.py", "-q",
+            [py, "-m", "pytest", "test_groundtruth.py", "-q",
              "--no-header", "-p", "no:cacheprovider"],
             check=False, cwd=str(scratch), capture_output=True, text=True,
         )

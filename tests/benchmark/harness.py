@@ -100,8 +100,14 @@ VENV_PY = PIPELINE_REPO / ".venv" / "bin" / "python"
 # packages for the rest of the process -- e.g. a later
 # `from tests.benchmark import scorecard` would silently load the main
 # checkout's copy. Appending keeps the repo-root modules importable without
-# shadowing anything already on sys.path (in a normal checkout PIPELINE_REPO is
-# already on sys.path, so this is a no-op).
+# shadowing anything already on sys.path. In IMPORT mode (pytest importing
+# this module from a normal checkout) PIPELINE_REPO is already on sys.path,
+# so this is a no-op; in SCRIPT mode (python harness.py) only tests/benchmark
+# is on sys.path, and this append is exactly what makes main()'s later
+# `from app import ...` resolve -- do not delete it. Residual tradeoff: in a
+# worktree, modules absent from this worktree can still resolve from the
+# main checkout as a fallback (never shadowing); the bench needs main's app,
+# so that is acceptable.
 if str(PIPELINE_REPO) not in sys.path:
     sys.path.append(str(PIPELINE_REPO))
 

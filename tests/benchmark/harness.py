@@ -164,6 +164,46 @@ def _tdd_diff(repo: Path, init_sha: str, impl_file: str,
     return (impl_changed, test_changed)
 
 
+def _validate_extra_impl_files(task_name: str, value) -> list[str]:
+    """Normalize/validate a task's `extra_impl_files` spec field.
+
+    A Tier 3 task's ground truth imports several modules the agent changed,
+    so run_groundtruth must copy more than the single impl_file. The spec
+    lists those extra files as paths relative to the repo root. None (or a
+    missing key) means "no extras" and normalizes to []. Anything else must
+    be a list of non-empty relative paths with no backslash, no ".."
+    component and no duplicates; every invalid shape raises ValueError
+    naming the task and the offending entry (the contract - and its tests -
+    require ValueError rather than TypeError for a non-list too).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(  # noqa: TRY004 - the contract specifies ValueError for every invalid shape
+            f"task {task_name!r} declares extra_impl_files={value!r}; "
+            "expected a list of relative file paths"
+        )
+    kept: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError(
+                f"task {task_name!r} declares invalid extra_impl_files entry "
+                f"{entry!r}; expected a non-empty relative path"
+            )
+        if entry.startswith("/") or "\\" in entry or ".." in Path(entry).parts:
+            raise ValueError(
+                f"task {task_name!r} declares invalid extra_impl_files entry "
+                f"{entry!r}; expected a relative path with no '..' component"
+            )
+        if entry in kept:
+            raise ValueError(
+                f"task {task_name!r} declares duplicate extra_impl_files "
+                f"entry {entry!r}"
+            )
+        kept.append(entry)
+    return kept
+
+
 def load_task(name: str) -> dict:
     spec = json.loads((TASKS_DIR / name / "spec.json").read_text())
     # Ecosystem dispatch (Gap 3): the harness used to be pytest-only, with
@@ -192,6 +232,13 @@ def load_task(name: str) -> dict:
     else:
         spec["acceptance_source"] = None
     spec["groundtruth_source"] = (TASKS_DIR / name / f"groundtruth.{ext}").read_text()
+    # Tier 3 tasks: the ground truth may import several modules the agent
+    # changed, so the spec can list extra impl files (relative to the repo
+    # root) for run_groundtruth to copy beside test_groundtruth.py. Absent
+    # (the common case for every existing task) normalizes to [].
+    spec["extra_impl_files"] = _validate_extra_impl_files(
+        name, spec.get("extra_impl_files")
+    )
     # Tier 2+ tasks ("modify existing code", vs. Tier 1's greenfield katas)
     # seed the repo with an existing, already-committed codebase via
     # tasks/<name>/seed/ - a real directory tree (not JSON-embedded strings,
@@ -681,7 +728,8 @@ def drive_plan(p, plan_name: str, story_keys: list[str], deadline: float,
 
 
 def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
-                    scratch: Path, ecosystem: str = "pytest") -> dict:
+                    scratch: Path, ecosystem: str = "pytest",
+                    extra_impl_files: tuple | list = ()) -> dict:
     """Run the independent ground-truth suite against a copy of the impl file.
 
     Ecosystem dispatch (Gap 3): pytest copies the impl into a scratch dir
@@ -701,13 +749,33 @@ def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
     "model wrote something that builds but fails the tests" in the
     result. The test-orchestrator scripts (`tests/benchmark/_post/*`)
     should treat either as wrong, which is the correct reading.
+
+    `extra_impl_files` (Tier 3): additional impl files the ground truth
+    imports, copied from impl_src to the same relative path under scratch
+    before pytest runs. Only the pytest ecosystem supports it - cargo/npm
+    reject a non-empty list rather than silently grading a partial tree.
     """
     impl_path = impl_src / impl_file
     if not impl_path.exists():
         return {"ran": False, "passed": False, "reason": f"no {impl_file} at {impl_src}"}
+    if extra_impl_files and ecosystem != "pytest":
+        return {"ran": False, "passed": False,
+                "reason": "extra_impl_files is only supported for pytest tasks"}
     scratch.mkdir(parents=True, exist_ok=True)
 
     if ecosystem == "pytest":
+        for rel in extra_impl_files:
+            extra_path = impl_src / rel
+            if not extra_path.exists():
+                return {"ran": False, "passed": False,
+                        "reason": f"no {rel} at {impl_src}"}
+            dest = scratch / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(extra_path, dest)
+        # impl_file may itself be nested (e.g. "pkg/report.py"), so create
+        # its parent dir before the copy - the flat-name assumption only
+        # held for Tier 1 katas.
+        (scratch / impl_file).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(impl_path, scratch / impl_file)
         (scratch / "test_groundtruth.py").write_text(groundtruth)
         r = subprocess.run(
@@ -878,7 +946,8 @@ def main() -> int:
         wt = Path(story.get("worktree", ""))
         gt_src, gt_where = (wt, "worktree") if wt.is_dir() else (repo, "master")
     gt = run_groundtruth(gt_src, task["impl_file"], task["groundtruth_source"],
-                         cell / "_gt", ecosystem=task.get("ecosystem", "pytest"))
+                         cell / "_gt", ecosystem=task.get("ecosystem", "pytest"),
+                         extra_impl_files=task.get("extra_impl_files", []))
 
     # TDD-skip signal (project_t2_tdd_skip_finding.md): a T2 cell that
     # touches the impl without adding a regression test still scores

@@ -746,6 +746,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
+            dispatch_kwargs["story_summary"] = story.get("summary", "")
         # L1 (REVIEWER_ESCALATION_PLAN.md): any rework redispatch - a
         # CI-triggered rework (story["ci_rework"]) OR a reviewer
         # REQUEST_CHANGES rework (story["review_feedback"]) - raises the

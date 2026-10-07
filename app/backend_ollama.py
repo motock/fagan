@@ -607,6 +607,7 @@ class OllamaDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
         acceptance: list[str] | None = None,
+        story_summary: str = "",
         resume_transcript_path: Path | None = None,
         resume_append_content: str | None = None,
         rework_full_suite: bool = False,
@@ -703,6 +704,7 @@ class OllamaDriver:
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"
+            env["LOCAL_AGENT_STORY_SUMMARY"] = story_summary
         # L1 (REVIEWER_ESCALATION_PLAN.md): on a CI-fail-rework redispatch,
         # raise the agent's done-bar to full-suite-green. Only set when the
         # caller explicitly opts in (a CI-triggered rework); cold-start

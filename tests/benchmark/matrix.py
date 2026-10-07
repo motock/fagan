@@ -20,6 +20,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -99,14 +100,83 @@ def preflight_models(models: list[str], registry: dict | None = None) -> list[st
     return problems
 
 
+def _needs_claude(model_cfg: dict) -> bool:
+    """True when a cell for this arm can invoke a Claude agent.
+
+    A mock arm never touches the network. When the arm pins its roles in
+    role_config that is authoritative -- the harness plan-pins every role from
+    it and it outranks the env -- so the env is ignored. Legacy env-only arms
+    fall back to the env: dispatch claude, or review claude (harness's
+    _set_review_backend_env defaults review to claude when the key is absent).
+    """
+    if model_cfg.get("mock"):
+        return False
+    role_config = model_cfg.get("role_config")
+    if role_config is not None:
+        return any(str(pin.get("provider", "")).strip().lower() == "claude"
+                   for pin in role_config.values())
+    env = model_cfg.get("env") or {}
+    if env.get("PIPELINE_BACKEND_DISPATCH") == "claude":
+        return True
+    return env.get("PIPELINE_BACKEND_REVIEW", "claude") == "claude"
+
+
+# Substrings that mean "Claude is unusable right now", not "this cell failed":
+# the CLI reports them on stdout with is_error false and exit code 0.
+_CREDIT_MARKERS = ("out_of_credits", "rate limit", "rate_limit", "usage limit")
+
+
+def _probe_verdict(returncode: int, stdout: str) -> tuple[bool, str]:
+    """Pure verdict for a claude CLI probe: (available, reason)."""
+    if returncode != 0:
+        return False, f"claude probe exited {returncode}"
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        return False, "claude probe did not return JSON"
+    if not isinstance(payload, dict):
+        return False, "claude probe did not return a JSON object"
+    if payload.get("is_error"):
+        return False, "claude probe reported is_error"
+    lowered = stdout.lower()
+    for marker in _CREDIT_MARKERS:
+        if marker in lowered:
+            return False, f"claude probe reported {marker}"
+    return True, ""
+
+
+def claude_available() -> tuple[bool, str]:
+    """Probe the claude CLI once: (available, reason).
+
+    A missing binary or a hung CLI is an infra failure, not a model verdict,
+    so both map to unavailable rather than raising.
+    """
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "Reply with the single word OK",
+             "--output-format", "json"],
+            timeout=120, check=False, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return False, "claude CLI not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, "claude probe timed out"
+    return _probe_verdict(proc.returncode, proc.stdout)
+
+
 def _is_environment_failure(result: dict) -> bool:
     """True when a cell failed before any agent ran.
 
     Such a cell carries no model verdict to attribute the failure to, so
     every later cell would fail the same way. A cell that dispatched and then
     parked is a normal bench outcome -- the model simply failed the task --
-    and must not stop the grid.
+    and must not stop the grid. An infra_skipped cell never ran an agent by
+    design (Claude was unavailable), so it must not trip the abort-on-first-
+    cell rule either: the grid keeps recording every skipped cell so a later
+    --resume re-runs them.
     """
+    if result.get("final_status") == "infra_skipped":
+        return False
     if result.get("final_status") == "harness_error":
         return True
     return not result.get("dispatched_model")
@@ -156,6 +226,12 @@ def main() -> int:
     results: list[dict] = []
     started = time.time()
 
+    # Latched once Claude is found unavailable. Credits can run out mid-run,
+    # so the probe runs per Claude-using cell, but once it fails every later
+    # Claude cell is skipped without another probe. _go may run in threads.
+    claude_latch: dict[str, str] = {}
+    latch_lock = threading.Lock()
+
     def _go(spec):
         t, m, i = spec
         cell_dir = workdir / f"{t}__{m}__t{i}"
@@ -164,6 +240,29 @@ def main() -> int:
             r = json.loads(result_path.read_text())
             print(f"  [{t}/{m}/t{i}] SKIP (existing) {r['final_status']}", file=sys.stderr)
             return r
+        if _needs_claude(MODELS[m]):
+            with latch_lock:
+                reason = claude_latch.get("reason")
+            if reason is None:
+                ok, probe_reason = claude_available()
+                if not ok:
+                    with latch_lock:
+                        if claude_latch.get("reason") is None:
+                            claude_latch["reason"] = probe_reason
+                            print(f"  claude unavailable: {probe_reason}",
+                                  file=sys.stderr)
+                        reason = claude_latch["reason"]
+            if reason is not None:
+                # No run, no result.json: a later --resume re-runs this cell.
+                print(f"  [{t}/{m}/t{i}] infra_skipped (claude unavailable)",
+                      file=sys.stderr)
+                return {
+                    "task": t, "model": m, "trial": i,
+                    "final_status": "infra_skipped", "merged": False,
+                    "groundtruth_passed": False, "groundtruth_ran": False,
+                    "timed_out": False, "elapsed_s": 0, "ticks": 0,
+                    "error": reason,
+                }
         t0 = time.time()
         r = run_cell(t, m, i, workdir, args.timeout, args.tick)
         print(f"  [{t}/{m}/t{i}] {r['final_status']:13} "

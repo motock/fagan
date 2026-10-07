@@ -94,8 +94,16 @@ TASKS_DIR = BENCH_DIR / "tasks"
 VENV_PY = PIPELINE_REPO / ".venv" / "bin" / "python"
 
 # pipeline_mcp_server.py and backend.py live at the pipeline repo root.
+# Append rather than prepend: when this file lives in a git worktree,
+# PIPELINE_REPO resolves to the MAIN checkout (see _resolve_pipeline_repo), and
+# prepending it would shadow this worktree's own `tests`/`app` namespace
+# packages for the rest of the process -- e.g. a later
+# `from tests.benchmark import scorecard` would silently load the main
+# checkout's copy. Appending keeps the repo-root modules importable without
+# shadowing anything already on sys.path (in a normal checkout PIPELINE_REPO is
+# already on sys.path, so this is a no-op).
 if str(PIPELINE_REPO) not in sys.path:
-    sys.path.insert(0, str(PIPELINE_REPO))
+    sys.path.append(str(PIPELINE_REPO))
 
 def _set_review_backend_env() -> None:
     """Default the review gate to the cloud Claude reviewer, without
@@ -774,6 +782,7 @@ def main() -> int:
                          "rate-limit deferrals (FM-H), seconds")
     args = ap.parse_args()
 
+    import cell_cost
     from models import MODELS
     if args.model not in MODELS:
         print(f"unknown model {args.model!r}; known: {list(MODELS)}", file=sys.stderr)
@@ -904,6 +913,7 @@ def main() -> int:
         "timed_out": final_status not in TERMINAL,
         "tick_log": ticks,
         "groundtruth_tail": gt.get("tail", gt.get("reason", "")),
+        "claude_usd": cell_cost.claude_spend_usd(cell)["total_usd"],
     }
     (cell / "result.json").write_text(json.dumps(result, indent=2))
 

@@ -331,14 +331,16 @@ def test_main_latch_is_thread_safe(tmp_path, monkeypatch):
 def test_main_still_runs_the_preflight_gate(tmp_path, monkeypatch):
     """The credit guard must not weaken preflight_models (a8b268b)."""
     wd = tmp_path / "wd"
-    runs, _ = _wire(monkeypatch, [], lambda: (False, REASON))
+    runs = []
+    _wire(monkeypatch, runs, lambda: (False, REASON))
     rc = _main(monkeypatch, "--tasks", TASK, "--models", "sonnet", "--trials", "1",
                "--workdir", str(wd), "--jobs", "1")
     assert rc == 0                      # published arms pass the real registry
     assert runs == []                   # skipped, not run
     # a registry that cannot resolve the pins still refuses to run anything
     monkeypatch.setattr(matrix, "preflight_models", lambda ms: ["bad pin"])
-    runs2, probes2 = _wire(monkeypatch, [], lambda: (False, REASON))
+    runs2 = []
+    probes2 = _wire(monkeypatch, runs2, lambda: (False, REASON))
     rc = _main(monkeypatch, "--tasks", TASK, "--models", "sonnet", "--trials", "1",
                "--workdir", str(wd / "other"), "--jobs", "1")
     assert rc == 2                      # unresolvable pins still refuse to run

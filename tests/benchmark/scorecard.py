@@ -23,10 +23,21 @@ def _pct(n: int, d: int) -> str:
     return f"{100 * n // d}%" if d else "-"
 
 
+def _is_infra_skipped(cell: dict) -> bool:
+    """A cell the credit guard skipped: no agent ran, so it is no model verdict.
+
+    Such a cell counts in no denominator -- including it would score an infra
+    failure as a model failure (FINDINGS.md Run 1).
+    """
+    return cell.get("final_status") == "infra_skipped"
+
+
 def aggregate(cells: list[dict]) -> dict:
     """Group cells by (task, model) and compute per-cell-group stats."""
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for c in cells:
+        if _is_infra_skipped(c):
+            continue
         groups[(c["task"], c["model"])].append(c)
 
     stats: dict[tuple[str, str], dict] = {}
@@ -107,6 +118,10 @@ def render(cells: list[dict]) -> str:
             f"| {model} | {succ}/{trials} ({_pct(succ, trials)}) | {merged}/{trials} | "
             f"{gtp}/{trials} | {mw} | {ts} | {to} | {avg_s} | {avg_t} | {cost} |"
         )
+
+    skipped = sum(_is_infra_skipped(c) for c in cells)
+    if skipped:
+        lines.append(f"\nInfra-skipped cells (not counted): {skipped}\n")
 
     lines.append(
         "\n> **Merged-but-wrong** counts cells the pipeline merged whose code "

@@ -146,6 +146,57 @@ Cells run **sequentially** by default — local models share one Ollama/GPU, so
 - `BENCH_MLX_TAG`, `BENCH_MLX_ENDPOINT` — override the `mlx` cell's model
   id/endpoint to match whatever `mlx_lm.server` is currently serving.
 
+## Published run
+
+`run_published_matrix.sh` is the one-command entry point for the published
+benchmark grid. It fixes the task x arm grid in one place and runs it in two
+phases:
+
+```bash
+# From anywhere; DIR is created if missing.
+tests/benchmark/run_published_matrix.sh --workdir _runs/published
+
+# Print the two commands without running anything (run_meta.json is still written):
+tests/benchmark/run_published_matrix.sh --dry-run --workdir _runs/published
+```
+
+- **main** — the main arms (`sonnet`, `glm_claude_review`,
+  `gptoss_claude_review_s60`) over every published task, 3 trials each, into
+  `DIR/main`.
+- **steps** — the step arm (`gptoss_claude_review_s120`) over the same tasks
+  into `DIR/steps`.
+
+Both phases pass `--resume`, so an **infra-skipped** cell (Ollama down, a
+timeout, a transient network failure) is re-run by simply repeating the same
+command — completed cells are skipped and only the missing ones run.
+
+Before anything runs, the script writes `DIR/run_meta.json` recording the
+provenance of the run: `repo_sha` (`git rev-parse HEAD`), `repo_dirty`
+(`git status --porcelain`), `started_utc`, the task/arm grid, `trials`, and the
+model registry the pipeline will read — `registry.path` is
+`$PIPELINE_MODEL_REGISTRY_PATH` when set and non-empty, else the repo's
+`model_registry.json`, and `registry.sha256` is that file's digest (`null` if
+the file does not exist). The registry matters because the arm friendly names
+(`glm`, `gpt-oss`) resolve against it, so a run is only reproducible if the
+registry contents are pinned alongside the repo sha.
+
+The script uses `<repo>/.venv/bin/python` (override with `PY`) because
+`matrix.py` imports the app package; it falls back to `python3` only when that
+venv is absent.
+
+### Verify the run afterwards
+
+Confirm that every cell actually dispatched the model its arm names — an arm
+that silently ran another model is the failure this check exists to catch:
+
+```bash
+jq -r '[.model,.dispatched_model]|@tsv' DIR/*/*/result.json | sort | uniq -c
+```
+
+Each line should pair an arm with the model that arm pins; a mismatch (or a
+`dispatched_model` that is empty) means the cell's result is not attributable
+to the arm and must not be published.
+
 ## How isolation works (and why it's safe)
 
 Every cell gets its own directory tree with its own `PLAN_DIR`, `WORKTREE_ROOT`,

@@ -22,6 +22,7 @@ from typing import Any
 from .parsers import _is_transient_backend_exception
 from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
+from .review_deferral import park_rate_limited_review, review_defer_park_after
 from .review_logic import (
     REVIEW_LOGIC_FINGERPRINT_KEY,
     is_unchanged_since_review,
@@ -273,6 +274,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
             # misclassified rate-limit would eventually park a correct impl.
             story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+            _defer_limit = review_defer_park_after()
+            if 0 < _defer_limit <= story["review_deferred_count"]:
+                return park_rate_limited_review(
+                    plan_name, story_key, story, manifest, manifest_path, **_cid_kwargs
+                )
             _notify_user(
                 plan_name,
                 f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
@@ -359,6 +365,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # Fall through into the normal verdict-handling code below —
             # this is a genuine review attempt now, not a deferral.
         else:
+            _defer_limit = review_defer_park_after()
+            if 0 < _defer_limit <= story["review_deferred_count"]:
+                return park_rate_limited_review(
+                    plan_name, story_key, story, manifest, manifest_path, **_cid_kwargs
+                )
             _notify_user(
                 plan_name,
                 f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",

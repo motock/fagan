@@ -195,10 +195,10 @@ def green_commit_subject(summary: str) -> str:
     if len(subject) <= 72:
         return subject
     cut = subject[:72]
-    # The 72-char cut lands inside a word; drop that word, then the word before
-    # it, so the subject is a clean run of whole words with no trailing space.
-    if " " in cut:
-        cut = cut[: cut.rfind(" ")]
+    # The 72-char cut lands inside a word (or right after a space, in which case
+    # it ends with one); drop that partial word so the subject is a clean run of
+    # whole words with no trailing space. One backoff is enough — a second one
+    # over-corrects, discarding a whole extra word and landing well under 72.
     if " " in cut:
         cut = cut[: cut.rfind(" ")]
     return cut

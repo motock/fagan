@@ -155,10 +155,10 @@ def test_run_meta_records_repo_state_and_grid(tmp_path):
     assert meta["repo_dirty"] is bool(_git("status", "--porcelain"))
     assert meta["trials"] == 3
     assert len(meta["tasks"]) == 7
-    assert set(TASKS) <= set(meta["tasks"])
+    assert meta["tasks"] == list(TASKS)
     assert "inventory_pagination" in meta["tasks"]
-    assert set(MAIN_ARMS) <= set(meta["main_arms"])
-    assert STEP_ARM in meta["step_arm"]
+    assert meta["main_arms"] == list(MAIN_ARMS)
+    assert meta["step_arm"] == [STEP_ARM]
 
     started = datetime.fromisoformat(meta["started_utc"].replace("Z", "+00:00"))
     assert started.utcoffset().total_seconds() == 0, "started_utc must be UTC"

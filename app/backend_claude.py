@@ -327,7 +327,7 @@ class ClaudeCliDriver:
             _claude_identity_status = {"ok": True, "model": served, "reason": ""}
         return _claude_identity_status
 
-    def resource_status(self) -> dict:
+    def resource_status(self, model_tag: str | None = None) -> dict:
         """Claude's gate is the poller-fed, hysteresis-stabilized usage state
         (see pipeline_mcp_server.check_usage / _usage_gate), not a live /cost
         probe — reading the cached `paused` flag here is cheap and reflects the
@@ -335,6 +335,9 @@ class ClaudeCliDriver:
         orchestrator imports this module (a top-level import would cycle); by
         call time pipeline_mcp_server is fully loaded. Failing open (ok) on
         missing/garbled state matches check_usage's own fail-open behavior.
+        model_tag is accepted for interface parity with the base class and is
+        ignored, because Claude's gate is the usage state, not a per-model
+        memory check.
 
         Also folds in the cached provider-identity check (verify_identity) -
         an unchecked (None) cache fails open, same as missing usage state;

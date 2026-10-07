@@ -191,6 +191,9 @@ def test_registry_default_and_boundary_cases(tmp_path):
                 env={"PIPELINE_MODEL_REGISTRY_PATH": ""})
     assert proc.returncode == 0, proc.stderr
     assert os.path.realpath(_meta(wd2)["registry"]["path"]) == os.path.realpath(str(default))
+    assert _meta(wd2)["registry"]["sha256"] == expected_sha, (
+        "an empty PIPELINE_MODEL_REGISTRY_PATH must behave exactly like unset"
+    )
 
     # A path that does not exist: null digest, not a failure.
     wd3 = tmp_path / "wd3"

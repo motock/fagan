@@ -27,6 +27,8 @@ from pathlib import Path
 import scorecard
 from models import MODELS
 
+from app.role_registry import load_registry
+
 BENCH = Path(__file__).resolve().parent
 PIPELINE_REPO = BENCH.parents[1]
 VENV_PY = PIPELINE_REPO / ".venv" / "bin" / "python"
@@ -65,6 +67,48 @@ def run_cell(task: str, model: str, trial: int, workdir: Path,
     }
 
 
+def preflight_models(models: list[str], registry: dict | None = None) -> list[str]:
+    """Reasons the grid cannot run as configured; empty means it can.
+
+    Every arm pins the roles a cell can invoke in its plan role_config (see
+    models._ollama_role_config), and resolve_role rejects a pin whose model
+    is not declared under providers.<provider>.models in the registry
+    load_registry() actually reads. An isolated bench clone loses
+    model_registry.local.json -- and load_registry() returns {} for a missing
+    file rather than raising -- so every pin resolves against nothing, every
+    cell parks with no dispatched model, and the grid burns all of its cells
+    discovering that. Check it once here instead.
+    """
+    if registry is None:
+        registry = load_registry()
+    providers = registry.get("providers", {})
+    problems: list[str] = []
+    for name in models:
+        for role, pin in (MODELS[name].get("role_config") or {}).items():
+            provider = str(pin.get("provider", "")).strip().lower()
+            declared = providers.get(provider, {}).get("models", {})
+            if pin.get("model") not in declared:
+                problems.append(
+                    f"model {name!r}: role {role!r} pins "
+                    f"{provider}/{pin.get('model')!r}, which is not declared "
+                    f"under providers.{provider}.models"
+                )
+    return problems
+
+
+def _is_environment_failure(result: dict) -> bool:
+    """True when a cell failed before any agent ran.
+
+    Such a cell carries no model verdict to attribute the failure to, so
+    every later cell would fail the same way. A cell that dispatched and then
+    parked is a normal bench outcome -- the model simply failed the task --
+    and must not stop the grid.
+    """
+    if result.get("final_status") == "harness_error":
+        return True
+    return not result.get("dispatched_model")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", nargs="+", default=None,
@@ -98,6 +142,14 @@ def main() -> int:
           f"{len(args.models)} models x {args.trials} trials "
           f"(jobs={args.jobs}, timeout={args.timeout}s)", file=sys.stderr)
 
+    problems = preflight_models(args.models)
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        print(f"refusing to run {len(cells_spec)} cells with unresolvable "
+              f"role pins -- fix the registry and retry.", file=sys.stderr)
+        return 2
+
     results: list[dict] = []
     started = time.time()
 
@@ -117,8 +169,20 @@ def main() -> int:
         return r
 
     if args.jobs <= 1:
+        first_ran = False
         for spec in cells_spec:
-            results.append(_go(spec))
+            cached = args.resume and (workdir / f"{spec[0]}__{spec[1]}__t{spec[2]}"
+                                      / "result.json").exists()
+            r = _go(spec)
+            results.append(r)
+            if not first_ran and not cached:
+                first_ran = True
+                if _is_environment_failure(r):
+                    print(f"  [{spec[0]}/{spec[1]}/t{spec[2]}] first cell failed "
+                          f"before any agent ran; aborting rather than running "
+                          f"{len(cells_spec) - 1} more cells that would fail the "
+                          f"same way.", file=sys.stderr)
+                    return 2
     else:
         with ThreadPoolExecutor(max_workers=args.jobs) as ex:
             futs = [ex.submit(_go, spec) for spec in cells_spec]

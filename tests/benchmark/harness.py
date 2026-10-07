@@ -401,6 +401,33 @@ def ingest_or_raise(p, plan_name: str) -> dict:
     return result
 
 
+def _preserve_dispatch_log(worktree, story_key) -> Path | None:
+    """Copy a worktree's raw dispatch log out before the worktree is removed.
+
+    ``ClaudeCliDriver.dispatch()`` mirrors every raw stream-json line to
+    ``<worktree>/agent.log.raw``; its terminal ``{"type": "result", ...}`` line
+    carries the run's ``total_cost_usd``. ``_merge_pr_stub`` then runs
+    ``git worktree remove --force``, which deletes that file - so every
+    SUCCESSFUL cell would silently lose its dispatch cost. Copy it to
+    ``<worktrees>/<story_key>.agent.log.raw`` (the worktree's parent, which
+    survives) first.
+
+    Returns the destination path, or None when there is no raw log to keep.
+    A later merge of the same key appends to the existing destination rather
+    than overwriting it, so no earlier dispatch cost is lost.
+    """
+    src = Path(worktree) / "agent.log.raw"
+    if not src.is_file():
+        return None
+    dest = Path(worktree).parent / f"{story_key}.agent.log.raw"
+    if dest.exists():
+        with open(dest, "ab") as fh:
+            fh.write(src.read_bytes())
+    else:
+        shutil.copy(src, dest)
+    return dest
+
+
 def install_merge_stubs(p, repo: Path) -> None:
     """Replace the three gh-calling seams with hermetic git-only equivalents.
 
@@ -452,6 +479,7 @@ def install_merge_stubs(p, repo: Path) -> None:
         _sh(["git", "merge", "--squash", branch], repo)
         _sh(["git", "commit", "-qm", f"{story_key}: squash-merge {branch}"], repo)
         _sh(["git", "push", "-q", "origin", "master"], repo)
+        _preserve_dispatch_log(worktree, story_key)
         _sh(["git", "worktree", "remove", "--force", worktree], repo, check=False)
         _sh(["git", "branch", "-D", branch], repo, check=False)
         return "merged (stub)"

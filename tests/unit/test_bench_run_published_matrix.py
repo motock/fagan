@@ -110,6 +110,9 @@ def _meta(workdir):
 def test_script_exists_and_is_executable():
     assert SCRIPT.is_file(), "tests/benchmark/run_published_matrix.sh must exist"
     assert os.access(SCRIPT, os.X_OK), "the script must be committed with mode 100755"
+    assert SCRIPT.read_text().startswith("#!/usr/bin/env bash\n"), (
+        "the script must be a bash script with a /usr/bin/env bash shebang"
+    )
     tracked = _git("ls-files", "-s", "--", str(SCRIPT))
     if tracked:
         assert tracked.startswith("100755 "), (

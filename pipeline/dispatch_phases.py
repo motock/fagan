@@ -11,6 +11,7 @@ is resolved lazily through ``_ServerRef``, so
 """
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from .service import _ServerRef
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. This
 # mirrors the ``_ServerRef`` pattern already used by pipeline/dispatch.py.
 _LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
+_atomic_write_json = _ServerRef("_atomic_write_json")
 _default_branch = _ServerRef("_default_branch")
 _plan_role_config = _ServerRef("_plan_role_config")
 _run_planner = _ServerRef("_run_planner")
@@ -158,3 +160,124 @@ def _apply_planner_checklist(
             "(create_file for the first note, str_replace to rewrite it "
             "after that)."
         )
+
+
+# Truthy spellings for PIPELINE_TEST_AUTHOR_DETACHED. Anything else (unset,
+# empty, "0", "off", a typo) leaves the detached phase disabled.
+_TEST_AUTHOR_DETACHED_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _test_author_detached_enabled() -> bool:
+    """True iff ``PIPELINE_TEST_AUTHOR_DETACHED`` opts into the detached
+    test-author phase.
+
+    Read at call time (not import time) so tests and operators can flip it
+    per dispatch. Only ``1``/``true``/``yes``/``on`` (case-insensitive,
+    surrounding whitespace stripped) enable it; unset, empty, or any other
+    value disables it.
+    """
+    return (
+        os.environ.get("PIPELINE_TEST_AUTHOR_DETACHED", "").strip().lower()
+        in _TEST_AUTHOR_DETACHED_TRUTHY
+    )
+
+
+def _step_detached_test_author(
+    story: dict[str, Any],
+    *,
+    story_key: str,
+    worktree_path: Path,
+    dispatch_backend: str,
+    local_model: str,
+    plan_name: str,
+    plan_role_config: dict | None,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    marker_path: Path,
+    resuming: bool,
+) -> str:
+    """Advance the detached test-author phase by one non-blocking step.
+
+    Returns exactly one of ``"not_applicable"``, ``"pending"``,
+    ``"authored"`` or ``"fell_open"``:
+
+    - ``"not_applicable"``: the flag is off, the backend is not local-family,
+      this is a resume with no phase in flight, or the done-marker already
+      exists. The caller runs today's blocking path unchanged; nothing here
+      is touched.
+    - ``"pending"``: the phase was launched (first entry) or is still running
+      (re-entry); the caller should poll again later.
+    - ``"authored"``: the phase committed real tests; the marker is written
+      and ``story["tdd_split"]`` is set.
+    - ``"fell_open"``: the phase could not run or produced no commit; the
+      caller proceeds to the planner/executor exactly like today's fail-open.
+
+    Never raises: any unexpected error is logged and reported as
+    ``"fell_open"``, matching the phase's fail-open contract.
+    """
+    try:
+        if not _test_author_detached_enabled():
+            return "not_applicable"
+        if dispatch_backend not in _LOCAL_BACKEND_NAMES:
+            return "not_applicable"
+        phase = story.get("test_author_phase")
+        has_phase = isinstance(phase, dict)
+        if resuming and not has_phase:
+            return "not_applicable"
+        if marker_path.exists():
+            return "not_applicable"
+
+        if has_phase:
+            # Lazy import at call time (the same lazy-resolution property
+            # pipeline.dispatch gets from _ServerRef for _run_test_author_phase)
+            # so tests can patch pipeline.test_author.collect_test_author_phase.
+            from .test_author import collect_test_author_phase
+
+            result = collect_test_author_phase(
+                phase,
+                story=story,
+                story_key=story_key,
+                worktree_path=worktree_path,
+                plan_name=plan_name,
+            )
+            if result is None:
+                return "pending"
+            if result is True:
+                story.pop("test_author_phase", None)
+                story["tdd_split"] = True
+                marker_path.write_text("ok\n")
+                _atomic_write_json(manifest_path, manifest)
+                return "authored"
+            # False: the phase fell open (timeout, no commit, dispatch
+            # failure). Drop the stale phase so a later dispatch does not
+            # re-poll it, then hand back to the blocking path.
+            story.pop("test_author_phase", None)
+            _atomic_write_json(manifest_path, manifest)
+            return "fell_open"
+
+        from .test_author import start_test_author_phase
+
+        launched = start_test_author_phase(
+            story,
+            story_key=story_key,
+            worktree_path=worktree_path,
+            dispatch_backend=dispatch_backend,
+            local_model=local_model,
+            plan_name=plan_name,
+            plan_role_config=plan_role_config,
+        )
+        if isinstance(launched, dict):
+            story["test_author_phase"] = launched
+            _atomic_write_json(manifest_path, manifest)
+            return "pending"
+        # None: the phase skipped or failed to launch. Nothing was written,
+        # so there is nothing to persist.
+        return "fell_open"
+    # Fail open: a detached-phase hiccup must never take the dispatch down.
+    except Exception:
+        logging.getLogger("pipeline").warning(
+            f"detached test-author step failed for {story_key}; "
+            "falling back to monolithic dispatch",
+            exc_info=True,
+        )
+        return "fell_open"

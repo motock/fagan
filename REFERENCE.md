@@ -1144,6 +1144,42 @@ against the committed tests rather than rewriting them.
 
 ---
 
+## Detached test-author phase
+
+`PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS` (default `5400`) bounds how long the
+test-author phase may run before it is reaped and fails open. By default the
+phase is **blocking**: the dispatch waits for the test-author to exit before
+the executor starts, which holds the scheduler's reconcile thread for the
+whole authoring pass. Set `PIPELINE_TEST_AUTHOR_DETACHED` to `1` (also
+`true`, `yes`, `on` — case-insensitive, surrounding whitespace stripped) to
+opt into the **detached** phase: the test-author is launched without waiting,
+and each subsequent scheduler tick advances the phase by one non-blocking
+step. Any other value (unset, empty, `0`, `off`, a typo) leaves the phase
+blocking, so the flag is off by default and a stale operator environment
+cannot silently change dispatch behavior.
+
+While a detached phase is in flight, the story's manifest entry carries a
+`test_author_phase` object recording the launch:
+
+```json
+"test_author_phase": {
+  "pid": 4242,
+  "started_at": "2026-10-08T00:00:00+00:00",
+  "backend": "mlx",
+  "model": "test-author-model"
+}
+```
+
+`pid` is the launched agent's process id, `started_at` an ISO-8601 UTC
+timestamp (the timeout above is measured from it), and `backend`/`model` the
+resolved test-author role. The field is removed once the phase commits real
+tests (the `.tdd_split_test_author_done` marker is written and
+`story["tdd_split"]` is set) or falls open; the detached phase keeps the same
+fail-open contract as the blocking one — a launch failure, timeout, or
+no-commit result drops the field and proceeds as ordinary monolithic dispatch.
+
+---
+
 ## Test-author skip for doc/config-only stories
 
 In addition to the TDD-split gates above, the test-author phase is skipped

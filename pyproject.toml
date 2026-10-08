@@ -74,4 +74,3 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 # tests/unit/_pipeline_mcp_server_test_helpers.py and uses it as a
 # test-function parameter.
 "tests/unit/test_advance_cloud_slot_exempt.py" = ["F811"]
-"tests/unit/test_advance_pending_test_author.py" = ["F811"]

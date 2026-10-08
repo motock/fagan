@@ -6,6 +6,8 @@ is not ``in_progress``. dispatch_story returning ``{"pending": "test_author"}``
 is reported under ``summary["pending_phase"]``, not ``"dispatched"``.
 """
 
+# ruff: noqa: F811  (pytest fixture imported then used as a test parameter)
+
 import os
 
 import pytest

@@ -399,9 +399,14 @@ def test_server_module_defines_plan_hash_sidecar_path():
     path literal and the new guard variable appear in the server source."""
     import inspect
 
-    from pipeline import dispatch
+    from pipeline import dispatch, dispatch_phases
 
-    source = inspect.getsource(dispatch)
+    # TA-DETACH-DISPATCH-EXTRACT moved the planner/REUSE-guard block verbatim
+    # out of pipeline/dispatch.py into pipeline/dispatch_phases.py, so the
+    # source scan covers both modules - the same widening the story_status ->
+    # detached_grade and PLD90-DSP-4 git-setup moves used. Every assertion
+    # below is unchanged, so the check still fails if the guard disappears.
+    source = inspect.getsource(dispatch) + "\n" + inspect.getsource(dispatch_phases)
     assert 'plan_hash_path = worktree_path / ".agent_plan_src_hash"' in source
     # The new guard variable name from the fix.
     assert "checklist_is_fresh" in source

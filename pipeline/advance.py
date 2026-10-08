@@ -24,7 +24,11 @@ from .advance_merge import (
     _adjudicate_merges,
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
-from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
+from .concurrency import (
+    PlanLockReacquireTimeout,
+    _has_live_test_author_phase,
+    _released_plan_lock,
+)
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_lease import claim_dispatch_lease
@@ -260,6 +264,10 @@ def _count_on_device_in_progress_agents() -> int:
     for manifest_path in PLAN_DIR.glob("*.manifest.json"):
         manifest = json.loads(manifest_path.read_text())
         for story in manifest.get("stories", {}).values():
+            if _has_live_test_author_phase(story):
+                if _story_dispatch_is_on_device(story):
+                    count += 1
+                continue
             if story.get("status") != "in_progress" or "pid" not in story:
                 continue
             try:
@@ -457,7 +465,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 break
             story = stories[key]
             on_device = _story_dispatch_is_on_device(story)
-            if capped and on_device and free_device_slots <= 0:
+            # A story waiting on a detached test-author already occupies a
+            # slot (it is counted above), so re-dispatching it to collect the
+            # phase must neither be blocked by nor consume another slot.
+            holds_slot = _has_live_test_author_phase(story)
+            if capped and on_device and not holds_slot and free_device_slots <= 0:
                 # On-device slots are exhausted: defer this story until a
                 # slot frees up. Cloud dispatches never reach this branch.
                 continue
@@ -506,7 +518,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # Persist the claim BEFORE releasing the lock - an unpersisted
             # lease protects nothing.
             _atomic_write_json(manifest_path, m)
-            if capped and on_device:
+            if capped and on_device and not holds_slot:
                 # Only a dispatch that actually launches on-device consumes
                 # the slot; a cloud dispatch must not touch the counter.
                 free_device_slots -= 1
@@ -533,7 +545,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # stub) is not counted.
                 if isinstance(result, dict):
                     dispatched_this_tick += 1
-                if not (isinstance(result, dict) and result.get("skipped")):
+                if isinstance(result, dict) and result.get("pending"):
+                    # Detached test-author still running: no executor launched.
+                    summary.setdefault("pending_phase", []).append(key)
+                elif not (isinstance(result, dict) and result.get("skipped")):
                     summary["dispatched"].append(key)
                 else:
                     summary.setdefault("skipped", []).append(key)

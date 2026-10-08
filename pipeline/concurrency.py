@@ -77,6 +77,25 @@ del _pre_reload_server_ref
 PLAN_DIR = _ServerRef("PLAN_DIR")
 
 
+def _has_live_test_author_phase(story: dict) -> bool:
+    """True when ``story`` holds a detached test-author phase whose process is
+    alive. Such a story still has a local model loaded, so it occupies a
+    concurrency slot although its status is not ``in_progress``. Malformed
+    phase values (non-dict, missing/non-int/bool/non-positive pid) are ignored.
+    """
+    phase = story.get("test_author_phase")
+    pid = phase.get("pid") if isinstance(phase, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
 def _count_in_progress_agents() -> int:
     """Count *actually running* dispatched agents (status in_progress with a
     live pid) across every plan's manifest, not just one plan — the usage
@@ -100,6 +119,9 @@ def _count_in_progress_agents() -> int:
     for manifest_path in PLAN_DIR.glob("*.manifest.json"):
         manifest = json.loads(manifest_path.read_text())
         for story in manifest.get("stories", {}).values():
+            if _has_live_test_author_phase(story):
+                count += 1
+                continue
             if story.get("status") != "in_progress" or "pid" not in story:
                 continue
             try:

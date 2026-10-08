@@ -20,7 +20,7 @@ from .dispatch_baseline import (
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
 )
-from .dispatch_phases import _apply_planner_checklist
+from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
     _dispatch_fallback_provider,  # noqa: F401
@@ -565,7 +565,26 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # produced) falls open to today's unmodified monolithic dispatch -
         # never a gate (§2.5).
         test_author_marker = worktree_path / ".tdd_split_test_author_done"
-        if (
+        detached_outcome = _step_detached_test_author(
+            story,
+            story_key=story_key,
+            worktree_path=worktree_path,
+            dispatch_backend=dispatch_backend,
+            local_model=spec["model"],
+            plan_name=plan_name,
+            plan_role_config=_plan_role_config(plan_name),
+            manifest=manifest,
+            manifest_path=manifest_path,
+            marker_path=test_author_marker,
+            resuming=resuming,
+        )
+        if detached_outcome == "pending":
+            return {"ok": True, "pending": "test_author", "story_key": story_key}
+        executor_is_resume = resuming and detached_outcome not in (
+            "authored",
+            "fell_open",
+        )
+        if detached_outcome == "not_applicable" and (
             dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming
             and not test_author_marker.exists()
@@ -604,7 +623,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             story,
             spec,
             dispatch_backend=dispatch_backend,
-            resuming=resuming,
+            resuming=executor_is_resume,
             worktree_path=worktree_path,
             test_author_marker=test_author_marker,
             plan_name=plan_name,
@@ -636,7 +655,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             "allowed_tools": spec["allowed_tools"],
             "cwd": worktree_path,
             "log_path": log_path,
-            "append": resuming,
+            "append": executor_is_resume,
         }
         # Only the local driver accepts/uses `acceptance`; pass it through when
         # we're actually invoking that driver so Claude's signature stays clean.
@@ -879,5 +898,5 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             "story_key": story_key,
             "pid": handle.pid,
             "branch": branch,
-            "resumed": resuming,
+            "resumed": executor_is_resume,
         }

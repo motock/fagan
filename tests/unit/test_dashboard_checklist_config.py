@@ -374,12 +374,14 @@ def test_server_scratchpad_prompt_requires_progress_line():
     .agent_scratchpad.md."""
     import inspect
 
-    from pipeline import dispatch
+    from pipeline import dispatch, dispatch_phases
 
     # The instruction is built inside a function; inspect the source of the
     # module so we assert on the literal string content the implementer must
-    # keep in sync with the plan.
-    source = inspect.getsource(dispatch)
+    # keep in sync with the plan. TA-DETACH-DISPATCH-EXTRACT moved the
+    # scratchpad instruction verbatim into pipeline/dispatch_phases.py, so the
+    # scan covers both modules; every assertion below is unchanged.
+    source = inspect.getsource(dispatch) + "\n" + inspect.getsource(dispatch_phases)
     assert "PROGRESS: <done>/<total>" in source, (
         "scratchpad prompt must mention 'PROGRESS: <done>/<total>'"
     )

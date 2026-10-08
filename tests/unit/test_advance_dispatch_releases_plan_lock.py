@@ -27,6 +27,7 @@ itself, review_story, the resource backend, autonomy) are stubbed.
 """
 
 import json
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -368,7 +369,7 @@ class TestDispatchLeaseGuards:
     ):
         story = _story(
             dispatch_lease_expires_at=_future_iso(),
-            dispatch_lease_owner_pid=999999,
+            dispatch_lease_owner_pid=os.getpid(),
         )
         path = _write_manifest(tmp_path, {"s1": story})
         _seed_common(monkeypatch, path)
@@ -384,7 +385,7 @@ class TestDispatchLeaseGuards:
         final = _read_stories(path)["s1"]
         assert final["status"] == "todo"
         assert final["dispatch_attempts"] == 0
-        assert final["dispatch_lease_owner_pid"] == 999999
+        assert final["dispatch_lease_owner_pid"] == os.getpid()
 
     def test_expired_lease_does_not_block_dispatch(self, monkeypatch, tmp_path):
         story = _story(

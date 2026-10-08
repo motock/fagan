@@ -83,16 +83,19 @@ from pipeline.scheduler_timeouts import (  # noqa: F401
     _ABANDON_WORKER_GRACE_ENV,
     _DEFAULT_ABANDON_RESTART_THRESHOLD,
     _DEFAULT_ABANDON_WORKER_GRACE_S,
+    _DEFAULT_HEARTBEAT_INTERVAL_S,
     _DEFAULT_RECONCILE_JOIN_TIMEOUT_S,
     _DEFAULT_SCAN_JOIN_TIMEOUT_S,
     _DRAIN_JOIN_TIMEOUT_ENV,
     _DRAIN_JOIN_TIMEOUT_SECONDS,
+    _HEARTBEAT_INTERVAL_ENV,
     _RECONCILE_JOIN_TIMEOUT_ENV,
     _SCAN_JOIN_TIMEOUT_ENV,
     _abandon_restart_threshold,
     _abandon_worker_grace_seconds,
     _apply_scheduler_role_call_clamp,
     _drain_join_timeout_seconds,
+    _heartbeat_interval_seconds,
     _reconcile_join_timeout_seconds,
     _scan_join_timeout_seconds,
 )
@@ -125,6 +128,13 @@ class SchedulerDaemon:
         self._last_reconcile = clock()
         # Health surface state
         self._health_path = health_path
+        # Liveness heartbeat (story SCHED-HEARTBEAT): set only while a watchdog
+        # join is mid-phase, so ``write_health`` can surface ``phase`` and
+        # ``heartbeat_ts`` in the FILE payload while the phase runs and omit
+        # both on a clean tick (existing tests pin the file payload to
+        # ``{**health(), "config": ...}``). ``health()`` never reads these.
+        self._heartbeat_phase = None
+        self._heartbeat_ts = None
         self._last_reconcile_ts = None
         self._last_scan_ts = None
         self._last_error = None
@@ -324,9 +334,57 @@ class SchedulerDaemon:
         are additive extras in both the dict and the file.
         """
         tmp_path = f"{path}.tmp"
+        payload = {**self.health(), "config": self.config_fingerprint()}
+        # Liveness heartbeat (story SCHED-HEARTBEAT): present in the FILE only
+        # while a watchdog join is mid-phase, so a busy-but-alive daemon's file
+        # keeps advancing and a reader can distinguish it from a dead or wedged
+        # one. Omitted on a clean tick, which keeps the file payload exactly
+        # ``{**health(), "config": ...}`` for existing readers and tests.
+        if self._heartbeat_phase is not None:
+            payload["heartbeat_ts"] = self._heartbeat_ts
+            payload["phase"] = self._heartbeat_phase
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump({**self.health(), "config": self.config_fingerprint()}, fh)
+            json.dump(payload, fh)
         os.replace(tmp_path, path)
+
+    def _join_with_heartbeat(self, worker, timeout_s, label):
+        """Join *worker* in heartbeat-sized slices, refreshing health between.
+
+        Story SCHED-HEARTBEAT: a single ``worker.join(timeout_s)`` of up to
+        900s blocks the main thread with health written only after the phase
+        ends, so ``last_scan_ts`` and the health file's mtime freeze while the
+        daemon is healthy and busy (the scan phase runs bus handlers
+        synchronously — reviews, seconds to minutes). Slicing the join at
+        ``PIPELINE_SCHEDULER_HEARTBEAT_SECONDS`` and refreshing health after
+        each unfinished slice keeps the file advancing, so a reader can tell a
+        busy-but-alive daemon from a dead or wedged one.
+
+        The total deadline is unchanged: the slices sum to *timeout_s*, and
+        the caller's ``is_alive()`` check remains the only timed-out-vs-done
+        signal. ``_heartbeat_phase`` is set only while the phase is genuinely
+        mid-join and cleared when the join returns, so a clean tick's file
+        payload stays exactly ``{**health(), "config": ...}``.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            worker.join(min(_heartbeat_interval_seconds(), remaining))
+            if not worker.is_alive():
+                break
+            # The slice elapsed without the worker finishing: the phase is
+            # still running, so stamp it and refresh health before the next
+            # slice. Guarded exactly like the other health writes — a failing
+            # write must never kill the loop.
+            self._heartbeat_phase = label
+            self._heartbeat_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            if self._health_path is not None:
+                try:
+                    self.write_health(self._health_path)
+                except Exception:  # pragma: no cover - must never kill the loop
+                    logger.exception("write_health failed during %s heartbeat", label)
+        self._heartbeat_phase = None
 
     def _run_with_watchdog(self, fn, *, timeout_s, label):
         """Run ``fn`` in one worker daemon-thread with a bounded join.
@@ -363,8 +421,10 @@ class SchedulerDaemon:
         worker.start()
         started = time.monotonic()
         # Thread.join(timeout) ALWAYS returns None; the is_alive() check below
-        # is the only correct timed-out-vs-done signal.
-        worker.join(timeout_s)
+        # is the only correct timed-out-vs-done signal. The join is sliced at
+        # the heartbeat interval (story SCHED-HEARTBEAT) so health keeps
+        # advancing while a long phase runs; the total deadline is unchanged.
+        self._join_with_heartbeat(worker, timeout_s, label)
         if not worker.is_alive():
             if "error" in box:
                 raise box["error"]

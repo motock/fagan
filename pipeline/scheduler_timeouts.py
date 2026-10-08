@@ -189,6 +189,57 @@ def _reconcile_join_timeout_seconds() -> float:
     return value
 
 
+# Liveness heartbeat (story SCHED-HEARTBEAT): while a scan or reconcile phase
+# runs, the main thread blocks in a single ``worker.join(timeout_s)`` of up to
+# 900s and health is written only after the phase ends. The scan phase runs bus
+# handlers synchronously (reviews, seconds to minutes), so ``last_scan_ts`` and
+# the health file's mtime freeze while the daemon is healthy and busy — a
+# reader cannot tell that from a dead or wedged process. The watchdog join is
+# sliced at this interval and health is refreshed after each unfinished slice.
+_HEARTBEAT_INTERVAL_ENV = "PIPELINE_SCHEDULER_HEARTBEAT_SECONDS"
+_DEFAULT_HEARTBEAT_INTERVAL_S = 30.0
+
+
+def _heartbeat_interval_seconds() -> float:
+    """Read the watchdog heartbeat interval from the environment, per call.
+
+    Mirrors :func:`_reconcile_join_timeout_seconds` exactly: malformed,
+    non-positive, and non-finite values degrade to the default (30s) instead
+    of crashing the loop — a bad operator override must never take the daemon
+    down, and a non-finite interval would make the sliced join never fire.
+    """
+    raw = os.environ.get(_HEARTBEAT_INTERVAL_ENV)
+    if raw is None:
+        return _DEFAULT_HEARTBEAT_INTERVAL_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s must be a number, got %r; using default %gs",
+            _HEARTBEAT_INTERVAL_ENV,
+            raw,
+            _DEFAULT_HEARTBEAT_INTERVAL_S,
+        )
+        return _DEFAULT_HEARTBEAT_INTERVAL_S
+    if not math.isfinite(value):
+        logger.warning(
+            "%s must be finite, got %r; using default %gs",
+            _HEARTBEAT_INTERVAL_ENV,
+            raw,
+            _DEFAULT_HEARTBEAT_INTERVAL_S,
+        )
+        return _DEFAULT_HEARTBEAT_INTERVAL_S
+    if value <= 0:
+        logger.warning(
+            "%s must be positive, got %r; using default %gs",
+            _HEARTBEAT_INTERVAL_ENV,
+            raw,
+            _DEFAULT_HEARTBEAT_INTERVAL_S,
+        )
+        return _DEFAULT_HEARTBEAT_INTERVAL_S
+    return value
+
+
 # Abandon-restart escape hatch (story LOCKSTARVE-C2): process death is the
 # only thing that releases a flock, and the launchd job
 # com.fagan.pipeline.advance-scheduler has KeepAlive=true, so exiting IS the

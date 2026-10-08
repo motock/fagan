@@ -19,7 +19,9 @@ already used elsewhere in the pipeline package.
 import logging
 import os
 import signal
+import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app import backend, role_registry
@@ -405,7 +407,53 @@ def _wait_for_agent_exit(pid: int, timeout: float, poll_interval: float = 1.0) -
     return False
 
 
-def _run_test_author_phase(
+def _agent_has_exited(pid: int) -> bool:
+    """Non-blocking liveness probe for the test-author agent at `pid`.
+
+    The blocking `_wait_for_agent_exit` polls `os.waitpid` in a loop; the
+    scheduler's reconcile worker thread cannot afford that (its join
+    deadline is 900s, so one slow test-author stalls every plan). This is
+    the single-shot probe behind `collect_test_author_phase`: True iff the
+    process has exited (reaped, dead, or a zombie), False iff it is still
+    running. Never raises.
+
+    `os.waitpid(pid, os.WNOHANG)` is the portable way to reap our own child
+    without blocking; a non-zero return means it exited. When that cannot
+    answer (ChildProcessError: not our child, or already reaped by someone
+    else; or a zero return, which we still confirm through the liveness
+    probe so a pid we cannot signal is reported correctly), fall back to
+    `os.kill(pid, 0)`: ProcessLookupError means it is gone, PermissionError
+    means it exists but is not ours to signal (still running), and success
+    means we read its state via `ps -p <pid> -o stat=` - an empty result or
+    a 'Z' (zombie) state means it has exited.
+    """
+    try:
+        reaped_pid, _ = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        reaped_pid = 0
+    if reaped_pid != 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+    try:
+        state = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001 (ps missing/unusable must not raise past this probe)
+        return False
+    return not state or state.startswith("Z")
+
+
+def start_test_author_phase(
     story: dict,
     *,
     story_key: str,
@@ -414,24 +462,17 @@ def _run_test_author_phase(
     local_model: str,
     plan_name: str,
     plan_role_config: dict | None = None,
-    timeout: float | None = None,
-) -> bool:
-    """Run the test-authoring pre-executor dispatch in `worktree_path`,
-    BLOCKING until it exits, before the main executor dispatch starts. See
-    TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.5.
+) -> dict | None:
+    """Launch the test-authoring pre-executor dispatch and return
+    immediately, without waiting for it to exit.
 
-    Returns True iff the test-author produced a real commit on the story's
-    branch for the executor to build on. Returns False on ANY failure (role
-    unconfigured/refused, dispatch error, timeout, or no new commit) -
-    callers MUST treat False as "fall back to today's monolithic dispatch,
-    agent_instructions unmodified" per the fail-open contract that is this
-    feature's single most safety-critical property. Never raises.
-
-    Every False return also calls _notify_user: the fail-open silently
-    dropped the weak-executor's TDD-split crutch with no operator-visible
-    signal (observed live 2026-07-30 on two stories whose plan left
-    test_author on a different provider than dispatch - both then parked).
-    The fail-open itself is unchanged; only the silence is fixed.
+    Everything `_run_test_author_phase` does BEFORE its blocking wait: the
+    doc/config-only skip, the [no-new-tests] opt-out skip, backend
+    resolution, and the `backend.dispatch` launch - with the same
+    `_notify_user` fall-open messages. Returns a phase dict
+    ``{"pid", "started_at", "backend", "model"}`` on a successful launch
+    (``started_at`` is an ISO-8601 UTC timestamp), or None on ANY fall-open
+    (skip, unconfigured/refused role, or dispatch failure). Never raises.
     """
     # Escape hatch (Mode 51, live 2026-08-10 on W1a-10): a story whose brief
     # carries the [no-new-tests] sentinel is a behavior-preserving refactor
@@ -446,7 +487,7 @@ def _run_test_author_phase(
             "doc/config); dispatching monolithically against the existing "
             "test suite",
         )
-        return False
+        return None
     if _story_opts_out_of_test_author(story):
         _notify_user(
             plan_name,
@@ -454,7 +495,7 @@ def _run_test_author_phase(
             "[no-new-tests]); dispatching monolithically against the "
             "existing test suite",
         )
-        return False
+        return None
     test_author_backend, test_author_model = _resolve_test_author_backend(
         dispatch_backend,
         local_model,
@@ -467,7 +508,7 @@ def _run_test_author_phase(
             "resolves to the same backend as dispatch); dispatching "
             "monolithically without a test-first split",
         )
-        return False
+        return None
     log_path = worktree_path / "test_author.log"
     try:
         handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
@@ -489,14 +530,49 @@ def _run_test_author_phase(
             f"{story_key} test-author phase fell open (dispatch failed to "
             "start); dispatching monolithically without a test-first split",
         )
-        return False
-    exited = _wait_for_agent_exit(
-        handle.pid,
-        timeout
-        if timeout is not None
-        else float(os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")),
-    )
-    if not exited:
+        return None
+    return {
+        "pid": handle.pid,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "backend": test_author_backend,
+        "model": test_author_model,
+    }
+
+
+def collect_test_author_phase(
+    phase: dict,
+    *,
+    story: dict,
+    story_key: str,
+    worktree_path: Path,
+    plan_name: str,
+    now: datetime | None = None,
+) -> bool | None:
+    """Reap a phase launched by `start_test_author_phase` without blocking.
+
+    Returns None while the agent is still running and less than
+    PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS (default 5400) have elapsed since
+    ``phase["started_at"]`` - the caller should poll again later. Once the
+    timeout elapses with the agent still running, SIGTERMs it, notifies the
+    operator, and returns False (the same fail-open as the blocking timeout
+    path). Once the agent has exited, runs the shared commit-detection tail:
+    True iff a real (non-WIP) commit landed on the story's branch, else
+    False. `now` is injectable for tests. Never raises.
+    """
+    pid = phase["pid"]
+    if not _agent_has_exited(pid):
+        started_at = datetime.fromisoformat(phase["started_at"])
+        current = now if now is not None else datetime.now(timezone.utc)
+        elapsed = (current - started_at).total_seconds()
+        timeout = float(
+            os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")
+        )
+        if elapsed < timeout:
+            return None
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         logging.getLogger("pipeline").warning(
             f"test-author dispatch timed out for {story_key}; "
             "falling back to monolithic dispatch"
@@ -533,6 +609,81 @@ def _run_test_author_phase(
             "monolithically without a test-first split",
         )
     return has_commits
+
+
+def _run_test_author_phase(
+    story: dict,
+    *,
+    story_key: str,
+    worktree_path: Path,
+    dispatch_backend: str,
+    local_model: str,
+    plan_name: str,
+    plan_role_config: dict | None = None,
+    timeout: float | None = None,
+) -> bool:
+    """Run the test-authoring pre-executor dispatch in `worktree_path`,
+    BLOCKING until it exits, before the main executor dispatch starts. See
+    TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.5.
+
+    Thin wrapper over the non-blocking primitives: `start_test_author_phase`
+    launches (or falls open to None -> False), `_wait_for_agent_exit` blocks
+    with the same timeout semantics as before, and the shared
+    commit-detection tail in `collect_test_author_phase` grades the result.
+
+    Returns True iff the test-author produced a real commit on the story's
+    branch for the executor to build on. Returns False on ANY failure (role
+    unconfigured/refused, dispatch error, timeout, or no new commit) -
+    callers MUST treat False as "fall back to today's monolithic dispatch,
+    agent_instructions unmodified" per the fail-open contract that is this
+    feature's single most safety-critical property. Never raises.
+
+    Every False return also calls _notify_user: the fail-open silently
+    dropped the weak-executor's TDD-split crutch with no operator-visible
+    signal (observed live 2026-07-30 on two stories whose plan left
+    test_author on a different provider than dispatch - both then parked).
+    The fail-open itself is unchanged; only the silence is fixed.
+    """
+    phase = start_test_author_phase(
+        story,
+        story_key=story_key,
+        worktree_path=worktree_path,
+        dispatch_backend=dispatch_backend,
+        local_model=local_model,
+        plan_name=plan_name,
+        plan_role_config=plan_role_config,
+    )
+    if phase is None:
+        return False
+    exited = _wait_for_agent_exit(
+        phase["pid"],
+        timeout
+        if timeout is not None
+        else float(os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")),
+    )
+    if not exited:
+        logging.getLogger("pipeline").warning(
+            f"test-author dispatch timed out for {story_key}; "
+            "falling back to monolithic dispatch"
+        )
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (dispatch timed out); "
+            "dispatching monolithically without a test-first split",
+        )
+        return False
+    # The agent has exited: reuse collect's shared commit-detection tail.
+    # `_wait_for_agent_exit` returning True means the process is gone, so
+    # collect takes the exited branch and returns a bool.
+    return bool(
+        collect_test_author_phase(
+            phase,
+            story=story,
+            story_key=story_key,
+            worktree_path=worktree_path,
+            plan_name=plan_name,
+        )
+    )
 
 
 def _run_rework_test_author_phase(
@@ -621,6 +772,7 @@ __all__ = [
     "_TEST_AUTHOR_ALLOWED_TOOLS",
     "_TEST_AUTHOR_OPT_OUT_MARKER",
     "_TEST_AUTHOR_SYSTEM",
+    "_agent_has_exited",
     "_resolve_test_author_backend",
     "_rework_test_author_prompt",
     "_run_rework_test_author_phase",
@@ -629,4 +781,6 @@ __all__ = [
     "_story_opts_out_of_test_author",
     "_test_author_prompt",
     "_wait_for_agent_exit",
+    "collect_test_author_phase",
+    "start_test_author_phase",
 ]

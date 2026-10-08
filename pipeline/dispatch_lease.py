@@ -26,6 +26,11 @@ Fail secure, in both directions:
 - A missing, malformed, or expired lease never withholds work forever:
   it reads as not live and is re-claimable. A naive (timezone-less)
   timestamp is malformed — never guess a timezone.
+- A lease whose recorded owner process is gone is not live either: the
+  owner pid is trusted ONLY to prove an owner is dead, never to prove it
+  alive (pid reuse can only keep a lease live until expiry, which is the
+  safe direction). A pid that is not a plain positive ``int`` is an
+  unknown owner and falls back to expiry-only.
 
 ``now`` / ``ttl_s`` are injectable purely so tests are deterministic;
 production callers pass neither. No logging: manifests carry user work.
@@ -119,15 +124,43 @@ def claim_dispatch_lease(
     return True
 
 
+def _owner_is_alive(story: dict) -> bool:
+    """Return False only when ``story``'s recorded owner is provably dead.
+
+    The owner pid is trusted ONLY to prove an owner is dead, never to prove
+    it alive: pid reuse can only keep a lease live until expiry, which is
+    the safe direction. An owner pid that is not a plain positive ``int``
+    (``bool`` is rejected despite being an ``int`` subclass) is an UNKNOWN
+    owner, so this returns True and the caller falls back to expiry-only —
+    today's behavior.
+
+    ``os.kill(pid, 0)`` is the liveness probe: ``ProcessLookupError`` means
+    no such process (dead); ``PermissionError`` means the process exists but
+    is owned by another user (alive); success means alive.
+    """
+    pid = story.get("dispatch_lease_owner_pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return True
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def lease_is_live(story: dict, *, now: datetime | None = None) -> bool:
     """Return True only when ``story`` holds a live dispatch lease.
 
     The lease is live iff ``dispatch_lease_expires_at`` is present,
     parses as a timezone-aware ISO-8601 timestamp, and is strictly in
-    the future relative to ``now`` (expiry is exclusive). Anything else
-    — missing field, non-string, unparseable, naive timestamp, expired —
-    is NOT live, so a corrupt field can never withhold work forever.
-    This function never mutates ``story``.
+    the future relative to ``now`` (expiry is exclusive), AND the recorded
+    owner process is not provably dead (see ``_owner_is_alive``). Anything
+    else — missing field, non-string, unparseable, naive timestamp, expired,
+    or a gone owner — is NOT live, so a corrupt field can never withhold
+    work forever. This function never mutates ``story``.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -147,4 +180,8 @@ def lease_is_live(story: dict, *, now: datetime | None = None) -> bool:
         return False
 
     # Expiry is exclusive: a lease expiring at exactly ``now`` is dead.
-    return expires > now
+    if expires <= now:
+        return False
+
+    # The expiry says live; the owner pid can still prove it dead.
+    return _owner_is_alive(story)

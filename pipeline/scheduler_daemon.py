@@ -187,6 +187,20 @@ class SchedulerDaemon:
         ``run_once`` records.
         It does not swallow exceptions; any error propagates to the caller.
         """
+        # Replace the previous process's health file BEFORE the startup
+        # reconcile runs. Health used to be written only inside run_once,
+        # after the scan phase, so a freshly started scheduler left the dead
+        # process's file on disk for up to a full interval - a reader
+        # (dashboard, preflight, a model) would see a foreign config.pid and
+        # a stale last_error such as "reconcile_fn stalled past the join
+        # deadline" and diagnose a wedge that does not exist. Guarded exactly
+        # like the post-scan write: a failing health write must never kill
+        # the loop.
+        if self._health_path is not None:
+            try:
+                self.write_health(self._health_path)
+            except Exception:
+                logger.exception("write_health failed at startup")
         # Perform reconcile immediately, through the SAME bounded watchdog
         # path run_once uses. Calling _reconcile_fn() bare here left a stall
         # unbounded: no join deadline, so the call never reached the

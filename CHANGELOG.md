@@ -7,6 +7,73 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [0.7.0] - 2026-10-09
+
+### Added
+
+**Dispatch**
+
+- The test-author step now runs detached from `dispatch_story` through
+  non-blocking start/collect primitives, with a decision step for when to
+  use it; the planner block moved into `dispatch_phases` (no behavior
+  change for that extraction).
+- A PR title is derived from the branch's Conventional Commits subject
+ .
+
+**Local-agent harness**
+
+- `view_file` returns a repeat advisory instead of re-emitting identical
+  bytes, and the one-sided-read latch guard keys reads by their own bound
+  so orientation in a large file is not a false-positive park.
+- `FULL_SUITE_DONE_BAR` is armed on the oracle harness, the oracle gets
+  the story summary in its env, and its auto-commit has a story-derived
+  subject.
+
+**Scheduler**
+
+- Health is written at startup before the first reconcile and refreshed
+  during long watchdog joins; `SchedulerDaemon.start()`'s reconcile is
+  bounded by the watchdog.
+
+**Benchmark tooling**
+
+- Every role is pinned per arm through `role_config`, the grid refuses to
+  run when its pins cannot resolve, and a one-command published-matrix
+  driver records pinned provenance.
+- A Tier 3 `inventory_pagination` cross-module task, Claude dollars per
+  success in the scorecard, preserved dispatch cost logs, and Claude
+  cells skipped when credits or rate limits run out.
+
+### Changed
+
+- The maintainer's home path is scrubbed from archived plans, specs and
+  retros, and the committed launchd files use a placeholder home
+  directory.
+- The exported overlord policy spec matches the live parked-story policy.
+- A bare `pytest` run is clean on a fresh clone.
+
+### Fixed
+
+**Scheduler and merge**
+
+- A dispatch lease whose owner pid is dead is treated as not live.
+- CI status queries run in the scoped plan repo, and an unreadable CI
+  status parks the story instead of being treated as no CI.
+- A trailing DONE line in `agent.log` counts as `agent_done` in the wedge
+  scan.
+
+**Review gate**
+
+- `ClaudeCliDriver.resource_status` accepts `model_tag`, so the review
+  gate no longer crashes the scheduler.
+- Review is gated on the model it will actually run, the Claude usage
+  pause is re-derived from cached percentages, and consecutive
+  rate-limited review deferrals are bounded and then park.
+
+**Local agent**
+
+- A successful `create_file` resets its own repetition count.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added

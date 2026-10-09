@@ -75,6 +75,17 @@ def _repo_has_ci_configured() -> bool:
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
+def _unreadable_or_none(error: str) -> dict[str, str]:
+    """Classify a failure to read CI status.
+
+    With workflows declared, an unreadable status must not look like "no CI"
+    (the merge gate would treat it as permission to merge), so it is
+    ``unreadable``; repos without workflows keep ``none``.
+    """
+    state = "unreadable" if _repo_has_ci_configured() else "none"
+    return {"state": state, "error": error}
+
+
 def _scoped_repo_cwd() -> str:
     """Directory ``gh`` must run in: the scoped plan repo, read at call time.
 
@@ -180,10 +191,10 @@ def _ci_status(
                     text=True,
                 )
         except OSError as e:
-            return {"state": "none", "error": f"gh unavailable: {e}"}
+            return _unreadable_or_none(f"gh unavailable: {e}")
 
         if r.returncode != 0:
-            return {"state": "none", "error": r.stderr.strip()[:200]}
+            return _unreadable_or_none(r.stderr.strip()[:200])
 
         if sha:
             try:
@@ -191,10 +202,7 @@ def _ci_status(
                     json.loads(line) for line in r.stdout.splitlines() if line.strip()
                 ]
             except ValueError:
-                return {
-                    "state": "none",
-                    "error": "unparseable gh api check-runs output",
-                }
+                return _unreadable_or_none("unparseable gh api check-runs output")
 
             if not runs:
                 if not _repo_has_ci_configured():
@@ -235,7 +243,7 @@ def _ci_status(
                 entries = json.loads(r.stdout or "[]")
                 buckets = {c.get("bucket") for c in entries}
             except ValueError:
-                return {"state": "none", "error": "unparseable gh pr checks output"}
+                return _unreadable_or_none("unparseable gh pr checks output")
 
             if not buckets:
                 if not _repo_has_ci_configured():
@@ -305,10 +313,10 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
                 text=True,
             )
     except OSError as e:
-        return {"state": "none", "error": f"gh unavailable: {e}"}
+        return _unreadable_or_none(f"gh unavailable: {e}")
 
     if r.returncode != 0:
-        return {"state": "none", "error": r.stderr.strip()[:200]}
+        return _unreadable_or_none(r.stderr.strip()[:200])
 
     if sha:
         try:
@@ -316,10 +324,7 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
                 json.loads(line) for line in r.stdout.splitlines() if line.strip()
             ]
         except ValueError:
-            return {
-                "state": "none",
-                "error": "unparseable gh api check-runs output",
-            }
+            return _unreadable_or_none("unparseable gh api check-runs output")
 
         if not runs:
             if not _repo_has_ci_configured():
@@ -357,7 +362,7 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
             entries = json.loads(r.stdout or "[]")
             buckets = {c.get("bucket") for c in entries}
         except ValueError:
-            return {"state": "none", "error": "unparseable gh pr checks output"}
+            return _unreadable_or_none("unparseable gh pr checks output")
 
         if not buckets:
             if not _repo_has_ci_configured():

@@ -5,6 +5,8 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 import json
 import subprocess
 
+import pytest
+
 from pipeline import ci as pci
 from pipeline import server as p
 from pipeline import ticketing as pt
@@ -18,6 +20,15 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     plan_dir,
     usage_state_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _repo_without_ci_workflows(monkeypatch):
+    """These tests fake a gh failure and expect the no-CI path (state 'none');
+    the live repo declares workflows, which would now yield 'unreadable'."""
+    import pipeline.ci as _pci
+
+    monkeypatch.setattr(_pci, "_repo_has_ci_configured", lambda: False)
 
 # ---------- _reverify_build (T4) ----------
 # Neither the reviewer nor the dispatched agent's own "tests pass" report is

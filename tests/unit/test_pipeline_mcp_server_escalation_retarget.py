@@ -5,6 +5,8 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 import fcntl
 import os
 
+import pytest
+
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _RATE_LIMIT_MSG,
@@ -17,6 +19,15 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     agents_dir,
     plan_dir,
 )
+
+
+@pytest.fixture(autouse=True)
+def _repo_without_ci_workflows(monkeypatch):
+    """These tests fake a gh failure and expect the no-CI path (state 'none');
+    the live repo declares workflows, which would now yield 'unreadable'."""
+    import pipeline.ci as _pci
+
+    monkeypatch.setattr(_pci, "_repo_has_ci_configured", lambda: False)
 
 # ---------- Non-rate-limited UNKNOWN must not burn the rework budget ----------
 

@@ -612,6 +612,12 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         "error": f"CI still pending: {ci['error']}",
                         "story_key": story_key,
                     }
+                if ci["state"] == "unreadable":
+                    return {
+                        "ok": False,
+                        "error": f"ci unreadable: {ci['error']}",
+                        "story_key": story_key,
+                    }
                 acc = _reverify_acceptance(story, worktree, story_key)
                 if acc["state"] == "fail":
                     return {

@@ -10,8 +10,8 @@ import json
 
 import pytest
 
-from pipeline import merge
 import pipeline.server as p
+from pipeline import merge
 from pipeline.server import _advance_pipeline_locked
 
 

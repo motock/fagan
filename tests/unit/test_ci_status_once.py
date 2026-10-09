@@ -213,6 +213,7 @@ def test_none_when_gh_exits_nonzero(monkeypatch, no_sleep):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
+    monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
     result = p._ci_status_once("agent/x", sha="deadbeef")
     assert result["state"] == "none"
     assert len(result["error"]) <= 200
@@ -227,6 +228,7 @@ def test_none_when_gh_raises_oserror(monkeypatch, no_sleep):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
+    monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
     result = p._ci_status_once("agent/x", sha="deadbeef")
     assert result["state"] == "none"
     assert result["error"].startswith("gh unavailable:")
@@ -242,6 +244,7 @@ def test_none_on_unparseable_output(monkeypatch, no_sleep):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
+    monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
     result = p._ci_status_once("agent/x", sha="deadbeef")
     assert result["state"] == "none"
     assert result["error"]  # non-empty descriptive error

@@ -25,6 +25,23 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     usage_state_path,
 )
 
+
+@pytest.fixture(autouse=True)
+def _repo_without_ci_workflows(monkeypatch):
+    """These tests fake a gh failure and expect the no-CI path (state 'none');
+    the live repo declares workflows, which would now yield 'unreadable'."""
+    import pipeline.ci as _pci
+
+    real = _pci._repo_has_ci_configured
+    live_root = p.REPO_ROOT
+
+    # Only the live (unpatched) REPO_ROOT is forced to "no CI"; tests that
+    # point REPO_ROOT at their own tmp_path keep the real check.
+    monkeypatch.setattr(
+        _pci, "_repo_has_ci_configured",
+        lambda: False if p.REPO_ROOT == live_root else real(),
+    )
+
 # ---------- advance_pipeline orchestration ----------
 
 def test_advance_pipeline_does_not_report_skipped_locked_as_dispatched(plan_dir, monkeypatch):

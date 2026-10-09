@@ -22,6 +22,15 @@ from pipeline import self_modification as sm
 from pipeline import server as p
 
 
+@pytest.fixture(autouse=True)
+def _repo_without_ci_workflows(monkeypatch):
+    """These tests fake a gh failure and expect the no-CI path (state 'none');
+    the live repo declares workflows, which would now yield 'unreadable'."""
+    import pipeline.ci as _pci
+
+    monkeypatch.setattr(_pci, "_repo_has_ci_configured", lambda: False)
+
+
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"

@@ -262,6 +262,10 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 ci_definitive_fail = True
             elif ci["state"] == "cancelled":
                 gate_error = f"ci fail: {ci['error']}"
+            elif ci["state"] == "unreadable":
+                # Status could not be read although workflows exist: park via
+                # the ordinary gate_error/merge_attempts path, never merge blind.
+                gate_error = f"ci unreadable: {ci['error']}"
             elif ci["state"] == "pending":
                 story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
                 story["ci_pending_sha"] = pushed_sha

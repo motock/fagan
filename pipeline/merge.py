@@ -600,6 +600,11 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     story["ci_rerun_attempted"] = True
                     _ci_rerun(pushed_sha)
                     ci = _ci_status(branch, sha=pushed_sha)
+                # Record the gate's final result for every risk level; persisted
+                # now because the blocking returns below skip the final write.
+                story["pr_checks"] = ci
+                story.pop("pr_checks_error", None)
+                _atomic_write_json(manifest_path, manifest)
                 if ci["state"] in ("fail", "cancelled"):
                     return {
                         "ok": False,

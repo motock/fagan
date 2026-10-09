@@ -252,6 +252,11 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 story["ci_rerun_attempted"] = True
                 _ci_rerun(pushed_sha)
                 ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
+            # Record the gate's own final result for every risk level, so a
+            # merged story always carries CI evidence and a blocked one shows
+            # why (fail/pending/unreadable included).
+            story["pr_checks"] = ci
+            story.pop("pr_checks_error", None)
             if ci["state"] == "fail":
                 gate_error = f"ci fail: {ci['error']}"
                 # Only a genuine test-failure verdict is "definitive" -

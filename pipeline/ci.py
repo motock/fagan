@@ -75,6 +75,17 @@ def _repo_has_ci_configured() -> bool:
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
+def _scoped_repo_cwd() -> str:
+    """Directory ``gh`` must run in: the scoped plan repo, read at call time.
+
+    ``_scoped_repo_root`` reassigns ``server.REPO_ROOT`` without chdir, so a
+    bare ``gh`` call would query whichever repo the process was launched in.
+    """
+    from .server import REPO_ROOT
+
+    return str(REPO_ROOT)
+
+
 def _fetch_ci_failure_excerpt(branch: str) -> str | None:
     """Capture a bounded failing-test excerpt from the failed workflow run.
 
@@ -159,13 +170,13 @@ def _ci_status(
                         "--jq",
                         ".check_runs[] | {name, status, conclusion}",
                     ],
-                    check=False, capture_output=True,
+                    check=False, capture_output=True, cwd=_scoped_repo_cwd(),
                     text=True,
                 )
             else:
                 r = subprocess.run(
                     ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                    check=False, capture_output=True,
+                    check=False, capture_output=True, cwd=_scoped_repo_cwd(),
                     text=True,
                 )
         except OSError as e:
@@ -284,13 +295,13 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
                     "--jq",
                     ".check_runs[] | {name, status, conclusion}",
                 ],
-                check=False, capture_output=True,
+                check=False, capture_output=True, cwd=_scoped_repo_cwd(),
                 text=True,
             )
         else:
             r = subprocess.run(
                 ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                check=False, capture_output=True,
+                check=False, capture_output=True, cwd=_scoped_repo_cwd(),
                 text=True,
             )
     except OSError as e:

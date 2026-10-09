@@ -113,6 +113,27 @@ def _journal_path_for(plan_name: str, story_key: str, story: dict) -> Path | Non
     return None
 
 
+_LOG_TAIL_BYTES = 8192
+
+
+def _log_ends_with_done(agent_log: Path) -> bool:
+    """True when the log's last non-empty line is a ``[step N] DONE:`` line.
+
+    Only the last line counts: agent.log is appended to on a rework resume,
+    so an older DONE followed by new steps means the worker is mid-run.
+    Reads just the tail of the file and never raises.
+    """
+    try:
+        with agent_log.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _LOG_TAIL_BYTES))
+            tail = fh.read()
+    except OSError:
+        return False
+    lines = [ln for ln in tail.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+    return bool(lines) and "] DONE:" in lines[-1]
+
+
 def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> dict:
     """Measure one story's wedge signals. Read-only; never raises.
 
@@ -155,6 +176,7 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
         agent_done = (
             (wt / ".agent_done").exists()
             or (wt / ".agent_done.consumed").exists()
+            or _log_ends_with_done(wt / "agent.log")
         )
 
     return {

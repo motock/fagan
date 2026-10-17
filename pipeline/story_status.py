@@ -898,6 +898,13 @@ def bind_to_server(_server: Any) -> None:
     itself never imports the server and can be imported cold."""
     global check_story_status, _detached_grade_lifecycle
 
+    # The rebound bodies below resolve bare names against pipeline.server's
+    # namespace, and their `datetime.now(UTC)` stamps read bare `UTC` -- a name
+    # pipeline.server does not import (it keeps `timezone` for the pre-UP017
+    # bodies). Export the alias here, the same way the other collaborators the
+    # rebound bodies read are exported below, so the stamps keep resolving.
+    _server.UTC = UTC
+
     # Rebind the function's globals to pipeline.server's namespace so that
     # bare-name reads inside the body (e.g. `detect_test_command`,
     # `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at

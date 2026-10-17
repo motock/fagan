@@ -266,7 +266,7 @@ def _parse_iso(ts: str | None) -> datetime | None:
     try:
         # datetime.fromisoformat in 3.11+ accepts trailing 'Z'; older
         # versions need it swapped for an explicit +00:00 offset.
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return datetime.fromisoformat(ts)
     except ValueError:
         return None
 

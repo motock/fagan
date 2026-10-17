@@ -32,7 +32,7 @@ import copy
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -42,7 +42,7 @@ TTL_ENV = "PIPELINE_DISPATCH_LEASE_TTL_SECONDS"
 EXPIRES_KEY = "dispatch_lease_expires_at"
 OWNER_PID_KEY = "dispatch_lease_owner_pid"
 
-NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)

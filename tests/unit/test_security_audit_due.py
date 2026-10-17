@@ -1,13 +1,13 @@
 """When is a repo due a security audit: thresholds, commit counting, decision."""
 
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from pipeline import security_audit
 
-_NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 _SHA = "a" * 40
 _COMMITS = "PIPELINE_SECURITY_AUDIT_EVERY_COMMITS"
 _DAYS = "PIPELINE_SECURITY_AUDIT_EVERY_DAYS"

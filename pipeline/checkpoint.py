@@ -14,7 +14,7 @@ import json
 import os
 import signal
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +127,7 @@ def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | 
             if size > 65536:
                 fh.seek(-65536, os.SEEK_END)
             tail = fh.read(65536)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         dest = Path(PLAN_DIR) / f"{plan_name}.{story_key}.watchdog-{stamp}.log"
         dest.write_bytes(tail)
         return str(dest)
@@ -150,7 +150,7 @@ def _pid_started_after_dispatch(pid: int, dispatched_at: str | None) -> bool:
         out = proc.stdout.strip()
         if not out:
             return False
-        started = datetime.strptime(out, "%a %b %d %H:%M:%S %Y").astimezone(timezone.utc)
+        started = datetime.strptime(out, "%a %b %d %H:%M:%S %Y").astimezone(UTC)
         dispatched = datetime.fromisoformat(dispatched_at)
         return (started - dispatched).total_seconds() > 5
     except Exception:  # noqa: BLE001 - unknown identity keeps today's kill behavior
@@ -173,7 +173,7 @@ def _terminate_and_checkpoint(
             pass
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
-    interrupted_at = datetime.now(timezone.utc).isoformat()
+    interrupted_at = datetime.now(UTC).isoformat()
     record = {
         "step": step,
         "summary": summary,
@@ -227,7 +227,7 @@ def _checkpoint_impl(
         "summary": summary,
         "next_hint": next_hint,
         "commit": sha,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
     }
     _append_journal(plan_name, story_key, record)
     return {"ok": True, **record}

@@ -15,6 +15,7 @@ import json
 # tests exercise the pure helpers exposed by app.js by shelling out to Node
 # in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
 import os
+from datetime import UTC
 
 from app import dashboard as d  # noqa: F401
 from tests.unit._app_js import run_app_js as _shared_run_app_js
@@ -78,8 +79,8 @@ def _run_app_js(expr):
 
 def _iso(seconds_ago):
     """Return an ISO timestamp `seconds_ago` in the past, UTC."""
-    from datetime import datetime, timedelta, timezone
-    dt = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    from datetime import datetime, timedelta
+    dt = datetime.now(UTC) - timedelta(seconds=seconds_ago)
     # datetime.isoformat produces '+00:00'; new Date() handles that fine.
     return dt.isoformat()
 
@@ -129,8 +130,8 @@ def test_age_label_for_uses_last_activity_relative_to_now():
 def test_age_label_for_future_timestamp_is_just_now():
     """Boundary: a future-dated last_activity clamps to 'just now'
     rather than producing a negative-looking string."""
-    from datetime import datetime, timedelta, timezone
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    from datetime import datetime, timedelta
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     assert _run_app_js(f"ageLabelFor({json.dumps(future)})") == "just now"
 
 

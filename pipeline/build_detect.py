@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -675,7 +675,7 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
         "returncode": result.returncode,
         "stdout_tail": (result.stdout or "")[-2000:],
         "stderr_tail": (result.stderr or "")[-2000:],
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
     }
 
 

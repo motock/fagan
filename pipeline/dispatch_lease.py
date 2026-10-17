@@ -37,7 +37,7 @@ production callers pass neither. No logging: manifests carry user work.
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 _DEFAULT_TTL_S = 1800
 # Sane upper cap on any resolved TTL: 30 days. Comfortably below
@@ -98,7 +98,7 @@ def claim_dispatch_lease(
     ``TypeError`` today, which is acceptable for a test-only injectable.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     if ttl_s is not None:
         ttl = _validated_ttl_s(ttl_s, from_env=False)
@@ -163,7 +163,7 @@ def lease_is_live(story: dict, *, now: datetime | None = None) -> bool:
     work forever. This function never mutates ``story``.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     value = story.get("dispatch_lease_expires_at")
     if not isinstance(value, str) or not value:

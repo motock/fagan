@@ -24,7 +24,7 @@ Design notes
 
 import copy
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -299,11 +299,11 @@ def test_children_is_an_empty_list_placeholder(monkeypatch):
 
 
 def test_decided_at_is_iso_utc(monkeypatch):
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
 
     _, calls = _run(monkeypatch, {"status": "parked"}, mode="dry-run")
 
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
     raw = _only_record(calls)["decided_at"]
     assert isinstance(raw, str) and raw
     parsed = datetime.fromisoformat(raw)

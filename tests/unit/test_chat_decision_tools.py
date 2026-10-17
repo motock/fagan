@@ -226,7 +226,7 @@ class TestDecisionsRouteHappyPath:
         record = res.json()["record"]
         ts = record["decided_at"]
         # Must be ISO-parseable; tolerate a trailing Z or +00:00 offset.
-        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(ts)
         assert parsed.tzinfo is not None, "decided_at must carry UTC tz info"
 
 

@@ -21,7 +21,7 @@ import os
 import signal
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app import backend, role_registry
@@ -533,7 +533,7 @@ def start_test_author_phase(
         return None
     return {
         "pid": handle.pid,
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": datetime.now(UTC).isoformat(),
         "backend": test_author_backend,
         "model": test_author_model,
     }
@@ -562,7 +562,7 @@ def collect_test_author_phase(
     pid = phase["pid"]
     if not _agent_has_exited(pid):
         started_at = datetime.fromisoformat(phase["started_at"])
-        current = now if now is not None else datetime.now(timezone.utc)
+        current = now if now is not None else datetime.now(UTC)
         elapsed = (current - started_at).total_seconds()
         timeout = float(
             os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")

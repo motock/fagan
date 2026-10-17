@@ -20,7 +20,7 @@ self-contained and does not import from that module.
 
 import json
 import subprocess
-from datetime import timezone
+from datetime import UTC
 
 import pytest
 
@@ -404,8 +404,8 @@ def test_run_lint_gate_returns_dict_with_expected_shape(tmp_path, monkeypatch):
     from datetime import datetime
     parsed = datetime.fromisoformat(result["ts"])
     assert parsed.tzinfo is not None
-    assert parsed.tzinfo.utcoffset(parsed) == timezone.utc.utcoffset(
-        datetime.now(timezone.utc))
+    assert parsed.tzinfo.utcoffset(parsed) == UTC.utcoffset(
+        datetime.now(UTC))
 
 
 def test_run_lint_gate_fails_open_on_oserror(tmp_path, monkeypatch):

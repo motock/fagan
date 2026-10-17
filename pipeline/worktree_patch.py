@@ -44,7 +44,7 @@ import json
 import os
 import secrets
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 
 # Loaded via importlib rather than a relative ``from`` import because this
@@ -402,7 +402,7 @@ def create_patch_record(
     diff_hash = hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
     confirmation_token = derive_confirmation_token(patch_id, diff_hash)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record = {
         "patch_id": patch_id,
         "plan_name": plan_name,
@@ -503,9 +503,9 @@ def get_patch_record(patch_id: str) -> dict | None:
         _PATCH_STORE.pop(patch_id, None)
         return None
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
 
-    if datetime.now(timezone.utc) >= expires_at:
+    if datetime.now(UTC) >= expires_at:
         _PATCH_STORE.pop(patch_id, None)
         return None
 
@@ -661,7 +661,7 @@ def apply_patch(
 
         # 9. Success ONLY: flip the record (single-use forever).
         record["status"] = "applied"
-        record["applied_at"] = datetime.now(timezone.utc).isoformat()
+        record["applied_at"] = datetime.now(UTC).isoformat()
 
         # Audit (WAP-8), success ONLY: journal + outbox notification.  A
         # refused or failed apply returns above and emits nothing new.

@@ -23,7 +23,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import global_rules_targets
@@ -188,7 +188,7 @@ def install_for_tool(tool: str, source_root: Path, env: dict[str, str], *, dry_r
     if not dry_run:
         # Backup if target existed.
         if target.exists():
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup = target.with_name(f"{target.name}.fagan-bak-{timestamp}")
             shutil.copy2(target, backup)
         # Ensure parent directory exists.

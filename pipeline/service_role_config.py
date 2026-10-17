@@ -126,7 +126,8 @@ def _set_role_default_impl(self, role: str, provider: str | None, model: str | N
     return {"ok": True, "role": role, "provider": provider, "model": model}
 
 
-from .service import _ServerRef  # noqa: I001 - must follow the defs: service.py back-imports _set_plan_role_config_impl/_set_role_default_impl (line 164), so defining them first keeps both import directions cycle-free
+# must follow the defs: service.py back-imports _set_plan_role_config_impl/_set_role_default_impl (line 164), so defining them first keeps both import directions cycle-free
+from .service import _ServerRef
 
 _store = _ServerRef("_store")
 _validate_key = _ServerRef("_validate_key")

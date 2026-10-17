@@ -95,7 +95,7 @@ def _ruling(**overrides) -> dict:
 
 def _assert_utc_iso(ts) -> None:
     assert isinstance(ts, str) and ts, f"ts must be a non-empty ISO string, got {ts!r}"
-    parsed = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    parsed = _dt.datetime.fromisoformat(ts)
     assert parsed.tzinfo is not None, f"ts must carry a UTC offset: {ts!r}"
     assert parsed.utcoffset() == _dt.timedelta(0), f"ts must be UTC: {ts!r}"
 

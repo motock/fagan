@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
     if payload is None:
         payload = {}
 
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     event = {
         "type": type,
         "plan": plan,

@@ -12,7 +12,7 @@ converted to local time, so these tests hold in any timezone.
 import json
 import signal
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +26,7 @@ STORY_KEY = "SEW-4"
 PID = 4242
 STEP = "interrupt"
 SUMMARY = "manual interrupt"
-BASE = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 9, 29, 12, 0, 0, tzinfo=UTC)
 
 
 def _lstart(dt_utc: datetime) -> str:

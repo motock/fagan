@@ -59,7 +59,7 @@ import ast
 import json
 import os
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -296,7 +296,7 @@ def _seed_grading(story, worktree, *, pid=DEAD_GRADE_PID, age_seconds=0.0,
     """Pre-seed the per-story grading bookkeeping a prior tick would have
     written, and optionally the result file the detached wrapper produced."""
     story["grading_pid"] = pid
-    started = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    started = datetime.now(UTC) - timedelta(seconds=age_seconds)
     story["grading_started_at"] = started.isoformat()
     if not drop_result_path:
         story["grading_result_path"] = str(worktree / RESULT_NAME)
@@ -308,8 +308,8 @@ def _seed_grading(story, worktree, *, pid=DEAD_GRADE_PID, age_seconds=0.0,
 def _assert_utc_iso(value, what):
     parsed = datetime.fromisoformat(value)
     assert parsed.tzinfo is not None, f"{what} must be tz-aware"
-    assert parsed.utcoffset() == timezone.utc.utcoffset(
-        datetime.now(timezone.utc)), f"{what} must be UTC isoformat"
+    assert parsed.utcoffset() == UTC.utcoffset(
+        datetime.now(UTC)), f"{what} must be UTC isoformat"
 
 
 # ------------------------------------------- 1. the watchdog constant
@@ -830,7 +830,7 @@ def test_live_story_pid_still_returns_running_without_grading_bookkeeping(
     _base_setup(
         plan_dir, monkeypatch,
         story_overrides={"dispatched_at":
-                         datetime.now(timezone.utc).isoformat()},
+                         datetime.now(UTC).isoformat()},
         alive_pids=(STORY_PID,),
     )
 

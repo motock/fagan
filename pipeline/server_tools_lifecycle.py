@@ -13,7 +13,7 @@ keep landing.
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import paths, security_audit
@@ -234,5 +234,5 @@ def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, A
     if proc.returncode != 0:
         return {"ok": False, "error": f"could not resolve sha {target!r}"}
     full_sha = proc.stdout.strip()
-    state = security_audit.record_audit(paths.PLAN_DIR, repo_root, full_sha, datetime.now(timezone.utc))
+    state = security_audit.record_audit(paths.PLAN_DIR, repo_root, full_sha, datetime.now(UTC))
     return {"ok": True, **state}

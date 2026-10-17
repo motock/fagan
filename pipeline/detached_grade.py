@@ -10,7 +10,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .build_detect import failed_node_ids
@@ -208,7 +208,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
             if _untracked["paths"]:
                 story["scratchpad_untrack"] = {
                     **_untracked,
-                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ts": datetime.now(UTC).isoformat(),
                 }
 
         starter = globals().get("start_detached_grade")
@@ -263,7 +263,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
             else:
                 story["grading_pid"] = grade_pid
                 story["grading_started_at"] = datetime.now(
-                    timezone.utc
+                    UTC
                 ).isoformat()
                 story["grading_result_path"] = str(result_path)
                 _atomic_write_json(manifest_path, manifest)
@@ -312,7 +312,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
                     started = None
                 if started is not None and started.tzinfo is not None:
                     age = (
-                        datetime.now(timezone.utc) - started
+                        datetime.now(UTC) - started
                     ).total_seconds()
             if age is not None and age > DETACHED_GRADE_WATCHDOG_SECONDS:  # noqa: F821
                 collected = dict(fail_closed)
@@ -337,7 +337,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
         story.pop("grading_pid", None)
         story.pop("grading_started_at", None)
         story.pop("grading_result_path", None)
-        story["collected_at"] = datetime.now(timezone.utc).isoformat()
+        story["collected_at"] = datetime.now(UTC).isoformat()
         _atomic_write_json(manifest_path, manifest)
 
     return None, test_result

@@ -1,14 +1,14 @@
 """Per-repo record of the last security audit (the state behind the due notice)."""
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from pipeline import security_audit
 
 _SHA = "a" * 40
-_NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 
 
 def test_state_path_is_inside_the_state_dir_and_named_for_security_audit(tmp_path):

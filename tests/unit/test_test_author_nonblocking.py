@@ -34,7 +34,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -122,7 +122,7 @@ def test_start_returns_phase_dict_and_returns_immediately(monkeypatch, tmp_path)
         assert isinstance(phase["pid"], int)
         started_at = datetime.fromisoformat(phase["started_at"])
         assert started_at.tzinfo is not None, "started_at must be timezone-aware"
-        assert started_at.utcoffset() == timezone.utc.utcoffset(None)
+        assert started_at.utcoffset() == UTC.utcoffset(None)
         assert phase["backend"] == "mlx"
         assert isinstance(phase["model"], str) and phase["model"]
         assert elapsed < 2.0, "start must not block on the agent"

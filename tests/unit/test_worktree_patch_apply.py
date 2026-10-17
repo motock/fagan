@@ -47,7 +47,7 @@ import inspect
 import json
 import subprocess
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -512,7 +512,7 @@ def test_expired_record_404(plan_dir, repo, manifest, monkeypatch):
     rec = _record(diff, ["app.py"])
     stored = get_patch_record(rec["patch_id"])
     stored["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
+        datetime.now(UTC) - timedelta(seconds=1)
     ).isoformat()
     spy = _install_spy(monkeypatch, _SubprocessSpy(returncode=0))
     before = (repo / "app.py").read_bytes()

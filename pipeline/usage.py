@@ -21,7 +21,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app import backend, role_registry
@@ -97,7 +97,7 @@ def _run_usage_probe() -> dict[str, Any]:
     """
     text = backend.get_backend().usage_probe_text()
     usage = _parse_usage_output(text)
-    usage["checked_at"] = datetime.now(timezone.utc).isoformat()
+    usage["checked_at"] = datetime.now(UTC).isoformat()
     return usage
 
 
@@ -125,8 +125,8 @@ def _usage_state_age_seconds(prev: dict[str, Any]) -> float | None:
     except ValueError:
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - ts).total_seconds()
+        ts = ts.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - ts).total_seconds()
 
 
 def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
@@ -178,7 +178,7 @@ def _check_usage_impl() -> dict[str, Any]:
     except ValueError:
         if not prev:
             raise
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         state = dict(prev)
         state["checked_at"] = now_iso
         # Count how many polls in a row have failed to parse, so the blind

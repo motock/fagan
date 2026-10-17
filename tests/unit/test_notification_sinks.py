@@ -18,7 +18,7 @@ payload fields.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -90,7 +90,7 @@ def test_event_types_has_exactly_twelve_members():
 def _make_event(plan="cap1", payload=None, ts=None):
     """Build a bus-level notification event for tests."""
     if ts is None:
-        ts = datetime.now(timezone.utc).isoformat()
+        ts = datetime.now(UTC).isoformat()
     return {
         "type": "notification",
         "plan": plan,
@@ -262,14 +262,14 @@ def test_sink_defaults_missing_ts(tmp_path, monkeypatch):
     """When the bus event has no "ts", the sink falls back to
     datetime.now(timezone.utc).isoformat() rather than raising."""
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     ev = {
         "type": "notification",
         "plan": "cap1",
         "payload": {"message": "no ts"},
     }
     notification_sinks.file_log_sink(ev)
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     log_path = tmp_path / "cap1.notifications.log"
     line = log_path.read_text().splitlines()[0]

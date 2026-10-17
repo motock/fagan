@@ -10,7 +10,7 @@ The names this module reads that are bound at module level in
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -138,7 +138,7 @@ def _readjudicate_parked_merge_hold(
         # flap guard - the next tick compares equal and never re-invokes the
         # gate, so the cost is one overlord call per evidence TRANSITION.
         story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
-        story["merge_parked_at"] = datetime.now(timezone.utc).isoformat()
+        story["merge_parked_at"] = datetime.now(UTC).isoformat()
     return decision
 
 
@@ -182,7 +182,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # being terminal. Written in every mode: a gated park is
             # re-adjudicable too if autonomy is ever full again.
             story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
-            story["merge_parked_at"] = datetime.now(timezone.utc).isoformat()
+            story["merge_parked_at"] = datetime.now(UTC).isoformat()
             _notify_user(
                 plan_name,
                 f"{key} parked: {decision['reason']}",
@@ -272,7 +272,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 # the ordinary gate_error/merge_attempts path, never merge blind.
                 gate_error = f"ci unreadable: {ci['error']}"
             elif ci["state"] == "pending":
-                story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
+                story.setdefault("ci_pending_since", datetime.now(UTC).isoformat())
                 story["ci_pending_sha"] = pushed_sha
                 if _ci_pending_expired(story["ci_pending_since"]):
                     _notify_user(

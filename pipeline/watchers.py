@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import paths, security_audit
 from .events import make_event
@@ -149,7 +149,7 @@ def _scan_security_audits(repo_plans: dict[str, str]) -> None:
             else None
         )
         reason = security_audit.audit_due_reason(
-            state, commits, datetime.now(timezone.utc), every_commits, every_days
+            state, commits, datetime.now(UTC), every_commits, every_days
         )
         if reason is None:
             continue

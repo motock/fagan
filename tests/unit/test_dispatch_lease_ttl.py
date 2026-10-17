@@ -22,7 +22,7 @@ Expected behavior pinned here:
 
 import copy
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -32,7 +32,7 @@ from pipeline.dispatch_lease import (
     claim_dispatch_lease,
 )
 
-NOW_1 = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+NOW_1 = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 # A second tick 5 s later, nominally from a different claimer process.
 NOW_2 = NOW_1 + timedelta(seconds=5)
 OTHER_PID = 424242
@@ -48,7 +48,7 @@ def _parse_iso(value) -> datetime:
     Accepts a trailing ``Z`` so the assertion pins the instant rather than
     one particular ISO-8601 spelling of it.
     """
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return datetime.fromisoformat(str(value))
 
 
 @pytest.mark.parametrize("bad_env", ["0", "-5", "99999999999999999"])

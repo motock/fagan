@@ -24,7 +24,7 @@ call on the expired-pending branch.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -64,12 +64,12 @@ def _story(**overrides):
 def _expired_since():
     """An ISO timestamp old enough that ``_ci_pending_expired`` is True."""
     bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-    return (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+    return (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
 
 def _fresh_since():
     """An ISO timestamp fresh enough that ``_ci_pending_expired`` is False."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _patch_merge_boundaries(monkeypatch, ci_once, *, rebase_push=None):

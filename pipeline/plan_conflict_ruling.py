@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import testfiles
 from .build_detect import failed_node_ids
@@ -379,7 +379,7 @@ def apply_plan_conflict_ruling(
     story's rework budget.
     """
     kind = ruling.get("ruling")
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
 
     if kind == "PREAUTHORIZE_TEST_EDIT":
         file_path = ruling["file"]

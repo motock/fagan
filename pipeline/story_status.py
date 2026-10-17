@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,7 +107,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             dispatched_at = story.get("dispatched_at")
             if dispatched_at is not None:
                 elapsed = (
-                    datetime.now(timezone.utc) - datetime.fromisoformat(dispatched_at)
+                    datetime.now(UTC) - datetime.fromisoformat(dispatched_at)
                 ).total_seconds()
                 # Determine if activity is stale
                 signals = collect_story_wedge_signals(plan_name, story_key, story)
@@ -293,7 +293,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # docstring for the live incident this fixes.
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
-        interrupted_at = datetime.now(timezone.utc).isoformat()
+        interrupted_at = datetime.now(UTC).isoformat()
         _store.append_journal(  # noqa: F821
             plan_name,
             story_key,
@@ -383,7 +383,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
 
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
-        interrupted_at = datetime.now(timezone.utc).isoformat()
+        interrupted_at = datetime.now(UTC).isoformat()
         _store.append_journal(  # noqa: F821
             plan_name,
             story_key,
@@ -667,7 +667,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["grade_baseline_exemption"] = {
                 "failed_node_ids": exempted,
                 "baseline_returncode": story["baseline_test_check"]["returncode"],
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
             }
 
     # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):

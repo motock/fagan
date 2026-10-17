@@ -15,7 +15,7 @@ never call ``gh``.  They are written against the *target* behaviour and fail
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -93,13 +93,13 @@ class TestCiPendingExpired:
         assert p._ci_pending_expired("") is False
 
     def test_returns_false_for_recent_timestamp(self):
-        recent = datetime.now(timezone.utc).isoformat()
+        recent = datetime.now(UTC).isoformat()
         assert p._ci_pending_expired(recent) is False
 
     def test_returns_true_when_older_than_bound(self):
         # Older than the total patience the blocking gate provided.
         bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-        old = (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+        old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
         assert p._ci_pending_expired(old) is True
 
     def test_returns_false_for_none(self):
@@ -172,7 +172,7 @@ class TestPendingCi:
         assert man["stories"]["P1"].get("ci_pending_since") is not None
 
     def test_pending_does_not_overwrite_ci_pending_since(self, plan_dir, monkeypatch):
-        first = datetime.now(timezone.utc).isoformat()
+        first = datetime.now(UTC).isoformat()
 
         def ci_once(branch, *, sha):
             return {"state": "pending", "error": "checks running"}
@@ -186,7 +186,7 @@ class TestPendingCi:
         assert man["stories"]["P1"]["ci_pending_since"] == first
 
     def test_subsequent_pass_clears_ci_pending_since(self, plan_dir, monkeypatch):
-        first = datetime.now(timezone.utc).isoformat()
+        first = datetime.now(UTC).isoformat()
 
         def ci_once(branch, *, sha):
             return {"state": "pass", "error": ""}
@@ -203,7 +203,7 @@ class TestPendingCi:
         # patience bound MUST still count against merge_attempts (the bound
         # still fires in time-based form).
         bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-        old = (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+        old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
         def ci_once(branch, *, sha):
             return {"state": "pending", "error": "checks running"}
@@ -219,7 +219,7 @@ class TestPendingCi:
         # An expired-pending story terminal-fails at MERGE_MAX_ATTEMPTS exactly
         # like any other gate_error.
         bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-        old = (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+        old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
         def ci_once(branch, *, sha):
             return {"state": "pending", "error": "checks running"}

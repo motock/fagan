@@ -55,7 +55,7 @@ import sys
 import time
 import types
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -113,7 +113,7 @@ def _make_story(worktree, pid, *, log_text=None, agent_done=False,
         "status": "in_progress",
         "pid": pid,
         "dispatched_at": (
-            datetime.now(timezone.utc) - timedelta(seconds=DISPATCHED_SECONDS_AGO)
+            datetime.now(UTC) - timedelta(seconds=DISPATCHED_SECONDS_AGO)
         ).isoformat(),
         "worktree": str(worktree),
     }

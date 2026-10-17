@@ -36,7 +36,7 @@ import re
 import time
 import types
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -74,7 +74,7 @@ def _make_story(tmp_path, *, dispatched_seconds_ago, log_age_seconds=None,
         "status": "in_progress",
         "pid": os.getpid(),  # guaranteed-live pid; terminate is always stubbed
         "dispatched_at": (
-            datetime.now(timezone.utc) - timedelta(seconds=dispatched_seconds_ago)
+            datetime.now(UTC) - timedelta(seconds=dispatched_seconds_ago)
         ).isoformat(),
         "worktree": str(worktree),
     }

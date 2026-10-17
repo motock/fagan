@@ -6,7 +6,7 @@ story_status re-exports both names.
 
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _record_test_check(
@@ -35,7 +35,7 @@ def _record_test_check(
         "returncode": test_result.returncode,
         "stdout_tail": (test_result.stdout or "")[-2000:],
         "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "sha": check_sha,
     }
     return check_sha

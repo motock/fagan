@@ -14,7 +14,7 @@ import re
 import subprocess
 import time
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -580,7 +580,7 @@ def _reverify_acceptance(
         "returncode": r.returncode,
         "stdout_tail": (r.stdout or "")[-2000:],
         "stderr_tail": (r.stderr or "")[-2000:],
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "sha": check_sha,
     }
 
@@ -636,9 +636,9 @@ def _ci_pending_expired(since_iso: str) -> bool:
         since = datetime.fromisoformat(since_iso)
     except (TypeError, ValueError):
         return False
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if since.tzinfo is None:
-        since = since.replace(tzinfo=timezone.utc)
+        since = since.replace(tzinfo=UTC)
     elapsed = (now - since).total_seconds()
     return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
 
@@ -776,7 +776,7 @@ def _record_retro_pending(plan_name: str, story_count: int) -> None:
     # drained back below the threshold - no module-level "already notified"
     # flag to reset.
     before = sum(1 for line in existing_lines if line.startswith("- "))
-    date = datetime.now(timezone.utc).date().isoformat()
+    date = datetime.now(UTC).date().isoformat()
     noun = "story" if story_count == 1 else "stories"
     with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
         f.write(f"- {plan_name} \u2014 completed {date}, {story_count} {noun}\n")

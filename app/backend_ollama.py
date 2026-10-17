@@ -326,7 +326,7 @@ class OllamaDriver:
         _append_review_log(
             cwd,
             f"=== review cycle "
-            f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} "
+            f"{datetime.datetime.now(datetime.UTC).isoformat()} "
             f"model={resolved_model} ===\n",
         )
         preamble = (
@@ -584,7 +584,7 @@ class OllamaDriver:
             return
         try:
             record = {
-                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "ts": datetime.datetime.now(datetime.UTC).isoformat(),
                 "backend": "ollama",
                 "model": usage.get("model", "?"),
                 "role": role,

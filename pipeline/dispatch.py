@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app import backend, role_registry  # noqa: F401
@@ -846,7 +846,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
         story["status"] = "in_progress"
         story["pid"] = handle.pid
-        story["dispatched_at"] = datetime.now(timezone.utc).isoformat()
+        story["dispatched_at"] = datetime.now(UTC).isoformat()
         story["worktree"] = str(worktree_path)
         story["log"] = str(log_path)
         # Record the concrete model the agent actually boots with (the local

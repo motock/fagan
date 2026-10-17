@@ -50,7 +50,7 @@ _spec.loader.exec_module(ic)
 _STUB_PATH_PREFIX = "/fake/toolchain/bin/"
 _ALL_TOOLS = ("python", "git", "gh", "claude", "ollama", "docker")
 _PROBED_TOOLS = ("gh", "claude", "ollama")
-_PY_MIN = (3, 10)
+_PY_MIN = (3, 11)
 
 # Resolved probe surfaces (verified non-interactive on the installed CLIs).
 _GH_AUTH_ARGV = ("gh", "auth", "status")

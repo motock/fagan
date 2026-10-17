@@ -22,13 +22,13 @@ echo "==> Pipeline install ($ROOT)"
 # --- Python venv -----------------------------------------------------------
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "ERROR: python3 not found. Install Python 3.10+ (the mcp SDK needs it) and re-run." >&2
+  echo "ERROR: python3 not found. Install Python 3.11+ (the mcp SDK needs it) and re-run." >&2
   exit 1
 fi
 PYVER="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 echo "==> Using $PY ($PYVER)"
-"$PY" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,10) else 1)' || {
-  echo "ERROR: Python 3.10+ required (found $PYVER)." >&2; exit 1; }
+"$PY" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,11) else 1)' || {
+  echo "ERROR: Python 3.11+ required (found $PYVER)." >&2; exit 1; }
 
 # --- External tools (the pipeline shells out to these) ---------------------
 # Delegated to the pre-venv doctor module: runs on the system python before

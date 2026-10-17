@@ -217,8 +217,8 @@ def test_survivor_python3_presence_check():
 
 def test_survivor_python_version_guard():
     assert re.search(
-        r"sys\.version_info\[:2\]\s*>=\s*\(\s*3\s*,\s*10\s*\)", _source()
-    ), "Python 3.10+ version guard must survive"
+        r"sys\.version_info\[:2\]\s*>=\s*\(\s*3\s*,\s*11\s*\)", _source()
+    ), "Python 3.11+ version guard must survive"
 
 
 def test_survivor_venv_create_if_missing():
@@ -269,7 +269,7 @@ def test_guards_precede_module_invocation():
         "python3 presence check must run before the module is launched"
     )
     assert code.index(version) < first_invocation, (
-        "Python 3.10+ version guard must run before the module is launched"
+        "Python 3.11+ version guard must run before the module is launched"
     )
 
 

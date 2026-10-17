@@ -264,8 +264,7 @@ def _parse_iso(ts: str | None) -> datetime | None:
     if not isinstance(ts, str) or not ts:
         return None
     try:
-        # datetime.fromisoformat in 3.11+ accepts trailing 'Z'; older
-        # versions need it swapped for an explicit +00:00 offset.
+        # datetime.fromisoformat accepts a trailing 'Z' (Python 3.11+).
         return datetime.fromisoformat(ts)
     except ValueError:
         return None

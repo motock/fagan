@@ -1,7 +1,7 @@
 """TDD suite for scripts/install_checks.py (written BEFORE the implementation).
 
 ``install_checks`` is the pre-venv doctor for the repo: it reports which tools
-the pipeline needs (python >= 3.10, git, gh, claude - required; ollama, docker
+the pipeline needs (python >= 3.11, git, gh, claude - required; ollama, docker
 - optional) and never fails the process; install.sh (a later story) decides
 what to do with the report.
 
@@ -59,8 +59,8 @@ _ALL_TOOLS = _REQUIRED_TOOLS + _OPTIONAL_TOOLS
 # either binary name; the stub must answer both so the version logic alone
 # decides the python check's status in the happy-path tests.
 _ALL_PRESENT = set(_ALL_TOOLS) | {"python3"}
-_PYTHON_MIN = (3, 10)
-_EXACT_PYTHON_MISSING_HINT = "Install Python 3.10+ (the mcp SDK needs it)"
+_PYTHON_MIN = (3, 11)
+_EXACT_PYTHON_MISSING_HINT = "Install Python 3.11+ (the mcp SDK needs it)"
 _CHECK_KEYS = {"name", "required", "status", "detail", "hint"}
 _STUB_PATH_PREFIX = "/fake/toolchain/bin/"
 
@@ -105,7 +105,7 @@ _MIXED_CHECKS = [
         "required": True,
         "status": "ok",
         "detail": "3.11.2",
-        "hint": "Install Python 3.10+ (the mcp SDK needs it)",
+        "hint": "Install Python 3.11+ (the mcp SDK needs it)",
     },
     {
         "name": "git",
@@ -219,8 +219,8 @@ def test_every_missing_tool_hint_names_the_tool():
 # ---------------------------------------------------------------------------
 
 
-def test_python_at_exact_minimum_3_10_is_ok():
-    by_name = {check["name"]: check for check in _collect(py_version=(3, 10))}
+def test_python_at_exact_minimum_3_11_is_ok():
+    by_name = {check["name"]: check for check in _collect(py_version=(3, 11))}
     assert by_name["python"]["status"] == "ok"
 
 
@@ -231,13 +231,13 @@ def test_python_3_9_is_missing_with_the_exact_required_hint():
     assert py["hint"] == _EXACT_PYTHON_MISSING_HINT
 
 
-@pytest.mark.parametrize("py_version", [(3, 11), (3, 19), (4, 0)])
+@pytest.mark.parametrize("py_version", [(3, 12), (3, 19), (4, 0)])
 def test_python_versions_above_minimum_are_ok(py_version):
     by_name = {check["name"]: check for check in _collect(py_version=py_version)}
     assert by_name["python"]["status"] == "ok"
 
 
-@pytest.mark.parametrize("py_version", [(2, 7), (3, 0), (3, 9)])
+@pytest.mark.parametrize("py_version", [(2, 7), (3, 0), (3, 9), (3, 10)])
 def test_python_versions_below_minimum_are_missing(py_version):
     by_name = {check["name"]: check for check in _collect(py_version=py_version)}
     assert by_name["python"]["status"] == "missing"

@@ -489,8 +489,8 @@ For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Prerequisites
 
-- **Python 3.10+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
-  macOS on every push; 3.10/3.11 aren't part of the CI matrix, so treat them
+- **Python 3.11+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
+  macOS on every push; 3.11 isn't part of the CI matrix, so treat it
   as likely-fine but unverified.
 - **git** on PATH.
 - **GitHub CLI** (`gh`).

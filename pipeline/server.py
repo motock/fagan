@@ -44,7 +44,11 @@ import time
 import traceback
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import (  # noqa: F401 (UTC: story_status functions are rebound onto this module's globals)
+    UTC,
+    datetime,
+    timezone,
+)
 from pathlib import Path
 from typing import Any
 

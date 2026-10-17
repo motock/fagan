@@ -745,10 +745,6 @@ def _run_lint_gate_lazy(*args, **kwargs):
     global _run_lint_gate_bound
     if _run_lint_gate_bound is None:
         from . import server as _server
-        # The rebound body resolves bare names against pipeline.server's
-        # namespace and stamps with `datetime.now(UTC)`; server.py does not
-        # import `UTC`, so export the alias alongside the rebind.
-        _server.UTC = UTC
         _run_lint_gate_bound = types.FunctionType(
             _run_lint_gate_unbound.__code__,
             _server.__dict__,

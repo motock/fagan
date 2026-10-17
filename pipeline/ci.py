@@ -910,11 +910,6 @@ def bind_to_server(server: Any) -> None:
     itself never imports the server and can be imported cold.
     """
     global _mark_story_done_impl, _record_retro_pending
-    # The rebound bodies resolve bare names against ``pipeline.server``'s
-    # namespace, so the ``UTC`` their ``datetime.now(UTC)`` stamps read must be
-    # reachable there. Base server.py imports only ``timezone`` (kept for the
-    # pre-UP017 bodies), so export the alias instead of editing server.py.
-    server.UTC = UTC
     _mark_story_done_impl = types.FunctionType(
         _mark_story_done_impl.__code__,
         server.__dict__,

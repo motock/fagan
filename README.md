@@ -45,7 +45,7 @@ modes — it is not a hands-off "describe a feature, get a PR" tool yet.
 
 Developed and run day-to-day on **macOS**. The core (MCP server, dashboard,
 Claude-backend dispatch/review, the full test suite) is plain Python and CI
-tests it on Ubuntu across Python 3.12–3.14 on every push. Two pieces are
+tests it on Ubuntu across Python 3.11–3.14 on every push. Two pieces are
 **macOS-only**:
 
 - **`launchd/*.plist`** — the scheduler/MLX-supervisor/usage-poller are
@@ -489,9 +489,8 @@ For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Prerequisites
 
-- **Python 3.11+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
-  macOS on every push; 3.11 isn't part of the CI matrix, so treat it
-  as likely-fine but unverified.
+- **Python 3.11+** and the project venv. CI tests 3.11–3.14 on Ubuntu and
+  macOS on every push.
 - **git** on PATH.
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).

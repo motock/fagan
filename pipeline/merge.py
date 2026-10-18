@@ -16,7 +16,7 @@ import os
 import subprocess
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -411,7 +411,7 @@ def _adjudicate_high_risk_merge(
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
-            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "decided_at": datetime.now(UTC).isoformat(),
         }
     else:
         record = {
@@ -422,7 +422,7 @@ def _adjudicate_high_risk_merge(
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
-            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "decided_at": datetime.now(UTC).isoformat(),
         }
     try:
         _append_decision(plan_name, record)

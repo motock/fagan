@@ -6,7 +6,7 @@ directory is stubbed; git runs for real against a throwaway repo.
 """
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -108,7 +108,7 @@ def test_a_recorded_repo_is_no_longer_due(plans, repo):
     state = security_audit.read_audit_state(plans, str(repo))
     commits = security_audit.commits_since(str(repo), result["last_audited_sha"])
 
-    assert security_audit.audit_due_reason(state, commits, datetime.now(timezone.utc), 1, 1) is None
+    assert security_audit.audit_due_reason(state, commits, datetime.now(UTC), 1, 1) is None
 
 
 def test_the_tool_is_registered_on_the_mcp_server():

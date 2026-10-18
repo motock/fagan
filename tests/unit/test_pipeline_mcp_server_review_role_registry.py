@@ -5,7 +5,7 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 import fcntl
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -98,7 +98,7 @@ def test_check_usage_pauses_after_prolonged_blindness(monkeypatch, usage_state_p
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)   # always trigger stale path
     monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 100)
 
-    old_enough = datetime.now(timezone.utc) - timedelta(seconds=200)
+    old_enough = datetime.now(UTC) - timedelta(seconds=200)
     prev = {
         "paused": False,
         "gate_blind": True,
@@ -122,7 +122,7 @@ def test_check_usage_stays_open_during_short_blind_window(monkeypatch, usage_sta
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)   # always trigger stale path
     monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 3600)
 
-    recent = datetime.now(timezone.utc) - timedelta(seconds=60)
+    recent = datetime.now(UTC) - timedelta(seconds=60)
     prev = {
         "paused": False,
         "gate_blind": True,
@@ -149,7 +149,7 @@ def test_check_usage_blind_logs_only_on_transition_and_interval(monkeypatch, usa
     monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 9999)
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)  # trigger blind path
 
-    base_time = datetime.now(timezone.utc) - timedelta(seconds=100)
+    base_time = datetime.now(UTC) - timedelta(seconds=100)
     prev = {
         "paused": False,
         "gate_blind": False,
@@ -429,7 +429,7 @@ def test_usage_state_age_seconds_returns_none_when_checked_at_unparseable():
 
 
 def test_usage_state_age_seconds_returns_elapsed_seconds_for_valid_timestamp():
-    checked_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    checked_at = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     age = p._usage_state_age_seconds({"checked_at": checked_at})
     assert age is not None
     assert 110 <= age <= 130
@@ -438,7 +438,7 @@ def test_usage_state_age_seconds_returns_elapsed_seconds_for_valid_timestamp():
 def test_check_usage_keeps_paused_when_blackout_is_within_staleness_window(
     usage_state_path, monkeypatch,
 ):
-    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    recent = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
     usage_state_path.write_text(json.dumps(
         {"session_pct": 91, "week_pct": 60, "paused": True, "checked_at": recent}
     ))
@@ -466,7 +466,7 @@ def test_check_usage_keeps_paused_when_blackout_is_within_staleness_window(
 def test_check_usage_clears_pause_when_blackout_outlasts_staleness_window(
     usage_state_path, monkeypatch,
 ):
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
     usage_state_path.write_text(json.dumps(
         {"session_pct": 91, "week_pct": 60, "paused": True, "checked_at": long_ago}
     ))
@@ -502,8 +502,8 @@ def test_check_usage_repeated_blackouts_do_not_reset_the_staleness_clock(
     that measure even though the actual session_pct/week_pct have not been
     re-measured in hours. The real measurement time (measured_at) must be
     carried forward unchanged across fallback calls instead."""
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=7200)).isoformat()
-    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=7200)).isoformat()
+    recent = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 91, "week_pct": 60, "paused": True,
         "checked_at": recent, "measured_at": long_ago,
@@ -536,7 +536,7 @@ def test_check_usage_fallback_preserves_measured_at_for_the_next_call(
     read - otherwise it silently disappears after one call and the next
     call falls back to the (just-bumped) checked_at, recreating the exact
     bug this guards against one call later."""
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=600)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 91, "week_pct": 60, "paused": True,
         "checked_at": long_ago, "measured_at": long_ago,
@@ -595,7 +595,7 @@ def _blackout_run(cmd, **kwargs):
 def test_check_usage_marks_gate_blind_when_failing_open(usage_state_path, monkeypatch):
     """When the probe has been dark past the staleness window, failing the gate
     open must be recorded visibly (gate_blind + blind_since), not just printed."""
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 91, "week_pct": 60, "paused": True,
         "checked_at": long_ago, "measured_at": long_ago,
@@ -614,7 +614,7 @@ def test_check_usage_marks_gate_blind_when_failing_open(usage_state_path, monkey
 def test_check_usage_counts_parse_failures_before_going_blind(usage_state_path, monkeypatch):
     """A parse failure still inside the staleness window bumps the counter but
     does not (yet) blind the gate — the last measurement is still trusted."""
-    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    recent = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 91, "week_pct": 60, "paused": True,
         "checked_at": recent, "measured_at": recent,
@@ -633,8 +633,8 @@ def test_check_usage_counts_parse_failures_before_going_blind(usage_state_path, 
 def test_check_usage_preserves_blind_since_across_consecutive_blind_polls(
     usage_state_path, monkeypatch,
 ):
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
-    blind_since = (datetime.now(timezone.utc) - timedelta(seconds=900)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
+    blind_since = (datetime.now(UTC) - timedelta(seconds=900)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 91, "week_pct": 60, "paused": False,
         "checked_at": long_ago, "measured_at": long_ago,
@@ -653,7 +653,7 @@ def test_check_usage_preserves_blind_since_across_consecutive_blind_polls(
 
 def test_check_usage_clears_blind_state_on_successful_probe(usage_state_path, monkeypatch):
     """A real measurement clears the blind flags so the dashboard stops alerting."""
-    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    long_ago = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
     usage_state_path.write_text(json.dumps({
         "session_pct": 50, "week_pct": 50, "paused": False,
         "checked_at": long_ago, "measured_at": long_ago,

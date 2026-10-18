@@ -37,6 +37,7 @@ import inspect
 import json
 import re
 import subprocess
+from datetime import UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -186,11 +187,11 @@ def _create_record(diff_text: str = VALID_DIFF, paths=None) -> dict:
 
 def _expire(patch_id: str) -> None:
     """Force a stored record's ``expires_at`` into the past."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     store = worktree_patch._PATCH_STORE
     store[patch_id]["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
+        datetime.now(UTC) - timedelta(seconds=1)
     ).isoformat()
 
 

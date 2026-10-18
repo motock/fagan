@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -306,9 +306,9 @@ def test_created_and_expires_timestamps_are_utc_and_ttl_apart(patch_store):
     if created.tzinfo is not None:
         assert created.utcoffset() == timedelta(0)
         assert expires.utcoffset() == timedelta(0)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     else:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
     assert abs((now - created).total_seconds()) < 120, "created_at must be 'now' in UTC"
     assert (expires - created).total_seconds() == pytest.approx(PATCH_TTL_SECONDS, abs=2)
 

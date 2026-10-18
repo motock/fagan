@@ -154,7 +154,7 @@ def test_0_2_0_heading_carries_a_release_date():
         f"0.1.0 release ({V0_1_0_DATE.isoformat()})"
     )
     # One day of slack so a local-vs-UTC clock difference cannot fail this.
-    latest = _dt.datetime.now(tz=_dt.timezone.utc).date() + _dt.timedelta(days=1)
+    latest = _dt.datetime.now(tz=_dt.UTC).date() + _dt.timedelta(days=1)
     assert released <= latest, (
         f"the 0.2.0 release date ({released.isoformat()}) must be the date the "
         "work is done, not a future date"

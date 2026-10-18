@@ -33,7 +33,7 @@ environment (.claude/rules/testing-config-gates.md).
 
 import inspect
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -43,7 +43,7 @@ TTL_ENV = "PIPELINE_DISPATCH_LEASE_TTL_SECONDS"
 EXPIRES_KEY = "dispatch_lease_expires_at"
 OWNER_PID_KEY = "dispatch_lease_owner_pid"
 
-NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +70,7 @@ def _parse_iso(value):
         pass
     if text.endswith("Z"):
         try:
-            return datetime.fromisoformat(text[:-1] + "+00:00")
+            return datetime.fromisoformat(text)
         except ValueError:
             return None
     return None
@@ -131,7 +131,7 @@ def test_production_callers_pass_neither_now_nor_ttl():
     assert dl.lease_is_live(story) is True
 
     expiry = _assert_utc_iso_string(story[EXPIRES_KEY])
-    assert expiry > datetime.now(timezone.utc)
+    assert expiry > datetime.now(UTC)
     assert story[OWNER_PID_KEY] == os.getpid()
 
 

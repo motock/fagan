@@ -35,7 +35,7 @@ import difflib
 import hashlib
 import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -373,7 +373,7 @@ def test_expired_record_is_refused_through_the_route(client, manifest, worktree)
     record = worktree_patch.get_patch_record(patch_id)
     assert record is not None, "sanity: the record must exist before expiry"
     record["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
+        datetime.now(UTC) - timedelta(seconds=1)
     ).isoformat()
 
     refused = _apply(client, patch_id, token, origin=ORIGIN_UI)

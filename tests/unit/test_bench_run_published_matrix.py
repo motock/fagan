@@ -13,7 +13,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tests.benchmark import models
@@ -163,9 +163,9 @@ def test_run_meta_records_repo_state_and_grid(tmp_path):
     assert meta["main_arms"] == list(MAIN_ARMS)
     assert meta["step_arm"] == [STEP_ARM]
 
-    started = datetime.fromisoformat(meta["started_utc"].replace("Z", "+00:00"))
+    started = datetime.fromisoformat(meta["started_utc"])
     assert started.utcoffset().total_seconds() == 0, "started_utc must be UTC"
-    assert abs((started - datetime.now(timezone.utc)).total_seconds()) < 3600
+    assert abs((started - datetime.now(UTC)).total_seconds()) < 3600
 
 
 def test_registry_provenance_follows_pipeline_env(tmp_path):

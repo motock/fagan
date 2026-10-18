@@ -24,7 +24,7 @@ default, these tests pass.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -231,7 +231,7 @@ class TestMergeCiPendingProductionPath:
         # Edge case from the review: ci_pending_since set on the first pending
         # tick must persist correctly and be cleared once CI later passes, all
         # on the production path (no _ci_status_once monkeypatch).
-        first = datetime.now(timezone.utc).isoformat()
+        first = datetime.now(UTC).isoformat()
         _patch_merge_boundaries_production(monkeypatch, ci_state="pass")
         _write_manifest(plan_dir, "go", {"P1": _story(ci_pending_since=first)})
 

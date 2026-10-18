@@ -30,7 +30,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -164,11 +164,11 @@ def _read_stories(path):
 
 
 def _future_iso(seconds=900):
-    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+    return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
 
 
 def _past_iso(seconds=10):
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
 
 
 # ---------------------------------------------------------------------------

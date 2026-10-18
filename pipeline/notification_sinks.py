@@ -35,7 +35,7 @@ the in‑process event bus.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import persistence
@@ -66,7 +66,7 @@ def file_log_sink(event: dict[str, Any]) -> None:
             return
 
         payload = event.get("payload") or {}
-        ts = event.get("ts") or datetime.now(timezone.utc).isoformat()
+        ts = event.get("ts") or datetime.now(UTC).isoformat()
         message = payload.get("message", "")
 
         # Free‑text line

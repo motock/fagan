@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -411,7 +411,7 @@ def resume_plan(plan_name: str) -> dict[str, Any]:
 def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
     if plan_name not in _store.list_manifests() and plan_name != "someplan":
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    decided_at = datetime.now(timezone.utc).isoformat()
+    decided_at = datetime.now(UTC).isoformat()
     record = {
         "story_key": body.story_key,
         "question": body.question,

@@ -7,7 +7,7 @@ imported by tests/unit/test_install_checks.py and executed standalone via
 story) will consume its report and decide what to do, so ``main`` always
 returns 0: missing OPTIONAL tools are graceful degradation, not failure.
 
-Checks, in report order: python >= 3.10, git, gh, claude (required);
+Checks, in report order: python >= 3.11, git, gh, claude (required);
 ollama, docker (optional). Every check carries a static, actionable,
 host-independent hint; a discovered binary path goes in ``detail``, never
 in ``hint``.
@@ -43,8 +43,8 @@ import sys
 import urllib.error
 import urllib.request
 
-_PY_MIN = (3, 10)
-_PYTHON_HINT = "Install Python 3.10+ (the mcp SDK needs it)"
+_PY_MIN = (3, 11)
+_PYTHON_HINT = "Install Python 3.11+ (the mcp SDK needs it)"
 
 # Bound for every auth probe (CLI subprocess or daemon HTTP call). A probe
 # that hangs must degrade to ``unknown`` within this many seconds, never
@@ -218,7 +218,7 @@ def collect_checks(which=shutil.which, py_version=None):
     elif py_bin:
         py_status = "missing"
         py_detail = (
-            f"Python {py_version[0]}.{py_version[1]} found, 3.10+ required"
+            f"Python {py_version[0]}.{py_version[1]} found, 3.11+ required"
         )
     else:
         py_status = "missing"

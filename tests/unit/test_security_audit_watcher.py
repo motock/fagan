@@ -8,7 +8,7 @@ and the env are stubbed.
 import json
 import subprocess
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -76,7 +76,7 @@ def _due(calls):
 
 
 def _audited(plans, repo, sha, days_ago=0):
-    when = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    when = datetime.now(UTC) - timedelta(days=days_ago)
     security_audit.record_audit(plans, str(repo), sha, when)
 
 

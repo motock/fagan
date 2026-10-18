@@ -9,7 +9,7 @@ no call-site wiring, so the fixture drives the public function directly
 rather than a production entrypoint.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from pipeline.token_report import summarize_token_costs
 
@@ -76,7 +76,7 @@ def test_aggregates_none_costs_without_raising(tmp_path):
 
 def test_since_filter_excludes_older_and_unparseable_timestamps(tmp_path):
     path = tmp_path / "since.jsonl"
-    now = datetime(2026, 7, 29, 6, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 29, 6, 0, 0, tzinfo=UTC)
     older = now - timedelta(hours=2)
     _write_lines(path, [
         {"ts": older.isoformat(), "backend": "claude", "role": "complete",
@@ -135,7 +135,7 @@ def test_zero_token_record_is_counted_not_skipped(tmp_path):
 
 def test_since_filter_is_inclusive_at_boundary(tmp_path):
     path = tmp_path / "since_boundary.jsonl"
-    boundary = datetime(2026, 7, 29, 6, 0, 0, tzinfo=timezone.utc)
+    boundary = datetime(2026, 7, 29, 6, 0, 0, tzinfo=UTC)
     _write_lines(path, [
         {"ts": boundary.isoformat(), "backend": "claude", "role": "complete",
          "input_tokens": 1, "output_tokens": 1, "total_cost_usd": 0.01},

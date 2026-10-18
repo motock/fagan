@@ -22,6 +22,11 @@ pythonpath = ["."]
 # ephemeral ports via _free_port(), monkeypatched env) - see 8822b38.
 addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 
+[tool.ruff]
+# Matches the lowest Python version in the CI matrix (.github/workflows/ci.yml).
+# Without it ruff infers a default that varies by release (0.17.0 -> py311).
+target-version = "py312"
+
 [tool.ruff.lint.per-file-ignores]
 # Acceptance fixtures are read-only oracle content: their worktree bytes are
 # hashed against a dispatch-time digest (pipeline.oracle_gate.acceptance_digests)
@@ -30,6 +35,13 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 # in place without breaking that guarantee, so import-sort/format is exempted
 # here instead. Only I001; other rules (undefined names, syntax) still apply.
 "tests/acceptance_*.py" = ["I001"]
+# Existing tests assert these sources verbatim contain `datetime.now(timezone.utc)`
+# and `from datetime import datetime, timezone` (test_execution.py::TestSpawnLocal,
+# test_agent_done_marker.py), so the UP017 `timezone.utc` -> `UTC` rewrite would
+# break them. Exempt only that rule here rather than editing the pinned tests.
+"pipeline/execution.py" = ["UP017"]
+"scripts/local_agent.py" = ["UP017"]
+"scripts/local_agent_oracle.py" = ["UP017"]
 # pipeline/server.py re-exports many names for test monkeypatching and keeps
 # `import fcntl` (asserted verbatim by test_server_module_imports_hashlib) even
 # though the merge helpers that used it moved to pipeline/merge.py. F401 is

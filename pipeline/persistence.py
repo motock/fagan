@@ -222,7 +222,7 @@ def _notify_user(
     builder and the bus-event payload; when omitted (the default) the record
     and payload shapes are unchanged.
     """
-    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    ts = datetime.datetime.now(datetime.UTC).isoformat()
     record = _notification_record(
         plan_name,
         message,

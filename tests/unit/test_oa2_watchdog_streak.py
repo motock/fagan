@@ -36,7 +36,7 @@ import os
 import time
 import types
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -129,7 +129,7 @@ def _make_watchdog_story(
         "status": "in_progress",
         "pid": os.getpid(),  # guaranteed-live pid; terminate is always stubbed
         "dispatched_at": (
-            datetime.now(timezone.utc) - timedelta(seconds=dispatched_seconds_ago)
+            datetime.now(UTC) - timedelta(seconds=dispatched_seconds_ago)
         ).isoformat(),
         "worktree": str(worktree),
         "model": PRIMARY_MODEL,
@@ -158,7 +158,7 @@ def _redispatch(env, *, dispatched_seconds_ago=7200, log_age_seconds=4000):
     story["status"] = "in_progress"
     story["pid"] = os.getpid()
     story["dispatched_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=dispatched_seconds_ago)
+        datetime.now(UTC) - timedelta(seconds=dispatched_seconds_ago)
     ).isoformat()
     agent_log = Path(story["worktree"]) / "agent.log"
     mtime = time.time() - log_age_seconds
@@ -235,7 +235,7 @@ def watchdog_env(oa2_plan_dir, monkeypatch):
         # process or shelling out to git.
         story["status"] = "interrupted"
         story["last_commit"] = "deadbeef"
-        story["interrupted_at"] = datetime.now(timezone.utc).isoformat()
+        story["interrupted_at"] = datetime.now(UTC).isoformat()
         manifest_path.write_text(json.dumps(manifest))
         return "deadbeef"
 

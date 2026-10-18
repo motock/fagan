@@ -13,7 +13,7 @@ timestamp is never stale, so legacy parks keep today's exclusion exactly.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -44,12 +44,12 @@ def _candidates(story):
 
 
 def test_fresh_hold_not_a_candidate():
-    story = _parked_story(merge_parked_at=datetime.now(timezone.utc).isoformat())
+    story = _parked_story(merge_parked_at=datetime.now(UTC).isoformat())
     assert "S1" not in _candidates(story)
 
 
 def test_stale_hold_is_a_candidate():
-    stale = datetime.now(timezone.utc) - timedelta(seconds=86401)
+    stale = datetime.now(UTC) - timedelta(seconds=86401)
     story = _parked_story(merge_parked_at=stale.isoformat())
     assert "S1" in _candidates(story)
 
@@ -76,7 +76,7 @@ def test_unparseable_timestamp_not_a_candidate():
 
 
 def test_future_timestamp_not_a_candidate():
-    future = datetime.now(timezone.utc) + timedelta(seconds=3600)
+    future = datetime.now(UTC) + timedelta(seconds=3600)
     story = _parked_story(merge_parked_at=future.isoformat())
     assert "S1" not in _candidates(story)
 
@@ -88,13 +88,13 @@ def test_future_timestamp_not_a_candidate():
 
 def test_grace_zero_lets_a_fresh_park_escape(monkeypatch):
     monkeypatch.setenv("PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS", "0")
-    story = _parked_story(merge_parked_at=datetime.now(timezone.utc).isoformat())
+    story = _parked_story(merge_parked_at=datetime.now(UTC).isoformat())
     assert "S1" in _candidates(story)
 
 
 def test_unparseable_grace_env_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS", "garbage")
-    story = _parked_story(merge_parked_at=datetime.now(timezone.utc).isoformat())
+    story = _parked_story(merge_parked_at=datetime.now(UTC).isoformat())
     assert "S1" not in _candidates(story)
 
 
@@ -159,7 +159,7 @@ def test_merge_ruling_pops_timestamp(monkeypatch, plan_dir):
         "status": "parked",
         "parked_reason": "high risk held for human review",
         "merge_park_evidence": {"pr_checks": {"ci": "pending"}},
-        "merge_parked_at": datetime.now(timezone.utc).isoformat(),
+        "merge_parked_at": datetime.now(UTC).isoformat(),
         "pr_checks": {"ci": "pass"},
         "pr_url": "https://example.test/pr/1",
         "review_verdict": "APPROVE",
@@ -198,7 +198,7 @@ def test_merge_ruling_pops_timestamp(monkeypatch, plan_dir):
 def test_grace_env_edge_values_fail_secure(grace_env, monkeypatch):
     """Negative grace falls back to the default; a fresh park stays excluded."""
     monkeypatch.setenv("PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS", grace_env)
-    story = _parked_story(merge_parked_at=datetime.now(timezone.utc).isoformat())
+    story = _parked_story(merge_parked_at=datetime.now(UTC).isoformat())
     if grace_env == "0":
         assert "S1" in _candidates(story)
     else:

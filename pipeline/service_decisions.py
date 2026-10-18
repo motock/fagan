@@ -5,7 +5,7 @@ pipeline.service, so tests patching pipeline.server still land.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _request_decision_impl(self, plan_name: str, story_key: str, question: str, options: list[str], context: str=''):
@@ -52,7 +52,7 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
             "failed_open": True,
             "summary": summary,
             "decided_by": "overlord",
-            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "decided_at": datetime.now(UTC).isoformat(),
         }
         try:
             _store.append_decision(plan_name, record)
@@ -94,13 +94,14 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
         "options": list(options),
         **ruling,
         "decided_by": "overlord",
-        "decided_at": datetime.now(timezone.utc).isoformat(),
+        "decided_at": datetime.now(UTC).isoformat(),
     }
     _store.append_decision(plan_name, record)
     return record
 
 
-from .service import _ServerRef  # noqa: I001 - must follow the def: service.py back-imports _request_decision_impl (line 163), so defining it first keeps both import directions cycle-free
+# must follow the def: service.py back-imports _request_decision_impl (line 163), so defining it first keeps both import directions cycle-free
+from .service import _ServerRef
 
 _invoke_overlord = _ServerRef("_invoke_overlord")
 _load_policy = _ServerRef("_load_policy")

@@ -44,7 +44,7 @@ import time
 import traceback
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 

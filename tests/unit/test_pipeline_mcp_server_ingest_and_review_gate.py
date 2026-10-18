@@ -4,7 +4,7 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 """
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -766,9 +766,9 @@ def test_dispatch_story_records_dispatched_at_timestamp(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     p.dispatch_story("dat", "S1")
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     story = json.loads(manifest_path.read_text())["stories"]["S1"]
     dispatched_at = datetime.fromisoformat(story["dispatched_at"])

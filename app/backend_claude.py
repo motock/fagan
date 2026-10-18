@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import UTC
 from pathlib import Path
 
 from app.backend_types import AgentHandle
@@ -195,9 +196,9 @@ class ClaudeCliDriver:
         if cell_dir is None:
             return
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
             record = {
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "backend": "claude",
                 "model": usage.get("model", "?"),
                 "served_model": usage.get("served_model"),

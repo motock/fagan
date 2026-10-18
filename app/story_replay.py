@@ -19,7 +19,7 @@ Ordering contract:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 __all__ = ["build_replay_events"]
 
@@ -34,9 +34,8 @@ def _parse_iso(ts: object) -> datetime | None:
     if not isinstance(ts, str) or not ts:
         return None
     try:
-        # fromisoformat accepts a trailing 'Z' on 3.11+; older interpreters
-        # need it swapped for an explicit +00:00 offset.
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        # fromisoformat accepts a trailing 'Z' (Python 3.11+).
+        return datetime.fromisoformat(ts)
     except ValueError:
         return None
 
@@ -68,8 +67,8 @@ def _as_utc(moment: datetime) -> datetime:
     and aware datetimes, so the sort key must be uniform.
     """
     if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
 
 
 def _split_leading_timestamp(line: str) -> tuple[str, str, datetime] | None:

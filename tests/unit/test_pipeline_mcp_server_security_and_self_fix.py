@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -410,7 +410,7 @@ def test_check_story_status_kills_hung_process_past_watchdog_timeout(
     monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    old_dispatched_at = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     _write_manifest(plan_dir, "wd1", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
                "worktree": str(worktree), "dispatched_at": old_dispatched_at},
@@ -467,7 +467,7 @@ def test_check_story_status_watchdog_timeout_invokes_rebrief_step_cap_struggle(
     agent_log.write_text("Working on it...\n")
     old_mtime = time.time() - 120
     os.utime(agent_log, (old_mtime, old_mtime))
-    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    old_dispatched_at = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     _write_manifest(plan_dir, "wdrebrief", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
                "worktree": str(worktree), "dispatched_at": old_dispatched_at,
@@ -545,7 +545,7 @@ def test_check_story_status_watchdog_timeout_diagnosis_lands_in_agent_instructio
     )
     old_mtime = time.time() - 120
     os.utime(agent_log, (old_mtime, old_mtime))
-    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    old_dispatched_at = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     _write_manifest(plan_dir, "wddiag", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
                "worktree": str(worktree), "dispatched_at": old_dispatched_at,
@@ -614,7 +614,7 @@ def test_check_story_status_running_within_watchdog_window_is_not_killed(
     monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 3600)
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    recent_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    recent_dispatched_at = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
     _write_manifest(plan_dir, "wd2", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
                "worktree": str(worktree), "dispatched_at": recent_dispatched_at},

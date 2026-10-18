@@ -15,7 +15,7 @@ until ``pipeline/server.py`` implements the change.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -184,7 +184,7 @@ class TestSecondTickSkipsRebase:
         # Story already has a recorded pending SHA from a prior tick.
         _write_manifest(
             plan_dir, "go",
-            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(timezone.utc).isoformat())},
+            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(UTC).isoformat())},
         )
 
         _advance_pipeline_locked("go")
@@ -205,7 +205,7 @@ class TestSecondTickSkipsRebase:
         _patch_merge_boundaries(monkeypatch, ci_once, rebase_push=rebase_push)
         _write_manifest(
             plan_dir, "go",
-            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(timezone.utc).isoformat())},
+            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(UTC).isoformat())},
         )
 
         _advance_pipeline_locked("go")
@@ -224,7 +224,7 @@ class TestSecondTickSkipsRebase:
         _patch_merge_boundaries(monkeypatch, ci_once, rebase_push=rebase_push)
         _write_manifest(
             plan_dir, "go",
-            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(timezone.utc).isoformat())},
+            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(UTC).isoformat())},
         )
 
         _advance_pipeline_locked("go")
@@ -244,7 +244,7 @@ class TestResolvedClearsBoth:
         _patch_merge_boundaries(monkeypatch, ci_once)
         _write_manifest(
             plan_dir, "go",
-            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(timezone.utc).isoformat())},
+            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(UTC).isoformat())},
         )
 
         _advance_pipeline_locked("go")
@@ -262,7 +262,7 @@ class TestResolvedClearsBoth:
         _patch_merge_boundaries(monkeypatch, ci_once)
         _write_manifest(
             plan_dir, "go",
-            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(timezone.utc).isoformat())},
+            {"P1": _story(ci_pending_sha="recordedsha", ci_pending_since=datetime.now(UTC).isoformat())},
         )
 
         _advance_pipeline_locked("go")
@@ -285,7 +285,7 @@ class TestResolvedClearsBoth:
             {"P1": _story(
                 merge_attempts=1,
                 ci_pending_sha="recordedsha",
-                ci_pending_since=datetime.now(timezone.utc).isoformat(),
+                ci_pending_since=datetime.now(UTC).isoformat(),
             )},
         )
 
@@ -306,7 +306,7 @@ class TestResolvedClearsBoth:
             {"P1": _story(
                 ci_rerun_attempted=True,
                 ci_pending_sha="recordedsha",
-                ci_pending_since=datetime.now(timezone.utc).isoformat(),
+                ci_pending_since=datetime.now(UTC).isoformat(),
             )},
         )
 
@@ -323,7 +323,7 @@ class TestResolvedClearsBoth:
 class TestExpiryPath:
     def test_expiry_clears_both_and_counts_attempt(self, plan_dir, monkeypatch):
         bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-        old = (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+        old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
         def ci_once(branch, *, sha):
             return {"state": "pending", "error": "checks running"}
@@ -349,7 +349,7 @@ class TestExpiryPath:
 
     def test_expiry_does_not_merge(self, plan_dir, monkeypatch):
         bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
-        old = (datetime.now(timezone.utc) - timedelta(seconds=bound + 60)).isoformat()
+        old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
         merged = []
 
         def ci_once(branch, *, sha):

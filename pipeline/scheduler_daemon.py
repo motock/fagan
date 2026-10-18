@@ -239,7 +239,7 @@ class SchedulerDaemon:
                 f"reconcile_fn stalled past the join deadline "
                 f"({outcome:.1f}s elapsed); worker abandoned"
             )
-        now_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        now_ts = _dt.datetime.now(_dt.UTC).isoformat()
         self._last_reconcile_ts = now_ts
         self._reconcile_count += 1
         # Update interval gating clock so run_once does not reconcile again
@@ -378,7 +378,7 @@ class SchedulerDaemon:
             # slice. Guarded exactly like the other health writes — a failing
             # write must never kill the loop.
             self._heartbeat_phase = label
-            self._heartbeat_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            self._heartbeat_ts = _dt.datetime.now(_dt.UTC).isoformat()
             if self._health_path is not None:
                 try:
                     self.write_health(self._health_path)
@@ -519,7 +519,7 @@ class SchedulerDaemon:
         finally:
             # Update health metrics for scan.
             self._scan_count += 1
-            self._last_scan_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            self._last_scan_ts = _dt.datetime.now(_dt.UTC).isoformat()
             # Write health at the END of the scan phase rather than only at
             # the end of the tick: the scan is the cheap, event-driven path,
             # and the phases after it (reconcile, drain) can each hold a tick
@@ -586,7 +586,7 @@ class SchedulerDaemon:
             finally:
                 # Update health metrics for reconcile regardless of success.
                 self._reconcile_count += 1
-                self._last_reconcile_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+                self._last_reconcile_ts = _dt.datetime.now(_dt.UTC).isoformat()
                 self._last_reconcile = now
 
         # Drain phase (PLANNOTIFY-06): its own phase after scan and reconcile,

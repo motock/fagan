@@ -38,7 +38,7 @@ wedged badge.
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from tests.unit._app_js import run_app_js
 
@@ -292,7 +292,7 @@ def _board_js_source():
 
 
 def _iso_minutes_ago(minutes):
-    dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    dt = datetime.now(UTC) - timedelta(minutes=minutes)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

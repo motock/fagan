@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -124,10 +125,10 @@ def _token_for(patch_id: str) -> str:
 
 def _expire(patch_id: str) -> None:
     """Force a stored record's ``expires_at`` into the past."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     worktree_patch._PATCH_STORE[patch_id]["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
+        datetime.now(UTC) - timedelta(seconds=1)
     ).isoformat()
 
 

@@ -467,32 +467,32 @@
     "mode": "57",
     "date": "2026-09-29",
     "class": "harness-bug",
-    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
-    "fix_ref": "retros/harness-review_2026-09-29.md §2.2",
+    "status": "FIXED",
+    "fix_ref": "352b75b (RH-01) anchors the rebrief-header detectors",
     "guard": "match the sentinel anchored/whole-line so a mention is not an occurrence (live `pipeline/local_success.py`, latent `pipeline/rebrief.py`)"
   },
   {
     "mode": "58",
     "date": "2026-09-29",
     "class": "harness-bug",
-    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
-    "fix_ref": "retros/harness-review_2026-09-29.md §2.3",
+    "status": "FIXED",
+    "fix_ref": "25151b7 (RH-02, PR #1050) one event name per rebrief cause",
     "guard": "one event name per cause; assert the reason histogram sums to the event count"
   },
   {
     "mode": "59",
     "date": "2026-09-29",
     "class": "harness-bug",
-    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
-    "fix_ref": "retros/harness-review_2026-09-29.md §2.4",
+    "status": "FIXED",
+    "fix_ref": "83d9766 (RH-03) diffs plist against MCP env; 79fbe5d (RH-15) redacts values",
     "guard": "derive conflicts from the artifact set, not an allowlist; test a conflict outside it"
   },
   {
     "mode": "60",
     "date": "2026-09-29",
     "class": "harness-bug",
-    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
-    "fix_ref": "retros/harness-review_2026-09-29.md §2.7 and §2.9",
+    "status": "FIXED",
+    "fix_ref": "7258867 (RH-05) replaces the count pin with a floor and uniqueness test",
     "guard": "monotonic floor + uniqueness test on the dataset (added by this story)"
   }
 ]

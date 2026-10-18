@@ -26,7 +26,7 @@ Prefer adding new sections over editing the invariant ones, so the document stay
 
 Clone the repo and run `scripts/install.sh --dev` (creates `.venv/`, installs
 runtime + dev dependencies, and reports on external tools the pipeline shells
-out to). Prerequisites: Python 3.11+ (CI tests 3.12–3.14), `git`, the GitHub
+out to). Prerequisites: Python 3.12+ (CI tests 3.12–3.14), `git`, the GitHub
 CLI (`gh`, authenticated via `gh auth login`), and the Claude Code CLI
 (authenticated). Register the MCP server and copy the persona subagents into
 place per the [README Quickstart](README.md#quickstart).

@@ -489,9 +489,8 @@ For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Prerequisites
 
-- **Python 3.11+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
-  macOS on every push; 3.11 isn't part of the CI matrix, so treat it
-  as likely-fine but unverified.
+- **Python 3.12+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
+  macOS on every push, and ruff targets `py312`.
 - **git** on PATH.
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).

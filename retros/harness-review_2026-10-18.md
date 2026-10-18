@@ -106,7 +106,7 @@ Status of the Sep 29 §3 list, checked against master:
 | 4 | Repo filter on success report | done (RH-04): `--repo`, `--all-repos` |
 | 5 | Resolve tier asymmetry deliberately | **open**; `PIPELINE_LOCAL_MAX_STEPS` documented default is still 40 in `REFERENCE.md:1376` |
 | 6 | Unfreeze failure-mode catalog | done: test asserts `len(entries) >= 57`; modes 56–60 present |
-| 7 | Bound the retro backlog | **open**: `PENDING.md` still grows without a cap (this document removes 22 markers by hand) |
+| 7 | Bound the retro backlog | **partly done** (RH-06, `ca0c0b8`): one notification when the marker count crosses `_RETRO_BACKLOG_NOTIFY_AT = 100`. It is a notification, not a cap, and it re-arms only after the backlog drains below 100; `PENDING.md` still holds about 185 markers after this document removes 22, so it will not fire until then |
 | 8 | CI line-count gate | done (RH-08, `scripts/check_line_limit.py`, `ci.yml:99`) |
 | 9 | Re-split over-limit files | done for production Python (§2.2) |
 | 10 | Label `effective_env_config` field | done (RH-07) |
@@ -180,8 +180,10 @@ before first reconcile; dead-owner dispatch lease no longer treated as live).
 
 ### P2 — process
 
-5. **Bound the retro backlog in code** (Sep 29 item 7, still open). This window
-   adds 17 lines and removes 22 by hand.
+5. **Drain the backfilled backlog.** RH-06's notification cannot fire again
+   until `PENDING.md` falls below 100 markers, and about 185 remain (most are
+   the 2026-08-12 backfill). Discharge them by family via window retros, as the
+   drain policy allows, rather than adding more code. (§2.3)
 6. **Plan the next "implement the retro" plan in two parts:** cheap
    instrument/label fixes on the cloud tier, structural file splits on a
    stronger tier from the start. (§2.2)

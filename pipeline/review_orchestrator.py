@@ -20,6 +20,7 @@ patch it land too.
 from typing import Any
 
 from .parsers import _is_transient_backend_exception
+from .pr import _pr_title_mismatch_message, _resolve_story_branch
 from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
 from .review_deferral import park_rate_limited_review, review_defer_park_after
@@ -50,6 +51,19 @@ _escalate_review_to_claude = _ServerRef("_escalate_review_to_claude")
 _has_review_findings = _ServerRef("_has_review_findings")
 _is_test_file_path = _ServerRef("_is_test_file_path")
 _open_pr = _ServerRef("_open_pr")
+
+
+def _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **kwargs):
+    """Warn-only: never alters the PR, the verdict, or the returned pr_url."""
+    try:
+        message = _pr_title_mismatch_message(
+            worktree, _resolve_story_branch(worktree, story_key), story.get("summary", ""))
+        if message:
+            _notify_user(plan_name, f"{story_key}: {message}", story_key=story_key,
+                         severity="warning", event="pr_title_mismatch", **kwargs)
+    except Exception:  # noqa: BLE001 - advisory check must not affect the gate
+        logging.getLogger("pipeline").debug("pr_title_mismatch warning failed", exc_info=True)
+
 _reverify_acceptance = _ServerRef("_reverify_acceptance")
 _extract_blocking_finding_files = _ServerRef("_extract_blocking_finding_files")
 _extract_suggested_commit_message = _ServerRef("_extract_suggested_commit_message")
@@ -708,6 +722,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # call retries from scratch rather than getting stuck.
         try:
             pr_url = _open_pr(worktree, story_key, story)
+            _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **_cid_kwargs)
         except (subprocess.CalledProcessError, OSError) as exc:
             _notify_user(
                 plan_name,
@@ -932,6 +947,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if worktree and os.path.isdir(worktree):
                 try:
                     story["pr_url"] = _open_pr(worktree, story_key, story)
+                    _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **_rework_kwargs)
                     _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
                 except (subprocess.CalledProcessError, OSError) as exc:
                     _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.", **_rework_kwargs)

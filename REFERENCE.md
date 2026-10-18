@@ -552,7 +552,10 @@ Each record has the following keys:
   pass: `triage_ruling` (triage's note of the action it ruled, sent alongside
   the `story_parked` notice), `sizing_risk` (ingest's story-sizing warning), and
   `security_review_unenforced` (ingest's notice that a brief asks for a security
-  review on a story below `risk: high`).
+  review on a story below `risk: high`). `pr_title_mismatch` is a warn-only,
+  heuristic notice (severity `warning`) emitted after a PR opens when its title
+  shares no words with the story summary or the changed files; it never alters
+  the PR or any gate outcome.
   `brief_patched` is emitted whenever a story's `agent_instructions` are
   rewritten after it has already been dispatched (its manifest entry carries
   `dispatched_at`), so the metrics sidecar and the local-success classifier

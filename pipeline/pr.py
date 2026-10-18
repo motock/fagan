@@ -16,6 +16,7 @@ review comments via the gh CLI.
 
 import re
 import subprocess
+from logging import getLogger
 from typing import Any
 
 
@@ -161,6 +162,80 @@ def _sync_pr_title(worktree: str, branch: str, title: str) -> None:
         )
     except (subprocess.CalledProcessError, OSError):
         pass
+
+
+_TITLE_NOISE_WORDS = frozenset({
+    "feat", "fix", "chore", "refactor", "test", "docs", "perf",
+    "that", "with", "from", "this", "into", "when", "over", "under",
+})
+_TITLE_WORD_RE = re.compile(r"[a-z0-9]{4,}")
+
+
+def _title_tokens(text: str) -> set[str]:
+    return set(_TITLE_WORD_RE.findall(text.lower())) - _TITLE_NOISE_WORDS
+
+
+def _title_describes_change(title: str, summary: str, changed_paths: list[str]) -> bool:
+    """Heuristic: does the PR title share a word with the summary or paths?
+
+    Fails open (True) when either side has no comparable words left.
+    """
+    title_tokens = _title_tokens(title)
+    if not title_tokens:
+        return True
+    reference = _title_tokens(summary)
+    for path in changed_paths:
+        reference |= _title_tokens(path)
+    return not reference or bool(title_tokens & reference)
+
+
+def _changed_paths(worktree: str, branch: str) -> list[str]:
+    """Files changed on `branch` since its merge-base; [] on any failure."""
+    base = ""
+    for ref in _DEFAULT_BRANCH_REFS:
+        try:
+            proc = subprocess.run(
+                ["git", "merge-base", ref, branch],
+                cwd=worktree, check=False, capture_output=True, text=True,
+            )
+        except OSError:
+            return []
+        if proc.returncode == 0 and proc.stdout.strip():
+            base = proc.stdout.strip()
+            break
+    if not base:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}..{branch}"],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+    except OSError:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _pr_title_mismatch_message(worktree: str, branch: str, summary: str) -> str | None:
+    """One-line warning when the PR title looks unrelated to the story.
+
+    Warn-only and heuristic; fails open to None on any error.
+    """
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "view", branch, "--json", "title", "-q", ".title"],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            return None
+        title = proc.stdout.strip()
+        if _title_describes_change(title, summary, _changed_paths(worktree, branch)):
+            return None
+        return f"PR title {title!r} shares no words with the story summary {summary!r} or the changed files."
+    except Exception:
+        getLogger(__name__).debug("pr title mismatch check failed", exc_info=True)
+        return None
 
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:

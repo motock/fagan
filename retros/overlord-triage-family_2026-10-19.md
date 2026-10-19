@@ -70,21 +70,27 @@ Today's registry has every role on `ollama/deepseek-v4.1-flash`, so the
 condition cannot arise. If roles are ever split across families again, this
 plan is the case for making the warning a gate rather than advice.
 
-### 2.3 Review availability dominated the first plan
+### 2.3 A false review gate dominated the first plan
 
 159 of its 250 sidecar records (64%) are:
 
 > `Review backend gated (Claude usage gate tripped): deferring review.`
 
-One record per scheduler tick, for 42 hours, because the notification carries
-no `dedup_key` (`pipeline/advance.py:889`). The same defect reproduced live
-today: four identical deferrals for M56-1, one per minute from 15:15 to
-15:18. A human reading the sidecar has to filter noise to find the
-signal, and the plan's real throughput cost is invisible in the record.
+All 159 fall between 15:59 and 19:13 on 2026-08-18 — 3.2 hours at roughly one
+record per scheduler tick, 51 of them in a single hour. Review was not
+actually unavailable: the registry's review role was `ollama/glm` the whole
+time, and the gate was reading Claude's usage state anyway. The false gate
+has its own record in `pipeline/usage.py::_role_resource_ok`, which now
+resolves the provider review will actually run on.
 
-The underlying availability problem is now addressed twice over: review is no
-longer pinned to Claude, and `pipeline/review_deferral.py` bounds consecutive
-rate-limited deferrals per story. The notification spam is not addressed.
+The per-tick repetition is a separate, still-live defect: the notice has no
+transition state and no `dedup_key` (`pipeline/advance.py:889`). It
+reproduced on 2026-10-19 — four identical deferrals for M56-1, one per
+minute from 15:15 to 15:18.
+
+The false-gate half is fixed twice over: `_role_resource_ok` follows the
+resolved review backend, and `pipeline/review_deferral.py` bounds consecutive
+rate-limited deferrals per story. The notice repetition is not addressed.
 
 ### 2.4 Step caps were 31% of the family, and the rebrief path absorbed the on-device ones
 

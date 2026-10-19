@@ -49,3 +49,4 @@ if a precise date is needed when writing one of these up.
 - on-device-tier-guidance — completed 2026-10-19, 1 story
 - mode56-step-cap-journal-classifier — completed 2026-10-19, 1 story
 - escalation-same-target-noop — completed 2026-10-19, 1 story
+- review-gate-notice-transition — completed 2026-10-19, 1 story

@@ -27,7 +27,19 @@ from collections.abc import Iterable, Sequence
 __all__ = ["classify_story", "rolling_rate"]
 
 # Regular expressions used by the classifier.
-_RE_LEGACY_MESSAGE = re.compile(r"escalat|parked|fallback|triage|wedge", re.IGNORECASE)
+# Untyped sidecar messages: map the harness's notice forms to the same
+# reason names structured events use, so old and new records classify
+# alike. A bare word match both double-counted escalations (their notice
+# contains "escalat") and marked a story non-clean for a benign mention
+# of a topic word such as "triage".
+_LEGACY_REASON_PATTERNS = (
+    (re.compile(r"\bparked:", re.IGNORECASE), "story_parked"),
+    (re.compile(r"\bescalat", re.IGNORECASE), "escalated"),
+    (re.compile(r"\bfallback\b", re.IGNORECASE), "model_fallback"),
+)
+# Failure-shaped legacy text with no structured-event equivalent. Narrow
+# on purpose: a bare mention of "triage" or "fallback" is not a failure.
+_RE_LEGACY_MESSAGE = re.compile(r"\bwedge[ds]?\b", re.IGNORECASE)
 _RE_BRIEF_REWRITE = re.compile(r"(?<![A-Za-z_])(REWORK|AMENDMENT)(?![A-Za-z_])")
 
 # Step-cap rebrief headers folded into agent_instructions by
@@ -154,7 +166,14 @@ def classify_story(
             clean = False
         elif event is None:
             msg = str(rec.get("message", ""))
-            if _RE_LEGACY_MESSAGE.search(msg):
+            mapped = next(
+                (reason for pattern, reason in _LEGACY_REASON_PATTERNS if pattern.search(msg)),
+                None,
+            )
+            if mapped is not None:
+                reasons.add(mapped)
+                clean = False
+            elif _RE_LEGACY_MESSAGE.search(msg):
                 reasons.add("legacy_message")
                 clean = False
 

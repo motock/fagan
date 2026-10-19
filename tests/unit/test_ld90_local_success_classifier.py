@@ -168,30 +168,36 @@ def test_legacy_escalation_message_matches_by_prefix():
     out = classify_story("S1", story, [record])
     assert out["in_population"] is True
     assert out["clean"] is False
-    assert "legacy_message" in out["reasons"]
+    assert "escalated" in out["reasons"]
+    assert "legacy_message" not in out["reasons"]
 
 
 def test_legacy_record_without_an_event_key_also_matches():
     record = _rec(message="S1 escalating to Claude (step cap)")
     out = classify_story("S1", _story(), [record])
-    assert "legacy_message" in out["reasons"]
+    assert "escalated" in out["reasons"]
 
 
 @pytest.mark.parametrize(
-    "message",
+    "message, expected_reason",
     [
-        "S1 escalating to Claude (step cap)",
-        "S1 parked: rebase conflict",
-        "S1 switching to fallback model",
-        "S1 triage needed",
-        "S1 wedged on a lock",
-        "S1 ESCALATING TO CLAUDE",
+        ("S1 escalating to Claude (step cap)", "escalated"),
+        ("S1 parked: rebase conflict", "story_parked"),
+        ("S1 switching to fallback model", "model_fallback"),
+        ("S1 wedged on a lock", "legacy_message"),
+        ("S1 ESCALATING TO CLAUDE", "escalated"),
     ],
 )
-def test_every_legacy_marker_word_flags_an_event_less_record(message):
+def test_every_legacy_marker_word_flags_an_event_less_record(message, expected_reason):
     out = classify_story("S1", _story(), [_rec(event=None, message=message)])
     assert out["clean"] is False
-    assert "legacy_message" in out["reasons"]
+    assert expected_reason in out["reasons"]
+
+
+def test_a_benign_triage_mention_is_not_a_failure():
+    out = classify_story("S1", _story(), [_rec(event=None, message="S1 triage needed")])
+    assert out["clean"] is True
+    assert out["reasons"] == []
 
 
 def test_benign_event_less_message_is_not_a_legacy_hit():
@@ -264,7 +270,7 @@ def test_story_prefixed_park_message_matches_s1():
     out = classify_story("S1", _story(), [record])
     assert out["in_population"] is True
     assert out["clean"] is False
-    assert "legacy_message" in out["reasons"]
+    assert "story_parked" in out["reasons"]
 
 
 def test_story_key_is_taken_from_the_argument_not_the_story_dict():

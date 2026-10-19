@@ -42,7 +42,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pipeline import local_success
 from pipeline.local_success import classify_story, rolling_rate
 from pipeline.story_metrics import load_notification_records
 
@@ -69,8 +68,16 @@ def _classify_plan(plan_dir: Path, plan: str, records: list[dict]) -> list[dict]
         return []
     classified: list[dict] = []
     for key, story in manifest.get("stories", {}).items():
-        if isinstance(story, dict):
-            classified.append(classify_story(key, story, records, journal=local_success.load_journal(plan_dir, plan, key)))
+        if not isinstance(story, dict):
+            continue
+        # Fail open: a missing/unreadable/malformed journal or a non-list top
+        # level counts as no journal; non-dict entries are dropped.
+        try:
+            entries = json.loads((plan_dir / f"{plan}.{key}.journal.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            entries = []
+        journal = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        classified.append(classify_story(key, story, records, journal=journal))
     return classified
 
 

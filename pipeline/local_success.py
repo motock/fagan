@@ -15,16 +15,14 @@ They include population membership, clean status, tier resolution, and reason
 codes for legacy messages, escalations, and brief rewrite markers.  A brief
 carrying a step-cap rebrief block (``step_cap_rebrief``) is not clean either,
 and neither is a story whose journal holds a ``step_cap_reached`` entry.
-:func:`load_journal` is the one filesystem read, kept separate from the pure
-classifier.
+The journal is read by the caller (``scripts/local_success_report.py``) and
+passed in, so this module stays free of file I/O.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterable, Sequence
-from pathlib import Path
 
 __all__ = ["classify_story", "rolling_rate"]
 
@@ -70,22 +68,6 @@ def _matched_records(story_key: str, story: dict, records: Iterable[dict]) -> li
         if msg.startswith((f"{story_key} ", f"story {story_key} ")):
             matched.append(rec)
     return matched
-
-
-def load_journal(plan_dir: str | Path, plan_name: str, story_key: str) -> list[dict]:
-    """Read ``<plan_dir>/<plan_name>.<story_key>.journal.json`` as a list of dicts.
-
-    Fails open to ``[]`` on a missing or unreadable file, malformed JSON or a
-    non-list top level; non-dict entries are dropped.
-    """
-    path = Path(plan_dir) / f"{plan_name}.{story_key}.journal.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [entry for entry in data if isinstance(entry, dict)]
 
 
 def classify_story(

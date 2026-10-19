@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.local_success import classify_story, load_journal
+from pipeline.local_success import classify_story
 from pipeline.plan_summary import format_plan_summary
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -53,32 +53,35 @@ def test_should_not_match_step_name_with_suffix() -> None:
     assert result["clean"] is True
 
 
-def test_load_journal_returns_entries(tmp_path) -> None:
-    (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps([CAP]))
-
-    assert load_journal(tmp_path, "p", KEY) == [CAP]
-
-
-def test_load_journal_missing_file_is_empty(tmp_path) -> None:
-    assert load_journal(tmp_path, "p", KEY) == []
+def _classify_with_journal_file(tmp_path, content: str | None) -> list[dict]:
+    (tmp_path / "p.manifest.json").write_text(json.dumps({"stories": {KEY: _story()}}))
+    if content is not None:
+        (tmp_path / f"p.{KEY}.journal.json").write_text(content)
+    return local_success_report._classify_plan(tmp_path, "p", [])
 
 
-def test_load_journal_malformed_json_is_empty(tmp_path) -> None:
-    (tmp_path / f"p.{KEY}.journal.json").write_text("{not json")
+def test_report_reads_step_cap_entry_from_journal_file(tmp_path) -> None:
+    classified = _classify_with_journal_file(tmp_path, json.dumps([CAP]))
 
-    assert load_journal(tmp_path, "p", KEY) == []
-
-
-def test_load_journal_top_level_dict_is_empty(tmp_path) -> None:
-    (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps(CAP))
-
-    assert load_journal(tmp_path, "p", KEY) == []
+    assert classified[0]["reasons"] == ["step_cap_reached"]
 
 
-def test_load_journal_drops_non_dict_entries(tmp_path) -> None:
-    (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps([CAP, "x", None, 4]))
+def test_report_missing_journal_file_stays_clean(tmp_path) -> None:
+    assert _classify_with_journal_file(tmp_path, None)[0]["clean"] is True
 
-    assert load_journal(tmp_path, "p", KEY) == [CAP]
+
+def test_report_malformed_journal_json_stays_clean(tmp_path) -> None:
+    assert _classify_with_journal_file(tmp_path, "{not json")[0]["clean"] is True
+
+
+def test_report_top_level_dict_journal_stays_clean(tmp_path) -> None:
+    assert _classify_with_journal_file(tmp_path, json.dumps(CAP))[0]["clean"] is True
+
+
+def test_report_drops_non_dict_journal_entries(tmp_path) -> None:
+    classified = _classify_with_journal_file(tmp_path, json.dumps([CAP, "x", None, 4]))
+
+    assert classified[0]["reasons"] == ["step_cap_reached"]
 
 
 def test_report_marks_story_with_step_cap_journal_not_clean(tmp_path) -> None:

@@ -54,6 +54,10 @@ def test_host_is_allowed(host_header, server_host, expected):
         ("evil.example", None, False),
         # A wildcard is never trusted.
         ("*", "127.0.0.1", False),
+        # The comparison is exact: the fully-qualified trailing-dot form is
+        # rejected rather than normalised (harmless, and pinned here so a
+        # future "helpful" normalisation is a deliberate decision).
+        ("localhost.", "127.0.0.1", False),
     ],
 )
 def test_host_is_allowed_edge_cases(host_header, server_host, expected):

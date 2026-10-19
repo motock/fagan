@@ -38,6 +38,7 @@ from .rebrief import (
     detect_unsatisfiable_signal,
     diagnose_failure,
 )
+from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
 from .wedge_io import run_wedge_scan
 
 # MERGEATTR-1: ``_merge_mod``'s story-key adjudication context is bound around
@@ -831,6 +832,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # backend, and a local-dispatch run can still defer review if review
         # is on Claude and Claude is gated.
         if review_ok:
+            clear_review_gate_notice(plan_name)
             stories = json.loads(manifest_path.read_text())["stories"]
             # LOCKSTARVE-B4: release the plan lock around review_story, the
             # same synchronous model-call-heavy pattern LOCKSTARVE-B3 applied
@@ -885,9 +887,12 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # waiting to be reviewed this tick; otherwise the notification is
             # noise (e.g. all stories are already pr_open awaiting merge).
             if any(s["status"] == "tests_passed" for s in stories.values()):
-                _notify_user(
-                    plan_name, f"Review backend gated ({review_reason}): deferring review."
-                )
+                if should_notify_review_gate(plan_name):
+                    _notify_user(
+                        plan_name,
+                        f"Review backend gated ({review_reason}): deferring review.",
+                        dedup_key=f"review_gate:{plan_name}:{review_reason}",
+                    )
                 summary["notify"].append("review_paused")
 
     return {"ok": True, **summary}

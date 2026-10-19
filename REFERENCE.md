@@ -1060,6 +1060,18 @@ Practical consequence: to pin an implementer model for one plan, set
 `PIPELINE_LOCAL_MODEL_DEFAULT` (or pipe it through the dispatch backend), or
 set story-level `backend` — a plan's `role_config.dispatch` does not do it.
 
+### On-device tier status
+
+Measured first-pass-clean rates for on-device `gpt-oss-20b-high` were 17 of 41
+(`retros/harness-review_2026-09-29.md`) and 0 of 9
+(`retros/harness-review_2026-10-18.md`); cloud-oss was 70 of 79 and 38 of 43 in
+the same windows. The on-device tier is therefore not cleared for story
+dispatch: keep the dispatch role on a cloud-oss or Claude model. An operator who
+routes it back must run the local-dispatch preflight
+(`.claude/rules/local-dispatch-preflight.md`) and expect step-cap rebriefs.
+`PIPELINE_LOCAL_MAX_STEPS` defaults to 40 in code and the installed plist sets
+60, so the effective value comes from the plist, not the default.
+
 ---
 
 ## Guided decomposition (the tech-lead planner)

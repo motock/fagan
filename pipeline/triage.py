@@ -27,7 +27,7 @@ from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
 from .concurrency import _heavy_lock, _is_heavy
 from .config import STEP_CAP_FALLBACK_THRESHOLD, INFRA_FAILURE_LOG_SUBSTRING, _LOCAL_BACKEND_NAMES
 from .rebrief import collect_failure_evidence
-from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label)
+from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label, _escalation_target)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
@@ -196,7 +196,11 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                     "model_fallback",
                 )
                 return "escalate_model"
-            if _auto_escalation_enabled() and not story.get("escalated"):
+            if (
+                _auto_escalation_enabled()
+                and not story.get("escalated")
+                and _escalation_target() != (story.get("backend"), story.get("model"))
+            ):
                 _escalate_to_claude(
                     manifest, plan_name, story_key, manifest_path
                 )

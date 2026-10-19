@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import chat, role_registry
+from app import auth, chat, role_registry
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -95,6 +95,9 @@ _service = PipelineService()
 
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
+    server = request.scope.get("server") or ()
+    if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     if request.url.path.startswith("/api/"):
         try:
             require_api_key(

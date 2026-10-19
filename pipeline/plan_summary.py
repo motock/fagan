@@ -57,7 +57,13 @@ def _story_line(key: str, story: dict[str, Any], records: list[dict]) -> str:
     pr_url = story.get("pr_url")
     if isinstance(pr_url, str) and pr_url:
         line += f" (pr: {pr_url})"
-    verdict = classify_story(key, story, records)
+    # format_plan_summary is pure (no file I/O), so the caller supplies the
+    # story's journal entries pre-loaded under ``story["journal"]``.
+    journal = story.get("journal")
+    if isinstance(journal, list):
+        verdict = classify_story(key, story, records, journal=journal)
+    else:
+        verdict = classify_story(key, story, records)
     if verdict["in_population"]:
         if verdict["clean"] and _reviewer_requested_changes(key, records):
             line += _REVIEWER_BOUNCE_SUFFIX

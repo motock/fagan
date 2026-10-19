@@ -48,28 +48,37 @@ from pipeline.story_metrics import load_notification_records
 TIERS = ("on-device", "cloud-oss", "unknown")
 
 
-def _load_manifest(path: Path) -> dict | None:
-    """Load a manifest JSON file.
+def _load_journal(plan_dir: Path, plan: str, key: str) -> list[dict]:
+    """Return the journal entries for one story, failing open.
 
-    Returns ``None`` on error, printing a warning to ``stderr``.
+    Reads ``<plan_dir>/<plan>.<key>.journal.json``.  A missing file,
+    malformed JSON or a non-list top level yields ``[]``; non-dict entries
+    are dropped so the classifier only ever sees dicts.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        print(f"warning: failed to load manifest {path.name}: {exc}", file=sys.stderr)
-        return None
+        entries = json.loads((plan_dir / f"{plan}.{key}.journal.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, dict)]
 
 
 def _classify_plan(plan_dir: Path, plan: str, records: list[dict]) -> list[dict]:
     """Return a list of classified stories for a single plan."""
     manifest_path = plan_dir / f"{plan}.manifest.json"
-    manifest = _load_manifest(manifest_path)
-    if manifest is None:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"warning: failed to load manifest {manifest_path.name}: {exc}", file=sys.stderr)
         return []
     classified: list[dict] = []
     for key, story in manifest.get("stories", {}).items():
-        if isinstance(story, dict):
-            classified.append(classify_story(key, story, records))
+        if not isinstance(story, dict):
+            continue
+        classified.append(
+            classify_story(key, story, records, journal=_load_journal(plan_dir, plan, key))
+        )
     return classified
 
 
@@ -128,8 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     for path in sorted(plan_dir.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         records, _malformed = load_notification_records(plan_dir / f"{plan_name}.notifications.jsonl")
-        plan = _load_manifest(path)
-        if plan is None or not _repo_matches(plan):
+        try:
+            plan = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"warning: failed to load manifest {path.name}: {exc}", file=sys.stderr)
+            continue
+        if not _repo_matches(plan):
             continue
         all_classified.extend(_classify_plan(plan_dir, plan_name, records))
 

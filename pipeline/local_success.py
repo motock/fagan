@@ -13,7 +13,10 @@ dependencies on other parts of the pipeline.
 The definitions below match the recorded baseline method and the unit tests.
 They include population membership, clean status, tier resolution, and reason
 codes for legacy messages, escalations, and brief rewrite markers.  A brief
-carrying a step-cap rebrief block (``step_cap_rebrief``) is not clean either.
+carrying a step-cap rebrief block (``step_cap_rebrief``) is not clean either,
+and neither is a story whose journal holds a ``step_cap_reached`` entry.
+The journal is read by the caller (``scripts/local_success_report.py``) and
+passed in, so this module stays free of file I/O.
 """
 
 from __future__ import annotations
@@ -67,12 +70,20 @@ def _matched_records(story_key: str, story: dict, records: Iterable[dict]) -> li
     return matched
 
 
-def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
+def classify_story(
+    story_key: str, story: dict, records: list[dict], journal: list[dict] | None = None
+) -> dict:
     """Classify a story and return a dict with the required keys.
 
     The returned dict contains the keys ``story_key``, ``in_population``,
     ``tier``, ``dispatched_at``, ``clean`` and ``reasons``.  ``reasons`` is a
     sorted list of strings, each reason appearing at most once; it is empty iff ``clean`` is ``True``.
+
+    Reasons: ``not_done``, ``escalated``, ``model_fallback``, ``story_parked``,
+    ``brief_patched``, ``step_cap_rebrief``, ``give_up_rebrief``,
+    ``legacy_message``, ``brief_rewrite_marker`` and ``step_cap_reached`` (a
+    ``journal`` entry whose ``step`` is ``step_cap_reached``; non-dict entries
+    are ignored).
     """
     matched = _matched_records(story_key, story, records)
 
@@ -156,6 +167,10 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     # executor needed a prior-attempt diagnosis, so this was not a clean pass.
     if any(re.search(r"^" + re.escape(header), instr, re.MULTILINE) for header in _STEP_CAP_REBRIEF_HEADERS):
         reasons.add("step_cap_rebrief")
+        clean = False
+
+    if any(isinstance(entry, dict) and entry.get("step") == "step_cap_reached" for entry in journal or ()):
+        reasons.add("step_cap_reached")
         clean = False
 
     return {

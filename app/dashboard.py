@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import chat, role_registry
+from app import auth, chat, role_registry
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -86,15 +86,20 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 # and are exempt too. Scoping by the "/api/" prefix (rather than a
 # per-route allowlist) means a route added later under /api/ is still
 # covered by construction; only "/" and the StaticFiles mount are
-# deliberately, narrowly exempt. A cross-origin attacker page can still
-# trigger a request to "/" but cannot read the response body (same-origin
-# policy), so the exemption does not leak the key to a third party.
+# deliberately, narrowly exempt. A cross-origin page can still trigger a
+# request to "/", but the Host check below rejects any Host that is not this
+# server or a loopback alias, so DNS rebinding cannot read the injected key.
+# A reverse proxy must forward the bound address as the upstream Host (nginx:
+# `proxy_set_header Host 127.0.0.1:8000;`); the default `$host` form gets 403.
 app = FastAPI(title="Agent Pipeline Dashboard")
 _service = PipelineService()
 
 
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
+    server = request.scope.get("server") or ()
+    if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     if request.url.path.startswith("/api/"):
         try:
             require_api_key(

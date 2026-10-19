@@ -180,3 +180,26 @@ def require_ui_origin(x_pipeline_origin: str | None) -> None:
     """Refuse anything that is not the UI origin (chat, absent, unknown all refused)."""
     if x_pipeline_origin != ORIGIN_UI:
         raise HTTPException(status_code=403, detail="origin not permitted")
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def host_is_allowed(host_header: str | None, server_host: str | None) -> bool:
+    """True when the Host header names this server or a loopback alias.
+
+    The index route hands the API key to the browser, so a DNS-rebinding
+    page must not be able to read it under an attacker-chosen hostname.
+    Compare the header's hostname against the ASGI server host (the
+    socket actually bound) plus the loopback aliases; never trust a
+    wildcard.
+    """
+    from urllib.parse import urlsplit
+
+    hostname = urlsplit(f"//{host_header or ''}").hostname
+    if not hostname:
+        return False
+    allowed = set(_LOOPBACK_HOSTS)
+    if server_host:
+        allowed.add(server_host)
+    return hostname in allowed

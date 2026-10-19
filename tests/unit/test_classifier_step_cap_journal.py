@@ -85,6 +85,28 @@ def test_report_drops_non_dict_journal_entries(tmp_path) -> None:
     assert classified[0]["reasons"] == ["step_cap_reached"]
 
 
+def test_load_journal_missing_file_returns_empty_list(tmp_path) -> None:
+    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+
+
+def test_load_journal_malformed_json_returns_empty_list(tmp_path) -> None:
+    (tmp_path / f"p.{KEY}.journal.json").write_text("{not json")
+
+    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+
+
+def test_load_journal_top_level_dict_returns_empty_list(tmp_path) -> None:
+    (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps(CAP))
+
+    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+
+
+def test_load_journal_drops_non_dict_entries(tmp_path) -> None:
+    (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps([CAP, "x", None, 4]))
+
+    assert local_success_report._load_journal(tmp_path, "p", KEY) == [CAP]
+
+
 def test_report_marks_story_with_step_cap_journal_not_clean(tmp_path) -> None:
     manifest = {"stories": {KEY: _story()}}
     (tmp_path / "p.manifest.json").write_text(json.dumps(manifest))

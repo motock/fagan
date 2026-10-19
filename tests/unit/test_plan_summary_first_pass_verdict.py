@@ -178,7 +178,7 @@ def test_reasons_are_identifiers_not_message_text() -> None:
     records = [{"story_key": "S1", "message": "story escalated to the cloud tier"}]
     summary = format_plan_summary("demo-plan", _manifest({"S1": dict(LOCAL_STORY)}), records)
     line = _story_line_for(summary, "S1")
-    assert line.endswith(" [not first-pass clean: legacy_message]")
+    assert line.endswith(" [not first-pass clean: escalated]")
     assert "to the cloud tier" not in summary
 
 

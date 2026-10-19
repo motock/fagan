@@ -203,17 +203,18 @@ def test_every_reason_label_and_reason_ordering(tmp_path, capsys):
         {"event": "model_fallback", "story_key": "fallback"},
         {"event": "brief_patched", "story_key": "patched"},
         {"story_key": "legacy1", "message": "escalation triage wedge"},
-        {"story_key": "legacy2", "message": "story parked"},
+        {"story_key": "legacy2", "message": "story parked: rebase conflict"},
     ]
     _plan(tmp_path, "alpha", stories, recs)
     out = _run(capsys, tmp_path)
     assert _header(out, "overall") == "overall: 0/6 clean (0.0%)"
     assert _reasons(out) == [
-        "legacy_message: 2",
         "brief_patched: 1",
         "brief_rewrite_marker: 1",
+        "escalated: 1",
         "model_fallback: 1",
         "not_done: 1",
+        "story_parked: 1",
     ]
 
 

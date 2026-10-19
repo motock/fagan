@@ -42,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from pipeline import local_success
 from pipeline.local_success import classify_story, rolling_rate
 from pipeline.story_metrics import load_notification_records
 
@@ -69,7 +70,7 @@ def _classify_plan(plan_dir: Path, plan: str, records: list[dict]) -> list[dict]
     classified: list[dict] = []
     for key, story in manifest.get("stories", {}).items():
         if isinstance(story, dict):
-            classified.append(classify_story(key, story, records))
+            classified.append(classify_story(key, story, records, journal=local_success.load_journal(plan_dir, plan, key)))
     return classified
 
 

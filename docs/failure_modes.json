@@ -459,8 +459,8 @@
     "mode": "56",
     "date": "2026-09-29",
     "class": "harness-bug",
-    "status": "NOT fixed — PROPOSED 2026-09-29 (pinned, not yet shipped)",
-    "fix_ref": "retros/harness-review_2026-09-29.md §2.2",
+    "status": "FIXED",
+    "fix_ref": "pipeline/local_success.py classify_story(journal=...) reads the step_cap_reached journal entry (story M56-1)",
     "guard": "classifier must treat a step-cap kill as not-clean; test a step-capped run"
   },
   {

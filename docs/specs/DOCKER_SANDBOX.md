@@ -44,9 +44,7 @@ The sandbox is **deny-by-default**.  Only environment variables whose names star
 with `LOCAL_AGENT_` or `PIPELINE_` are forwarded into the container via `-e
 key=value`.  All other host variables—including credentials—are **not forwarded**.
 
-The allowlist is absolute: the only way to forward a variable is to name it explicitly with a `LOCAL_AGENT_` or `PIPELINE_` prefix. There is no other escape hatch — a non‑prefixed key added to the `env` dictionary passed to `spawn_harness` is silently dropped by both the secret/prefix pre‑filter in `spawn_harness` and the filter inside `build_docker_command`.
-
-A fixed secret denylist (`PIPELINE_NOTIFY_EMAIL_PASSWORD`, `PLANE_API_KEY`, `GH_TOKEN`, `GITHUB_TOKEN`) overrides the prefix allowlist and is never forwarded, even though some of those names carry a `PIPELINE_` prefix; the pre‑filter in `spawn_harness` drops them from any explicit `env` before mode resolution, and the local (unsandboxed) spawn applies the same denylist to the environment it materializes from `os.environ`.
+The allowlist is absolute: the only way to forward a variable is to name it explicitly with a `LOCAL_AGENT_` or `PIPELINE_` prefix. There is no other escape hatch — a non‑prefixed key added to the `env` dictionary passed to `spawn_harness` is silently dropped by both the pre‑filter in `spawn_harness` and the filter inside `build_docker_command`.
 
 ## 5. Fail‑closed behavior matrix
 

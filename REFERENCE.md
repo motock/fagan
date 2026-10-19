@@ -1837,26 +1837,6 @@ through the `decompose` tool.
 
 ---
 
-## Dashboard Host validation
-
-The dashboard's `/` route injects the API key into the page it serves, so the
-middleware rejects any request whose `Host` header does not name the address
-the server is actually bound to (the ASGI `server` scope entry) or a loopback
-alias (`127.0.0.1`, `localhost`, `::1`). A DNS-rebinding page therefore cannot
-read the key under an attacker-chosen hostname: `Host: evil.example` gets a
-`403 {"detail": "Forbidden"}` before the index route runs, and the same gate
-applies to `/api/` paths even when the correct `X-Pipeline-Api-Key` is sent.
-`DASHBOARD_HOST` (default `127.0.0.1`) is the bound address the header is
-compared against, so a non-loopback bind is reachable only under that exact
-hostname.
-
-**Behind a reverse proxy** the proxy must forward the bound address as the
-`Host` header (e.g. `proxy_set_header Host 127.0.0.1:8000;`), not the browser's
-public hostname — otherwise every proxied request is rejected with 403. This
-is the same rule `PIPELINE_CHAT_API_BASE` follows in "Configuration
-(environment variables)": the internal call target is derived from the ASGI
-`server` scope, never from the client-supplied `Host`.
-
 ## Development & testing
 
 ```bash

@@ -152,3 +152,21 @@ def test_plan_completion_report_ignores_malformed_journal(tmp_path, monkeypatch)
     report = _complete_plan(tmp_path, monkeypatch, "{not json")
 
     assert "step_cap_reached" not in report
+
+
+def test_plan_completion_report_ignores_top_level_dict_journal(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, json.dumps(CAP))
+
+    assert "step_cap_reached" not in report
+
+
+def test_plan_completion_report_drops_non_dict_journal_entries(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, json.dumps([CAP, "x", None, 4]))
+
+    assert "step_cap_reached" in report
+
+
+def test_plan_completion_report_with_only_non_dict_entries_stays_clean(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, json.dumps(["x", None, 4]))
+
+    assert "step_cap_reached" not in report

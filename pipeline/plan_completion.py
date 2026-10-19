@@ -18,6 +18,7 @@ The summary is also written to ``<plan>.report.md`` in ``PLAN_DIR``; this is
 best effort: a write failure is logged and does not block the notification.
 """
 
+import json
 import logging
 
 from .paths import PLAN_DIR
@@ -26,6 +27,30 @@ from .plan_summary import format_plan_summary
 from .story_metrics import load_notification_records
 
 logger = logging.getLogger(__name__)
+
+
+def _with_journals(plan_name: str, manifest: dict) -> dict:
+    """Shallow copy of ``manifest`` whose stories carry their journal entries.
+
+    Fail open: an unreadable or malformed journal sidecar means no journal for
+    that story. The caller's manifest is not mutated; it is returned as-is when
+    no story has a journal.
+    """
+    stories = {}
+    for key, story in manifest["stories"].items():
+        story = dict(story)
+        try:
+            entries = json.loads(
+                (PLAN_DIR / f"{plan_name}.{key}.journal.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            entries = None
+        if isinstance(entries, list):
+            story["journal"] = [e for e in entries if isinstance(e, dict)]
+        stories[key] = story
+    if not any("journal" in story for story in stories.values()):
+        return manifest
+    return {**manifest, "stories": stories}
 
 
 def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
@@ -53,7 +78,9 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
         records = load_notification_records(
             PLAN_DIR / f"{plan_name}.notifications.jsonl"
         )[0]
-        summary = format_plan_summary(plan_name, manifest, records)
+        summary = format_plan_summary(
+            plan_name, _with_journals(plan_name, manifest), records
+        )
         # A durable copy for retros; the notification is the delivery, this
         # file is the record. Never blocks the notification.
         try:

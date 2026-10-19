@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from pipeline import plan_completion
 from pipeline.local_success import classify_story
 from pipeline.plan_summary import format_plan_summary
 
@@ -100,3 +101,32 @@ def test_plan_summary_marks_story_with_loaded_journal_not_clean() -> None:
     out = format_plan_summary("p", manifest, [])
 
     assert "not first-pass clean: step_cap_reached" in out
+
+
+def _complete_plan(tmp_path, monkeypatch, journal: str | None) -> str:
+    monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(plan_completion, "_notify_user", lambda *a, **k: None)
+    if journal is not None:
+        (tmp_path / f"p.{KEY}.journal.json").write_text(journal)
+    manifest = {"stories": {KEY: _story()}}
+    assert plan_completion.notify_if_plan_completed("p", manifest) is True
+    assert "journal" not in manifest["stories"][KEY]
+    return (tmp_path / "p.report.md").read_text()
+
+
+def test_plan_completion_report_includes_step_cap_from_journal_file(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, json.dumps([CAP]))
+
+    assert "step_cap_reached" in report
+
+
+def test_plan_completion_report_without_journal_file_has_no_step_cap(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, None)
+
+    assert "step_cap_reached" not in report
+
+
+def test_plan_completion_report_ignores_malformed_journal(tmp_path, monkeypatch) -> None:
+    report = _complete_plan(tmp_path, monkeypatch, "{not json")
+
+    assert "step_cap_reached" not in report

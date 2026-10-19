@@ -4,6 +4,7 @@ import os
 import subprocess
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app import backend, role_registry  # noqa: F401
@@ -506,7 +507,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         acceptance = story.get("acceptance") or []
         acceptance_paths = _acceptance_rel_paths(story)
         for entry in acceptance:
-            target = worktree_path / entry["path"]
+            rel = Path(str(entry.get("path", "")))
+            if rel.is_absolute() or ".." in rel.parts:
+                _notify_user(
+                    plan_name,
+                    f"{story_key}: acceptance fixture path outside the worktree rejected: {rel!s}",
+                )
+                continue
+            target = worktree_path / rel
             if resuming and target.exists():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)

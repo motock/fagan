@@ -274,6 +274,56 @@ def _files_field_error(story: dict) -> str | None:
     return None
 
 
+def _acceptance_field_error(story: dict) -> str | None:
+    """Return an error string when ``story["acceptance"]`` is invalid, else None.
+
+    ``acceptance`` (optional) declares the read-only grading fixtures a story
+    is dispatched with. ``None`` when the field is absent or explicitly
+    ``None``. Otherwise the value must be a ``list`` whose every entry is a
+    ``dict`` carrying a non-empty ``str`` ``path`` and a ``str`` ``source``.
+    The path must be repo-relative POSIX: it must not start with ``"/"``,
+    must contain no ``"\\"``, and must have no ``".."`` path component
+    (components are compared after splitting on ``"/"``, so ``..foo/x.py`` is
+    fine). An absolute path or a ``..`` component would let dispatch write
+    outside the worktree as the operator. The error names the story summary
+    and the offending value.
+    """
+    acceptance = story.get("acceptance")
+    if acceptance is None:
+        return None
+    if not isinstance(acceptance, list):
+        return (
+            f"story {story.get('summary', '?')!r}: malformed acceptance: "
+            f"acceptance must be a list of {{'path': ..., 'source': ...}} "
+            f"dicts, got {type(acceptance).__name__} ({acceptance!r})"
+        )
+    for index, entry in enumerate(acceptance):
+        if not isinstance(entry, dict):
+            return (
+                f"story {story.get('summary', '?')!r}: malformed acceptance: "
+                f"acceptance[{index}] must be a {{'path': ..., 'source': ...}} "
+                f"dict, got {type(entry).__name__} ({entry!r})"
+            )
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            return (
+                f"story {story.get('summary', '?')!r}: `acceptance` entry "
+                f"`path` must be a non-empty string, got {path!r}"
+            )
+        if not isinstance(entry.get("source"), str):
+            return (
+                f"story {story.get('summary', '?')!r}: `acceptance` entry "
+                f"`source` must be a string, got {entry.get('source')!r}"
+            )
+        if path.startswith("/") or "\\" in path or ".." in path.split("/"):
+            return (
+                f"story {story.get('summary', '?')!r}: `acceptance` entry "
+                f"`path` must be a repo-relative path inside the worktree, "
+                f"got {path!r}"
+            )
+    return None
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:
@@ -411,6 +461,9 @@ def _ingest_plan_impl(
             files_error = _files_field_error(story)
             if files_error is not None:
                 return {"ok": False, "error": files_error}
+            acceptance_error = _acceptance_field_error(story)
+            if acceptance_error is not None:
+                return {"ok": False, "error": acceptance_error}
             # .claude/rules/local-dispatch-preflight.md: a story dispatched to
             # a non-Claude provider must carry a real `Preflight:` line (a
             # conflict/impact run against the base commit), so the executor

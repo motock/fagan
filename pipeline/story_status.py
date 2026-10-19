@@ -821,7 +821,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 # missing the hook every other rework-exhaustion park path
                 # already had (review_story's three call sites), so a story
                 # that hit exactly this path never got a chance at Claude.
-                if _auto_escalation_enabled() and not story.get("escalated"):  # noqa: F821
+                if (
+                    _auto_escalation_enabled()  # noqa: F821
+                    and not story.get("escalated")
+                    and _escalation_target() != (story.get("backend"), story.get("model"))
+                ):
                     _escalate_review_to_claude(
                         story,
                         story_key,

@@ -557,7 +557,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         inconclusive = story.get("review_inconclusive_count", 0) + 1
         story["review_inconclusive_count"] = inconclusive
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
-            if _auto_escalation_enabled() and not story.get("escalated"):
+            if (
+                _auto_escalation_enabled()
+                and not story.get("escalated")
+                and _escalation_target() != (story.get("backend"), story.get("model"))
+            ):
                 _escalate_review_to_claude(
                     story,
                     story_key,
@@ -610,7 +614,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         inconclusive = story.get("review_inconclusive_count", 0) + 1
         story["review_inconclusive_count"] = inconclusive
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
-            if _auto_escalation_enabled() and not story.get("escalated"):
+            if (
+                _auto_escalation_enabled()
+                and not story.get("escalated")
+                and _escalation_target() != (story.get("backend"), story.get("model"))
+            ):
                 _escalate_review_to_claude(
                     story,
                     story_key,
@@ -905,7 +913,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         else:
             rework_cap = REWORK_MAX_ATTEMPTS
         if attempts >= rework_cap:
-            if _auto_escalation_enabled() and not story.get("escalated"):
+            if (
+                _auto_escalation_enabled()
+                and not story.get("escalated")
+                and _escalation_target() != (story.get("backend"), story.get("model"))
+            ):
                 _escalate_review_to_claude(
                     story,
                     story_key,

@@ -211,6 +211,28 @@ def _spawn_fd_redirect(
     return AgentHandle(pid=proc.pid, model="")
 
 
+_AGENT_SECRET_ENV = frozenset({
+    "PIPELINE_NOTIFY_EMAIL_PASSWORD",
+    "PLANE_API_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+})
+
+
+def _strip_agent_secrets(env: dict) -> dict:
+    return {k: v for k, v in env.items() if k not in _AGENT_SECRET_ENV}
+
+
+def _local_agent_env(env: dict | None) -> dict:
+    """Materialize the local child env with pipeline secrets removed.
+
+    ``None`` means "inherit os.environ"; inheritance must not include
+    the secrets, so it is materialized here and filtered.
+    """
+    base = dict(os.environ) if env is None else env
+    return _strip_agent_secrets(base)
+
+
 def spawn_local(
     cmd: list[str],
     *,
@@ -345,6 +367,8 @@ def spawn_harness(
     docker-sandbox resolution — the harness runs on the ssh host, so no
     sandbox image or pinning applies.
     """
+    if env is not None:
+        env = _strip_agent_secrets(env)
     mode = resolve_execution_mode(role)
     if mode == "ssh":
         return _spawn_ssh(cmd, cwd=cwd, log_path=log_path, append=append, env=env)
@@ -378,7 +402,7 @@ def spawn_harness(
         cwd=cwd,
         log_path=log_path,
         append=append,
-        env=env,
+        env=_local_agent_env(env),
         line_filter=line_filter,
         _fd_redirect=line_filter is None,
     )

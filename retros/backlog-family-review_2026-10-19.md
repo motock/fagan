@@ -12,6 +12,13 @@ not to explain them.
 **Coverage:** 184 plans, 659 stories, listed by family in §2. The three
 markers dated 2026-10-18 are not covered and stay in `PENDING.md`.
 
+> **Correction (2026-10-19):** the first-pass-clean column below is
+> manifest-only and is an upper bound. The event-aware reclassification of the
+> same 184 plans is in
+> [`backlog-family-review-correction_2026-10-19.md`](backlog-family-review-correction_2026-10-19.md)
+> — 406/589 (68.9%) becomes 354/589 (60.1%), and review/rework/gate replaces
+> the UI family as the second-weakest family.
+
 Source: `~/.claude/plans/<plan>.manifest.json` for each marker (all 187
 markers in the file had a manifest, 184 of them covered here; 168 of the 187 have `repo_root` `pipeline`, the
 repo's earlier directory name, and 19 have `fagan`). First-pass-clean numbers

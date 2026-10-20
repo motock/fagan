@@ -50,3 +50,5 @@ if a precise date is needed when writing one of these up.
 - mode56-step-cap-journal-classifier — completed 2026-10-19, 1 story
 - escalation-same-target-noop — completed 2026-10-19, 1 story
 - review-gate-notice-transition — completed 2026-10-19, 1 story
+- legacy-reason-precision — completed 2026-10-19, 1 story
+- security-audit-fixes-2026-10 — completed 2026-10-19, 3 stories

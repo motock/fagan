@@ -36,8 +36,8 @@ function renderUsage(usage) {
   banner.innerHTML = html;
 }
 
-// One line per provider (first-seen order), listing each role with an
-// ok/blocked indicator and the driver-generated reason when blocked.
+// One line per (provider, model) pair (first-seen order), listing each role
+// with an ok/blocked indicator and the driver-generated reason when blocked.
 function renderBackends(backends) {
   const groups = new Map();
   for (const row of backends) {

@@ -537,6 +537,54 @@ await run("rows sharing one provider are de-duplicated to a single provider ment
   assertTrue(html.includes("review"), "the second role must still be shown");
 });
 
+await run("rows sharing one provider but different models each get their own label", async () => {
+  const { banner } = await renderInto({
+    available: true,
+    session_pct: 5,
+    week_pct: 6,
+    backends: [
+      {
+        role: "dispatch",
+        provider: "ollama",
+        model: "deepseek-v4.1-flash",
+        ok: true,
+        reason: "",
+      },
+      {
+        role: "review",
+        provider: "ollama",
+        model: "minimax-m3.1-flash",
+        ok: true,
+        reason: "",
+      },
+      {
+        role: "chat",
+        provider: "ollama",
+        model: "minimax-m3.1-flash",
+        ok: true,
+        reason: "",
+      },
+    ],
+  });
+  const html = banner.innerHTML;
+  assertTrue(
+    html.includes("ollama/deepseek"),
+    "the deepseek model must get its own provider/model label",
+  );
+  assertTrue(
+    html.includes("ollama/minimax"),
+    "the minimax model must get its own provider/model label",
+  );
+  assertEqual(
+    countOccurrences(html, "minimax"),
+    1,
+    "roles sharing provider AND model must share one label",
+  );
+  assertTrue(html.includes("dispatch"), "the dispatch role must still be shown");
+  assertTrue(html.includes("review"), "the review role must still be shown");
+  assertTrue(html.includes("chat"), "the chat role must still be shown");
+});
+
 await run("distinct providers each get their own row content", async () => {
   const { banner } = await renderInto({
     available: true,

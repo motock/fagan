@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
-_SESSION_USAGE_RE = re.compile(r"Current session:\s*(\d+)%\s*used\s*·\s*resets\s*(.+)")
-_WEEK_USAGE_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used\s*·\s*resets\s*(.+)")
+_SESSION_USAGE_RE = re.compile(r"Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*(.+))?")
+_WEEK_USAGE_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*(.+))?")
 # Current format (post-Jun 2026): "Last 24h · N requests …" / "Last 7d · N requests …"
 _DAILY_REQ_RE = re.compile(r"Last 24h\s*·\s*(\d+)\s*requests")
 _WEEKLY_REQ_RE = re.compile(r"Last 7d\s*·\s*(\d+)\s*requests")
@@ -66,9 +66,9 @@ def _parse_usage_output(text: str) -> dict[str, Any]:
     if session_m and week_m:
         return {
             "session_pct": int(session_m.group(1)),
-            "session_reset": session_m.group(2).strip(),
+            "session_reset": (session_m.group(2) or "").strip(),
             "week_pct": int(week_m.group(1)),
-            "week_reset": week_m.group(2).strip(),
+            "week_reset": (week_m.group(2) or "").strip(),
         }
 
     # Current format: derive percentages from request counts vs. configurable thresholds.

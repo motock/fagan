@@ -236,3 +236,58 @@ def test_write_health_survives_a_raising_staleness_check(monkeypatch, tmp_path):
     assert data["checkout_behind_origin"] == 2
     assert data["config"] == {"plan_dir": "x"}
     assert not (tmp_path / "health.json.tmp").exists()
+
+
+def test_write_health_wires_the_real_fingerprint_into_the_check(
+    monkeypatch, notify, plan_dir, tmp_path
+):
+    """The production wiring must notify, not just a hand-built dict.
+
+    Regression guard for the bug where ``write_health`` passed ``health()`` to
+    the staleness check: ``checkout_behind_origin`` lives in
+    ``config_fingerprint()`` (``health()``'s key set is pinned), so the check
+    returned immediately and the whole feature was dead code. Only the git
+    probe and the notification sink are stubbed here — ``health()`` and
+    ``config_fingerprint()`` are the real implementations.
+    """
+    (plan_dir / "demo.manifest.json").write_text("{}", encoding="utf-8")
+
+    def _fake_run(cmd, **kwargs):
+        args = list(cmd)[1:]
+        if args == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(returncode=0, stdout="head5678\n", stderr="")
+        if args == ["rev-list", "--count", "HEAD..@{upstream}"]:
+            return SimpleNamespace(returncode=0, stdout="2\n", stderr="")
+        if args == ["rev-parse", "@{upstream}"]:
+            return SimpleNamespace(returncode=0, stdout="abc1234\n", stderr="")
+        if args == ["diff", "--name-only", "HEAD..@{upstream}"]:
+            return SimpleNamespace(returncode=0, stdout="pipeline/x.py\n", stderr="")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(sd.subprocess, "run", _fake_run)
+
+    daemon = _daemon()
+    path = tmp_path / "health.json"
+    daemon.write_health(str(path))
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["config"]["checkout_behind_origin"] == 2, (
+        "the fingerprint is where the behind count lives"
+    )
+    assert "checkout_behind_origin" not in data, (
+        "health()'s pinned key set must not grow"
+    )
+
+    assert len(notify) == 1, (
+        "write_health must feed the fingerprint's checkout_behind_origin to "
+        "the staleness check; passing health() leaves the feature dead"
+    )
+    assert notify[0]["plan_name"] == "demo"
+    assert notify[0]["event"] == "scheduler_reload_required"
+    assert notify[0]["dedup_key"] == "scheduler_stale:abc1234"
+    assert "scripts/reload_pipeline_daemon.sh" in notify[0]["message"]
+    assert sd._STALE_CHECKOUT_NOTIFIED == {"abc1234"}
+
+    # A second health write for the same upstream revision stays silent.
+    daemon.write_health(str(path))
+    assert len(notify) == 1, "the same upstream revision must not notify twice"

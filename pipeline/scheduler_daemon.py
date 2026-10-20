@@ -323,11 +323,14 @@ class SchedulerDaemon:
         """Notify once per upstream revision when the daemon is running stale code.
 
         A merged orchestration change is invisible to this process until it is
-        restarted. ``checkout_behind_origin`` (already computed by ``health()``)
-        says the checkout trails upstream; this method adds the two facts that
-        decide whether that matters: the upstream revision (for one-notice-per-
-        revision dedup) and whether the missing commits touch ``pipeline/`` or
-        ``app/``. Doc-only and test-only merges stay silent.
+        restarted. ``checkout_behind_origin`` — computed by
+        ``config_fingerprint()``, deliberately NOT by ``health()``, whose key
+        set is pinned — says the checkout trails upstream; this method adds the
+        two facts that decide whether that matters: the upstream revision (for
+        one-notice-per-revision dedup) and whether the missing commits touch
+        ``pipeline/`` or ``app/``. Doc-only and test-only merges stay silent.
+
+        *health* is the config fingerprint dict, not ``health()``.
         """
         from pipeline import paths
 
@@ -342,16 +345,22 @@ class SchedulerDaemon:
                 capture_output=True, text=True, timeout=10,
             )
 
+        # Resolve the upstream revision first: once announced, the diff probe
+        # is pure waste, and this runs on every health write.
         upstream = _git("rev-parse", "@{upstream}")
-        diff = _git("diff", "--name-only", "HEAD..@{upstream}")
-        if upstream.returncode != 0 or diff.returncode != 0:
+        if upstream.returncode != 0:
             return
         upstream_sha = upstream.stdout.strip()
+        if not upstream_sha or upstream_sha in _STALE_CHECKOUT_NOTIFIED:
+            return
+        diff = _git("diff", "--name-only", "HEAD..@{upstream}")
+        if diff.returncode != 0:
+            return
         code_paths = [
             name for name in diff.stdout.splitlines()
             if name.startswith(("pipeline/", "app/"))
         ]
-        if not upstream_sha or not code_paths or upstream_sha in _STALE_CHECKOUT_NOTIFIED:
+        if not code_paths:
             return
         plan_name = next(
             (
@@ -366,7 +375,7 @@ class SchedulerDaemon:
 
         _notify_user(
             plan_name,
-            f"The running scheduler is {behind} commit(s) behind origin/master "
+            f"The running scheduler is {behind} commit(s) behind its upstream "
             f"and the missing commits change code (e.g. {code_paths[0]}). The "
             "daemon does not hot-reload: run scripts/reload_pipeline_daemon.sh "
             "to activate the merged code.",
@@ -395,7 +404,10 @@ class SchedulerDaemon:
         """
         tmp_path = f"{path}.tmp"
         health = self.health()
-        payload = {**health, "config": self.config_fingerprint()}
+        # Computed once: the staleness check needs the fingerprint's
+        # ``checkout_behind_origin`` (health()'s key set is pinned).
+        config = self.config_fingerprint()
+        payload = {**health, "config": config}
         # Liveness heartbeat (story SCHED-HEARTBEAT): present in the FILE only
         # while a watchdog join is mid-phase, so a busy-but-alive daemon's file
         # keeps advancing and a reader can distinguish it from a dead or wedged
@@ -410,7 +422,7 @@ class SchedulerDaemon:
         # Advisory: a merged orchestration change stays inert until restart.
         # Never let this check break the health write above.
         try:
-            self._notify_if_checkout_stale(health)
+            self._notify_if_checkout_stale(config)
         except Exception:
             logger.exception("scheduler staleness check failed")
 

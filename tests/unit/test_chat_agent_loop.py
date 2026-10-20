@@ -212,8 +212,9 @@ class TestExecuteTurnNegative:
         out = svc.execute_turn("hello")
         assert out["turns"] == 3
         assert "(turn cap reached)" in out["reply"]
-        # The reply is the last response plus the cap marker.
-        assert out["reply"].startswith(_tool_call("loop", {}))
+        # Raw [TOOL_CALL] markup must never be handed back as the answer.
+        assert "(turn cap reached)" in out["reply"]
+        assert _tool_call("loop", {}) not in out["reply"]
         # Exactly max_turns driver calls were made.
         assert len(driver.calls) == 3
 

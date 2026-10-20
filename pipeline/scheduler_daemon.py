@@ -26,6 +26,10 @@ from pipeline.watchers import scan_all_plans
 
 logger = logging.getLogger(__name__)
 
+# Upstream revisions already announced as stale (story SSA-1). Module-level so
+# the dedup survives across the daemon's many health writes; never reassigned.
+_STALE_CHECKOUT_NOTIFIED: set[str] = set()
+
 
 def _checkout_git_state() -> dict:
     """Report the revision of the checkout THIS process imported ``pipeline``
@@ -315,6 +319,71 @@ class SchedulerDaemon:
             "pid": os.getpid(),
         }
 
+    def _notify_if_checkout_stale(self, health: dict) -> None:
+        """Notify once per upstream revision when the daemon is running stale code.
+
+        A merged orchestration change is invisible to this process until it is
+        restarted. ``checkout_behind_origin`` — computed by
+        ``config_fingerprint()``, deliberately NOT by ``health()``, whose key
+        set is pinned — says the checkout trails upstream; this method adds the
+        two facts that decide whether that matters: the upstream revision (for
+        one-notice-per-revision dedup) and whether the missing commits touch
+        ``pipeline/`` or ``app/``. Doc-only and test-only merges stay silent.
+
+        *health* is the config fingerprint dict, not ``health()``.
+        """
+        from pipeline import paths
+
+        behind = health.get("checkout_behind_origin")
+        if not behind:
+            return
+        checkout = os.path.dirname(os.path.dirname(os.path.abspath(paths.__file__)))
+
+        def _git(*args: str):
+            return subprocess.run(
+                ["git", *args], cwd=checkout, check=False,
+                capture_output=True, text=True, timeout=10,
+            )
+
+        # Resolve the upstream revision first: once announced, the diff probe
+        # is pure waste, and this runs on every health write.
+        upstream = _git("rev-parse", "@{upstream}")
+        if upstream.returncode != 0:
+            return
+        upstream_sha = upstream.stdout.strip()
+        if not upstream_sha or upstream_sha in _STALE_CHECKOUT_NOTIFIED:
+            return
+        diff = _git("diff", "--name-only", "HEAD..@{upstream}")
+        if diff.returncode != 0:
+            return
+        code_paths = [
+            name for name in diff.stdout.splitlines()
+            if name.startswith(("pipeline/", "app/"))
+        ]
+        if not code_paths:
+            return
+        plan_name = next(
+            (
+                path.name.removesuffix(".manifest.json")
+                for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
+            ),
+            None,
+        )
+        if plan_name is None:
+            return
+        from .persistence import _notify_user
+
+        _notify_user(
+            plan_name,
+            f"The running scheduler is {behind} commit(s) behind its upstream "
+            f"and the missing commits change code (e.g. {code_paths[0]}). The "
+            "daemon does not hot-reload: run scripts/reload_pipeline_daemon.sh "
+            "to activate the merged code.",
+            event="scheduler_reload_required",
+            dedup_key=f"scheduler_stale:{upstream_sha}",
+        )
+        _STALE_CHECKOUT_NOTIFIED.add(upstream_sha)
+
     def write_health(self, path: str) -> None:
         """Atomically write the health JSON to *path*.
 
@@ -334,7 +403,11 @@ class SchedulerDaemon:
         are additive extras in both the dict and the file.
         """
         tmp_path = f"{path}.tmp"
-        payload = {**self.health(), "config": self.config_fingerprint()}
+        health = self.health()
+        # Computed once: the staleness check needs the fingerprint's
+        # ``checkout_behind_origin`` (health()'s key set is pinned).
+        config = self.config_fingerprint()
+        payload = {**health, "config": config}
         # Liveness heartbeat (story SCHED-HEARTBEAT): present in the FILE only
         # while a watchdog join is mid-phase, so a busy-but-alive daemon's file
         # keeps advancing and a reader can distinguish it from a dead or wedged
@@ -346,6 +419,12 @@ class SchedulerDaemon:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
         os.replace(tmp_path, path)
+        # Advisory: a merged orchestration change stays inert until restart.
+        # Never let this check break the health write above.
+        try:
+            self._notify_if_checkout_stale(config)
+        except Exception:
+            logger.exception("scheduler staleness check failed")
 
     def _join_with_heartbeat(self, worker, timeout_s, label):
         """Join *worker* in heartbeat-sized slices, refreshing health between.

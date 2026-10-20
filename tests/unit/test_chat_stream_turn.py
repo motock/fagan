@@ -266,7 +266,7 @@ class TestPreservedLoopBehaviour:
         assert [e["type"] for e in events] == ["turn", "tool_call", "tool_result", "result"]
         data = events[-1]["data"]
         assert data["reply"].endswith("(turn cap reached)")
-        assert data["reply"] == _tool_call(_TOOL_NAME, {}) + "\n\n(turn cap reached)"
+        assert _tool_call(_TOOL_NAME, {}) not in data["reply"]
         assert data["turns"] == 1
         assert data["tool_calls"] == [_TOOL_CALL_ENTRY]
 

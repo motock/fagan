@@ -611,7 +611,27 @@ class ChatService:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
                 result_blocks.append(block)
             current_prompt = current_prompt + "\nassistant: " + response + "\n" + "\n".join(result_blocks)
-        yield {"type": "result", "data": {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}}
+            remaining = self._max_turns - turns
+            if remaining <= 2:
+                current_prompt += "\n" + (
+                    f"You have {remaining} turn(s) left. Do not call another tool. "
+                    "Answer the user now in prose using what you already have."
+                )
+        # Cap reached on a tool-call turn: never hand raw [TOOL_CALL] markup
+        # back as the answer. Strip the call blocks and keep whatever prose
+        # remains; when nothing remains, say so plainly. The
+        # "(turn cap reached)" marker stays as a stable diagnostic suffix.
+        stripped = re.sub(
+            r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", response, flags=re.DOTALL
+        ).strip()
+        if stripped:
+            cap_reply = stripped + "\n\n(turn cap reached)"
+        else:
+            cap_reply = (
+                "I ran out of tool turns before producing an answer. Try "
+                "narrowing the question.\n\n(turn cap reached)"
+            )
+        yield {"type": "result", "data": {"reply": cap_reply, "tool_calls": tool_calls_made, "turns": turns}}
         return
 
     def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:

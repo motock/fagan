@@ -556,6 +556,31 @@ class OllamaDriver:
                                lines[-1], re.IGNORECASE):
             _append_review_log(cwd, f"{lines[-1]}\n")
             return lines[-1]
+        # Final no-tools verdict call: a model that exhausted the tool budget
+        # without ever writing a terminal VERDICT line still has its
+        # observations. Ask once, without tools, for the conclusion. Fail
+        # closed: any error or unparseable answer falls through to the
+        # existing no-verdict path.
+        try:
+            final_env = self._chat(
+                messages + [{"role": "user", "content":
+                    "You have exhausted your tool budget. Based only on what you "
+                    "have already inspected, reply with exactly one line: "
+                    "`VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`, followed "
+                    "by a one-paragraph justification."}],
+                resolved_model,
+            )
+            final_text = (final_env.get("message", {}).get("content") or "").strip()
+            final_match = re.search(
+                r"^\s*`?VERDICT:\s*(APPROVE|REQUEST_CHANGES)`?\s*$",
+                final_text, re.IGNORECASE | re.MULTILINE,
+            )
+            if final_match:
+                final_verdict = final_match.group(1).upper()
+                _append_review_log(cwd, f"FINAL-VERDICT: {final_verdict}\n")
+                return f"VERDICT: {final_verdict}\n\n{final_text}"
+        except Exception as exc:  # noqa: BLE001 - the final call must never break the review
+            _append_review_log(cwd, f"final-verdict call failed ({type(exc).__name__})\n")
         _append_review_log(cwd, f"no verdict ({fallthrough_reason})\n")
         return ""
 

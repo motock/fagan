@@ -149,10 +149,12 @@ def test_review_loop_reads_step_cap_live_from_env(tmp_path, monkeypatch):
     assert driver.review_max_steps == 20  # constructor default, env unset
     monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "2")
     call_count = 0
+    tools_seen = []
 
     def chat(messages, model, tools=None):
         nonlocal call_count
         call_count += 1
+        tools_seen.append(tools)
         return _envelope({"tool_calls": [{"function": {"name": "bash",
                                                         "arguments": {"command": "echo x"}}}]})
     monkeypatch.setattr(driver, "_chat", chat)
@@ -164,7 +166,9 @@ def test_review_loop_reads_step_cap_live_from_env(tmp_path, monkeypatch):
     # trivial for the mock to serve), so a call_count of 2 can only mean the
     # loop honored the live env override rather than the constructor's
     # captured default of 20.
-    assert call_count == 2
+    # Two tool-enabled loop steps (the live cap), then the post-loop
+    # no-tools final-verdict call.
+    assert [t is not None for t in tools_seen] == [True, True, False]
     assert out == ""        # step cap exhausted with no verdict to salvage
 
 

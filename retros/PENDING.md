@@ -52,3 +52,5 @@ if a precise date is needed when writing one of these up.
 - review-gate-notice-transition — completed 2026-10-19, 1 story
 - legacy-reason-precision — completed 2026-10-19, 1 story
 - security-audit-fixes-2026-10 — completed 2026-10-19, 3 stories
+- product-analyst-model-pin — completed 2026-10-20, 1 story
+- review-verdict-fallback — completed 2026-10-20, 1 story

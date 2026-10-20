@@ -57,3 +57,4 @@ if a precise date is needed when writing one of these up.
 - chat-turn-cap-answer — completed 2026-10-20, 1 story
 - usage-gate-parser-fix — completed 2026-10-20, 1 story
 - usage-banner-model-grouping — completed 2026-10-20, 1 story
+- scheduler-stale-checkout-alert — completed 2026-10-20, 1 story

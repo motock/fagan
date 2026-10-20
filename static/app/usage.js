@@ -36,18 +36,21 @@ function renderUsage(usage) {
   banner.innerHTML = html;
 }
 
-// One line per provider (first-seen order), listing each role with an
-// ok/blocked indicator and the driver-generated reason when blocked.
+// One line per (provider, model) pair (first-seen order), listing each role
+// with an ok/blocked indicator and the driver-generated reason when blocked.
 function renderBackends(backends) {
   const groups = new Map();
   for (const row of backends) {
     if (!row) continue;
-    const key = String(row.provider ?? "?");
-    if (!groups.has(key)) groups.set(key, { model: row.model, roles: [] });
+    const key = JSON.stringify([row.provider ?? "?", row.model ?? ""]);
+    if (!groups.has(key)) {
+      groups.set(key, { provider: row.provider ?? "?", model: row.model, roles: [] });
+    }
     groups.get(key).roles.push(row);
   }
   let html = "";
-  for (const [provider, group] of groups) {
+  for (const group of groups.values()) {
+    const provider = group.provider;
     const label = group.model
       ? `${escapeHtml(provider)}/${escapeHtml(group.model)}`
       : escapeHtml(provider);

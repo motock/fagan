@@ -103,8 +103,11 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
   Default to `software-engineer` for ordinary backend/API/service/library work —
   there is no separate "backend-engineer" or "frontend-engineer" persona.
   Never invent a persona name outside this list.
-- `model` — `opus` | `sonnet` | `haiku`. Default to `sonnet`; reserve `opus` for
-  judgment-heavy or security-sensitive stories; `haiku` for docs/trivial.
+- `model` — optional, and omitted by default: the registry's `dispatch` role
+  (or the persona default) decides the model. Set it only when the user
+  explicitly names an implementer, choosing `opus` | `sonnet` | `haiku`
+  (`opus` for judgment-heavy or security-sensitive stories, `haiku` for
+  docs/trivial).
 - `risk` — `low` | `medium` | `high`. Mark anything irreversible, security-,
   data-, money-, or public-API-related as `high` (the overlord gates these).
 

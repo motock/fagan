@@ -58,6 +58,9 @@ shippable, testable, and reviewable.
     instead of duplicating them.
 - Recommend the right **persona** and **risk** level for each story so the
   pipeline can dispatch it correctly.
+- **Omit each story's `model` field** unless the user explicitly names an
+  implementer. The registry's `dispatch` role decides the model; a model pin
+  copied from an example silently misroutes the story to that tag.
 
 ## Output format — the pipeline plan schema
 
@@ -75,7 +78,6 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
           "agent_instructions": "The full implementation brief: scope, approach, the TDD expectation, and the testable success criteria (concrete, checkable statements, e.g. 'rejects a zero-length key with StoreError::Corrupted') - this is where acceptance criteria actually live, not a separate field",
           "dependencies": ["<other story summary or key>"],
           "persona": "software-engineer",
-          "model": "sonnet",
           "risk": "low"
         }
       ]

@@ -267,9 +267,9 @@
     "mode": "32",
     "date": "2026-07-22",
     "class": "model-capability + harness-bug",
-    "status": "PARTIAL",
-    "fix_ref": "PR #232",
-    "guard": "`test_backend.py` (`test_chat_retries_transient_connect_error_then_succeeds`, `test_chat_retries_5xx_then_succeeds`)"
+    "status": "PARTIAL (2026-10-21: write paths reject a trailing omission/truncation marker; non-Ollama provider calls remain single blocking reads with no per-chunk silence bound)",
+    "fix_ref": "PR #232; PR #<n> for the omission-marker guard",
+    "guard": "`test_backend.py` (`test_chat_retries_transient_connect_error_then_succeeds`, `test_chat_retries_5xx_then_succeeds`); tests/unit/test_omission_marker_guard.py"
   },
   {
     "mode": "33",

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 
@@ -79,6 +80,30 @@ def _base_ref_for_restore(cwd) -> str | None:
             args, cwd=cwd, capture_output=True, text=True, check=False)
         if result.returncode == 0 and result.stdout.strip():
             return args[-1] if args[1] == "rev-parse" else result.stdout.strip()
+    return None
+
+
+_OMISSION_LINE_RE = re.compile(
+    r"^\s*(?:#|//|/\*+|<!--|--)?\s*\.{2,3}\s*[\(\[]?\s*"
+    r"(?:rest of (?:the )?file|existing code|unchanged content|"
+    r"omitted|remains (?:the )?same|code remains)",
+    re.IGNORECASE,
+)
+
+
+def _omission_marker(content: str) -> str | None:
+    """Return the final line when it is a model truncation artifact.
+
+    A local model that runs out of context sometimes ends a written file with
+    a marker such as ``# ... (rest of file remains same)`` instead of the
+    real content (Mode 32). The marker is valid Python, so the syntax check
+    passes and the truncated file lands. Only the LAST non-blank line is
+    checked, so prose or a doc that merely mentions the artifact mid-file is
+    still writable.
+    """
+    for line in reversed(content.splitlines()):
+        if line.strip():
+            return line.strip()[:120] if _OMISSION_LINE_RE.match(line) else None
     return None
 
 
@@ -144,6 +169,14 @@ def run_tool_impl(origin, fn, args) -> str:
                     f"exact call with confirm_removals=true. The file was NOT overwritten."
                 )
         path.parent.mkdir(parents=True, exist_ok=True)
+        marker = _omission_marker(content)
+        if marker:
+            return (
+                f"ERROR: {args['path']} content ends with an omission marker "
+                f"({marker!r}) - the file was truncated, not written. Emit the "
+                f"complete content; an omission marker is not valid file content. "
+                f"The file was NOT written."
+            )
         path.write_text(content)
         origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
         origin["_CREATED_THIS_RUN"].add(args["path"])
@@ -204,6 +237,14 @@ def run_tool_impl(origin, fn, args) -> str:
                 f"unintentional, keep the definition in new_str. If the removal "
                 f"is intentional, repeat this exact call with "
                 f"confirm_removals=true. The edit was NOT applied."
+            )
+        marker = _omission_marker(new_text)
+        if marker:
+            return (
+                f"ERROR: {args['path']} content ends with an omission marker "
+                f"({marker!r}) - the file was truncated, not written. Emit the "
+                f"complete content; an omission marker is not valid file content. "
+                f"The file was NOT written."
             )
         path.write_text(new_text)
         origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
@@ -301,6 +342,14 @@ def run_tool_impl(origin, fn, args) -> str:
             if not deletions:
                 message = "ERROR: " + message
             return message
+        marker = _omission_marker(new_text)
+        if marker:
+            return (
+                f"ERROR: {args['path']} content ends with an omission marker "
+                f"({marker!r}) - the file was truncated, not written. Emit the "
+                f"complete content; an omission marker is not valid file content. "
+                f"The file was NOT written."
+            )
         path.write_text(new_text)
         origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
         removed_echo = origin["edit_guards"].render_removal_report([], rewrites)

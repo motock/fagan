@@ -58,3 +58,6 @@ if a precise date is needed when writing one of these up.
 - usage-gate-parser-fix — completed 2026-10-20, 1 story
 - usage-banner-model-grouping — completed 2026-10-20, 1 story
 - scheduler-stale-checkout-alert — completed 2026-10-20, 1 story
+- replace-lines-symbol-loss-ungated — completed 2026-10-21, 1 story
+
+<!-- replace-lines-symbol-loss-ungated retro drained 2026-10-21: Mode 55 fix shipped in PR #1151 (commit 28560f8). `_dropped_top_level_defs` now runs unconditionally before the `confirm_removals` gate in both `scripts/local_agent_tools.py` and `scripts/local_agent_oracle_tools.py`, so a rename that classifies as a rewrite can no longer silently drop top-level symbols. 12 new tests (6 cases × 2 variants), full suite 14657 passed / 0 failed, ruff clean. -->

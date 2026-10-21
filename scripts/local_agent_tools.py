@@ -211,30 +211,51 @@ def run_tool_impl(origin, fn, args) -> str:
                 f"equivalent. The edit was NOT applied."
             )
         deletions, rewrites = origin["edit_guards"].classify_removed_lines(lines[start - 1:end], new_str)
-        if deletions and not args.get("confirm_removals"):
-            report = origin["edit_guards"].render_removal_report(deletions, rewrites)
-            # Unconditional top-level-symbol-loss check: name any def/class/
-            # constant that this range removes in its entirety, even when no
-            # same-file reference survives (the symbol may be consumed by OTHER
-            # files). This only ENRICHES the existing confirm_removals-gated
-            # rejection message -- it is not a separate blocking gate, so
-            # confirm_removals=true still short-circuits past it untouched.
-            dropped = origin["_dropped_top_level_defs"](old_text, new_text)
-            if path.suffix == ".py":
-                dropped += origin["_dropped_top_level_vars"](old_text, new_text)
-            symbol_note = ""
-            if dropped:
-                symbol_note = (
-                    f"This edit also permanently removes these top-level symbols "
-                    f"in their entirety: {', '.join(dropped)}\n"
+        # Top-level-symbol-loss check: name any def/class/constant that this
+        # range removes in its entirety, even when no same-file reference
+        # survives (the symbol may be consumed by OTHER files). This runs
+        # UNCONDITIONALLY, before the confirm_removals gate below: a rename
+        # (def foo -> def foo_v2) classifies the old def lines as rewrites, so
+        # `deletions` is empty and a gate-first call would never fire, letting
+        # the write land with the original symbols silently gone. Only the
+        # REJECTION is gated, so confirm_removals=true still lets it through.
+        dropped = origin["_dropped_top_level_defs"](old_text, new_text)
+        if path.suffix == ".py":
+            dropped += origin["_dropped_top_level_vars"](old_text, new_text)
+        if (deletions or dropped) and not args.get("confirm_removals"):
+            report = (origin["edit_guards"].render_removal_report(deletions, rewrites)
+                      if deletions else "")
+            if deletions and not dropped:
+                # Deletion-only message: byte-identical to the pre-fix wording.
+                return (
+                    f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
+                    f"that don't appear to survive (as-is or rewritten) in your replacement:"
+                    f"{report}\n\nRevise new_str to preserve these lines, or if the deletion "
+                    f"is intentional, repeat this exact call with confirm_removals=true. "
+                    f"The edit was NOT applied."
                 )
-            return (
-                f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
-                f"that don't appear to survive (as-is or rewritten) in your replacement:"
-                f"{symbol_note}{report}\n\nRevise new_str to preserve these lines, or if the deletion "
-                f"is intentional, repeat this exact call with confirm_removals=true. "
-                f"The edit was NOT applied."
+            parts = []
+            if deletions:
+                parts.append(
+                    f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
+                    f"that don't appear to survive (as-is or rewritten) in your replacement:"
+                )
+                parts.append(report)
+            if dropped:
+                parts.append(
+                    f"This edit also permanently removes these top-level symbols in their "
+                    f"entirety: {', '.join(dropped)}. These may be public API consumed by "
+                    f"other files."
+                )
+            parts.append(
+                "Revise new_str to preserve these lines/symbols, or if the removal is "
+                "intentional, repeat this exact call with confirm_removals=true. "
+                "The edit was NOT applied."
             )
+            message = "\n".join(parts)
+            if not deletions:
+                message = "ERROR: " + message
+            return message
         path.write_text(new_text)
         origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
         removed_echo = origin["edit_guards"].render_removal_report([], rewrites)

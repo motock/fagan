@@ -451,9 +451,9 @@
     "mode": "55",
     "date": "2026-08-08 (found 2026-08-12)",
     "class": "harness-bug",
-    "status": "NOT fixed — root cause PINNED 2026-08-12 (replace_lines-range swept 4 unrelated top-level symbols; cross-file-blind orphan guard + unscoped confirm_removals bypass both missed it)",
-    "fix_ref": "n/a",
-    "guard": "none (root cause pinned, fix not yet shipped)"
+    "status": "FIXED",
+    "fix_ref": "PR #<n>",
+    "guard": "replace_lines now calls _dropped_top_level_defs (plus _dropped_top_level_vars for .py) UNCONDITIONALLY before the confirm_removals gate, so a rename (def foo -> def foo_v2) that classifies as a rewrite with zero deletions can no longer silently drop the original top-level symbols; the rejection is still gated on confirm_removals. Guarded by tests/unit/test_replace_lines_symbol_loss_ungated.py, which parametrizes over both scripts/local_agent.py and scripts/local_agent_oracle.py and covers rename rejection, confirmed rename, non-def rewrite, combined deletion+symbol-loss reporting, non-Python files, and pure insertion."
   },
   {
     "mode": "56",

@@ -411,9 +411,9 @@
     "mode": "50",
     "date": "2026-08-05",
     "class": "harness-bug + harness-bug (process)",
-    "status": "PARTIAL (ignore-tests bug fixed; diagnosis-bypass on CI-fail-rework still open)",
-    "fix_ref": "PR #232 + #233",
-    "guard": "`test_added_pytest_test_paths.py`"
+    "status": "PARTIAL (2026-10-21: CI-fail rework keeps prior review/diagnosis feedback instead of replacing it; no diagnosis role runs on the CI failure itself)",
+    "fix_ref": "PR #232 + #233; PR #<n> for the feedback merge",
+    "guard": "`test_added_pytest_test_paths.py`; tests/unit/test_ci_rework_feedback_merge.py"
   },
   {
     "mode": "51",

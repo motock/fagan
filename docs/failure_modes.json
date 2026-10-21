@@ -403,9 +403,9 @@
     "mode": "49",
     "date": "2026-07-31",
     "class": "plan-authoring + model-capability",
-    "status": "REFRAMED (born-broken variant fixed 2026-08-03; general git-op-avoidance gap still open)",
-    "fix_ref": "direct-repair + `pipeline/oracle_gate.py`",
-    "guard": "`test_acceptance_oracle_gate_prior_gate.py` + `test_acceptance_oracle_tamper_append.py` (covers the born-broken-oracle variant only; the general git-op-avoidance gap has no guard)"
+    "status": "REFRAMED (born-broken variant fixed 2026-08-03; base-scoped restore_file added 2026-10-21; oracle-agent drift/churn guards still absent)",
+    "fix_ref": "direct-repair + `pipeline/oracle_gate.py`; PR #<n> for the from_base restore",
+    "guard": "`test_acceptance_oracle_gate_prior_gate.py` + `test_acceptance_oracle_tamper_append.py`; tests/unit/test_restore_file_from_base.py"
   },
   {
     "mode": "50",

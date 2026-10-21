@@ -233,9 +233,11 @@ TOOLS = [
             "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "restore_file",
-        "description": "Discard your changes to ONE file and restore it to the last commit (git checkout HEAD -- <path>). Use this when your edits to a file have gone wrong and you want a clean slate for it specifically, instead of str_replace/replace_lines patches on top of a mess. Does not touch any other file.",
+        "description": "Discard your changes to ONE file. By default restores it to the last commit in your worktree (git checkout HEAD -- <path>). With from_base=true, restores the committed version from the base branch (origin's default), which is what you want when your own commits already contain a bad change. Does not touch any other file.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}}, "required": ["path"]}}},
+            "path": {"type": "string"},
+            "from_base": {"type": "boolean", "description": "Restore the base branch's committed version instead of your worktree HEAD; use when your own commits already contain the bad change."}},
+            "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "bash", "description": "Run a bash command (run tests, git, etc.). Do NOT use to create or edit files.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},

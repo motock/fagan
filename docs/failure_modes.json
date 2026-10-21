@@ -427,25 +427,25 @@
     "mode": "52",
     "date": "2026-08-07 (found 2026-08-12)",
     "class": "harness-bug",
-    "status": "NOT fixed (confirmed open by direct code read, not just retro prose)",
-    "fix_ref": "n/a",
-    "guard": "none (gap, not a guard)"
+    "status": "FIXED",
+    "fix_ref": "PR #301 (`6380010`)",
+    "guard": "tests/test_dropped_top_level_vars.py"
   },
   {
     "mode": "53",
     "date": "n/a (found 2026-08-12)",
     "class": "harness-bug",
-    "status": "NOT fixed (confirmed open by direct code read)",
-    "fix_ref": "n/a",
-    "guard": "none (gap, not a guard)"
+    "status": "FIXED",
+    "fix_ref": "PR #303 (`699d07a`), auto-rebase upgrade PR #357 (`b0c08c5`)",
+    "guard": "tests/unit/test_dispatch_staleness.py"
   },
   {
     "mode": "54",
     "date": "2026-08-06 (found 2026-08-12)",
     "class": "harness-bug",
-    "status": "NOT fixed — postdates edit-guard-enforcement, resolves token-context-a1 retro's open question",
-    "fix_ref": "n/a",
-    "guard": "none (same open class as Mode 55)"
+    "status": "FIXED",
+    "fix_ref": "PR #305 (`27a2560`) for str_replace; PR #1151 (`28560f8`) for the replace_lines rename bypass",
+    "guard": "tests/unit/test_replace_lines_symbol_loss_ungated.py; tests/unit/test_local_agent_calibration_and_churn.py::test_str_replace_names_dropped_top_level_symbols"
   },
   {
     "mode": "55",

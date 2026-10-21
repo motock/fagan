@@ -187,9 +187,9 @@
     "mode": "22",
     "date": "2026-07-19/20",
     "class": "model-capability",
-    "status": "NOT fixed (workaround only)",
-    "fix_ref": "n/a",
-    "guard": "none (not fixed)"
+    "status": "PARTIAL (create_file content-loss guard covers .py top-level def/class/var only; non-.py files, including markdown, have no content-preservation check)",
+    "fix_ref": "steering in `pipeline/planner.py` and the `create_file` tool schema; PR #301 (`6380010`) extended the guard to .py top-level symbols",
+    "guard": "tests/test_dropped_top_level_vars.py (`.py` only); none for non-.py content loss"
   },
   {
     "mode": "23",
@@ -372,7 +372,7 @@
     "date": "2026-07-30",
     "class": "harness-bug",
     "status": "FIXED (root cause pinned 2026-10-21: resuming was inferred from worktree existence)",
-    "fix_ref": "PR #<n>",
+    "fix_ref": "PR #1153 (`0d01d34`)",
     "guard": "tests/unit/test_dispatch_acceptance_rematerialize.py"
   },
   {
@@ -452,7 +452,7 @@
     "date": "2026-08-08 (found 2026-08-12)",
     "class": "harness-bug",
     "status": "FIXED",
-    "fix_ref": "PR #<n>",
+    "fix_ref": "PR #1151 (`28560f8`)",
     "guard": "replace_lines now calls _dropped_top_level_defs (plus _dropped_top_level_vars for .py) UNCONDITIONALLY before the confirm_removals gate, so a rename (def foo -> def foo_v2) that classifies as a rewrite with zero deletions can no longer silently drop the original top-level symbols; the rejection is still gated on confirm_removals. Guarded by tests/unit/test_replace_lines_symbol_loss_ungated.py, which parametrizes over both scripts/local_agent.py and scripts/local_agent_oracle.py and covers rename rejection, confirmed rename, non-def rewrite, combined deletion+symbol-loss reporting, non-Python files, and pure insertion."
   },
   {

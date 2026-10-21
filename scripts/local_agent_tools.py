@@ -62,6 +62,26 @@ def _cut_view_at_line_boundary(formatted: str, cap: int = 3000) -> tuple[str, in
     return kept, kept.count("\n")
 
 
+def _base_ref_for_restore(cwd) -> str | None:
+    """Return the ref a from_base restore should read, or None.
+
+    Prefers origin's advertised default branch, then the two conventional
+    names. Mode 49b: the destructive-git block refuses `git checkout <base> --
+    <path>`, so this is the only safe way to reach the base branch's version
+    once the agent's own commits already contain the bad change.
+    """
+    for args in (
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        ["git", "rev-parse", "--verify", "--quiet", "origin/master"],
+        ["git", "rev-parse", "--verify", "--quiet", "origin/main"],
+    ):
+        result = subprocess.run(
+            args, cwd=cwd, capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return args[-1] if args[1] == "rev-parse" else result.stdout.strip()
+    return None
+
+
 def run_tool_impl(origin, fn, args) -> str:
     if fn == "create_file":
         path = origin["CWD"] / args["path"]
@@ -368,6 +388,33 @@ def run_tool_impl(origin, fn, args) -> str:
                 f"exact lines you need and fix them with a small anchored "
                 f"str_replace instead."
             )
+        if args.get("from_base"):
+            # Base-scoped restore (Mode 49b): the agent's own commits already
+            # capture the bad change, so `git checkout HEAD -- <path>` would
+            # keep it. Restore the version committed on origin's default branch
+            # instead - the destructive-git block refuses `git checkout <base>
+            # -- <path>`, so this is the only safe way back to the base.
+            base_ref = _base_ref_for_restore(origin["CWD"])
+            if base_ref is None:
+                return (
+                    f"ERROR: from_base restore of {path_str} failed - no origin "
+                    f"default branch could be resolved (tried "
+                    f"refs/remotes/origin/HEAD, origin/master, origin/main)."
+                )
+            shown = subprocess.run(
+                ["git", "show", f"{base_ref}:{path_str}"],
+                check=False, cwd=origin["CWD"], capture_output=True, text=True,
+            )
+            if shown.returncode != 0:
+                return (f"ERROR: could not restore {path_str} from {base_ref}: "
+                        f"{shown.stderr.strip()[:300]}")
+            target = origin["CWD"] / path_str
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(shown.stdout)
+            restores[path_str] = restores.get(path_str, 0) + 1
+            return (f"restored {path_str} from {base_ref} (the base branch's "
+                    f"committed version); your branch commits and uncommitted "
+                    f"changes to this file are superseded. Other files are untouched.")
         result = subprocess.run(
             ["git", "checkout", "HEAD", "--", path_str],
             check=False, cwd=origin["CWD"], capture_output=True, text=True,
@@ -395,7 +442,9 @@ def run_tool_impl(origin, fn, args) -> str:
                 f"To throw away your OWN uncommitted edits to one specific file "
                 f"and start it clean from the last commit, use the restore_file "
                 f"tool on that path — it does exactly this, safely, without "
-                f"touching any other file."
+                f"touching any other file. If your own commits already contain "
+                f"the bad change, call restore_file with from_base=true to get "
+                f"the base branch's committed version instead."
             )
         # Acquire the cross-dispatch heavy-build lock for any command whose
         # first token is a known build/test executable (cargo, npm, mvn,

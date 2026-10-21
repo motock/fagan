@@ -64,3 +64,9 @@ if a precise date is needed when writing one of these up.
 - failure-mode-catalog-modes-52-54 — completed 2026-10-21, 1 story
 
 <!-- Context for failure-mode-catalog-modes-52-54's eventual window retro (marker stays until then): catalog drift, PR #1152 (commit 1fb1696). Modes 52/53/54 were all fixed in code in Aug 2026 (PRs #301/#303/#305) plus Mode 54's replace_lines path on 2026-10-21 (#1151), but the dataset still read "NOT fixed". Three anchored entry syncs + one pre-authorized spot-check re-pin; 11-line diff, full suite 14657 passed / 0 failed. Standing check worth adopting: the catalog is hand-synced, so any mode closed by a plan needs an explicit dataset update in that same plan. -->
+- mode45-acceptance-rematerialize — completed 2026-10-21, 1 story
+- failure-mode-catalog-sync-2 — completed 2026-10-21, 1 story
+
+<!-- Context for mode45-acceptance-rematerialize's eventual window retro (marker stays until then): PR #1153 (commit 0d01d34). Root cause pinned: `resuming` in pipeline/dispatch.py is true when the worktree directory exists, so a still-`todo` story re-dispatched after a dead attempt skipped acceptance-fixture materialization and could grade the base branch's stale fixture to a false green. The skip is now gated on the status-based `resumed_story` and each preserve/materialize decision is logged at INFO. 4 new tests; full suite 14661 passed / 0 failed. -->
+
+<!-- Context for failure-mode-catalog-sync-2's eventual window retro (marker stays until then): PR #1154 (commit 6d5eb95). Mode 22 corrected to PARTIAL (non-.py files still have no content-preservation check) and the `PR #<n>` placeholders on Modes 45/55 filled with #1153/#1151. This is the second hand-synced catalog repair in one day; the standing recommendation is still to make "closing a mode updates docs/failure_modes.json" part of the closing plan. -->

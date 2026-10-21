@@ -61,3 +61,6 @@ if a precise date is needed when writing one of these up.
 - replace-lines-symbol-loss-ungated — completed 2026-10-21, 1 story
 
 <!-- replace-lines-symbol-loss-ungated retro drained 2026-10-21: Mode 55 fix shipped in PR #1151 (commit 28560f8). `_dropped_top_level_defs` now runs unconditionally before the `confirm_removals` gate in both `scripts/local_agent_tools.py` and `scripts/local_agent_oracle_tools.py`, so a rename that classifies as a rewrite can no longer silently drop top-level symbols. 12 new tests (6 cases × 2 variants), full suite 14657 passed / 0 failed, ruff clean. -->
+- failure-mode-catalog-modes-52-54 — completed 2026-10-21, 1 story
+
+<!-- failure-mode-catalog-modes-52-54 retro drained 2026-10-21: catalog drift, PR #1152 (commit 1fb1696). Modes 52/53/54 were all fixed in code in Aug 2026 (PRs #301/#303/#305) plus Mode 54's replace_lines path today (#1151), but the dataset still read "NOT fixed". Three anchored entry syncs + one pre-authorized spot-check re-pin; 11-line diff, full suite 14657 passed / 0 failed. Worth a standing check: the catalog is hand-synced, so any mode closed by a plan needs an explicit dataset update in the same plan. -->

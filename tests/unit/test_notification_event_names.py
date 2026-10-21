@@ -576,7 +576,7 @@ class TestStoryKeyAttributionSourceLevel:
         merge_src = inspect.getsource(advance_merge)
         for needle in (
             'story["ci_rework"] = True',
-            'story["review_feedback"] = _ci_rework_feedback(',
+            'story["review_feedback"] = _merge_ci_rework_feedback(',
             'story["status"] = "changes_requested"',
             'summary["notify"].append(key)',
         ):

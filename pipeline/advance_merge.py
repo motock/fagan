@@ -43,6 +43,38 @@ merge_adjudication_plan = _ModuleRef("pipeline.advance", "merge_adjudication_pla
 
 _MERGE_HOLD_REASON = "high risk held for human review"
 
+# Header this module prepends when it carries an earlier feedback round
+# forward across a CI-fail rework (see _merge_ci_rework_feedback).
+_PRIOR_FEEDBACK_HEADER = (
+    "Earlier review feedback on this branch (still relevant - address it too):"
+)
+# First line of every _ci_rework_feedback string; used to drop a stale CI block
+# from the carried-forward text so repeat rounds do not stack.
+_CI_FEEDBACK_MARKER = "The merge-gate CI check failed on your submitted branch"
+
+
+def _merge_ci_rework_feedback(prior: str | None, ci_feedback: str) -> str:
+    """Return ``ci_feedback`` with any earlier review feedback preserved.
+
+    The merge-gate CI-fail rework used to replace ``review_feedback`` outright,
+    discarding findings from an earlier review round (Mode 50, root cause 3):
+    the implementer then fixed only the CI error and could re-break what the
+    reviewer had asked for. Keep the prior text in front of the CI failure,
+    unless the prior text is itself only a previous CI block (stale - its gate
+    error is superseded by this one) or empty.
+    """
+    prior = (prior or "").strip()
+    if not prior:
+        return ci_feedback
+    marker_at = prior.find(_CI_FEEDBACK_MARKER)
+    if marker_at != -1:
+        prior = prior[:marker_at].rstrip()
+    if prior.startswith(_PRIOR_FEEDBACK_HEADER):
+        prior = prior[len(_PRIOR_FEEDBACK_HEADER):].strip()
+    if not prior:
+        return ci_feedback
+    return f"{_PRIOR_FEEDBACK_HEADER}\n{prior}\n\n{ci_feedback}"
+
 
 def _readjudicate_parked_merge_hold(
     plan_name: str, key: str, story: dict[str, Any]
@@ -362,7 +394,10 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 # assertion every round (the agent's own broken test is
                 # invisible to the acceptance-scoped oracle/reviewer).
                 story["ci_rework"] = True
-                story["review_feedback"] = _ci_rework_feedback(gate_error, attempts)
+                story["review_feedback"] = _merge_ci_rework_feedback(
+                    story.get("review_feedback"),
+                    _ci_rework_feedback(gate_error, attempts),
+                )
                 story["status"] = "changes_requested"
                 _notify_user(
                     plan_name,

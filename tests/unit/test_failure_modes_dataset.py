@@ -71,5 +71,5 @@ def test_spot_checks_pin_verbatim_values():
     assert by_mode["16b"]["date"] == "~2026-07-02"
     assert by_mode["16b"]["class"] == "operational"
     assert by_mode["16"]["date"] == "2026-07-01/02"
-    assert by_mode["52"]["status"].startswith("NOT fixed")
-    assert by_mode["52"]["guard"] == "none (gap, not a guard)"
+    assert by_mode["52"]["status"] == "FIXED"
+    assert "6380010" in by_mode["52"]["fix_ref"]

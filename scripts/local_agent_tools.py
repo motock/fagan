@@ -98,6 +98,31 @@ def run_tool_impl(origin, fn, args) -> str:
                     f"intentional, repeat this exact call with "
                     f"confirm_removals=true. The file was NOT overwritten."
                 )
+        if preexisting and path.suffix != ".py":
+            # Generic content-loss guard for non-Python files (Mode 22): a
+            # create_file rewrite reconstructs the file from the model's
+            # memory of having read it and can silently drop whole sections.
+            # _dropped_top_level_defs is AST-based and always returns [] for
+            # markdown/text, so compare lines instead. Small legitimate edits
+            # (a one-line fix) stay under the threshold; a dropped section or
+            # a full re-serialization does not.
+            old_lines = path.read_text().splitlines(keepends=True)
+            deletions, _rewrites = origin["edit_guards"].classify_removed_lines(
+                old_lines, content)
+            nonblank_old = sum(1 for line in old_lines if line.strip())
+            loss_threshold = max(2, round(nonblank_old * 0.10))
+            if len(deletions) >= loss_threshold and not args.get("confirm_removals"):
+                report = origin["edit_guards"].render_removal_report(deletions, [])
+                return (
+                    f"ERROR: this create_file overwrite of {args['path']} would drop "
+                    f"{len(deletions)} of {nonblank_old} non-blank line(s) that do not "
+                    f"survive (as-is or rewritten) in your new content:{report}\n\n"
+                    f"This looks like content dropped while reconstructing the file "
+                    f"from memory. Include the missing content, use "
+                    f"str_replace/replace_lines for a targeted change instead of a "
+                    f"full rewrite, or if the removal is intentional, repeat this "
+                    f"exact call with confirm_removals=true. The file was NOT overwritten."
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)

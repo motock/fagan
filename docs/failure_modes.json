@@ -187,9 +187,9 @@
     "mode": "22",
     "date": "2026-07-19/20",
     "class": "model-capability",
-    "status": "PARTIAL (create_file content-loss guard covers .py top-level def/class/var only; non-.py files, including markdown, have no content-preservation check)",
-    "fix_ref": "steering in `pipeline/planner.py` and the `create_file` tool schema; PR #301 (`6380010`) extended the guard to .py top-level symbols",
-    "guard": "tests/test_dropped_top_level_vars.py (`.py` only); none for non-.py content loss"
+    "status": "FIXED (non-.py content-loss guard added 2026-10-21; .py keeps its top-level-symbol guard)",
+    "fix_ref": "steering in `pipeline/planner.py` and the `create_file` tool schema; PR #301 (`6380010`) for .py top-level symbols; PR #<n> for the non-.py line-loss guard",
+    "guard": "tests/unit/test_create_file_nonpy_content_loss.py (both agent variants); tests/test_dropped_top_level_vars.py (`.py`)"
   },
   {
     "mode": "23",

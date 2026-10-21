@@ -371,9 +371,9 @@
     "mode": "45",
     "date": "2026-07-30",
     "class": "harness-bug",
-    "status": "MITIGATED (root cause not pinned)",
-    "fix_ref": "n/a (unique-path mitigation)",
-    "guard": "none (naming-convention mitigation, not a test)"
+    "status": "FIXED (root cause pinned 2026-10-21: resuming was inferred from worktree existence)",
+    "fix_ref": "PR #<n>",
+    "guard": "tests/unit/test_dispatch_acceptance_rematerialize.py"
   },
   {
     "mode": "46",

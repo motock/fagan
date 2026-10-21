@@ -497,15 +497,19 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Fix #1: if the story carries an `acceptance` block, materialize the
         # oracle files into the worktree BEFORE the backend launches so the local
         # harness can grade against them. The plan's acceptance source is
-        # AUTHORITATIVE on a fresh dispatch and must always win — even when the
+        # AUTHORITATIVE on every dispatch that is not a status-based resume
+        # (interrupted / changes_requested) and must always win — even when the
         # fixture path collides with a file a prior story already merged to the
         # base branch (the worktree inherits that file; failing to overwrite it
         # silently grades the stale, already-satisfied file and produces a false
-        # green with zero implementation). Only a RESUMED run skips the write:
-        # the oracle may have evolved the fixture mid-run into a committed WIP,
-        # and overwriting would discard that evolution.
+        # green with zero implementation). Only a genuine resume skips the
+        # write: the oracle may have evolved the fixture mid-run into a
+        # committed WIP, and overwriting would discard that evolution. The skip
+        # is gated on the story's STATUS, never on worktree existence — a
+        # leftover worktree from a dead earlier attempt is not a resume.
         acceptance = story.get("acceptance") or []
         acceptance_paths = _acceptance_rel_paths(story)
+        resumed_story = story.get("status") in ("interrupted", "changes_requested")
         for entry in acceptance:
             rel = Path(str(entry.get("path", "")))
             if rel.is_absolute() or ".." in rel.parts:
@@ -515,10 +519,16 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
                 continue
             target = worktree_path / rel
-            if resuming and target.exists():
+            if resumed_story and target.exists():
+                logging.getLogger("pipeline").info(
+                    "acceptance fixture %s preserved: resumed run", rel,
+                )
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(entry["source"])
+            logging.getLogger("pipeline").info(
+                "acceptance fixture %s materialized (resuming=%s)", rel, resuming,
+            )
 
         # Record a digest of each fixture's AUTHORITATIVE manifest source
         # (never the worktree file, which could already be rewritten) so a

@@ -877,6 +877,7 @@ _PATCHABLE_STORY_FIELDS = frozenset(
         "summary",
         "tdd_split",
         "backend",
+        "blocked_by",
     )
 )
 

@@ -7,6 +7,12 @@ resolved via a lazy ``from .server import ...`` inside the function body at
 call time - the same circular-avoidance pattern used by pipeline/rebase.py and
 pipeline/pr.py. This keeps the re-exported bindings on ``pipeline.server`` the
 single source of truth that monkeypatches land on.
+
+One deliberate exception: ``_merge_decision`` imports ``PIPELINE_AUTO_MERGE``
+from ``pipeline.config`` rather than ``pipeline.server``. ``server.py`` is at
+its 1,000-line cap, so re-exporting the flag there would break the line-limit
+tests; ``pipeline.config`` is the flag's real home and is not monkeypatched
+through the server module. Do not "fix" this back into a server import.
 """
 
 import fcntl
@@ -444,20 +450,34 @@ def _merge_decision(
     adjudication, which invokes the overlord and appends the ruling to the
     plan's decisions log.
 
-    Honors PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD. In dry-run and
-    gated a high-risk story is always parked for human review; in full
-    autonomy the hold becomes an overlord adjudication whose ruling is
-    recorded in the decisions log and followed (fail closed to the hold).
-    ``plan_name`` is the plan the story belongs to; production callers
-    (``_adjudicate_merges``) always pass it so the ruling is recorded in the
-    plan's own decisions log and the plan's role_config override applies.
+    Honors PIPELINE_AUTO_MERGE, PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD.
+    The checks run in this order: "not approved", dry-run, then
+    PIPELINE_AUTO_MERGE, then risk/threshold handling. Because the
+    PIPELINE_AUTO_MERGE gate sits after "not approved"/dry-run but before any
+    risk handling, an unapproved story still parks with reason "not approved"
+    when the flag is off, while every other unattended merge parks with reason
+    "auto-merge disabled (PIPELINE_AUTO_MERGE=0)" - including a high-risk
+    story in full autonomy, which therefore never reaches the overlord
+    adjudication. With the flag on, dry-run and gated always park a high-risk
+    story for human review; in full autonomy the hold becomes an overlord
+    adjudication whose ruling is recorded in the decisions log and followed
+    (fail closed to the hold). ``plan_name`` is the plan the story belongs to;
+    production callers (``_adjudicate_merges``) always pass it so the ruling is
+    recorded in the plan's own decisions log and the plan's role_config
+    override applies.
     """
+    from .config import PIPELINE_AUTO_MERGE
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
     if story.get("review_verdict") != "APPROVE":
         return {"action": "park", "reason": "not approved"}
     if PIPELINE_AUTONOMY == "dry-run":
         return {"action": "park", "reason": "dry-run"}
+    if not PIPELINE_AUTO_MERGE:
+        return {
+            "action": "park",
+            "reason": "auto-merge disabled (PIPELINE_AUTO_MERGE=0)",
+        }
 
     risk_rank = _RISK_ORDER.get(
         (story.get("risk") or "low").lower(), _RISK_ORDER["high"]

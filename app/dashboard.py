@@ -56,6 +56,14 @@ from app.dashboard_routes import (
     get_story_log,
     get_story_replay,
 )
+from app.dashboard_routes_plan import (
+    advance_all_plans,
+    advance_pipeline,
+    checkpoint,
+    decompose_route,
+    ingest_plan,
+    save_plan,
+)
 from app.dashboard_routes_story import (
     approve_merge_route,
     dispatch_story_route,
@@ -552,73 +560,6 @@ def set_plan_role_config_route(
     return {**result, "effective_config": effective}
 
 
-@app.post("/api/plans/{plan_name}/save")
-def save_plan(plan_name: str, request: SavePlanRequest):
-    workspace = request.workspace if request.workspace is not None else _service.get_active_workspace()
-    result = _service.save_plan(plan_name, request.plan_json, workspace)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
-@app.post("/api/decompose")
-def decompose_route(request: DecomposeRequest):
-    workspace = (
-        request.workspace
-        if request.workspace is not None
-        else _service.get_active_workspace()
-    )
-    result = _service.decompose_plan(request.request, workspace)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-@app.post("/api/plans/{plan_name}/ingest")
-def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None, x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin")):
-    refuse_chat_origin(x_pipeline_origin)
-    if request is None:
-        result = _service.ingest_plan(plan_name)
-    else:
-        result = _service.ingest_plan(plan_name, only_epics=request.only_epics, overwrite=request.overwrite)
-
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
-
-@app.post("/api/plans/{plan_name}/advance")
-def advance_pipeline(plan_name: str) -> dict[str, Any]:
-    """Delegates to _service.advance_pipeline(plan_name)."""
-    result = _service.advance_pipeline(plan_name)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
-
-@app.post("/api/plans/advance_all")
-def advance_all_plans() -> dict[str, Any]:
-    """Delegates to _service.advance_all_plans()."""
-    result = _service.advance_all_plans()
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")
-def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Delegates to _service.checkpoint(plan_name, story_key, step, summary, next_hint)."""
-    step = body.get("step")
-    summary = body.get("summary")
-    if step is None or summary is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Both 'step' and 'summary' are required in the request body",
-        )
-    next_hint = body.get("next_hint", "")
-    result = _service.checkpoint(plan_name, story_key, step, summary, next_hint)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
-
 @app.get("/api/guard-liveness")
 def get_guard_liveness() -> dict[str, Any]:
     try:
@@ -920,6 +861,12 @@ app.post("/api/plans/{plan_name}/stories/{story_key}/patch")(patch_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/review")(review_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")(approve_merge_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/done")(mark_story_done_route)
+app.post("/api/plans/{plan_name}/save")(save_plan)
+app.post("/api/decompose")(decompose_route)
+app.post("/api/plans/{plan_name}/ingest")(ingest_plan)
+app.post("/api/plans/{plan_name}/advance")(advance_pipeline)
+app.post("/api/plans/advance_all")(advance_all_plans)
+app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")(checkpoint)
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

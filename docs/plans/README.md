@@ -35,6 +35,10 @@ dispatch trustworthy: `ALWAYS_ON_CHECKLIST_AND_TDD_SPLIT_PLAN.md`,
 
 **Cost / performance** — `TOKEN_CONTEXT_OPTIMIZATION_PLAN.md`.
 
+**External context inputs** — `EXTERNAL_CONTEXT_SOURCES_PLAN.md` (a governed
+"context lake" for legal, architectural, UX, engineering-practice and security
+guidance, resolved per plan and pinned by digest).
+
 **Process** — `PLAN_RETROSPECTIVE_PROCESS_PLAN.md` (the retro process
 `retros/INDEX.md` is part of).
 

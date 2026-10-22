@@ -168,6 +168,11 @@ def _backup_existing(target: Path, stamp: str) -> str:
     A name that already exists is never reused: the first collision gets
     ``.1`` appended, the next ``.2``, and so on. Returns the backup path as
     a string.
+
+    ``shutil.copy`` rather than ``shutil.copyfile``: the backup holds the same
+    bytes as ``target``, so it must hold the same permission bits too. A
+    ``copyfile`` backup is created with the umask-derived default (0644), which
+    would turn a 0600 secret-bearing env file into a world-readable backup.
     """
     base = f"{target.name}.bak.{stamp}"
     candidate = target.with_name(base)
@@ -175,7 +180,7 @@ def _backup_existing(target: Path, stamp: str) -> str:
     while candidate.exists():
         suffix += 1
         candidate = target.with_name(f"{base}.{suffix}")
-    shutil.copyfile(target, candidate)
+    shutil.copy(target, candidate)
     return str(candidate)
 
 

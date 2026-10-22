@@ -217,7 +217,8 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             story["merge_parked_at"] = datetime.now(UTC).isoformat()
             _notify_user(
                 plan_name,
-                f"{key} parked: {decision['reason']}",
+                f"{key} parked: {decision['reason']}"
+                + (f" — {story['pr_url']}" if story.get("pr_url") else ""),
                 event="story_parked",
                 story_key=key,
                 **(

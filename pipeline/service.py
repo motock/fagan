@@ -144,6 +144,7 @@ _PATCHABLE_STORY_FIELDS = frozenset(
         "summary",
         "tdd_split",
         "backend",
+        "blocked_by",
     )
 )
 # The plan-manifest TOP-LEVEL fields patch_plan may edit. Deliberately tiny
@@ -796,6 +797,16 @@ class PipelineService:
                     f"invalid backend {fields['backend']!r}: must be one of "
                     f"{sorted(_VALID_STORY_BACKENDS)}"
                 ),
+            }
+
+        if "blocked_by" in fields and not (
+            isinstance(fields["blocked_by"], list)
+            and all(isinstance(entry, str) for entry in fields["blocked_by"])
+        ):
+            return {
+                "ok": False,
+                "error": "invalid blocked_by: must be a list of "
+                '"<plan>:<story_key>" strings',
             }
 
         with _store.transaction(plan_name) as acquired:

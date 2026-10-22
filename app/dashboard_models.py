@@ -66,6 +66,7 @@ class StoryPatchBody(BaseModel):
     summary: str | None = None
     tdd_split: str | None = None
     backend: str | None = None
+    blocked_by: list[str] | None = None
 
 
 class WorkspaceRequest(BaseModel):

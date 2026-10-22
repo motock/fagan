@@ -912,9 +912,9 @@ def patch_story(
 ) -> dict[str, Any]:
     """
     Edit a story's plan-authored fields (agent_instructions, model, persona,
-    risk, dependencies, acceptance, pr_url, summary, tdd_split, backend)
-    without hand-editing the manifest JSON. `files` is not patchable: change
-    the plan's file list via ingest_plan and re-ingest.
+    risk, dependencies, acceptance, pr_url, summary, tdd_split, backend,
+    blocked_by: a list of "<plan>:<story_key>" strings) without hand-editing
+    the manifest JSON. `files` is not patchable: use ingest_plan to re-ingest.
 
     Hand-editing the manifest races the scheduler's 60s advance_all_plans
     tick - a read-modify-write on either side can clobber the other's write.

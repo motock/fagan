@@ -11,6 +11,10 @@ personal paths or superseded designs; read them as history, not instruction.
 
 Rough groupings, newest thinking first:
 
+**Installation / onboarding** — `GUIDED_INSTALL_PLAN.md` (one-command guided
+setup: prerequisites, provider routing, notifications, policy, MCP/personas,
+services, and health verification).
+
 **Provider / backend abstraction** — how the pipeline decoupled from any one
 model provider: `Local_LLM_Port_Plan.md`, `Port_to_local_LLM.md`,
 `MODEL_PROVIDER_ABSTRACTION_PLAN.md`, `CLAUDE_BACKEND_PROVIDER_ISOLATION_PLAN.md`,

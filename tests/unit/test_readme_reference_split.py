@@ -546,6 +546,11 @@ def test_original_readme_text_survives_extra_commits_on_head(tmp_path, monkeypat
     assert result == baseline
 
 
+_STORY_DIFF_PARAGRAPH = """The story modal also shows a **Diff** section: a manual snapshot of the
+agent's worktree against its fork point, including uncommitted and untracked
+files. It is read-only and never polls."""
+
+
 @pytest.mark.parametrize("title", EXPECTED_REFERENCE_SECTIONS)
 def test_moved_section_body_is_verbatim(title):
     assert REFERENCE.is_file(), "REFERENCE.md must exist at the repo root"
@@ -741,6 +746,11 @@ def test_moved_section_body_is_verbatim(title):
                     _REVIEW_FINGERPRINT_TAIL_NEW,
                     _REVIEW_FINGERPRINT_TAIL_ORIG,
                 )
+        if title == "Monitoring dashboard":
+            assert _STORY_DIFF_PARAGRAPH in reference_body
+            reference_body = reference_body.replace(
+                "\n\n" + _STORY_DIFF_PARAGRAPH, ""
+            )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

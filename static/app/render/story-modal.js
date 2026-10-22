@@ -1,5 +1,6 @@
 import { state } from "../state.js";
 import { escapeHtml } from "./board.js";
+import { renderStoryDiffSummary, renderStoryDiffFile } from "./story-diff.js";
 import {
   renderCopyButton, copyValues, loadStoryJournal, loadStoryChecklist,
 } from "./plan-detail.js";
@@ -171,6 +172,10 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
       <h3 class="modal-section">Notifications</h3>
       ${renderStoryModalNotifications(storyNotifications)}
     </div>
+    <div data-story-diff-slot>
+      <h3 class="modal-section">Diff</h3>
+      <p class="modal-empty" data-story-diff-empty>No diff available.</p>
+    </div>
     <section class="dsh-modal-log-section" aria-labelledby="dsh-log-heading">
       <h3 id="dsh-log-heading" class="modal-section">Log</h3>
       <div class="dsh-modal-log-status" data-state="loading">
@@ -221,6 +226,9 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   // (Tier 0 progress view). Most stories have no checklist (not run under
   // PIPELINE_DECOMPOSE), so the slot usually stays at the empty state.
   if (planName) loadStoryChecklist(planName, key, body);
+
+  // One-shot diff summary; file diffs load only on click. No polling.
+  if (planName) loadStoryDiff(planName, key, body);
 
   // Kick off the tail fetch now that the modal is shown. The fetch
   // resolves into the placeholder by class — if the user opens a different
@@ -396,6 +404,51 @@ async function loadStoryReplay(plan, key, container) {
   slot.innerHTML = renderReplay(body);
 }
 
+// Load the worktree diff summary once into the Diff slot, then one request
+// per clicked file. A response whose story no longer matches the open modal
+// is dropped (same guard as loadStoryReplay). Failures keep the empty state.
+async function loadStoryDiff(plan, key, container) {
+  const slot = container.querySelector("[data-story-diff-slot]");
+  if (!slot) return;
+
+  const base = `/api/plans/${encodeURIComponent(plan)}`
+    + `/stories/${encodeURIComponent(key)}/diff`;
+  const isCurrent = () => {
+    const modal = document.getElementById("story-modal");
+    return !!modal && modal.dataset.plan === plan && modal.dataset.story === key;
+  };
+  const fetchJson = async (url) => {
+    try {
+      const headers = {};
+      const apiKey = window.__PIPELINE_API_KEY__;
+      if (apiKey) headers["X-Pipeline-Api-Key"] = apiKey;
+      const res = await fetch(url, { headers });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const summary = await fetchJson(base);
+  if (!summary || !isCurrent()) return;
+
+  const heading = '<h3 class="modal-section">Diff</h3>';
+  const summaryHtml = renderStoryDiffSummary(summary);
+  slot.innerHTML = heading + summaryHtml;
+
+  const files = Array.isArray(summary.files) ? summary.files : [];
+  slot.addEventListener("click", async (event) => {
+    const row = event.target && event.target.closest
+      ? event.target.closest(".story-diff-file") : null;
+    if (!row) return;
+    const index = Array.from(slot.querySelectorAll(".story-diff-file")).indexOf(row);
+    if (index < 0 || !files[index]) return;
+    const file = await fetchJson(`${base}?path=${encodeURIComponent(files[index].path)}`);
+    if (!file || !isCurrent()) return;
+    slot.innerHTML = heading + summaryHtml + renderStoryDiffFile(file);
+  });
+}
+
 function hideStoryModal() {
   const modal = document.getElementById("story-modal");
   // Invalidate any in-flight log fetch so it can't write into a hidden
@@ -409,4 +462,5 @@ export {
   initStoryModal, filterStoryNotifications,
   renderStoryModalNotifications, showStoryModal, _renderStoryModalBody,
   hideStoryModal, renderReplay, renderReplayEvent, loadStoryReplay,
+  loadStoryDiff,
 };

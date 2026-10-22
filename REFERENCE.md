@@ -887,6 +887,17 @@ suffix.
 
 ---
 
+## Agent-log scorecard
+
+`scripts/agent_log_scorecard.py <worktree>/agent.log [--json]` derives a per-run
+scorecard from an agent's log: total steps, per-tool counts, the first step that
+mutated a file, how many steps mutated anything, the productive-step ratio,
+guard trips grouped by normalized label, and the outcome (`done` / `parked` /
+`unknown`) with its done summary or parked reason. The line grammar it reads is
+the one in `pipeline/agent_log_format.py`, so the reader cannot drift from the
+writers. `--json` emits the full record for downstream tooling; exit code 2
+means the log path does not exist.
+
 ## Test, lint and build commands
 
 Fagan detects how a repo is tested, linted and built from build markers.

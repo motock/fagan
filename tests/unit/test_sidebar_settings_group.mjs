@@ -675,6 +675,50 @@ await run("successive renders replace the basename and clear a stale title", asy
   }
 });
 
+await run("a root active path falls back to 'active repo' but keeps its title", async () => {
+  const restore = stubActiveWorkspaceFetch({ active: "/" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "active repo", "root path meta text");
+    assertEqual(meta.getAttribute("title"), "/", "root path keeps the full path as title");
+  } finally {
+    restore();
+  }
+});
+
+// The keyed-diff path (planListRowsByName already populated) is what every
+// poll tick and every workspace switch takes: selectWorkspace() fires the
+// workspace-selected hook -> refresh() -> renderPlanList(plans) WITHOUT a
+// resetPlanListState(). The label must refresh there too, otherwise the
+// Workspace item keeps showing the previous repository's basename.
+await run("the keyed-diff render path refreshes the label after a workspace switch", async () => {
+  let restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/alpha" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "alpha", "first render text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/alpha", "first render title");
+  } finally {
+    restore();
+  }
+
+  // Second render on the SAME module/DOM state: no resetPlanListState(), no
+  // nav().innerHTML = "" — exactly what _refresh() does after a switch.
+  restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/beta/" });
+  try {
+    planListMod.renderPlanList(SAMPLE_PLANS);
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "beta", "keyed-diff render text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/beta/", "keyed-diff render title");
+  } finally {
+    restore();
+  }
+});
+
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok);

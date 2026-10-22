@@ -185,9 +185,11 @@ function _workspaceMetaEl() {
 }
 
 // Show the active repository in the Workspace item's meta line: the basename
-// of the active path, with the full path as the hover title. One fetch per
-// render — setOnWorkspaceSelected already triggers _refresh(), which
-// re-renders, so no polling belongs here.
+// of the active path, with the full path as the hover title. Called at the end
+// of BOTH render paths (full rebuild and keyed diff) so the label tracks the
+// active repo after a workspace switch, which re-renders through the
+// workspace-selected hook without resetting planListRowsByName. One fetch per
+// render; no timer or polling belongs here.
 function _applyActiveWorkspaceLabel() {
   const fallback = () => {
     const meta = _workspaceMetaEl();
@@ -198,7 +200,10 @@ function _applyActiveWorkspaceLabel() {
   };
   fetchActiveWorkspace()
     .then((activePath) => {
-      if (typeof activePath !== "string" || !activePath) {
+      // fetchActiveWorkspace() already normalizes every failure (non-ok
+      // response, network error, empty body) to null, so this is the only
+      // "no active repo" case; the .catch below is belt-and-braces.
+      if (!activePath) {
         fallback();
         return;
       }
@@ -468,6 +473,15 @@ function renderPlanList(plans) {
   // path — show it when a repo filter is active and the list is empty, clear
   // it once plans return (or when the all-repositories opt-out is on).
   _syncScopedEmptyState(nav, plans);
+
+  // Refresh the Workspace item's meta line on the keyed-diff path too. This
+  // is the path every poll tick AND every workspace switch takes:
+  // selectWorkspace() fires the workspace-selected hook -> _refresh() ->
+  // renderPlanList(plans) without resetPlanListState(), so without this call
+  // the sidebar would re-scope to the new repository while the Workspace item
+  // kept showing the previous one's basename. One fetch per render; no timer
+  // or polling belongs here.
+  _applyActiveWorkspaceLabel();
 }
 
 // Archive/unarchive is fire-and-forget from the UI's perspective: on

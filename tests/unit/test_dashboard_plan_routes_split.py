@@ -47,7 +47,7 @@ def test_should_import_new_module_cold_without_loading_dashboard():
         "import sys, app.dashboard_routes_plan; "
         "sys.exit(1 if 'app.dashboard' in sys.modules else 0)"
     )
-    result = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True)
+    result = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr.decode()
 
 

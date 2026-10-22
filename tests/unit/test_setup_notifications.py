@@ -13,9 +13,9 @@ import ast
 from pathlib import Path
 
 import pytest
-from pipeline.setup.notifications import build_email_settings, build_outbox_settings
 
 from pipeline.notification_outbox import DEFAULT_OUTBOX_EVENTS
+from pipeline.setup.notifications import build_email_settings, build_outbox_settings
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "pipeline" / "setup" / "notifications.py"
@@ -153,6 +153,47 @@ def test_enabled_email_bad_port_raises():
 def test_enabled_email_zero_timeout_raises():
     with pytest.raises(ValueError, match="PIPELINE_NOTIFY_EMAIL_TIMEOUT"):
         build_email_settings(**{**COMPLETE_EMAIL, "timeout": "0"})
+
+
+@pytest.mark.parametrize(
+    ("field", "key"),
+    [("port", "PIPELINE_NOTIFY_EMAIL_PORT"), ("timeout", "PIPELINE_NOTIFY_EMAIL_TIMEOUT")],
+)
+def test_enabled_email_blank_port_or_timeout_raises(field, key):
+    """A blank port/timeout must never be persisted as ``KEY=''``.
+
+    ``pipeline.notification_email`` parses both with ``int()``, so an empty
+    value fails closed and no email is ever sent. The enabled path therefore
+    treats them as required, exactly like host/from/to.
+    """
+    with pytest.raises(ValueError, match=key):
+        build_email_settings(**{**COMPLETE_EMAIL, field: ""})
+
+
+def test_enabled_email_blank_port_and_timeout_reported_together():
+    with pytest.raises(ValueError) as excinfo:
+        build_email_settings(**{**COMPLETE_EMAIL, "port": "", "timeout": ""})
+
+    message = str(excinfo.value)
+    assert "PIPELINE_NOTIFY_EMAIL_PORT" in message
+    assert "PIPELINE_NOTIFY_EMAIL_TIMEOUT" in message
+
+
+@pytest.mark.parametrize("answer", ["false", "0", "", 0, None])
+def test_gate_is_off_for_anything_but_true(answer):
+    """Only a real ``True`` enables a sink; truthy strings must not."""
+    assert build_outbox_settings(answer)["PIPELINE_NOTIFY_OUTBOX_ENABLED"] == "0"
+    assert build_email_settings(enabled=answer)["PIPELINE_NOTIFY_EMAIL_ENABLED"] == "0"
+
+
+def test_recipients_none_is_treated_as_unanswered():
+    """``None`` means "not answered", so the message must not say "None"."""
+    with pytest.raises(ValueError) as excinfo:
+        build_email_settings(**{**COMPLETE_EMAIL, "recipients": None})
+
+    message = str(excinfo.value)
+    assert "PIPELINE_NOTIFY_EMAIL_TO" in message
+    assert "None" not in message
 
 
 def test_enabled_email_bad_sender_raises():

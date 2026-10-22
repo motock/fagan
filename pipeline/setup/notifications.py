@@ -77,11 +77,15 @@ def build_email_settings(
 
     When ``enabled`` is false, a missing host, sender or recipient list is
     accepted because the channel is inert, but any supplied value must still
-    pass its schema validator. When ``enabled`` is true, every problem is
-    collected and raised as one ``ValueError``. The password is returned
-    verbatim and never appears in an error message.
+    pass its schema validator. When ``enabled`` is true, host, port, sender,
+    recipients and timeout are all required — a blank port or timeout would be
+    persisted as ``KEY=''`` and ``pipeline.notification_email`` would then fail
+    closed on ``int("")`` — and every problem is collected and raised as one
+    ``ValueError``. The password is returned verbatim and never appears in an
+    error message.
     """
     problems: list[str] = []
+    required = enabled is True
     values: dict[str, str] = {_EMAIL_ENABLED: _gate(enabled)}
 
     def record(key: str, raw: object, *, required: bool = False) -> None:
@@ -97,13 +101,13 @@ def build_email_settings(
         else:
             problems.append(normalized)
 
-    record(_EMAIL_HOST, host, required=enabled)
-    record(_EMAIL_PORT, port)
+    record(_EMAIL_HOST, host, required=required)
+    record(_EMAIL_PORT, port, required=required)
     record(_EMAIL_USER, user)
     values[_EMAIL_PASSWORD] = _text(password)
-    record(_EMAIL_FROM, sender, required=enabled)
-    values[_EMAIL_TO] = _record_recipients(recipients, required=enabled, problems=problems)
-    record(_EMAIL_TIMEOUT, timeout)
+    record(_EMAIL_FROM, sender, required=required)
+    values[_EMAIL_TO] = _record_recipients(recipients, required=required, problems=problems)
+    record(_EMAIL_TIMEOUT, timeout, required=required)
 
     if problems:
         raise ValueError("; ".join(problems))
@@ -111,11 +115,18 @@ def build_email_settings(
 
 
 def _gate(enabled: bool) -> str:
-    """Return the only two gate spellings the pipeline understands."""
-    return "1" if enabled else "0"
+    """Return the only two gate spellings the pipeline understands.
+
+    Only a real ``True`` enables the sink: a truthy string such as ``"false"``
+    or ``"0"`` coming from a prompt layer must not flip the gate on.
+    """
+    return "1" if enabled is True else "0"
 
 
 def _text(raw: object) -> str:
+    """Coerce an answer to text; ``None`` means "not answered", not ``"None"``."""
+    if raw is None:
+        return ""
     return raw if isinstance(raw, str) else str(raw)
 
 

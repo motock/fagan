@@ -275,6 +275,89 @@ async function test_hashchange_restores_selection() {
   record("hashchange restores the plan selection (back/forward)", true);
 }
 
+// ---------- view hash key: config / workspace deep-links --------------------
+
+async function test_parse_view_config_and_workspace() {
+  const env = makeEnv();
+  const { parseHash } = await loadApp(env);
+  assertEqual(parseHash("#view=config").view, "config", "view=config");
+  // Values are lowercased and trimmed before matching.
+  assertEqual(parseHash("#view=WORKSPACE").view, "workspace", "view=WORKSPACE");
+  assertEqual(parseHash("#view=%20Config%20").view, "config", "padded view value");
+  record("parseHash accepts only config/workspace view values", true);
+}
+
+async function test_parse_view_bogus_is_ignored() {
+  const env = makeEnv();
+  const { parseHash } = await loadApp(env);
+  const parsed = parseHash("#view=bogus");
+  assertEqual(parsed.view, null, "bogus view ignored");
+  assertEqual(parsed.selectedPlan, null, "no plan from bogus view");
+  assertEqual(parsed.filters.sort, "key", "filters untouched by bogus view");
+  record("parseHash ignores an unknown view value without throwing", true);
+}
+
+async function test_encode_emits_view_for_active_view() {
+  const env = makeEnv();
+  const { encodeHashState, state } = await loadApp(env);
+  // Neither view active -> no view key.
+  state.configActive = false;
+  state.workspaceActive = false;
+  assertTrue(!encodeHashState().includes("view="), "no view when comms is active");
+  state.configActive = true;
+  state.workspaceActive = false;
+  const configHash = encodeHashState();
+  assertTrue(configHash.includes("view=config"), `view=config: ${configHash}`);
+  assertTrue(!configHash.includes("view=workspace"), "config only, never both");
+  state.configActive = false;
+  state.workspaceActive = true;
+  const workspaceHash = encodeHashState();
+  assertTrue(workspaceHash.includes("view=workspace"), `view=workspace: ${workspaceHash}`);
+  assertTrue(!workspaceHash.includes("view=config"), "workspace only, never both");
+  record("encodeHashState emits view=config / view=workspace, never both", true);
+}
+
+async function test_view_round_trip() {
+  const env = makeEnv();
+  const { encodeHashState, applyHashToState, state } = await loadApp(env);
+  state.configActive = true;
+  state.workspaceActive = false;
+  const hash = encodeHashState();
+  // Simulate a fresh load of the encoded URL.
+  state.configActive = false;
+  state.workspaceActive = false;
+  state.commsActive = true;
+  env.window.location.hash = `#${hash}`;
+  applyHashToState();
+  assertEqual(state.configActive, true, "config view restored");
+  assertEqual(state.workspaceActive, false, "workspace not active");
+  assertEqual(state.commsActive, false, "comms view deactivated");
+  record("view hash round-trips the active view", true);
+}
+
+async function test_plan_and_view_round_trip_together() {
+  const env = makeEnv();
+  const { encodeHashState, parseHash, applyHashToState, state } = await loadApp(env);
+  state.selectedPlan = "demo";
+  state.workspaceActive = true;
+  const hash = encodeHashState();
+  assertTrue(hash.includes("plan=demo"), `plan kept: ${hash}`);
+  assertTrue(hash.includes("view=workspace"), `view kept: ${hash}`);
+  // Both dimensions survive the encode -> parse round-trip.
+  const parsed = parseHash(`#${hash}`);
+  assertEqual(parsed.selectedPlan, "demo", "plan survives round-trip");
+  assertEqual(parsed.view, "workspace", "view survives round-trip");
+  // Applying it activates the view; the full-screen view drops the plan.
+  state.selectedPlan = null;
+  state.workspaceActive = false;
+  env.window.location.hash = `#${hash}`;
+  applyHashToState();
+  assertEqual(state.workspaceActive, true, "workspace view restored");
+  assertEqual(state.configActive, false, "config not active");
+  assertEqual(state.selectedPlan, null, "view deep-link clears plan selection");
+  record("a hash carrying both a plan and a view round-trips both", true);
+}
+
 // ---------- runner ----------------------------------------------------------
 
 async function run() {
@@ -296,6 +379,11 @@ async function run() {
     test_state_change_does_not_rewrite_hash_during_init,
     test_hashchange_listener_is_registered,
     test_hashchange_restores_selection,
+    test_parse_view_config_and_workspace,
+    test_parse_view_bogus_is_ignored,
+    test_encode_emits_view_for_active_view,
+    test_view_round_trip,
+    test_plan_and_view_round_trip_together,
   ];
   for (const t of tests) {
     try {

@@ -7,6 +7,7 @@ worktree and never takes the index lock.
 
 import logging
 import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -19,14 +20,15 @@ _GIT_TIMEOUT_SECONDS = 10
 _BASE_CANDIDATES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 _UNTRACKED_READ_LIMIT = 1_000_000
 _BINARY_SNIFF_BYTES = 8000
+_UNTRACKED_DIFF_LIMIT = 1024 * 1024
 
 # Anchored with "**/" so a bare name like "agent.log" matches at any depth,
 # independent of whether .git/info/exclude was ever written for this repo.
 _EXCLUDE_PATHSPECS = tuple(f":(exclude,glob)**/{pattern}" for pattern in _WORKTREE_LOG_EXCLUDES)
 
 
-def _git(worktree: Path, args: list[str]) -> str | None:
-    """Run a read-only git command; None on non-zero exit, timeout or OSError."""
+def _git(worktree: Path, args: list[str], ok_returncodes: tuple[int, ...] = (0,)) -> str | None:
+    """Run a read-only git command; None on a non-ok exit, timeout or OSError."""
     cmd = ["git", "--no-pager", "-c", "core.quotepath=false", *args]
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
     try:
@@ -37,7 +39,7 @@ def _git(worktree: Path, args: list[str]) -> str | None:
     except (subprocess.TimeoutExpired, OSError):
         logger.warning("worktree_diff git call failed", extra={"git_subcommand": args[0]})
         return None
-    return result.stdout if result.returncode == 0 else None
+    return result.stdout if result.returncode in ok_returncodes else None
 
 
 def resolve_worktree(story: dict[str, Any], worktree_root: Path) -> Path | None:
@@ -197,7 +199,68 @@ def collect_diff_summary(
     }
 
 
+def _is_safe_relative_path(path: Any, allowed_paths: set[str]) -> bool:
+    if not isinstance(path, str) or not path or path not in allowed_paths:
+        return False
+    if path.startswith("/") or "\\" in path or "\0" in path:
+        return False
+    parts = path.split("/")
+    return ".." not in parts and parts[0] != ".git"
+
+
+def _file_result(path: str, diff: str = "", **fields: Any) -> dict[str, Any]:
+    return {"available": True, "path": path, "diff": diff, "truncated": False, "binary": False, **fields}
+
+
+def _untracked_skip_reason(worktree: Path, path: str) -> str | None:
+    """Why an untracked file must not be read, or None when it is safe to diff."""
+    full = worktree / path
+    try:
+        info = os.lstat(full)
+        if stat.S_ISLNK(info.st_mode):
+            return "symlink"
+        if not stat.S_ISREG(info.st_mode):
+            return "not_regular"
+        if not full.resolve().is_relative_to(worktree.resolve()):
+            return "outside_worktree"
+    except OSError:
+        return "unreadable"
+    return "too_large" if info.st_size > _UNTRACKED_DIFF_LIMIT else None
+
+
 def collect_file_diff(
     worktree: Path, base_sha: str, path: str, allowed_paths: set[str], max_chars: int = 40000,
 ) -> dict[str, Any]:
-    raise NotImplementedError("collect_file_diff lands in WTD-2")
+    """Unified diff of one file from the summary's file list; never raises."""
+    if not _is_safe_relative_path(path, allowed_paths):
+        return {"ok": False, "status": 400, "error": "invalid path"}
+    if not base_sha:
+        return {"available": False, "reason": "no_base_ref"}
+
+    is_untracked = bool(_git(worktree, ["ls-files", "-z", "--others", "--exclude-standard", "--", path]))
+    if is_untracked:
+        skipped = _untracked_skip_reason(worktree, path)
+        if skipped:
+            return _file_result(path, skipped=skipped)
+        diff_args = ["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color"]
+        target = ["--", "/dev/null", path]
+        ok_codes = (0, 1)  # --no-index exits 1 when the files differ
+    else:
+        diff_args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color"]
+        target = [base_sha, "--", path]
+        ok_codes = (0,)
+
+    numstat = _git(worktree, [*diff_args, "--numstat", *target], ok_codes)
+    if numstat is None:
+        return {"available": False, "reason": "git_failed"}
+    if numstat.startswith("-\t-\t"):
+        return _file_result(path, binary=True)
+    diff = _git(worktree, [*diff_args, *target], ok_codes)
+    if diff is None:
+        return {"available": False, "reason": "git_failed"}
+    if len(diff) > max_chars:
+        return _file_result(
+            path, diff[:max_chars], truncated=True,
+            note=f"diff truncated to the first {max_chars} of {len(diff)} characters",
+        )
+    return _file_result(path, diff)

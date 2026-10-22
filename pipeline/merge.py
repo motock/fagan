@@ -452,12 +452,18 @@ def _merge_decision(
     (``_adjudicate_merges``) always pass it so the ruling is recorded in the
     plan's own decisions log and the plan's role_config override applies.
     """
+    from .config import PIPELINE_AUTO_MERGE
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
     if story.get("review_verdict") != "APPROVE":
         return {"action": "park", "reason": "not approved"}
     if PIPELINE_AUTONOMY == "dry-run":
         return {"action": "park", "reason": "dry-run"}
+    if not PIPELINE_AUTO_MERGE:
+        return {
+            "action": "park",
+            "reason": "auto-merge disabled (PIPELINE_AUTO_MERGE=0)",
+        }
 
     risk_rank = _RISK_ORDER.get(
         (story.get("risk") or "low").lower(), _RISK_ORDER["high"]

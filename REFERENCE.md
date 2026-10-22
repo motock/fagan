@@ -1332,6 +1332,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `AGENTS_DIR` | `~/.claude/agents` | Persona files |
 | `OVERLORD_POLICY` | `~/.claude/overlord-policy.md` | Global decision policy |
 | `PIPELINE_AUTONOMY` | `gated` | `dry-run` \| `gated` \| `full` |
+| `PIPELINE_AUTO_MERGE` | `1` | Set to `0` to park every reviewed PR for a human merge; dispatch and review continue |
 | `PIPELINE_RISK_THRESHOLD` | `low` | Highest risk merged unattended in `gated` |
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
@@ -1637,6 +1638,7 @@ request.
 - `gated` (default) — act unattended up to `PIPELINE_RISK_THRESHOLD`; park higher.
 - `full` — act on all tiers except `park-and-ping` (high risk), which is always
   held.
+- `PIPELINE_AUTO_MERGE=0` overrides every level above at the merge gate only — nothing else is gated.
 
 ---
 

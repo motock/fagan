@@ -245,9 +245,3 @@ def test_should_resolve_base_sha_and_ref(repo):
 
     assert wd.resolve_base_sha(wt) == (git(main, "rev-parse", "master").strip(), "master")
 
-
-def test_collect_file_diff_is_stubbed_until_wtd_2(repo):
-    _, _, wt = repo
-
-    with pytest.raises(NotImplementedError):
-        wd.collect_file_diff(wt, "abc", "f", set())

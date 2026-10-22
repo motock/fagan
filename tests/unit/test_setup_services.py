@@ -7,6 +7,7 @@ must never surface in a returned dict, an output tail, or a reason string.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 from pathlib import Path
@@ -269,6 +270,22 @@ def test_runner_raising_is_returned_as_failure(tmp_path):
     assert "bash not found" in result["error"]
 
 
+def test_runner_returning_malformed_result_is_returned_as_failure(tmp_path):
+    """A runner that returns ``None`` must not raise ``TypeError`` at the caller."""
+
+    def malformed(argv, timeout=None, env=None):
+        return None
+
+    result = services.render_services(
+        repo_root=tmp_path,
+        platform="linux",
+        runner=malformed,
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]
+
+
 # --------------------------------------------------------------------------
 # render_services - enable
 # --------------------------------------------------------------------------
@@ -322,6 +339,70 @@ def test_enable_darwin_skips_load_when_already_registered(tmp_path):
     assert result["error"] is None
     assert runner.argvs[1] == ["launchctl", "list"]
     assert len(runner.calls) == 2  # generator + list, no load
+
+
+def test_enable_darwin_loads_when_a_label_merely_contains_ours(tmp_path):
+    """A sibling job whose label contains ours is a different service.
+
+    ``launchctl list`` prints one job per line as ``PID<TAB>status<TAB>label``.
+    Matching the label as a substring would read a leftover
+    ``...-advance-scheduler-backup`` as our scheduler and skip the load, leaving
+    guided setup reporting a registered scheduler that is not registered.
+    """
+
+    def responder(argv, env):
+        if argv[:2] == ["launchctl", "list"]:
+            listing = (
+                "PID\tStatus\tLabel\n"
+                "-\t0\tcom.fagan.pipeline.advance-scheduler-backup\n"
+                "-\t0\tcom.fagan.pipeline.advance-scheduler-old\n"
+                "-\t0\tcom.fagan.pipeline.advance-scheduler2\n"
+                "-\t0\tcom.fagan.pipeline.advance-scheduler.plist"
+            )
+            return (0, listing, "")
+        return (0, "", "")
+
+    runner = FakeRunner(responder)
+
+    result = services.render_services(
+        repo_root=tmp_path,
+        platform="darwin",
+        mlx_model_path="/models/llama-3",
+        enable=True,
+        runner=runner,
+    )
+
+    assert result["enabled"] is True
+    assert result["error"] is None
+    assert runner.argvs[1] == ["launchctl", "list"]
+    assert runner.argvs[2] == [
+        "launchctl",
+        "load",
+        "-w",
+        str(tmp_path / "launchd" / DARWIN_PLIST),
+    ]
+
+
+def test_enable_darwin_loads_when_label_is_only_a_prefix_of_another(tmp_path):
+    """The exact label must be present; a longer label alone is not enough."""
+
+    def responder(argv, env):
+        if argv[:2] == ["launchctl", "list"]:
+            return (0, "PID\tStatus\tLabel\n123\t0\tcom.fagan.pipeline.advance-scheduler-x", "")
+        return (0, "", "")
+
+    runner = FakeRunner(responder)
+
+    result = services.render_services(
+        repo_root=tmp_path,
+        platform="darwin",
+        mlx_model_path="/models/llama-3",
+        enable=True,
+        runner=runner,
+    )
+
+    assert result["enabled"] is True
+    assert runner.argvs[2][:3] == ["launchctl", "load", "-w"]
 
 
 def test_enable_linux_runs_daemon_reload_then_enable(tmp_path):
@@ -542,6 +623,52 @@ def test_verify_health_retries_oserror_until_attempts_exhausted():
     assert len(opener.requests) == 4
     assert sleeps == [0.5, 0.5, 0.5]
     assert API_KEY not in message
+
+
+def test_verify_health_survives_http_protocol_errors():
+    """A malformed HTTP response is unhealthy data, not an escaping exception."""
+    opener = FakeOpener([http.client.BadStatusLine("garbage")])
+
+    ok, message = services.verify_health(
+        port=8080,
+        api_key=API_KEY,
+        attempts=3,
+        opener=opener,
+        sleep=lambda _: None,
+    )
+
+    assert ok is False
+    assert len(opener.requests) == 3
+    assert API_KEY not in message
+
+
+def test_verify_health_survives_truncated_body():
+    """``IncompleteRead`` from ``response.read()`` must not escape either."""
+
+    class TruncatedResponse(FakeResponse):
+        def read(self):
+            raise http.client.IncompleteRead(b"partial")
+
+    opener = FakeOpener([TruncatedResponse()])
+
+    ok, message = services.verify_health(
+        port=8080, api_key=API_KEY, attempts=2, opener=opener, sleep=lambda _: None
+    )
+
+    assert ok is False
+    assert len(opener.requests) == 2
+    assert API_KEY not in message
+
+
+def test_verify_health_rejects_negative_delay():
+    with pytest.raises(ValueError):
+        services.verify_health(
+            port=8080,
+            api_key=API_KEY,
+            delay=-1.0,
+            opener=FakeOpener([FakeResponse()]),
+            sleep=lambda _: None,
+        )
 
 
 def test_verify_health_recovers_after_first_connection_error():

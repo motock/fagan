@@ -116,9 +116,9 @@ def _call(
         return (1, "", f"{type(exc).__name__}: {exc}")
     try:
         returncode, stdout, stderr = result
+        return (int(returncode), stdout or "", stderr or "")
     except (TypeError, ValueError):
         return (1, "", "runner returned a malformed result")
-    return (int(returncode), stdout or "", stderr or "")
 
 
 def _failure_text(returncode: int, stdout: str, stderr: str) -> str:
@@ -134,10 +134,10 @@ def _collect_rendered(
 ) -> list[str]:
     """List the rendered file names that actually exist in ``out_dir``."""
     try:
-        entries = sorted(out_dir.iterdir())
+        entries = sorted(out_dir.iterdir(), key=lambda entry: entry.name)
     except OSError:
         return []
-    names = [
+    return [
         entry.name
         for entry in entries
         if entry.is_file()
@@ -146,7 +146,6 @@ def _collect_rendered(
             or entry.name in extras
         )
     ]
-    return sorted(names)
 
 
 def _render_result(
@@ -169,10 +168,25 @@ def _render_result(
     }
 
 
+def _launchctl_registered(stdout: str) -> bool:
+    """True when ``launchctl list`` output has a job whose label is exactly ``LABEL``.
+
+    ``launchctl list`` prints one job per line as ``PID<TAB>status<TAB>label``,
+    so the label is the last whitespace-separated field. A substring test would
+    also match a sibling job whose label merely *contains* ours (``...-backup``,
+    ``...-old``), which is a different service and must not read as registered.
+    """
+    for line in stdout.splitlines():
+        fields = line.split()
+        if fields and fields[-1] == LABEL:
+            return True
+    return False
+
+
 def _enable_darwin(repo_root: Path, runner: Runner) -> tuple[bool, str | None]:
     """Register the scheduler plist with launchd unless it already is."""
     returncode, stdout, stderr = _call(runner, ["launchctl", "list"], GENERATOR_TIMEOUT)
-    if returncode == 0 and LABEL in stdout:
+    if returncode == 0 and _launchctl_registered(stdout):
         return (True, None)
 
     plist = repo_root / "launchd" / f"{LABEL}.plist"
@@ -387,15 +401,21 @@ def _probe_once(
         return (False, f"dashboard returned HTTP {exc.code}")
     except OSError as exc:
         return (False, f"dashboard unreachable: {exc}")
+    except Exception as exc:  # noqa: BLE001 - http.client.HTTPException and friends
+        return (False, f"dashboard health request failed: {type(exc).__name__}")
 
     try:
         status = _response_status(response)
         if status != 200:
+            if status is None:
+                return (False, "dashboard returned an unreadable HTTP status")
             return (False, f"dashboard returned HTTP {status}")
         try:
             body = response.read()
         except OSError as exc:
             return (False, f"dashboard health read failed: {exc}")
+        except Exception as exc:  # noqa: BLE001 - a truncated body is just unhealthy
+            return (False, f"dashboard health read failed: {type(exc).__name__}")
         try:
             json.loads(body)
         except (ValueError, TypeError):
@@ -423,6 +443,8 @@ def verify_health(
     resolved_port = _validate_port(port)
     if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
         raise ValueError(f"attempts must be a positive integer, got {attempts!r}")
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or delay < 0:
+        raise ValueError(f"delay must be a non-negative number, got {delay!r}")
 
     resolved_opener = opener or urllib.request.urlopen
     resolved_sleep = sleep or time.sleep

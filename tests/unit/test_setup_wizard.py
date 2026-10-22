@@ -1040,3 +1040,31 @@ def test_build_plan_performs_no_filesystem_writes(tmp_path, monkeypatch):
 
 def test_wizard_module_has_exactly_three_public_functions():
     assert sorted(wizard.__all__) == ["build_plan", "render_summary", "run_plan"]
+
+
+def test_apply_result_carries_sections_so_the_summary_can_list_them():
+    plan = wizard.build_plan(make_args(yes=True), state=make_state(), interactive=False)
+
+    result = wizard.run_plan(
+        plan,
+        output=lambda _line: None,
+        env_writer=RecordingWriter(),
+        provider_applier=RecordingApplier(result=[]),
+        asset_installer=RecordingApplier(result={}),
+        service_runner=RecordingApplier(result={}),
+    )
+
+    assert [entry["name"] for entry in result["sections"]] == list(SECTION_ORDER)
+    text = wizard.render_summary(result)
+    for name in SECTION_ORDER:
+        assert name in text
+
+
+def test_summary_of_a_dry_run_result_still_names_the_dry_run_sentence():
+    plan = wizard.build_plan(
+        make_args(yes=True, dry_run=True), state=make_state(), interactive=False
+    )
+
+    result = wizard.run_plan(plan, output=lambda _line: None)
+
+    assert describe_autonomy("dry-run") in wizard.render_summary(result)

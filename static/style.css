@@ -1184,6 +1184,16 @@ body.trace-off .trace-detail { display: none !important; }
 .plan-item.settings-item.active { border-left-color: var(--accent); }
 #config-view, #workspace-view { flex: 1; }
 
+/* Story modal diff section */
+.story-diff-files { list-style: none; margin: 0; padding: 0; }
+.story-diff-file { cursor: pointer; padding: 2px 0; font-family: monospace; }
+.story-diff-file:hover { background: var(--panel-2); }
+.story-diff-add { color: var(--c-done); }
+.story-diff-del { color: var(--c-failed); }
+.story-diff-untracked, .story-diff-binary, .story-diff-old-path { opacity: 0.7; }
+.story-diff-truncated, .story-diff-empty { opacity: 0.8; font-style: italic; }
+.story-diff-file-header { font-weight: 600; margin-top: 8px; }
+
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }
 .config-table th, .config-table td { padding: var(--sp-2); border: 1px solid var(--border); }

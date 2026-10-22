@@ -361,6 +361,10 @@ the cost gate.
   reversible via the "Show dismissed plans" toggle at the bottom of the
   sidebar.
 
+The story modal also shows a **Diff** section: a manual snapshot of the
+agent's worktree against its fork point, including uncommitted and untracked
+files. It is read-only and never polls.
+
 ---
 
 ## Patch review & apply (WAP-9/WAP-10)

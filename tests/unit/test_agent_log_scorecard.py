@@ -86,6 +86,25 @@ def test_parking_line_sets_parked_outcome_and_reason() -> None:
     assert "parking: read-heavy after nudge" in score["parked_reason"]
 
 
+def test_indented_parking_line_is_not_counted_as_a_guard_trip() -> None:
+    """Real parking lines are 3-space indented, so they also match NUDGE_LINE_RE.
+
+    Regression guard: the parking check must win over the nudge branch, or a
+    run that parked reports ``unknown`` and a bogus "parking" guard trip.
+    """
+    score = s.parse_agent_log(
+        _log(
+            BOOT,
+            "[step 1] view_file: a.py",
+            "   [parking: read-heavy after nudge]",
+        )
+    )
+
+    assert score["outcome"] == "parked"
+    assert score["parked_reason"] == "[parking: read-heavy after nudge]"
+    assert score["guard_trips"] == {}
+
+
 def test_guard_trip_labels_group_across_digit_differences() -> None:
     score = s.parse_agent_log(
         _log(

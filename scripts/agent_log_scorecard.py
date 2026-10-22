@@ -127,7 +127,10 @@ def parse_agent_log(text: str) -> dict:
         if done_match is not None:
             step = int(done_match.group(1))
             steps = max(steps, step)
-            done_summary = done_match.group(2)
+            # ``format_done`` appends a trailing ``[cid=<hex>]`` when the run
+            # has a correlation id; it is reported separately, so keep it out
+            # of the human-readable summary.
+            done_summary = _CID_RE.sub("", done_match.group(2)).rstrip()
             correlation_id = _correlation_id(line) or correlation_id
             continue
 
@@ -142,14 +145,20 @@ def parse_agent_log(text: str) -> dict:
             correlation_id = _correlation_id(line) or correlation_id
             continue
 
+        # Parking lines are checked before the nudge branch: every parking line
+        # the agent writes is indented (``   [parking: ...]``), so it also
+        # matches NUDGE_LINE_RE. Classifying it as a guard trip would lose the
+        # parked outcome entirely.
+        if _PARKING_RE.search(line) is not None:
+            if parked_reason is None:
+                parked_reason = line.strip()[:200]
+            continue
+
         nudge_match = NUDGE_LINE_RE.match(line)
         if nudge_match is not None:
             label = _normalize_label(nudge_match.group(1))
             guard_trips[label] = guard_trips.get(label, 0) + 1
             continue
-
-        if parked_reason is None and _PARKING_RE.search(line):
-            parked_reason = line.strip()[:200]
 
     if done_summary is not None:
         outcome = "done"

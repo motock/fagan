@@ -978,7 +978,7 @@ def test_summary_lists_every_section():
 def test_summary_never_contains_a_secret_sentinel():
     result = _summary_result(
         changed={"PLANE_API_KEY": "***", "PIPELINE_AUTONOMY": "dry-run"},
-        errors=[f"PLANE_API_KEY: could not be validated"],
+        errors=["PLANE_API_KEY: could not be validated"],
     )
 
     text = wizard.render_summary(result)

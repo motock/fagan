@@ -53,6 +53,9 @@ SECTION_ORDER: tuple[str, ...] = (
 #: The default dashboard port. Never 8000: that is the dev server's port.
 DEFAULT_PORT = 8001
 
+#: The default data directory the core prompt offers.
+DEFAULT_DATA_DIR = "~/.claude"
+
 #: The routing preset a fresh non-interactive install applies.
 DEFAULT_PRESET = "claude"
 
@@ -378,10 +381,9 @@ def _apply_flag_changes(flags: Mapping, changes: dict, preserve: dict, errors: l
             preserve.pop(key, None)
 
     for key, flag in (("REPO_ROOT", "repo_root"), ("PIPELINE_AUTONOMY", "autonomy")):
-        value = flags.get(flag)
-        if value is None:
+        if flags.get(flag) is None:
             continue
-        ok, normalized = _normalize(key, str(value))
+        ok, normalized = _normalize(key, str(flags[flag]))
         if not ok:
             errors.append(f"{key}: {normalized}")
             continue
@@ -600,22 +602,27 @@ def _ask_keys(keys: Sequence[str], current, *, kinds: Mapping | None = None) -> 
 
 def _ask_core(current: Mapping[str, str], *, flags: dict) -> dict:
     """Ask the curated core questions."""
-    answers = _ask_keys(("PLAN_DIR",), current)
+    data_dir = ui.prompt_value(
+        "Data directory (plans and worktrees live under it)",
+        kind="text",
+        default=DEFAULT_DATA_DIR,
+        validate=lambda raw: _schema.validate_value("PLAN_DIR", raw),
+    )
+    answers: dict[str, str] = {}
+    if data_dir:
+        answers["PLAN_DIR"] = str(Path(data_dir) / "plans")
+        answers["WORKTREE_ROOT"] = str(Path(data_dir) / "worktrees")
     if _offers_repo_root():
         target = ui.prompt_value(
             "Target project directory (blank leaves REPO_ROOT unset)",
-            kind="text",
-            default="",
+            kind="text", default="",
             validate=lambda raw: _schema.validate_value("REPO_ROOT", raw)
-            if raw
-            else (True, ""),
+            if raw else (True, ""),
         )
         if target:
             answers["REPO_ROOT"] = target
     answers["port"] = ui.prompt_value(
-        "Dashboard port",
-        kind="text",
-        default=str(flags.get("port", DEFAULT_PORT)),
+        "Dashboard port", kind="text", default=str(flags.get("port", DEFAULT_PORT)),
         validate=lambda raw: _schema.validate_value("PIPELINE_NOTIFY_EMAIL_PORT", raw),
     )
     return answers
@@ -633,18 +640,15 @@ def _offers_repo_root() -> bool:
 def _ask_routing(current: Mapping[str, str], *, state: Mapping[str, object]) -> dict:
     """Ask the preset, and for ``custom`` one role plus a declared pair."""
     preset = ui.prompt_value(
-        "Routing preset",
-        kind="choice",
-        default=current.get("preset") or DEFAULT_PRESET,
-        choices=providers.PRESETS,
+        "Routing preset", kind="choice",
+        default=current.get("preset") or DEFAULT_PRESET, choices=providers.PRESETS,
     )
     if preset != "custom":
         return {"preset": preset}
     from pipeline.config_provenance import PIPELINE_ROLES
 
     role = ui.prompt_value(
-        "Role to route", kind="choice", default=PIPELINE_ROLES[0],
-        choices=PIPELINE_ROLES,
+        "Role to route", kind="choice", default=PIPELINE_ROLES[0], choices=PIPELINE_ROLES
     )
     pairs = _declared_pairs(_registry_data(state))
     if not pairs:
@@ -691,11 +695,11 @@ def _ask_notifications(current: Mapping[str, str]) -> dict:
 
 def _ask_integrations(current: Mapping[str, str]) -> dict:
     """Ask the Plane opt-in, then its settings and the ticket provider."""
-    if ui.ask_yes_no("Enable the Plane integration?", default=False):
-        answers = _ask_keys(_PLANE_PROMPTS, current)
-        answers["PIPELINE_TICKET_PROVIDER"] = "plane"
-        return answers
-    return _ask_keys(_INTEGRATION_PROMPTS, current)
+    if not ui.ask_yes_no("Enable the Plane integration?", default=False):
+        return _ask_keys(_INTEGRATION_PROMPTS, current)
+    answers = _ask_keys(_PLANE_PROMPTS, current)
+    answers["PIPELINE_TICKET_PROVIDER"] = "plane"
+    return answers
 
 
 def _prompt_label(key: str) -> str:
@@ -961,10 +965,8 @@ def render_summary(result: Mapping[str, object]) -> str:
         lines.append("Errors:")
         lines.extend(f"  {error}" for error in errors)
         lines.append("")
-
     if _summary_autonomy(result) == "dry-run":
-        lines.append(describe_autonomy("dry-run"))
-        lines.append("")
+        lines.extend([describe_autonomy("dry-run"), ""])
 
     lines.append("Next steps:")
     lines.extend(f"  - {step}" for step in _summary_next_steps(result))

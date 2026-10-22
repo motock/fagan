@@ -1091,3 +1091,33 @@ def test_default_adapter_core_prompt_asks_for_a_data_directory(monkeypatch):
     assert any(default == "~/.claude" for _label, default in asked)
     assert answers["PLAN_DIR"] == "/tmp/agent-data/plans"
     assert answers["WORKTREE_ROOT"] == "/tmp/agent-data/worktrees"
+
+
+def test_declining_advanced_gates_names_set_as_the_way_to_change_them():
+    def ask(name, current):
+        if name == "policy":
+            return {"PIPELINE_AUTONOMY": "gated"}
+        return {}
+
+    plan = wizard.build_plan(
+        make_args(), state=make_state(), interactive=True, ask=ask
+    )
+
+    assert any("--set" in step for step in plan["next_steps"])
+    assert "PIPELINE_DAILY_REQUEST_THRESHOLD" not in plan["changes"]
+
+
+def test_accepting_advanced_gates_records_the_thresholds():
+    def ask(name, current):
+        if name == "policy":
+            return {
+                "PIPELINE_AUTONOMY": "gated",
+                "PIPELINE_DAILY_REQUEST_THRESHOLD": "500",
+            }
+        return {}
+
+    plan = wizard.build_plan(
+        make_args(), state=make_state(), interactive=True, ask=ask
+    )
+
+    assert plan["changes"]["PIPELINE_DAILY_REQUEST_THRESHOLD"] == "500"

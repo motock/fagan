@@ -19,7 +19,9 @@ services, and health verification).
 model provider: `Local_LLM_Port_Plan.md`, `Port_to_local_LLM.md`,
 `MODEL_PROVIDER_ABSTRACTION_PLAN.md`, `CLAUDE_BACKEND_PROVIDER_ISOLATION_PLAN.md`,
 `MLX_DEFAULT_PROVIDER_PLAN.md`, `MLX_TOOL_FORMAT_SUPPORT_PLAN.md`,
-`TICKETING_ABSTRACTION_PLAN.md`, `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`.
+`TICKETING_ABSTRACTION_PLAN.md`, `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`,
+`FORGE_ABSTRACTION_PLAN.md` (**draft, not started** — makes the GitHub PR/CI
+layer pluggable so GitLab and Bitbucket hosts can use the merge gate).
 
 **Dispatch quality, TDD, and reliability** — the gates that make cheap local
 dispatch trustworthy: `ALWAYS_ON_CHECKLIST_AND_TDD_SPLIT_PLAN.md`,

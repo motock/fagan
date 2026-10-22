@@ -105,6 +105,34 @@ def test_indented_parking_line_is_not_counted_as_a_guard_trip() -> None:
     assert score["guard_trips"] == {}
 
 
+def test_guard_message_step_numbers_count_toward_steps() -> None:
+    """Guard/outcome lines carry a step prefix but no ``tool:`` shape.
+
+    Regression guard: only ``[step N] tool: arg`` and DONE lines used to advance
+    the step count, so a run that parked at step 4 reported steps=2 and an
+    understated productive_ratio.
+    """
+    score = s.parse_agent_log(
+        _log(
+            BOOT,
+            "[step 2] view_file: a.py",
+            "[step 4] no successful edit in 30 steps "
+            "(last progress at step 2); parking",
+        )
+    )
+
+    assert score["steps"] == 4
+    assert score["outcome"] == "parked"
+    assert "no successful edit" in score["parked_reason"]
+
+
+def test_done_summary_strips_a_trailing_correlation_id() -> None:
+    score = s.parse_agent_log(_log("[step 3] DONE: shipped it [cid=abc123]"))
+
+    assert score["done_summary"] == "shipped it"
+    assert score["correlation_id"] == "abc123"
+
+
 def test_guard_trip_labels_group_across_digit_differences() -> None:
     score = s.parse_agent_log(
         _log(
@@ -133,7 +161,11 @@ def test_malformed_and_unrelated_lines_are_ignored() -> None:
         )
     )
 
-    assert score["steps"] == 0
+    # ``[step 7] NotATool:`` is not a tool line (the tool name is not
+    # ``[a-z_]+``), so it contributes no tool count — but its step prefix is a
+    # real step number, and the scorecard counts the highest step on ANY
+    # ``[step N]`` line.
+    assert score["steps"] == 7
     assert score["tool_counts"] == {}
     assert score["guard_trips"] == {}
     assert score["outcome"] == "unknown"

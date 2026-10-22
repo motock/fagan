@@ -23,6 +23,7 @@ __all__ = [
     "DONE_LINE_RE",
     "NUDGE_LINE_RE",
     "STEP_LINE_RE",
+    "STEP_PREFIX_RE",
     "format_boot",
     "format_done",
     "format_step",
@@ -33,6 +34,8 @@ STEP_LINE_RE = re.compile(r"^\[step (\d+)\] ([a-z_]+): ?(.*)$")
 DONE_LINE_RE = re.compile(r"^\[step (\d+)\] DONE: (.*)$")
 BOOT_LINE_RE = re.compile(r"^\[boot\] (.*)$")
 NUDGE_LINE_RE = re.compile(r"^\s+\[([^\]]+)\]\s*$")
+# Any line that starts with a step prefix, including guard/outcome messages.
+STEP_PREFIX_RE = re.compile(r"^\[step (\d+)\]")
 
 
 def format_boot(

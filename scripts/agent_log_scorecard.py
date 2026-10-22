@@ -34,6 +34,7 @@ from pipeline.agent_log_format import (
     DONE_LINE_RE,
     NUDGE_LINE_RE,
     STEP_LINE_RE,
+    STEP_PREFIX_RE,
 )
 
 # Tools whose effect is a file mutation. ``bash`` is deliberately excluded: the
@@ -117,6 +118,13 @@ def parse_agent_log(text: str) -> dict:
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
 
+        # Guard and outcome messages also carry a step prefix (e.g.
+        # ``[step 4] no successful edit in 30 steps ...; parking``), so the
+        # highest step number on ANY ``[step N]`` line is the run's step count.
+        prefix_match = STEP_PREFIX_RE.match(line)
+        if prefix_match is not None:
+            steps = max(steps, int(prefix_match.group(1)))
+
         boot_match = BOOT_LINE_RE.match(line)
         if boot_match is not None:
             if boot is None:
@@ -125,8 +133,6 @@ def parse_agent_log(text: str) -> dict:
 
         done_match = DONE_LINE_RE.match(line)
         if done_match is not None:
-            step = int(done_match.group(1))
-            steps = max(steps, step)
             # ``format_done`` appends a trailing ``[cid=<hex>]`` when the run
             # has a correlation id; it is reported separately, so keep it out
             # of the human-readable summary.
@@ -138,7 +144,6 @@ def parse_agent_log(text: str) -> dict:
         if step_match is not None:
             step = int(step_match.group(1))
             tool = step_match.group(2)
-            steps = max(steps, step)
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
             if tool in MUTATING_TOOLS:
                 mutation_step_numbers.add(step)

@@ -1100,7 +1100,8 @@ def test_declining_advanced_gates_names_set_as_the_way_to_change_them():
         return {}
 
     plan = wizard.build_plan(
-        make_args(), state=make_state(), interactive=True, ask=ask
+        make_args(), state=make_state(env={"PIPELINE_AUTONOMY": "gated"}),
+        interactive=True, ask=ask,
     )
 
     assert any("--set" in step for step in plan["next_steps"])

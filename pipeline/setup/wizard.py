@@ -71,6 +71,12 @@ MASK = "***"
 #: The manual MCP registration command, shown when the automatic one failed.
 MCP_MANUAL_COMMAND = "claude mcp add -s user pipeline <python> <repo>/server.py"
 
+#: Named when the operator declines the advanced-gates branch.
+_ADVANCED_GATES_STEP = (
+    "Change the usage thresholds, pause/resume gates, escalation backend/model, "
+    "or security-audit cadence later with --set KEY=VALUE."
+)
+
 #: The two next steps every summary ends with.
 RESTART_STEP = "Restart Claude Code so it picks up the registered server."
 TEST_STEP = "Run .venv/bin/python -m pytest -q"
@@ -278,6 +284,7 @@ def build_plan(
         _collect_interactive(
             ask=ask, state=state, enabled=enabled, changes=changes,
             preserve=preserve, routing=routing, errors=errors, flags=flags,
+            next_steps=next_steps,
         )
 
     if fresh and "REPO_ROOT" not in changes:
@@ -285,6 +292,7 @@ def build_plan(
             "Set the managed repository with --repo-root <path> (or pick it in "
             "the dashboard workspace picker)."
         )
+
 
     return {
         "interactive": interactive,
@@ -304,11 +312,9 @@ def _build_flags(args, errors: list[str]) -> dict:
         port = DEFAULT_PORT
     else:
         ok, normalized = _normalize_port(port)
+        port = normalized if ok else DEFAULT_PORT
         if not ok:
             errors.append(normalized)
-            port = DEFAULT_PORT
-        else:
-            port = normalized
 
     resolved: dict[str, object] = {"port": port}
     for name, flag in (("data_dir", "--data-dir"), ("repo_root", "--repo-root")):
@@ -444,7 +450,8 @@ def _plan_explicit_choice(*, role, provider, model, routing, errors) -> None:
 # -- interactive collection -------------------------------------------------
 
 
-def _collect_interactive(*, ask, state, enabled, changes, preserve, routing, errors, flags) -> None:
+def _collect_interactive(*, ask, state, enabled, changes, preserve, routing, errors,
+                         flags, next_steps) -> None:
     """Ask once per enabled section and fold the answers into the plan."""
     adapter = ask if ask is not None else _default_ask(state=state, flags=flags)
     data = _registry_data(state)
@@ -463,6 +470,7 @@ def _collect_interactive(*, ask, state, enabled, changes, preserve, routing, err
         _fold_answers(
             name, answers, changes=changes, preserve=preserve, routing=routing,
             errors=errors, flags=flags, data=data, enabled=enabled,
+            next_steps=next_steps,
         )
 
 
@@ -490,7 +498,8 @@ def _current_for(name: str, *, changes, preserve, flags) -> dict:
     return current
 
 
-def _fold_answers(name, answers, *, changes, preserve, routing, errors, flags, data, enabled) -> None:
+def _fold_answers(name, answers, *, changes, preserve, routing, errors, flags, data,
+                  enabled, next_steps) -> None:
     if name == "routing":
         _fold_routing(answers, routing=routing, data=data, errors=errors)
         return
@@ -508,6 +517,8 @@ def _fold_answers(name, answers, *, changes, preserve, routing, errors, flags, d
         if answers.get("install") is not None:
             enabled["claude_assets"] = bool(answers["install"])
         return
+    if name == "policy" and not any(k in answers for k in _ADVANCED_POLICY_KEYS):
+        next_steps.append(_ADVANCED_GATES_STEP)
 
     for key, raw in answers.items():
         if key == "port":
@@ -591,10 +602,8 @@ def _ask_keys(keys: Sequence[str], current, *, kinds: Mapping | None = None) -> 
         if kind == "choice" and default not in spec.choices:
             default = spec.choices[0]
         answers[key] = ui.prompt_value(
-            _prompt_label(key),
-            kind="secret" if key in _SECRETS else kind,
-            default=default,
-            choices=spec.choices,
+            _prompt_label(key), kind="secret" if key in _SECRETS else kind,
+            default=default, choices=spec.choices,
             validate=lambda raw, k=key: _schema.validate_value(k, raw),
         )
     return answers
@@ -603,8 +612,7 @@ def _ask_keys(keys: Sequence[str], current, *, kinds: Mapping | None = None) -> 
 def _ask_core(current: Mapping[str, str], *, flags: dict) -> dict:
     """Ask the curated core questions."""
     data_dir = ui.prompt_value(
-        "Data directory (plans and worktrees live under it)",
-        kind="text",
+        "Data directory (plans and worktrees live under it)", kind="text",
         default=DEFAULT_DATA_DIR,
         validate=lambda raw: _schema.validate_value("PLAN_DIR", raw),
     )
@@ -614,8 +622,8 @@ def _ask_core(current: Mapping[str, str], *, flags: dict) -> dict:
         answers["WORKTREE_ROOT"] = str(Path(data_dir) / "worktrees")
     if _offers_repo_root():
         target = ui.prompt_value(
-            "Target project directory (blank leaves REPO_ROOT unset)",
-            kind="text", default="",
+            "Target project directory (blank leaves REPO_ROOT unset)", kind="text",
+            default="",
             validate=lambda raw: _schema.validate_value("REPO_ROOT", raw)
             if raw else (True, ""),
         )
@@ -630,8 +638,7 @@ def _ask_core(current: Mapping[str, str], *, flags: dict) -> dict:
 
 def _offers_repo_root() -> bool:
     try:
-        here = Path.cwd().resolve()
-        checkout = Path(__file__).resolve().parents[2]
+        here, checkout = Path.cwd().resolve(), Path(__file__).resolve().parents[2]
     except (OSError, IndexError):
         return False
     return (here / ".git").exists() and here != checkout
@@ -654,9 +661,8 @@ def _ask_routing(current: Mapping[str, str], *, state: Mapping[str, object]) -> 
     if not pairs:
         return {"preset": "custom", "role": role}
     labels = [f"{provider}/{model}" for provider, model in pairs]
-    chosen = ui.prompt_value(
-        "Provider/model", kind="choice", default=labels[0], choices=labels
-    )
+    chosen = ui.prompt_value("Provider/model", kind="choice", default=labels[0],
+                             choices=labels)
     provider, _, model = str(chosen).partition("/")
     return {"preset": "custom", "role": role, "provider": provider, "model": model}
 
@@ -676,10 +682,8 @@ def _declared_pairs(data: Mapping[str, object]) -> list[tuple[str, str]]:
 def _ask_notifications(current: Mapping[str, str]) -> dict:
     """Ask the outbox gate, then the email gate and its settings."""
     answers: dict[str, str] = {}
-    outbox = ui.ask_yes_no(
-        "Write pipeline events to the outbox?",
-        default=current.get("PIPELINE_NOTIFY_OUTBOX_ENABLED") == "1",
-    )
+    outbox = ui.ask_yes_no("Write pipeline events to the outbox?",
+                           default=current.get("PIPELINE_NOTIFY_OUTBOX_ENABLED") == "1")
     answers["PIPELINE_NOTIFY_OUTBOX_ENABLED"] = "1" if outbox else "0"
     if outbox:
         answers.update(_ask_keys(("PIPELINE_NOTIFY_OUTBOX_EVENTS",), current))
@@ -834,11 +838,11 @@ def _dry_run(*, changes, sections, output, next_steps) -> dict:
     for key, value in changes.items():
         output(f"{key}={_mask(key, value)}")
     for entry in sections:
-        name = entry.get("name")
+        name, reason = entry.get("name"), entry.get("reason") or "disabled"
         if entry.get("enabled"):
             output(f"section {name}: enabled")
         else:
-            output(f"section {name}: skipped ({entry.get('reason') or 'disabled'})")
+            output(f"section {name}: skipped ({reason})")
     return {
         "applied": False, "dry_run": True, "planned": _masked(changes),
         "sections": [dict(entry) for entry in sections],
@@ -894,10 +898,8 @@ def _record_service_health(result: dict, flags: Mapping, failures: list[str]) ->
         return
     result["health"] = health
     if not health.get("healthy"):
-        failures.append(
-            "the dashboard did not answer its health check: "
-            + str(health.get("reason") or "unknown reason")
-        )
+        reason = str(health.get("reason") or "unknown reason")
+        failures.append(f"the dashboard did not answer its health check: {reason}")
 
 
 def _verify_health(port: int) -> dict:
@@ -915,20 +917,13 @@ def _verify_health(port: int) -> dict:
 
 
 def _record_applier_failures(result: dict, failures: list[str]) -> None:
-    assets = result.get("assets")
-    mcp = assets.get("mcp") if isinstance(assets, Mapping) else None
-    if isinstance(mcp, Mapping) and mcp.get("status") == "failed":
-        failures.append(
-            "registering the MCP server failed: "
-            + str(mcp.get("error") or "unknown error")
-        )
-    started = result.get("services")
-    render = started.get("render") if isinstance(started, Mapping) else None
-    if isinstance(render, Mapping) and render.get("status") == "failed":
-        failures.append(
-            "rendering the service definitions failed: "
-            + str(render.get("error") or "unknown error")
-        )
+    for block, label in (
+        (_mcp_block(result), "registering the MCP server"),
+        (_render_block(result), "rendering the service definitions"),
+    ):
+        if block is not None and block.get("status") == "failed":
+            error = str(block.get("error") or "unknown error")
+            failures.append(f"{label} failed: {error}")
 
 
 # -- render_summary ---------------------------------------------------------
@@ -947,11 +942,11 @@ def render_summary(result: Mapping[str, object]) -> str:
     if sections:
         lines.append("Sections:")
         for entry in sections:
+            name, reason = entry.get("name"), entry.get("reason") or "disabled"
             if entry.get("enabled"):
-                lines.append(f"  {entry.get('name')}: enabled")
+                lines.append(f"  {name}: enabled")
             else:
-                reason = entry.get("reason") or "disabled"
-                lines.append(f"  {entry.get('name')}: skipped ({reason})")
+                lines.append(f"  {name}: skipped ({reason})")
         lines.append("")
 
     changed = dict(result.get("changed") or result.get("planned") or {})
@@ -988,12 +983,16 @@ def _mcp_block(result: Mapping[str, object]) -> Mapping | None:
     return mcp if isinstance(mcp, Mapping) else None
 
 
+def _render_block(result: Mapping[str, object]) -> Mapping | None:
+    started = result.get("services")
+    render = started.get("render") if isinstance(started, Mapping) else None
+    return render if isinstance(render, Mapping) else None
+
+
 def _summary_next_steps(result: Mapping[str, object]) -> list[str]:
     steps = [str(step) for step in result.get("next_steps") or ()]
     mcp = _mcp_block(result)
     if mcp is not None and mcp.get("status") in ("failed", "skipped"):
         manual = mcp.get("manual") or MCP_MANUAL_COMMAND
         steps.append(f"Register the MCP server by hand: {manual}")
-    steps.append(RESTART_STEP)
-    steps.append(TEST_STEP)
-    return steps
+    return steps + [RESTART_STEP, TEST_STEP]

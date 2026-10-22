@@ -49,6 +49,16 @@ Semantics and deliberate choices:
   `full` autonomy, so these parks stay parked until the human acts.
 - Naming follows the sibling opt-out flags `PIPELINE_MERGE_CI_GATE` /
   `PIPELINE_MERGE_BUILD_GATE`.
+- The parked notification embeds the PR URL (confirmed 2026-10-21).
+  Implementation is a message change in
+  `pipeline/advance_merge.py::_adjudicate_merges`'s park branch — append
+  `story["pr_url"]` to the `story_parked` notice text when present. This
+  covers every park reason (high-risk holds included), which is the point:
+  a human about to review a held PR needs the link. `_notify_user`'s fixed
+  kwargs (`persistence.py:201`) are deliberately NOT extended — the
+  `# Forward the optional dispatch context` loop and the record/bus payload
+  shapes stay untouched; the URL rides in the free-text message that the
+  log, record and bus payload already carry.
 
 ## Implementer tier assumption
 
@@ -71,8 +81,8 @@ preflight on both stories before ingesting.
           "key": "AUTO-MERGE-FLAG-1",
           "summary": "Add PIPELINE_AUTO_MERGE off-switch to the unattended merge gate",
           "risk": "medium",
-          "files": ["pipeline/config.py", "pipeline/merge.py", "pipeline/config_provenance.py"],
-          "agent_instructions": "Add a new env var PIPELINE_AUTO_MERGE (default \"1\"): read it in pipeline/config.py alongside PIPELINE_AUTONOMY (pattern: os.environ.get(\"PIPELINE_AUTO_MERGE\", \"1\") != \"0\"), export it in that module's __all__, and add an EnvVarSpec(\"PIPELINE_AUTO_MERGE\", \"1\") entry in pipeline/config_provenance.py. In pipeline/merge.py::_merge_decision, insert immediately after the PIPELINE_AUTONOMY == \"dry-run\" check and BEFORE any risk/threshold handling: `if not PIPELINE_AUTO_MERGE: return {\"action\": \"park\", \"reason\": \"auto-merge disabled (PIPELINE_AUTO_MERGE=0)\"}`. NOTE: merge.py reads PIPELINE_AUTONOMY from pipeline.server via `from .server import ...` inside the function — import PIPELINE_AUTO_MERGE the same way so test monkeypatching on pipeline.server keeps working; also re-export the name from pipeline/server.py's import block (it already imports from pipeline.config) so that import resolves. TDD: write the failing tests FIRST in a new test module following the repo's existing _merge_decision test style. Tests to write (positive AND negative): (1) flag off + APPROVED + risk=low + autonomy=gated -> action park with reason \"auto-merge disabled (PIPELINE_AUTO_MERGE=0)\"; (2) flag off + autonomy=full + risk=high -> park directly WITHOUT invoking the overlord adjudication path (assert _adjudicate_high_risk_merge is never called and no adjudication record is appended); (3) flag off + not-APPROVED story -> existing \"not approved\" park still wins (flag must not mask the verdict); (4) flag unset/default + risk=low -> still merges (regression guard on today's behavior); (5) flag off must NOT affect _approve_merge_impl: the human merge path must still be able to merge (assert _merge_decision is not consulted on that path, or drive _approve_merge_impl with the flag off and a suitable stub). Do NOT modify any existing test; the new behavior is strictly additive and today nothing asserts on PIPELINE_AUTO_MERGE. Success criterion: `.venv/bin/python -m pytest -q` passes and `.venv/bin/python -m ruff check .` is clean."
+          "files": ["pipeline/config.py", "pipeline/merge.py", "pipeline/config_provenance.py", "pipeline/advance_merge.py"],
+          "agent_instructions": "Add a new env var PIPELINE_AUTO_MERGE (default \"1\"): read it in pipeline/config.py alongside PIPELINE_AUTONOMY (pattern: os.environ.get(\"PIPELINE_AUTO_MERGE\", \"1\") != \"0\"), export it in that module's __all__, and add an EnvVarSpec(\"PIPELINE_AUTO_MERGE\", \"1\") entry in pipeline/config_provenance.py. In pipeline/merge.py::_merge_decision, insert immediately after the PIPELINE_AUTONOMY == \"dry-run\" check and BEFORE any risk/threshold handling: `if not PIPELINE_AUTO_MERGE: return {\"action\": \"park\", \"reason\": \"auto-merge disabled (PIPELINE_AUTO_MERGE=0)\"}`. NOTE: merge.py reads PIPELINE_AUTONOMY from pipeline.server via `from .server import ...` inside the function — import PIPELINE_AUTO_MERGE the same way so test monkeypatching on pipeline.server keeps working; also re-export the name from pipeline/server.py's import block (it already imports from pipeline.config) so that import resolves. SECOND CHANGE (same PR): in pipeline/advance_merge.py::_adjudicate_merges' park branch (the `_notify_user(plan_name, f\"{key} parked: {decision['reason']}\" ...)` call), append the story's PR URL to the message when present, e.g. `f\"{key} parked: {decision['reason']}\" + (f\" — {story['pr_url']}\" if story.get(\"pr_url\") else \"\")`, so a human reviewing a held PR gets the link. Do NOT extend _notify_user's kwargs. TDD: write the failing tests FIRST in a new test module following the repo's existing _merge_decision test style. Tests to write (positive AND negative): (1) flag off + APPROVED + risk=low + autonomy=gated -> action park with reason \"auto-merge disabled (PIPELINE_AUTO_MERGE=0)\"; (2) flag off + autonomy=full + risk=high -> park directly WITHOUT invoking the overlord adjudication path (assert _adjudicate_high_risk_merge is never called and no adjudication record is appended); (3) flag off + not-APPROVED story -> existing \"not approved\" park still wins (flag must not mask the verdict); (4) flag unset/default + risk=low -> still merges (regression guard on today's behavior); (5) flag off must NOT affect _approve_merge_impl: the human merge path must still be able to merge (assert _merge_decision is not consulted on that path, or drive _approve_merge_impl with the flag off and a suitable stub); (6) park branch with a story carrying pr_url -> the emitted story_parked notification message contains that URL; (7) park branch with no pr_url -> message unchanged and no dangling separator. Do NOT modify any existing test; the new behavior is strictly additive and today nothing asserts on PIPELINE_AUTO_MERGE. Success criterion: `.venv/bin/python -m pytest -q` passes and `.venv/bin/python -m ruff check .` is clean."
         },
         {
           "key": "AUTO-MERGE-FLAG-2",
@@ -88,14 +98,13 @@ preflight on both stories before ingesting.
 }
 ```
 
-## Open questions to resolve before ingesting
+## Open questions — resolved 2026-10-21
 
-1. Flag name: `PIPELINE_AUTO_MERGE` vs. `PIPELINE_MERGE_REQUIRE_HUMAN`.
-   Drafted as the former (shorter; opt-out shape matches the sibling gates).
-2. Should the flag also cover the scheduler's own merge path if one exists
-   outside `_adjudicate_merges`? Verified 2026-10-21 that
-   `_adjudicate_merges` is the only unattended caller of `_merge_decision`;
-   re-verify at ingest time if the merge module has grown.
-3. Notification copy: the parked notification will read
-   `<key> parked: auto-merge disabled (PIPELINE_AUTO_MERGE=0)` — usable as
-   is, or add the PR URL to the notice body for one-click human review.
+1. Flag name: settled — **`PIPELINE_AUTO_MERGE`** (opt-out shape matching
+   the sibling `PIPELINE_MERGE_*_GATE` flags).
+2. Unattended merge paths outside `_adjudicate_merges`: verified none
+   2026-10-21; re-verify at ingest time if the merge module has grown.
+3. PR URL in the park notification: confirmed yes — implemented as part of
+   story 1 (message change in `_adjudicate_merges`, tests 6-7 above); the
+   parked notice will read
+   `<key> parked: auto-merge disabled (PIPELINE_AUTO_MERGE=0) — <pr_url>`.

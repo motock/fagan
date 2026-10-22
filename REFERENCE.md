@@ -889,13 +889,16 @@ suffix.
 
 ## Agent-log scorecard
 
-`scripts/agent_log_scorecard.py <worktree>/agent.log [--json]` derives a per-run
-scorecard from an agent's log: total steps, per-tool counts, the first step that
-mutated a file, how many steps mutated anything, the productive-step ratio,
-guard trips grouped by normalized label, and the outcome (`done` / `parked` /
-`unknown`) with its done summary or parked reason. The line grammar it reads is
-the one in `pipeline/agent_log_format.py`, so the reader cannot drift from the
-writers. `--json` emits the full record for downstream tooling; exit code 2
+`scripts/agent_log_scorecard.py <worktree>/agent.log [--json]` derives a
+per-attempt scorecard from an agent's log: total steps, per-tool counts, the
+first step that mutated a file, how many steps mutated anything, the productive-
+step ratio, guard trips grouped by normalized label, and the outcome (`done` /
+`parked` / `unknown`) with its done summary or parked reason. It measures the
+LAST attempt in the log, sliced at the final `[boot]` line to match the
+rebrief's `_current_attempt_log` convention, so a resumed run is scored on its
+latest attempt rather than a blend of every attempt. The line grammar it reads
+is the one in `pipeline/agent_log_format.py`, so the reader cannot drift from
+the writers. `--json` emits the full record for downstream tooling; exit code 2
 means the log path does not exist.
 
 ## Test, lint and build commands

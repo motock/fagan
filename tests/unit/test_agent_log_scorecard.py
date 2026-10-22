@@ -238,3 +238,44 @@ def test_main_json_output_is_parseable(tmp_path, capsys) -> None:
     score = json.loads(capsys.readouterr().out)
     assert score["first_mutation_step"] == 1
     assert score["outcome"] == "done"
+
+
+def test_scorecard_measures_only_the_last_attempt() -> None:
+    """``agent.log`` is appended across resumes, so only the last attempt counts.
+
+    Regression guard: without the ``[boot]`` slice the whole log is scored as
+    one run, so a story whose first attempt parked and whose resume succeeded
+    reported outcome "parked" and mixed both attempts' totals.
+    """
+    score = s.parse_agent_log(
+        _log(
+            BOOT,
+            "[step 1] view_file: a.py",
+            "   [parking: read-heavy]",
+            "[boot] pid=456 model=other:7b steps=60",
+            "[step 1] create_file: b.py",
+            "[step 2] DONE: recovered",
+        )
+    )
+
+    assert score["outcome"] == "done"
+    assert score["done_summary"] == "recovered"
+    assert score["steps"] == 2
+    assert score["tool_counts"] == {"create_file": 1}
+    assert score["guard_trips"] == {}
+    assert score["boot"]["pid"] == "456"
+    assert score["boot"]["model"] == "other:7b"
+
+
+def test_scorecard_measures_a_bootless_log_whole() -> None:
+    """A partial log that never printed ``[boot]`` must still be scored."""
+    score = s.parse_agent_log(
+        _log(
+            "[step 1] view_file: a.py",
+            "[step 2] create_file: b.py",
+        )
+    )
+
+    assert score["steps"] == 2
+    assert score["tool_counts"] == {"create_file": 1, "view_file": 1}
+    assert score["boot"] is None

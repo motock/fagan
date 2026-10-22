@@ -1,4 +1,4 @@
-"""Per-run scorecard derived from an ``agent.log``.
+"""Per-attempt scorecard derived from an ``agent.log``.
 
 Mode 36's retro process reconstructs run quality from notification records and
 manifest state, while ``agent.log`` already records every step the agent took
@@ -7,6 +7,11 @@ it measures how many steps a run took, which tools it used, when it first
 mutated a file, how much of the run was productive (mutation) work rather than
 reading, which guard nudges fired and how often, and how the run ended. That is
 Mode 36's deferred per-run measurement item; no agent-loop code changes.
+
+The scorecard measures the LAST attempt in the log, matching the rebrief's
+``[boot]``-slice convention: ``agent.log`` is appended across resumes, so a
+resumed story is scored on its latest attempt rather than a blend of all of
+them.
 
 Usage::
 
@@ -104,13 +109,35 @@ def _correlation_id(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _last_attempt(text: str) -> str:
+    """Return only the final attempt's lines from an appended ``agent.log``.
+
+    ``agent.log`` is appended across resumes (REFERENCE.md), so one file can
+    hold several attempts. ``pipeline/rebrief.py``'s ``_current_attempt_log``
+    slices at the FINAL ``[boot]`` line before measuring an attempt; this
+    reader follows the same convention so a resumed story is scored on its
+    latest attempt instead of a blend of all of them.
+
+    A log with no ``[boot]`` line (malformed or partial) is returned whole:
+    the scorecard must still produce a result for it.
+    """
+    lines = text.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].strip().startswith("[boot]"):
+            return "\n".join(lines[index:])
+    return text
+
+
 def parse_agent_log(text: str) -> dict:
     """Return the scorecard for one ``agent.log`` body.
+
+    Only the LAST attempt in the log is measured (see ``_last_attempt``).
 
     Malformed or unrelated lines are ignored rather than raising: this is a
     reader over logs written by several producers, so it must never fail on
     input it does not recognize.
     """
+    text = _last_attempt(text)
     boot: dict | None = None
     steps = 0
     tool_counts: dict[str, int] = {}
@@ -172,9 +199,10 @@ def parse_agent_log(text: str) -> dict:
             guard_trips[label] = guard_trips.get(label, 0) + 1
             continue
 
-    # A parking marker is the run's terminal verdict: the agent stopped itself,
-    # so a DONE line that follows (or precedes) it must not mask the parked
-    # outcome.
+    # A parking marker is the attempt's terminal verdict: the agent stopped
+    # itself, so a DONE line that follows (or precedes) it must not mask the
+    # parked outcome. The scope here is a single attempt (see ``_last_attempt``),
+    # so parking and DONE are mutually exclusive in practice.
     if parked_reason is not None:
         outcome = "parked"
     elif done_summary is not None:

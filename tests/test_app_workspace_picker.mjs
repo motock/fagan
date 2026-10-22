@@ -28,10 +28,10 @@
 //     (existing renderWorkspaceList convention).
 //   - renderWorkspacePicker renders an explicit empty-state string (the
 //     existing 'empty-state' class convention) for a non-array or [].
-//   - index.html contains the workspace picker markup: #workspace-nav,
-//     #workspace-view, #workspace-form, #workspace-path-input,
-//     #workspace-create, #workspace-select (membership only — never
-//     asserted against the full file).
+//   - index.html contains the workspace picker markup: #workspace-view,
+//     #workspace-form, #workspace-path-input, #workspace-create,
+//     #workspace-select (membership only — never asserted against the full
+//     file).
 //
 // CUMULATIVE-ARTIFACT NOTE: workspace.js's export list is shared with
 // tests/test_app_workspace.mjs, which asserts the three original exports
@@ -328,7 +328,6 @@ await run("index.html contains the workspace picker markup", async () => {
   const html = readFileSync(new URL("../static/index.html", import.meta.url), "utf8");
   for (const id of [
     "workspace-view",
-    "workspace-nav",
     "workspace-form",
     "workspace-path-input",
     "workspace-create",

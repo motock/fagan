@@ -711,6 +711,8 @@ Graceful degradation for optional components — absence is never an error:
 }
 ```
 
+- `blocked_by` (optional story field) — list of `"<plan>:<story_key>"` cross-plan prerequisites; validated at ingest (shape only, existence is not checked) and refreshed on re-ingest.
+
 - `repo_root` — **absolute path to this plan's git repo, required.**
   `ingest_plan` validates it's present and is an existing directory before
   doing anything else (no Plane calls on failure) and carries it into the

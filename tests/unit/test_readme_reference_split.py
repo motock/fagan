@@ -102,6 +102,15 @@ _PATCH_PLAN_BULLET = (
     '  held it returns `{ok: true, skipped: "locked"}` without touching the manifest.'
 )
 
+# XP-3 added the `blocked_by` story field to the "Plan / story schema" section;
+# the pre-split README predates it, so the verbatim guard normalizes this line
+# away and separately requires it to be present.
+_BLOCKED_BY_SCHEMA_LINE = (
+    '- `blocked_by` (optional story field) — list of `"<plan>:<story_key>"` '
+    "cross-plan prerequisites; validated at ingest (shape only, existence is "
+    "not checked) and refreshed on re-ingest."
+)
+
 # RSGF-1 changed review_story's unchanged-SHA skip to additionally require an
 # unchanged reviewing-logic fingerprint, and documented the new
 # `last_reviewed_logic_fingerprint` manifest key in the "MCP tools reference"
@@ -751,6 +760,9 @@ def test_moved_section_body_is_verbatim(title):
             reference_body = reference_body.replace(
                 "\n\n" + _STORY_DIFF_PARAGRAPH, ""
             )
+        if title == "Plan / story schema":
+            assert _BLOCKED_BY_SCHEMA_LINE in reference_body
+            reference_body = reference_body.replace("\n\n" + _BLOCKED_BY_SCHEMA_LINE, "")
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

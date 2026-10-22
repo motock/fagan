@@ -696,7 +696,7 @@ _INGEST_AUTHORED_STORY_FIELDS = (
     "risk",
     "backend",
     "tdd_split",
-    "files",
+    "files", "blocked_by",
 )
 
 # Valid story["backend"] values at ingest time: every registered driver name
@@ -721,7 +721,7 @@ def ingest_plan(
     than replacing it: epics/stories not touched this call (including everything
     only_epics excludes) are preserved verbatim, a story whose key already exists gets
     its authored fields (summary, agent_instructions, dependencies, persona, model,
-    acceptance, risk (only while todo), backend, tdd_split, files) refreshed while its
+    acceptance, risk (only while todo), backend, tdd_split, files, blocked_by) refreshed while its
     runtime state (status, pr_url, escalated, ...) is kept, and top-level manifest
     keys outside epics/stories/repo_root (paused, local_model_fallback,
     final_rework_escalation, ...) carry over untouched. Pass overwrite=True to restore

@@ -232,6 +232,39 @@ def _security_review_unenforced_warning(story) -> str | None:
     )
 
 
+_BLOCKED_BY_REF_RE = re.compile(r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+$")
+
+
+def _blocked_by_error(story: dict) -> str | None:
+    """Return an error string when ``story["blocked_by"]`` is invalid, else None.
+
+    ``blocked_by`` (optional) lists cross-plan prerequisites as
+    ``"<plan>:<story_key>"`` strings. Absent or ``None`` is valid. Otherwise it
+    must be a list whose every entry is a string matching
+    ``^[A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+$``: the plan part (before the FIRST
+    colon) is non-empty and colon-free, and the key part is non-empty and may
+    itself contain colons (so ``a:b:c`` is plan ``a``, key ``b:c``). Existence
+    of the referenced plan/story is deliberately not checked here - it may not
+    be ingested yet. The error names the story summary and the offending entry.
+    """
+    blocked_by = story.get("blocked_by")
+    if blocked_by is None:
+        return None
+    summary = story.get("summary", "?")
+    if not isinstance(blocked_by, list):
+        return (
+            f"story {summary!r}: `blocked_by` must be a list of "
+            f"'<plan>:<story_key>' strings, got {blocked_by!r}"
+        )
+    for entry in blocked_by:
+        if not isinstance(entry, str) or not _BLOCKED_BY_REF_RE.fullmatch(entry):
+            return (
+                f"story {summary!r}: `blocked_by` entry must be "
+                f"'<plan>:<story_key>', got {entry!r}"
+            )
+    return None
+
+
 def _files_field_error(story: dict) -> str | None:
     """Return an error string when ``story["files"]`` is invalid, else None.
 
@@ -461,6 +494,9 @@ def _ingest_plan_impl(
             files_error = _files_field_error(story)
             if files_error is not None:
                 return {"ok": False, "error": files_error}
+            blocked_by_error = _blocked_by_error(story)
+            if blocked_by_error is not None:
+                return {"ok": False, "error": blocked_by_error}
             acceptance_error = _acceptance_field_error(story)
             if acceptance_error is not None:
                 return {"ok": False, "error": acceptance_error}
@@ -570,6 +606,10 @@ def _ingest_plan_impl(
                 }
                 if "files" in story and story["files"] is not None:
                     manifest["stories"][issue_id]["files"] = list(story["files"])
+                if story.get("blocked_by") is not None:
+                    manifest["stories"][issue_id]["blocked_by"] = list(
+                        story["blocked_by"]
+                    )
 
         # Translate dependencies expressed as local plan keys into the issue IDs
         # just created. Dependencies that don't match a known local key (e.g.
@@ -599,15 +639,14 @@ def _ingest_plan_impl(
                 for field in _INGEST_AUTHORED_STORY_FIELDS:
                     if field == "risk" and old_story.get("status") != "todo":
                         continue
-                    if field == "files":
-                        # `files` is the only authored field allowed to be
-                        # absent from a re-ingested story: present -> copied;
-                        # absent -> the key is removed (dropping `files` from
-                        # the plan clears it). Every other field is required.
-                        if "files" in new_story:
-                            combined["files"] = new_story["files"]
+                    if field in ("files", "blocked_by"):
+                        # `files` and `blocked_by` are the authored fields
+                        # allowed to be absent from a re-ingested story:
+                        # present -> copied; absent -> the key is removed.
+                        if field in new_story:
+                            combined[field] = new_story[field]
                         else:
-                            combined.pop("files", None)
+                            combined.pop(field, None)
                         continue
                     combined[field] = new_story[field]
                 merged_stories[key] = combined

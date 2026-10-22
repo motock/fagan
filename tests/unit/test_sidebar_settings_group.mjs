@@ -522,6 +522,203 @@ await run("Comms/Overview/PLANS ordering is unchanged", async () => {
   assertTrue(firstPlanRowIdx < settingsIdx, "settings group must come after the plan rows");
 });
 
+// ---------- active workspace basename (SIDEBAR-5) ----------
+//
+// The Workspace item's `.plan-meta` shows the basename of the active
+// repository path, fetched once per render via workspace.js's
+// fetchActiveWorkspace(). The fetch is asynchronous, so every assertion here
+// awaits settle() first: immediately after renderPlanList() returns, the
+// meta line still holds the pre-fetch placeholder.
+
+// Swap the process-wide fetch stub for one that answers /api/workspace with
+// `active` (or rejects when `reject` is true). Returns a restore function so
+// each test leaves the shared stub as it found it.
+function stubActiveWorkspaceFetch({ active = null, reject = false } = {}) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => {
+    if (reject) throw new Error("network down");
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ active }),
+      text: async () => "{}",
+    };
+  };
+  win.fetch = globalThis.fetch;
+  return () => {
+    globalThis.fetch = previous;
+    win.fetch = previous;
+  };
+}
+
+// Flush the microtask queue plus one macrotask tick so the promise chain
+// inside plan-list.js (fetch -> res.json -> DOM update) has fully settled.
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// The Workspace item is distinguished from the Config item by its
+// data-settings="workspace" attribute. The stub's attribute selector only
+// supports presence tests, so filter by value explicitly.
+function workspaceItem() {
+  const group = settingsGroup();
+  assertTrue(group, "expected a [data-sidebar-settings] group in #plan-list");
+  const items = group.querySelectorAll("[data-settings]");
+  const item = items.find((el) => el.getAttribute("data-settings") === "workspace");
+  assertTrue(item, "expected the Workspace settings item");
+  return item;
+}
+
+function workspaceMeta() {
+  const meta = workspaceItem().querySelector(".plan-meta");
+  assertTrue(meta, "expected a .plan-meta line on the Workspace item");
+  return meta;
+}
+
+// The fallback state must carry NO title attribute at all — an empty-string
+// title would still render a tooltip, so assert absence, not emptiness.
+function hasNoTitle(el) {
+  if (typeof el.hasAttribute === "function" && el.hasAttribute("title")) return false;
+  return el.getAttribute("title") === null;
+}
+
+await run("Workspace meta shows the active repo basename and full path title", async () => {
+  const restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/alpha" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "alpha", "Workspace meta text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/alpha", "Workspace meta title");
+  } finally {
+    restore();
+  }
+});
+
+await run("a trailing slash is stripped from the basename but kept in the title", async () => {
+  const restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/alpha/" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "alpha", "Workspace meta text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/alpha/", "Workspace meta title");
+  } finally {
+    restore();
+  }
+});
+
+await run("no active workspace falls back to 'active repo' with no title", async () => {
+  const restore = stubActiveWorkspaceFetch({ active: null });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "active repo", "Workspace meta text");
+    assertTrue(hasNoTitle(meta), "the fallback must not carry a title attribute");
+  } finally {
+    restore();
+  }
+});
+
+await run("a rejected active-workspace fetch falls back without throwing", async () => {
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on("unhandledRejection", onRejection);
+  const restore = stubActiveWorkspaceFetch({ reject: true });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "active repo", "Workspace meta text");
+    assertTrue(hasNoTitle(meta), "the fallback must not carry a title attribute");
+    assertEqual(rejections.length, 0, "no unhandled rejection may escape");
+  } finally {
+    restore();
+    process.removeListener("unhandledRejection", onRejection);
+  }
+});
+
+await run("successive renders replace the basename and clear a stale title", async () => {
+  let restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/alpha" });
+  try {
+    renderOnce();
+    await settle();
+    let meta = workspaceMeta();
+    assertEqual(meta.textContent, "alpha", "call 1 text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/alpha", "call 1 title");
+  } finally {
+    restore();
+  }
+
+  restore = stubActiveWorkspaceFetch({ active: null });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "active repo", "call 2 text");
+    assertTrue(hasNoTitle(meta), "call 2 must drop the previous title");
+  } finally {
+    restore();
+  }
+
+  restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/beta/" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "beta", "call 3 text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/beta/", "call 3 title");
+  } finally {
+    restore();
+  }
+});
+
+await run("a root active path falls back to 'active repo' but keeps its title", async () => {
+  const restore = stubActiveWorkspaceFetch({ active: "/" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "active repo", "root path meta text");
+    assertEqual(meta.getAttribute("title"), "/", "root path keeps the full path as title");
+  } finally {
+    restore();
+  }
+});
+
+// The keyed-diff path (planListRowsByName already populated) is what every
+// poll tick and every workspace switch takes: selectWorkspace() fires the
+// workspace-selected hook -> refresh() -> renderPlanList(plans) WITHOUT a
+// resetPlanListState(). The label must refresh there too, otherwise the
+// Workspace item keeps showing the previous repository's basename.
+await run("the keyed-diff render path refreshes the label after a workspace switch", async () => {
+  let restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/alpha" });
+  try {
+    renderOnce();
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "alpha", "first render text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/alpha", "first render title");
+  } finally {
+    restore();
+  }
+
+  // Second render on the SAME module/DOM state: no resetPlanListState(), no
+  // nav().innerHTML = "" — exactly what _refresh() does after a switch.
+  restore = stubActiveWorkspaceFetch({ active: "/tmp/proj/beta/" });
+  try {
+    planListMod.renderPlanList(SAMPLE_PLANS);
+    await settle();
+    const meta = workspaceMeta();
+    assertEqual(meta.textContent, "beta", "keyed-diff render text");
+    assertEqual(meta.getAttribute("title"), "/tmp/proj/beta/", "keyed-diff render title");
+  } finally {
+    restore();
+  }
+});
+
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok);

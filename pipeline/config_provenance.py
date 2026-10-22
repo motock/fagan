@@ -187,6 +187,7 @@ class EnvVarSpec:
 ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     # Config file env vars
     EnvVarSpec("PIPELINE_AUTONOMY", "gated"),
+    EnvVarSpec("PIPELINE_AUTO_MERGE", "1"),
     EnvVarSpec("PIPELINE_RISK_THRESHOLD", "low"),
     EnvVarSpec("PIPELINE_DEFAULT_MODEL", "sonnet"),
     EnvVarSpec("PIPELINE_PAUSE_THRESHOLD", "90"),

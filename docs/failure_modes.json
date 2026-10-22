@@ -494,5 +494,21 @@
     "status": "FIXED",
     "fix_ref": "7258867 (RH-05) replaces the count pin with a floor and uniqueness test",
     "guard": "monotonic floor + uniqueness test on the dataset (added by this story)"
+  },
+  {
+    "mode": "61",
+    "date": "n/a (catalogued 2026-10-22)",
+    "class": "harness-bug",
+    "status": "NOT fixed (a story carrying an acceptance fixture runs under scripts/local_agent_oracle.py, which reads only REWORK_FULL_SUITE; FULL_SUITE_DONE_BAR is local_agent.py-only, so an oracle-green run can declare done with the full suite red and tests_passed=true)",
+    "fix_ref": "n/a",
+    "guard": "none (gap, not a guard)"
+  },
+  {
+    "mode": "62",
+    "date": "n/a (catalogued 2026-10-22)",
+    "class": "harness-bug",
+    "status": "NOT fixed (dispatch.py excludes the materialized acceptance oracle from the story commit and acceptance_*.py matches no python_files pattern, so a fixture-only story lands with zero CI-visible regression guard)",
+    "fix_ref": "n/a",
+    "guard": "none (gap, not a guard)"
   }
 ]

@@ -350,6 +350,12 @@ the PR/merge path (the pipeline opens and merges PRs through the GitHub CLI),
 and provider authorization for whichever backend is configured — see
 **Provider selection & authorization** above.
 
+### Guided configuration (one command)
+
+`scripts/install.sh` finishes by running `scripts/configure.py`, which detects what is already set up and writes `.pipeline.env`, role routing, and (optionally) background services. It prompts only when both stdin and stdout are TTYs; `--yes` and piped installs (`curl ... | bash`) apply secure defaults and never prompt.
+
+Pass `--dry-run` to print the plan without writing anything. Every flag, key, and default is documented in [`docs/guided-setup.md`](docs/guided-setup.md).
+
 ## Components at a glance
 
 | Piece | Location | Role |
@@ -488,6 +494,8 @@ For a worked end-to-end example of the pipeline developing this repository itsel
 
 For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+For the one-command guided setup (flags, configuration keys, secure defaults, troubleshooting), see [`docs/guided-setup.md`](docs/guided-setup.md).
+
 ## Prerequisites
 
 - **Python 3.11+** and the project venv. CI tests 3.11–3.14 on Ubuntu and
@@ -511,8 +519,8 @@ The committed `launchd/*.plist` files and `launchd/pipeline-logs.newsyslog.conf`
 are a reference copy: they carry the maintainer's own absolute paths (a
 `/Users/<name>/...` home directory, a specific model cache path) and will not
 work unedited on another machine. On a fresh install, regenerate them yourself
-with `scripts/generate_launchd_plists.sh` (install.sh does not run this for
-you) — it fills the templates in `launchd/`
+with `scripts/generate_launchd_plists.sh` (the guided setup renders these for you only when you opt into background
+services) — it fills the templates in `launchd/`
 (`launchd/com.fagan.pipeline.*.plist.template`) from three flags:
 
 - `--repo-root` — the pipeline checkout the rendered files should point at

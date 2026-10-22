@@ -16,6 +16,16 @@ VENV="$ROOT/.venv"
 PYBIN="$VENV/bin/python3"
 REQ="requirements.txt"
 [ "${1:-}" = "--dev" ] && REQ="requirements-dev.txt"
+# --dev may appear in any position; every other argument is forwarded to
+# scripts/configure.py as a space-separated, pre-split flag list.
+CONFIGURE_ARGS=""
+for arg in "$@"; do
+  if [ "$arg" = "--dev" ]; then
+    REQ="requirements-dev.txt"
+  else
+    CONFIGURE_ARGS="${CONFIGURE_ARGS:+$CONFIGURE_ARGS }$arg"
+  fi
+done
 
 echo "==> Pipeline install ($ROOT)"
 
@@ -51,6 +61,15 @@ echo "==> Installing $REQ"
 "$PYBIN" -m pip install --quiet -r "$ROOT/requirements-dashboard.txt"
 echo "==> Python deps installed:"
 "$PYBIN" -m pip list 2>/dev/null | grep -iE '^(mcp|httpx|pytest) ' || true
+
+# CONFIGURE_ARGS is a pre-split flag list, so it is deliberately unquoted.
+if [ -x "$PYBIN" ] && [ -f "$ROOT/scripts/configure.py" ]; then
+  echo "==> Guided configuration"
+  # shellcheck disable=SC2086
+  if ! "$PYBIN" "$ROOT/scripts/configure.py" $CONFIGURE_ARGS; then
+    echo "==> Guided configuration did not complete; re-run: $PYBIN $ROOT/scripts/configure.py" >&2
+  fi
+fi
 
 echo
 echo "==> Done. Next steps:"

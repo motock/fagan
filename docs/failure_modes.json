@@ -188,7 +188,7 @@
     "date": "2026-07-19/20",
     "class": "model-capability",
     "status": "FIXED (non-.py content-loss guard added 2026-10-21; .py keeps its top-level-symbol guard)",
-    "fix_ref": "steering in `pipeline/planner.py` and the `create_file` tool schema; PR #301 (`6380010`) for .py top-level symbols; PR #<n> for the non-.py line-loss guard",
+    "fix_ref": "steering in `pipeline/planner.py` and the `create_file` tool schema; PR #301 (`6380010`) for .py top-level symbols; PR #1155 (`9c27770`) for the non-.py line-loss guard",
     "guard": "tests/unit/test_create_file_nonpy_content_loss.py (both agent variants); tests/test_dropped_top_level_vars.py (`.py`)"
   },
   {
@@ -268,7 +268,7 @@
     "date": "2026-07-22",
     "class": "model-capability + harness-bug",
     "status": "PARTIAL (2026-10-21: write paths reject a trailing omission/truncation marker; non-Ollama provider calls remain single blocking reads with no per-chunk silence bound)",
-    "fix_ref": "PR #232; PR #<n> for the omission-marker guard",
+    "fix_ref": "PR #232; PR #1158 (`19ec536`) for the omission-marker guard",
     "guard": "`test_backend.py` (`test_chat_retries_transient_connect_error_then_succeeds`, `test_chat_retries_5xx_then_succeeds`); tests/unit/test_omission_marker_guard.py"
   },
   {
@@ -404,7 +404,7 @@
     "date": "2026-07-31",
     "class": "plan-authoring + model-capability",
     "status": "REFRAMED (born-broken variant fixed 2026-08-03; base-scoped restore_file added 2026-10-21; oracle-agent drift/churn guards still absent)",
-    "fix_ref": "direct-repair + `pipeline/oracle_gate.py`; PR #<n> for the from_base restore",
+    "fix_ref": "direct-repair + `pipeline/oracle_gate.py`; PR #1157 (`74f0e29`) for the from_base restore",
     "guard": "`test_acceptance_oracle_gate_prior_gate.py` + `test_acceptance_oracle_tamper_append.py`; tests/unit/test_restore_file_from_base.py"
   },
   {
@@ -412,7 +412,7 @@
     "date": "2026-08-05",
     "class": "harness-bug + harness-bug (process)",
     "status": "PARTIAL (2026-10-21: CI-fail rework keeps prior review/diagnosis feedback instead of replacing it; no diagnosis role runs on the CI failure itself)",
-    "fix_ref": "PR #232 + #233; PR #<n> for the feedback merge",
+    "fix_ref": "PR #232 + #233; PR #1156 (`a5033c6`) for the feedback merge",
     "guard": "`test_added_pytest_test_paths.py`; tests/unit/test_ci_rework_feedback_merge.py"
   },
   {

@@ -52,6 +52,7 @@ from app.dashboard_routes import (
     effective_config,
     get_plan,
     get_story_checklist,
+    get_story_diff,
     get_story_journal,
     get_story_log,
     get_story_replay,
@@ -463,6 +464,7 @@ app.get("/api/plans/{plan_name}/stories/{story_key}/journal")(get_story_journal)
 app.get("/api/plans/{plan_name}/stories/{story_key}/log")(get_story_log)
 app.get("/api/plans/{plan_name}/stories/{story_key}/checklist")(get_story_checklist)
 app.get("/api/plans/{plan_name}/stories/{story_key}/replay")(get_story_replay)
+app.get("/api/plans/{plan_name}/stories/{story_key}/diff")(get_story_diff)
 app.get("/api/config")(effective_config)
 app.get("/api/config/providers")(config_providers)
 

@@ -173,6 +173,21 @@ occurrences, same root cause:
   specific string/selector this story must not have introduced), not a
   hash of the whole file that the next sibling will legitimately break.
 
+### CI enforces this: the pin-guard baseline
+
+`tests/unit/test_pin_guard_baseline.py` scans every `tests/**/*.py` with
+`pipeline.pin_guard.scan_source` and fails CI on a NEW pin of any of the three
+shapes: a sha256 literal, an exact enumeration of a cumulative name
+(`__all__`, `*_EXPORTS`, `*_TOOLS`, ...), or an exact count of one. (`.mjs`
+tests are not scanned.) Existing pins are listed in
+`tests/unit/pin_guard_baseline.json` (path -> line numbers). The baseline only
+shrinks: when you remove or re-assert a pin the test also fails on the now-stale
+entry, so delete it from the JSON in the same change.
+
+To add a deliberate exception, add the file and line to the baseline and
+justify it in the PR description (why the artifact will not grow). Adding
+lines to a baselined file shifts line numbers, so re-measure and update them.
+
 ## A blanket "never modify existing tests" instruction breaks when the story legitimately changes a shape an old test pins exactly
 
 Every dispatched agent is told not to modify existing tests (CLAUDE.md's

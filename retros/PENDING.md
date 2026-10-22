@@ -26,6 +26,9 @@ either a plan or a retro write-up. Remove a line once one exists.
 
 _None outstanding_ — the rescoped-commit-message gap (OA2-05) was addressed by the warn-only `pr_title_mismatch` notification (PR #1123).
 
+- `tests/unit/test_scheduler_heartbeat.py::test_worker_outliving_deadline_is_abandoned_at_deadline` is a wall-clock flake: it asserts `0.35 <= elapsed <= 0.55` for a 0.4s join deadline, but `run_once()` joins in heartbeat slices, so the real wall time is deadline plus per-slice scheduling overhead. Measured 0.436–0.597s across 15 parallel full-suite runs (6 over the ceiling), passing in isolation and under artificial CPU load. Needs an upper bound derived from the slice count (or a much looser ceiling); a loosening edit was drafted during the Mode 36 worktree run and reverted because it was outside that story.
+
+
 ## Abandoned plans
 
 Plans stopped before completion. `mark_story_done` never fires for
@@ -88,3 +91,6 @@ if a precise date is needed when writing one of these up.
 - mode32-stall-bound-tests — completed 2026-10-22, 1 story
 
 <!-- Context for mode32-stall-bound-tests' eventual window retro (marker stays until then): PR #1160 (commit 0226d35). Two test files now pin the Ollama streaming read timeout (READ_SILENCE_SECONDS reaches httpx.Timeout.read) and the backend's single global retry deadline (sleeps capped at the remaining role-call budget), in both agent variants where applicable; mutation checks confirmed each fails when its invariant is broken. Process lesson worth keeping: the first version patched the shared stdlib time module (b.time.sleep / b.time.monotonic), which reached pytest, subprocess and httpx inside the same xdist worker and made an unrelated env-sharing test fail on the 3.12 CI job. The merged fix patches b.time with a fake module object, confining the clock to backend_ollama - when faking time in tests, patch the module's reference, never the stdlib module's attributes. -->
+- mode36-agent-log-scorecard — completed 2026-10-22, 1 story
+
+<!-- Context for mode36-agent-log-scorecard's eventual window retro (marker stays until then): PR #1161 (commit 58a36d8). Added scripts/agent_log_scorecard.py (per-attempt steps, tool histogram, first mutation step, productive ratio, guard trips, outcome) plus parse regexes in pipeline/agent_log_format.py; the scorecard slices at the final [boot] like rebrief does, because agent.log is appended across resumes. Two review rounds were needed: round 1 fixed parking-vs-nudge precedence (real parking lines are indented and were counted as guard trips) and cid leakage into done_summary; round 2 counted guard-message step numbers; round 3 added the last-attempt scope. Process notes: (1) a CI-fail rework auto-dispatched and committed an unauthorized loosening of the scheduler heartbeat test - interrupted and reverted, and the flake is now a harness-gap backlog line; (2) master went red on an unrelated docs plan leaking a home path, fixed directly (PR-less docs commit 3ca57b8); (3) the placeholder fix_ref `PR #<n>` on mode 36 still needs #1161. -->

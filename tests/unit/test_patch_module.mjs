@@ -264,8 +264,8 @@ await test("patch.js exports exactly the three required functions", () => {
   const names = Object.keys(m).sort();
   assertEqual(
     names.join(","),
-    "applyPatch,fetchPatchRecord,renderPatchRecord",
-    "patch.js must export exactly renderPatchRecord, fetchPatchRecord, applyPatch",
+    "applyPatch,fetchPatchRecord,renderDiff,renderPatchRecord",
+    "patch.js must export exactly renderPatchRecord, fetchPatchRecord, applyPatch, renderDiff",
   );
   for (const name of names) {
     assertEqual(typeof m[name], "function", `${name} must be a function`);

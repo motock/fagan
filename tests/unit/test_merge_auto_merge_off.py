@@ -134,7 +134,11 @@ def test_flag_off_keeps_not_approved_reason(monkeypatch):
 # 4. Flag unset (parsed default on) + APPROVE + low risk + gated -> merge.
 # --------------------------------------------------------------------------
 def test_flag_unset_defaults_on_and_merges(monkeypatch):
-    monkeypatch.delenv("PIPELINE_AUTO_MERGE", raising=False)
+    # ``DEFAULT_ON`` mirrors what pipeline/config.py parses when the env var is
+    # unset (``os.environ.get("PIPELINE_AUTO_MERGE", "1") != "0"`` -> True).
+    # The function-local import reads the module attribute, so patching the
+    # attribute is what the gate observes; setting the env var here would have
+    # no effect on the outcome.
     _set_flag(monkeypatch, DEFAULT_ON)
 
     result = merge_mod._merge_decision(_story(), "plan-a")
@@ -143,10 +147,13 @@ def test_flag_unset_defaults_on_and_merges(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# 5. Explicit "1" + APPROVE + low risk + gated -> merge.
+# 5. Explicit on + APPROVE + low risk + gated -> merge. ``True`` is what
+#    pipeline/config.py actually produces; the literal "1" is the raw env
+#    spelling and must also stay truthy.
 # --------------------------------------------------------------------------
-def test_flag_explicit_one_merges(monkeypatch):
-    _set_flag(monkeypatch, "1")
+@pytest.mark.parametrize("flag_value", [True, "1"])
+def test_flag_explicit_one_merges(monkeypatch, flag_value):
+    _set_flag(monkeypatch, flag_value)
 
     result = merge_mod._merge_decision(_story(), "plan-a")
 

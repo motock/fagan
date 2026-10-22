@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from pipeline import worktree_diff
 from pipeline.workspace import normalize_workspace_path, validate_workspace
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ _store = _ServerRef("_store")
 _VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
 _notify_user = _ServerRef("_notify_user")
 PLAN_DIR = _ServerRef("PLAN_DIR")
+WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 config_provenance = _ServerRef("config_provenance")
 role_registry = _ServerRef("role_registry")
 _validate_key = _ServerRef("_validate_key")
@@ -678,6 +680,23 @@ class PipelineService:
 
     def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
         return _store.get_worktree_file(story, filename)
+
+    def get_story_diff(
+        self, plan_name: str, story_key: str, manifest: dict[str, Any], path: str | None = None,
+    ) -> dict[str, Any]:
+        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        story = stories.get(story_key) if isinstance(stories, dict) else None
+        if not isinstance(story, dict):
+            return {"ok": False, "status": 404, "error": "unknown plan/story"}
+        worktree = worktree_diff.resolve_worktree(story, WORKTREE_ROOT._value())
+        if worktree is None:
+            return {"available": False, "reason": "no_worktree"}
+        base_sha, base_ref = worktree_diff.resolve_base_sha(worktree)
+        summary = worktree_diff.collect_diff_summary(worktree, base_sha, base_ref=base_ref)
+        if path is None or not summary["available"]:
+            return summary
+        allowed_paths = {entry["path"] for entry in summary["files"]}
+        return worktree_diff.collect_file_diff(worktree, base_sha, path, allowed_paths)
 
     _DECOMPOSE_JSON_RETRY_ATTEMPTS = 2
 

@@ -24,9 +24,7 @@ are discharged by family as the relevant subsystem is reviewed.
 One-off harness defects observed during incident work that still need
 either a plan or a retro write-up. Remove a line once one exists.
 
-_None outstanding_ — the rescoped-commit-message gap (OA2-05) was addressed by the warn-only `pr_title_mismatch` notification (PR #1123).
-
-- `tests/unit/test_scheduler_heartbeat.py::test_worker_outliving_deadline_is_abandoned_at_deadline` is a wall-clock flake: it asserts `0.35 <= elapsed <= 0.55` for a 0.4s join deadline, but `run_once()` joins in heartbeat slices, so the real wall time is deadline plus per-slice scheduling overhead. Measured 0.436–0.597s across 15 parallel full-suite runs (6 over the ceiling), passing in isolation and under artificial CPU load. Needs an upper bound derived from the slice count (or a much looser ceiling); a loosening edit was drafted during the Mode 36 worktree run and reverted because it was outside that story.
+_None outstanding_ — the rescoped-commit-message gap (OA2-05) was addressed by the warn-only `pr_title_mismatch` notification (PR #1123). The scheduler-heartbeat wall-clock flake was fixed by plan `scheduler-heartbeat-flake-bound`.
 
 
 ## Abandoned plans

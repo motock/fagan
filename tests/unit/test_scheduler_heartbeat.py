@@ -172,9 +172,14 @@ def test_worker_outliving_deadline_is_abandoned_at_deadline(monkeypatch):
         elapsed = time.monotonic() - start
         release.set()
 
-    # Abandoned at ~the deadline: within one heartbeat slice plus slack, not
-    # the worker's full 5s.
-    assert 0.35 <= elapsed <= 0.55, elapsed
+    # Abandoned at ~the deadline, not the worker's full 5s. The upper bound is
+    # deliberately loose: run_once joins in heartbeat slices (0.05s here), so
+    # the wall time is the 0.4s deadline plus per-slice scheduling overhead,
+    # which is machine- and load-dependent (measured 0.44-0.60s under a
+    # parallel full-suite run on a loaded host). A tighter bound turns this
+    # test into a CI flake without proving anything more: the failure mode it
+    # guards against costs the worker's full 5s, so 1.0s still fails loudly.
+    assert 0.35 <= elapsed <= 1.0, elapsed
     assert daemon._consecutive_abandons == 1
     assert daemon._scan_timed_out == 1
 

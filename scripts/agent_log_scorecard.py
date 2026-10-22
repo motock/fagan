@@ -48,6 +48,11 @@ MUTATING_TOOLS = frozenset({
 _CID_RE = re.compile(r"\[cid=([0-9a-fA-F]+)\]$")
 _DIGITS_RE = re.compile(r"\d+")
 _PARKING_RE = re.compile(r"\bparking\b")
+# A ``[step N] <token>: ...`` line whose token is not a valid tool name (the
+# grammar's tool names are ``[a-z_]+``) and is not the ``DONE:`` marker. Such a
+# line is malformed, and the scorecard ignores it wholesale — including its
+# step number.
+_MALFORMED_TOOL_RE = re.compile(r"^\[step \d+\] (?![a-z_]+:)(?!DONE: )\S+:")
 
 
 def _parse_boot(fields: str) -> dict:
@@ -121,8 +126,10 @@ def parse_agent_log(text: str) -> dict:
         # Guard and outcome messages also carry a step prefix (e.g.
         # ``[step 4] no successful edit in 30 steps ...; parking``), so the
         # highest step number on ANY ``[step N]`` line is the run's step count.
+        # A malformed tool-shaped line (``[step 7] NotATool: ...``) is ignored
+        # wholesale, so it contributes no step number.
         prefix_match = STEP_PREFIX_RE.match(line)
-        if prefix_match is not None:
+        if prefix_match is not None and not _MALFORMED_TOOL_RE.match(line):
             steps = max(steps, int(prefix_match.group(1)))
 
         boot_match = BOOT_LINE_RE.match(line)
@@ -165,10 +172,13 @@ def parse_agent_log(text: str) -> dict:
             guard_trips[label] = guard_trips.get(label, 0) + 1
             continue
 
-    if done_summary is not None:
-        outcome = "done"
-    elif parked_reason is not None:
+    # A parking marker is the run's terminal verdict: the agent stopped itself,
+    # so a DONE line that follows (or precedes) it must not mask the parked
+    # outcome.
+    if parked_reason is not None:
         outcome = "parked"
+    elif done_summary is not None:
+        outcome = "done"
     else:
         outcome = "unknown"
 

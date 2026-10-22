@@ -822,17 +822,6 @@ function _wireBackendSelector() {
   });
 }
 
-// Wire the Configuration nav item (in #config-nav) to open the config view.
-(function wireConfigNav() {
-  const nav = document.getElementById("config-nav");
-  if (!nav) return;
-  const item = document.createElement("div");
-  item.className = "plan-item config-item";
-  item.innerHTML = `<div class="plan-name">Config</div><div class="plan-meta">roles &amp; env</div>`;
-  item.addEventListener("click", () => renderConfigView());
-  nav.appendChild(item);
-})();
-
 // ---------------------------------------------------------------------------
 // Workspace picker view (3c5e36b4)
 // ---------------------------------------------------------------------------

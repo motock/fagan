@@ -562,7 +562,12 @@ def test_dry_run_makes_zero_applier_calls_and_zero_file_writes(tmp_path):
     lines = []
 
     plan = wizard.build_plan(
-        make_args(yes=True, dry_run=True, repo_root=str(tmp_path)),
+        make_args(
+            yes=True,
+            dry_run=True,
+            repo_root=str(tmp_path),
+            data_dir=str(tmp_path / "data"),
+        ),
         state=make_state(),
         interactive=False,
     )
@@ -582,7 +587,7 @@ def test_dry_run_makes_zero_applier_calls_and_zero_file_writes(tmp_path):
     assert assets.calls == []
     assert services.calls == []
     assert not (tmp_path / ".pipeline.env").exists()
-    assert not Path(plan["changes"]["PLAN_DIR"]).exists()
+    assert not (tmp_path / "data").exists()
 
 
 def test_dry_run_prints_every_planned_change_and_masks_secrets():
@@ -1034,4 +1039,4 @@ def test_build_plan_performs_no_filesystem_writes(tmp_path, monkeypatch):
 
 
 def test_wizard_module_has_exactly_three_public_functions():
-    assert wizard.__all__ == ["build_plan", "run_plan", "render_summary"]
+    assert sorted(wizard.__all__) == ["build_plan", "render_summary", "run_plan"]

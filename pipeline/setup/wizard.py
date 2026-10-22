@@ -746,6 +746,7 @@ def run_plan(
         "applied": True, "changed": _masked(changes), "env": None,
         "registry": None, "assets": None, "services": None,
         "skipped": [], "errors": [], "next_steps": next_steps,
+        "sections": [dict(entry) for entry in sections],
     }
     skipped: list[str] = result["skipped"]  # type: ignore[assignment]
     failures: list[str] = result["errors"]  # type: ignore[assignment]
@@ -949,7 +950,7 @@ def render_summary(result: Mapping[str, object]) -> str:
                 lines.append(f"  {entry.get('name')}: skipped ({reason})")
         lines.append("")
 
-    changed = dict(result.get("changed") or {})
+    changed = dict(result.get("changed") or result.get("planned") or {})
     if changed:
         lines.append("Changes:")
         lines.extend(f"  {key}={_mask(key, value)}" for key, value in changed.items())
@@ -971,9 +972,12 @@ def render_summary(result: Mapping[str, object]) -> str:
 
 
 def _summary_autonomy(result: Mapping[str, object]) -> str | None:
-    changed = result.get("changed")
-    value = changed.get("PIPELINE_AUTONOMY") if isinstance(changed, Mapping) else None
-    return value if isinstance(value, str) else None
+    for field in ("changed", "planned"):
+        values = result.get(field)
+        value = values.get("PIPELINE_AUTONOMY") if isinstance(values, Mapping) else None
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def _mcp_block(result: Mapping[str, object]) -> Mapping | None:

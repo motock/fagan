@@ -1068,3 +1068,26 @@ def test_summary_of_a_dry_run_result_still_names_the_dry_run_sentence():
     result = wizard.run_plan(plan, output=lambda _line: None)
 
     assert describe_autonomy("dry-run") in wizard.render_summary(result)
+
+
+def test_default_adapter_core_prompt_asks_for_a_data_directory(monkeypatch):
+    asked = []
+
+    def fake_prompt(label, *, kind, default=None, choices=(), validate=None, **_kw):
+        asked.append((label, default))
+        if "Data directory" in label:
+            return "/tmp/agent-data"
+        if "port" in label.lower():
+            return "8001"
+        return default
+
+    monkeypatch.setattr(wizard.ui, "prompt_value", fake_prompt)
+    monkeypatch.setattr(wizard.ui, "ask_yes_no", lambda *_a, **_k: False)
+    monkeypatch.setattr(wizard, "_offers_repo_root", lambda: False)
+
+    answers = wizard._default_ask(state=make_state(), flags={"port": 8001})("core", {})
+
+    assert any("Data directory" in label for label, _default in asked)
+    assert any(default == "~/.claude" for _label, default in asked)
+    assert answers["PLAN_DIR"] == "/tmp/agent-data/plans"
+    assert answers["WORKTREE_ROOT"] == "/tmp/agent-data/worktrees"

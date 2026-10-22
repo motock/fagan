@@ -1,7 +1,7 @@
 import { state } from "../state.js";
 import { postJson } from "../api.js";
 import { escapeHtml } from "./board.js";
-import { setOnWorkspaceSelected } from "../workspace.js";
+import { setOnWorkspaceSelected, fetchActiveWorkspace } from "../workspace.js";
 
 // plan-list.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query
@@ -164,6 +164,55 @@ function _renderSettingsGroup(nav) {
 
     nav.appendChild(group);
   }
+}
+
+// Resolve the live `.plan-meta` line of the SYSTEM group's Workspace item.
+// Filtered by attribute VALUE rather than a `[data-settings="workspace"]`
+// selector: this file's lightweight test DOM stubs only support presence
+// tests for attribute selectors, and the Config item carries the same
+// attribute name. Returns null when the group is gone (a rebuild or teardown
+// landed while a fetch was in flight), so callers never mutate a detached
+// node.
+function _workspaceMetaEl() {
+  const nav = document.getElementById("plan-list");
+  if (!nav || typeof nav.querySelectorAll !== "function") return null;
+  for (const item of nav.querySelectorAll("[data-settings]")) {
+    if (item.getAttribute("data-settings") === "workspace") {
+      return item.querySelector(".plan-meta");
+    }
+  }
+  return null;
+}
+
+// Show the active repository in the Workspace item's meta line: the basename
+// of the active path, with the full path as the hover title. One fetch per
+// render — setOnWorkspaceSelected already triggers _refresh(), which
+// re-renders, so no polling belongs here.
+function _applyActiveWorkspaceLabel() {
+  const fallback = () => {
+    const meta = _workspaceMetaEl();
+    if (!meta) return;
+    meta.textContent = "active repo";
+    // removeAttribute, not title = "": an empty title still renders a tooltip.
+    meta.removeAttribute("title");
+  };
+  fetchActiveWorkspace()
+    .then((activePath) => {
+      if (typeof activePath !== "string" || !activePath) {
+        fallback();
+        return;
+      }
+      const meta = _workspaceMetaEl();
+      if (!meta) return;
+      // Strip ALL trailing slashes before taking the last segment, so
+      // "/tmp/proj/alpha/" yields "alpha"; a bare "/" trims to "" and falls
+      // back. The title keeps the original, unmodified path.
+      const trimmed = activePath.replace(/\/+$/, "");
+      const basename = trimmed.substring(trimmed.lastIndexOf("/") + 1);
+      meta.textContent = basename || "active repo";
+      meta.setAttribute("title", activePath);
+    })
+    .catch(fallback);
 }
 
 function _renderPlanListFull(plans) {
@@ -351,6 +400,10 @@ function renderPlanList(plans) {
     // last so it sits below the plan rows and the footer; the guard inside
     // the helper keeps a later full rebuild from duplicating it.
     _renderSettingsGroup(nav);
+    // Fill in the Workspace item's meta line with the active repository's
+    // basename. Fire-and-forget: the fetch resolves after this render returns
+    // and re-resolves the live node, so a rebuild in between is harmless.
+    _applyActiveWorkspaceLabel();
     planListRowsByName = new Map();
     // Query all .plan-item rows and keep only the per-plan ones (the pinned
     // Comms/Overview items also carry .plan-item but have no data-plan-name).

@@ -78,12 +78,7 @@ _UNCHANGED_JS_SHA256 = {
     # Re-pinned for the dashboard sidebar settings move (SIDEBAR-1): main.js
     # now routes the sidebar's Workspace/Config items through initPlanList
     # callbacks and no longer creates the orphan nav items.
-    # Re-pinned for SIDEBAR-2: the orphan #config-nav container was removed
-    # from index.html, so main.js's wireConfigNav IIFE (which looked up
-    # document.getElementById("config-nav") and could only ever return early)
-    # was deleted as dead code. The Config entry is served by the sidebar's
-    # SYSTEM group via _renderSettingsGroup -> _selectConfig -> renderConfigView.
-    MAIN_JS: "bbe6d7d2ad99037102364ea90fb42366794770d49bf715a0a5e28db2bfbcc69d",
+    MAIN_JS: "11c4405f510f3d640ceadcd58d5c4c6b6f9ad0f7a4a39db30be7876e134b8859",
 }
 
 EXPECTED_CHIP_MESSAGES = {

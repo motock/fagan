@@ -27,7 +27,7 @@ dispatch trustworthy: `ALWAYS_ON_CHECKLIST_AND_TDD_SPLIT_PLAN.md`,
 `AUTONOMY_GAP_CLOSURE_PLAN.md`.
 
 **Dashboard / workspace** — `DASHBOARD_STORY_PROGRESS_PLAN.md`,
-`workspace-selection.json`.
+`DASHBOARD_WORKTREE_DIFF_PLAN.md`, `workspace-selection.json`.
 
 **Architecture / decomposition of the pipeline itself** —
 `PIPELINE_MCP_DECOMPOSITION_PLAN.md`, `EVENT_DRIVEN_PHASE2_PLAN.md`,

@@ -75,7 +75,10 @@ _UNCHANGED_JS_SHA256 = {
     # renderPatchRecord import from ./patch.js, the initPatchReview()/
     # openPatchReview() panel wiring (server-record review + human Apply
     # control) and their exports. No Comms-related code was touched.
-    MAIN_JS: "4f3dfec1b0c3451d820c46ecd3e210f4131ea79c4e359065e3f6df9d32c8f0e5",
+    # Re-pinned for the dashboard sidebar settings move (SIDEBAR-1): main.js
+    # now routes the sidebar's Workspace/Config items through initPlanList
+    # callbacks and no longer creates the orphan nav items.
+    MAIN_JS: "c837129a28dceb3690016e139fb756a57a7598fa9645449ba997d7da71ac3833",
 }
 
 EXPECTED_CHIP_MESSAGES = {

@@ -246,12 +246,13 @@ def _markers_helper_js():
     """JS snippet: binds `nav` to the plan-list nav and defines a `markers()`
     function that walks nav's TOP-LEVEL children only (not a deep walk) and
     maps each one to a short marker string: "comms" / "overview" / "label" /
-    "plan:<name>" / "footer" / "other"."""
+    "plan:<name>" / "footer" / "settings" / "other"."""
     return (
         "const nav = document.getElementById('plan-list');"
         " const markers = () => nav.__children.map((c) => {"
         "  if (c.dataset && c.dataset.comms === 'true') return 'comms';"
         "  if (c.dataset && c.dataset.overview === 'true') return 'overview';"
+        "  if (c.dataset && c.dataset.sidebarSettings === 'true') return 'settings';"
         "  if (c.className && c.className.includes('plan-list-section-label')) return 'label';"
         "  if (c.dataset && c.dataset.planName) return 'plan:' + c.dataset.planName;"
         "  if (c.className && c.className.includes('plan-list-footer')) return 'footer';"
@@ -274,8 +275,11 @@ def test_nav_top_level_order_two_plans():
         " })()"
     )
     order = _run_app_js(expr)
-    assert order == ["comms", "overview", "label", "plan:alpha", "plan:beta", "footer"], (
-        f"expected [comms, overview, label, plan:alpha, plan:beta, footer], got {order}"
+    assert order == [
+        "comms", "overview", "label", "plan:alpha", "plan:beta", "footer", "settings",
+    ], (
+        "expected [comms, overview, label, plan:alpha, plan:beta, footer, settings], "
+        f"got {order}"
     )
 
 
@@ -383,8 +387,8 @@ def test_empty_plans_no_throw_and_order():
     assert not any(m.startswith("plan:") for m in order), (
         f"expected zero per-plan row markers for an empty plans array, got {order}"
     )
-    assert order == ["comms", "overview", "label", "footer"], (
-        f"expected [comms, overview, label, footer] for an empty plans array, got {order}"
+    assert order == ["comms", "overview", "label", "footer", "settings"], (
+        f"expected [comms, overview, label, footer, settings] for an empty plans array, got {order}"
     )
 
 
@@ -420,7 +424,9 @@ def test_diff_path_no_duplicate_pinned_items_and_new_row_before_footer():
     assert order[:3] == ["comms", "overview", "label"], (
         f"expected order to still start [comms, overview, label], got {order}"
     )
-    assert order[-1] == "footer", f"expected footer to remain the last marker, got {order}"
+    assert order[-1] == "settings", (
+        f"expected the bottom-pinned settings group to remain the last marker, got {order}"
+    )
     assert "plan:beta" in order, f"expected the newly-inserted plan:beta row, got {order}"
     label_idx = order.index("label")
     beta_idx = order.index("plan:beta")

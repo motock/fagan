@@ -75,7 +75,14 @@ import {
 // renderDecisions, and setNotifSeverityFilter are imported bindings, which
 // (like hoisted declarations) are resolved before this module's top-level
 // code runs.
-initPlanList({ selectPlan, selectComms, selectOverview, refresh });
+initPlanList({
+  selectPlan,
+  selectComms,
+  selectOverview,
+  selectConfig: renderConfigView,
+  selectWorkspace: selectWorkspaceView,
+  refresh,
+});
 initPlanDetail({ showStoryModal, renderNotifications, renderDecisions, setNotifSeverityFilter });
 initStoryModal({ backendErrorEl: _backendErrorEl, notifSeverityColor: NOTIF_SEVERITY_COLOR });
 initNotifications({ selectComms });
@@ -169,6 +176,19 @@ async function selectPlan(name) {
   state.selectedPlan = name;
   updateHash();
   await refresh();
+}
+
+// Open the Workspace view from the sidebar's SYSTEM settings group. Same
+// state transition the old #workspace-nav click handler performed; the nav
+// item itself is now rendered by plan-list.js and routed here through
+// initPlanList's selectWorkspace callback.
+async function selectWorkspaceView() {
+  state.workspaceActive = true;
+  state.commsActive = false;
+  state.configActive = false;
+  updateHash();
+  _applyActiveView();
+  await loadWorkspaceView();
 }
 
 const COMMS_VIEW_ID = "comms-view";
@@ -829,28 +849,11 @@ async function loadWorkspaceView() {
   picker.innerHTML = renderWorkspacePicker(workspaces, active);
 }
 
-// Wire the Workspace nav item (in #workspace-nav), the workspace-form
-// select/create submit, and picker-item clicks. Mirrors wireConfigNav()'s
-// nav-item pattern above.
+// Wire the workspace-form select/create submit and picker-item clicks. The
+// Workspace nav item itself now lives in the sidebar's SYSTEM settings group
+// (rendered by plan-list.js) and routes through selectWorkspaceView via
+// initPlanList's selectWorkspace callback.
 function wireWorkspaceView() {
-  const nav = document.getElementById("workspace-nav");
-  if (nav) {
-    const item = document.createElement("div");
-    item.className = "plan-item config-item";
-    item.innerHTML = `<div class="plan-name">Workspace</div><div class="plan-meta">active repo</div>`;
-    nav.appendChild(item);
-    // Listener lives on the nav container itself (not the rendered item),
-    // so a click anywhere in #workspace-nav opens the view.
-    nav.addEventListener("click", async () => {
-      state.workspaceActive = true;
-      state.commsActive = false;
-      state.configActive = false;
-      updateHash();
-      _applyActiveView();
-      await loadWorkspaceView();
-    });
-  }
-
   const form = document.getElementById("workspace-form");
   if (form) {
     let errorEl = null;

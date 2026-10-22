@@ -11,11 +11,20 @@ import { setOnWorkspaceSelected } from "../workspace.js";
 // app.js instead calls initPlanList() once at init with its own function
 // references, breaking the import-graph cycle while keeping identical
 // call-time behavior.
-let _selectPlan, _selectComms, _selectOverview, _refresh;
-function initPlanList({ selectPlan, selectComms, selectOverview, refresh }) {
+let _selectPlan, _selectComms, _selectOverview, _selectConfig, _selectWorkspace, _refresh;
+function initPlanList({
+  selectPlan,
+  selectComms,
+  selectOverview,
+  selectConfig,
+  selectWorkspace,
+  refresh,
+}) {
   _selectPlan = selectPlan;
   _selectComms = selectComms;
   _selectOverview = selectOverview;
+  _selectConfig = selectConfig;
+  _selectWorkspace = selectWorkspace;
   _refresh = refresh;
   // Repo-scoped plan visibility (030576c6): workspace.js fires this hook
   // after a successful selectWorkspace, so the plan list re-scopes to the
@@ -102,6 +111,52 @@ function _planMetaMarkup(plan) {
   const total = plan.story_count || 0;
   const done = (plan.status_counts && plan.status_counts.done) || 0;
   return `${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}`;
+}
+
+// Bottom-pinned "SYSTEM" settings group: the Workspace and Config entries
+// that replace the orphan #workspace-nav item main.js used to create.
+// Rendered ONCE, at the very end of renderPlanList's first-call branch, so it
+// sits below the plan rows and the pinned footer. The two items use the
+// quieter `.settings-item` variant and route their clicks through the
+// callbacks main.js injects via initPlanList.
+function _renderSettingsGroup(nav) {
+  // Guard: a later full rebuild (planListRowsByName reset) must not append a
+  // second copy. querySelector is feature-detected because some test shims
+  // expose only a partial DOM surface.
+  if (!nav.querySelector || !nav.querySelector("[data-sidebar-settings]")) {
+    const group = document.createElement("div");
+    group.id = "sidebar-settings";
+    group.setAttribute("data-sidebar-settings", "true");
+
+    const label = document.createElement("div");
+    label.className = "plan-list-section-label";
+    label.textContent = "SYSTEM";
+    group.appendChild(label);
+
+    // Item markup matches the pinned Comms/Overview pattern (innerHTML for
+    // the two rows, direct DOM for the container/listeners).
+    const workspace = document.createElement("div");
+    workspace.className = "plan-item settings-item";
+    workspace.setAttribute("data-settings", "workspace");
+    workspace.innerHTML = `
+      <div class="plan-name">Workspace</div>
+      <div class="plan-meta">active repo</div>
+    `;
+    workspace.addEventListener("click", () => _selectWorkspace());
+    group.appendChild(workspace);
+
+    const config = document.createElement("div");
+    config.className = "plan-item settings-item";
+    config.setAttribute("data-settings", "config");
+    config.innerHTML = `
+      <div class="plan-name">Config</div>
+      <div class="plan-meta">roles & env</div>
+    `;
+    config.addEventListener("click", () => _selectConfig());
+    group.appendChild(config);
+
+    nav.appendChild(group);
+  }
 }
 
 function _renderPlanListFull(plans) {
@@ -285,6 +340,10 @@ function renderPlanList(plans) {
     // and this repository has no plans, say so instead of showing a blank
     // sidebar. The all-repositories view keeps its global empty state.
     _syncScopedEmptyState(nav, plans);
+    // Bottom-pinned SYSTEM settings group (Workspace + Config). Rendered
+    // last so it sits below the plan rows and the footer; the guard inside
+    // the helper keeps a later full rebuild from duplicating it.
+    _renderSettingsGroup(nav);
     planListRowsByName = new Map();
     // Query all .plan-item rows and keep only the per-plan ones (the pinned
     // Comms/Overview items also carry .plan-item but have no data-plan-name).

@@ -42,6 +42,7 @@ KNOWN_GREEN = (
     "tests/unit/test_patch_module.mjs",
     "tests/unit/test_patch_ui_wiring.mjs",
     "tests/unit/test_plan_list_scoping.mjs",
+    "tests/unit/test_sidebar_settings_group.mjs",
     "tests/unit/test_usage_backends_render.mjs",
 )
 

@@ -1,0 +1,29 @@
+{
+  "tests/unit/test_comms_landing_redesign.py": [
+    30,
+    81
+  ],
+  "tests/unit/test_dashboard_comms_css.py": [
+    76,
+    98,
+    104,
+    125
+  ],
+  "tests/unit/test_dashboard_toast_long_text_css.py": [
+    26
+  ],
+  "tests/unit/test_global_rules_content.py": [
+    11,
+    12
+  ],
+  "tests/unit/test_readme_hero_demo.py": [
+    9
+  ],
+  "tests/unit/test_service_active_workspace.py": [
+    223,
+    231,
+    239,
+    272,
+    276
+  ]
+}

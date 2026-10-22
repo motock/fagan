@@ -28,6 +28,10 @@ WORKTREE_SCOPE_RULE = (
 
 # Autonomy: dry-run (plan/log only) | gated (act up to threshold) | full.
 PIPELINE_AUTONOMY = os.environ.get("PIPELINE_AUTONOMY", "gated").lower()
+# Auto-merge gate: enabled unless explicitly opted out with the exact string
+# "0". Deliberately not a general bool parser -- "false"/"off"/"" all leave it
+# enabled, so only an unambiguous "0" disables it.
+PIPELINE_AUTO_MERGE = os.environ.get("PIPELINE_AUTO_MERGE", "1") != "0"
 # Highest story risk the overlord may act on unattended.
 PIPELINE_RISK_THRESHOLD = os.environ.get("PIPELINE_RISK_THRESHOLD", "low").lower()
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
@@ -338,6 +342,7 @@ __all__ = [
     "MAX_CONCURRENT_AGENTS",
     "MERGE_MAX_ATTEMPTS",
     "PIPELINE_AUTONOMY",
+    "PIPELINE_AUTO_MERGE",
     "PIPELINE_LOCAL_MAX_RISK",
     "PIPELINE_MAX_DISPATCH_PER_TICK",
     "PIPELINE_REVIEWER_AUTO_FIX",

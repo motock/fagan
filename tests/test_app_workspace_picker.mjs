@@ -328,7 +328,6 @@ await run("index.html contains the workspace picker markup", async () => {
   const html = readFileSync(new URL("../static/index.html", import.meta.url), "utf8");
   for (const id of [
     "workspace-view",
-    "workspace-nav",
     "workspace-form",
     "workspace-path-input",
     "workspace-create",

@@ -70,7 +70,10 @@ INDEX_HTML = STATIC_DIR / "index.html"
 # #ingest-plan-status) at the end of #comms-body, as siblings of the existing
 # .comms-input-row. No Comms chat markup was touched.
 # Re-pinned for the ingest-picker select swap: #ingest-plan-name changed from <input type="text"> to an empty <select>. No other markup changed.
-INDEX_HTML_SHA256 = "0bc3e070dcfce293ad1ba0c7d0df0ddf5fdceadccc83817cd22b2dbeec0311b0"
+# Re-pinned for the dashboard sidebar settings move (SIDEBAR-2): the
+# orphan #config-nav and #workspace-nav containers were removed from
+# index.html; their items now live in the sidebar's SYSTEM group.
+INDEX_HTML_SHA256 = "ec39200052bd70274a940b4aa8653416d992cd95326954ef6d2245faeb906171"
 # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that story's
 # whole job was to inject the dashboard shared secret into the served HTML, so
 # static/index.html gained the <!--PIPELINE_API_KEY--> placeholder marker

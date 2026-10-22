@@ -88,7 +88,7 @@ Secondary defects:
 ### 2. Workspace item shows the active repo
 
 Replace the static "active repo" meta with the basename of the active
-workspace path (e.g. `fagan` for `/Users/jessecarroll/git/fagan`), fetched
+workspace path (e.g. `fagan` for `~/git/fagan`), fetched
 via the existing `fetchActiveWorkspace()` and refreshed on successful
 workspace select. The nav item becomes the board's persistent scope
 indicator.

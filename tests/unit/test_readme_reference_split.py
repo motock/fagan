@@ -163,6 +163,11 @@ _REVIEW_FINGERPRINT_TAIL_ORIG = (
 _CHECKPOINT_STORY_CALL = (
     'checkpoint_story(plan_name, story_key, step, summary, next_hint="")'
 )
+_GET_STORY_DIFF_BULLET = (
+    "- `get_story_diff(plan_name, story_key, path=None)` — return the in-flight\n"
+    "  story's worktree diff summary, or one file's diff when `path` is given. A\n"
+    "  story with no worktree returns `available: false` with a reason; never 500s."
+)
 _CHECKPOINT_CALL = 'checkpoint(plan_name, story_key, step, summary, next_hint="")'
 _CHECKPOINT_STORY_CALL_BARE = (
     "checkpoint_story(plan_name, story_key, step, summary, next_hint)"
@@ -741,6 +746,11 @@ def test_moved_section_body_is_verbatim(title):
                     _REVIEW_FINGERPRINT_TAIL_NEW,
                     _REVIEW_FINGERPRINT_TAIL_ORIG,
                 )
+        if title == "MCP tools reference":
+            assert _GET_STORY_DIFF_BULLET in reference_body
+            reference_body = reference_body.replace(
+                "\n\n" + _GET_STORY_DIFF_BULLET, ""
+            )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

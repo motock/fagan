@@ -974,8 +974,8 @@ from pipeline.review_orchestrator import (  # verbatim move; re-export for monke
     _verify_reviewer_auto_fix,
 )
 
-# The lifecycle tools are plain functions; registering them here avoids an import cycle.
 from . import server_tools_lifecycle as _lifecycle_tools
+from . import server_tools_read as _read_tools
 
 request_decision = mcp.tool()(_lifecycle_tools.request_decision)
 list_decisions = mcp.tool()(_lifecycle_tools.list_decisions)
@@ -986,12 +986,12 @@ pause_plan = mcp.tool()(_lifecycle_tools.pause_plan)
 resume_plan = mcp.tool()(_lifecycle_tools.resume_plan)
 advance_all_plans = mcp.tool()(_lifecycle_tools.advance_all_plans)
 record_security_audit = mcp.tool()(_lifecycle_tools.record_security_audit)
+get_story_diff = mcp.tool()(_read_tools.get_story_diff)
 
 if __name__ == "__main__":
     mcp.run()
 # A-posteriori escalation of a failed local run to Claude is gated by
-# _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
-# PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).
+# _auto_escalation_enabled() (see pipeline/escalation.py).
 from pipeline.dispatch import (  # noqa: F401
     _dispatch_story_impl,
     _find_dead_new_functions,

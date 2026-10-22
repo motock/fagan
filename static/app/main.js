@@ -916,7 +916,7 @@ export {
   refresh,
   renderToolTraceHtml,
   resetCommsThread,
-  selectComms, selectOverview, selectPlan,
+  selectComms, selectOverview, selectPlan, selectWorkspaceView,
   sendCommsMessage, startPolling, stopPolling,
   syncPollingWithVisibility,
 };

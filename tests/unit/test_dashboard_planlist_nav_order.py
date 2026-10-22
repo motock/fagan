@@ -398,7 +398,8 @@ def test_diff_path_no_duplicate_pinned_items_and_new_row_before_footer():
     """A second renderPlanList call (the keyed-diff branch) must not
     duplicate the pinned Comms/Overview items, must keep the order starting
     [comms, overview, label, ...], and a newly-inserted plan row must land
-    between the label and the footer, with the footer still last."""
+    between the label and the footer, with the bottom-pinned settings group
+    still last."""
     a = [_plan("alpha")]
     b = [_plan("alpha"), _plan("beta")]
     expr = (

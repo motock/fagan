@@ -78,7 +78,7 @@ _UNCHANGED_JS_SHA256 = {
     # Re-pinned for the dashboard sidebar settings move (SIDEBAR-1): main.js
     # now routes the sidebar's Workspace/Config items through initPlanList
     # callbacks and no longer creates the orphan nav items.
-    MAIN_JS: "c837129a28dceb3690016e139fb756a57a7598fa9645449ba997d7da71ac3833",
+    MAIN_JS: "11c4405f510f3d640ceadcd58d5c4c6b6f9ad0f7a4a39db30be7876e134b8859",
 }
 
 EXPECTED_CHIP_MESSAGES = {

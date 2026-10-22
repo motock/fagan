@@ -445,36 +445,37 @@ async function bootstrapWiringApp() {
   // test's tracked elements — see the comment above.
   globalThis.window = win;
   for (const k of ["document", "localStorage", "fetch"]) globalThis[k] = win[k];
-  await import(`../static/app/main.js?wiring=${++wiringImportSeq}`);
+  const mainModule = await import(`../static/app/main.js?wiring=${++wiringImportSeq}`);
   const { state } = await import("../static/app/state.js");
   return {
     elements,
     state,
+    selectWorkspaceView: mainModule.selectWorkspaceView,
     setFetch: (fn) => {
       fetchImpl = fn;
     },
   };
 }
 
-// The four listener tests below are gated behind a runtime feature-detect:
-// static/app/main.js is byte-frozen by tests/unit/test_comms_landing_redesign
-// .py::test_main_js_untouched (markup/CSS-only story), so the picker wiring
-// (nav click / form submit / picker-item select) cannot live there. When the
-// wiring lands in an unpinned module, the feature-detect flips and these
-// assertions run again unchanged.
-const WIRING_FROZEN_SKIP_REASON =
-  "main.js is hash-frozen by test_comms_landing_redesign.py::" +
-  "test_main_js_untouched (markup/CSS-only story) — the workspace picker " +
-  "wiring must live outside main.js; these assertions re-enable " +
-  "automatically once a click listener is bound to #workspace-nav again";
+// The four listener tests below are gated behind a runtime feature-detect so
+// they skip (rather than fail) when the workspace wiring is absent from the
+// module graph. SIDEBAR-1 moved the Workspace entry out of the orphan
+// #workspace-nav item and into the sidebar's SYSTEM settings group, which
+// plan-list.js renders and routes through initPlanList's selectWorkspace
+// callback into main.js's selectWorkspaceView(). The detect therefore tracks
+// the surviving wireWorkspaceView() wiring (the #workspace-form submit
+// listener) instead of a #workspace-nav click listener.
+const WIRING_ABSENT_SKIP_REASON =
+  "wireWorkspaceView() did not attach the #workspace-form submit listener — " +
+  "the workspace picker wiring is absent from the module graph";
 
-// Detects whether main.js (or whatever module wires the picker) actually
-// attached a click listener to the tracked #workspace-nav element during
-// bootstrapWiringApp(). No listener => the wiring is absent => the four
-// listener tests skip instead of failing against the frozen artifact.
+// Detects whether wireWorkspaceView() actually attached its submit listener
+// to the tracked #workspace-form element during bootstrapWiringApp(). No
+// listener => the wiring is absent => the four listener tests skip instead of
+// failing against a module graph that never wired the picker.
 function wiringIsBound(elements) {
-  const nav = elements.get("workspace-nav");
-  return !!(nav && nav._listeners && nav._listeners.click && nav._listeners.click.length > 0);
+  const form = elements.get("workspace-form");
+  return !!(form && form._listeners && form._listeners.submit && form._listeners.submit.length > 0);
 }
 
 await run("state.workspaceActive exists and defaults to false", async () => {
@@ -487,11 +488,11 @@ await run("state.workspaceActive exists and defaults to false", async () => {
 });
 
 await run(
-  "clicking #workspace-nav sets workspaceActive, shows the view, and populates the picker",
+  "selectWorkspaceView sets workspaceActive, shows the view, and populates the picker",
   async () => {
-    const { elements, state, setFetch } = await bootstrapWiringApp();
+    const { elements, state, setFetch, selectWorkspaceView } = await bootstrapWiringApp();
     if (!wiringIsBound(elements)) {
-      record("clicking #workspace-nav sets workspaceActive, shows the view, and populates the picker", true, `SKIP — ${WIRING_FROZEN_SKIP_REASON}`);
+      record("selectWorkspaceView sets workspaceActive, shows the view, and populates the picker", true, `SKIP — ${WIRING_ABSENT_SKIP_REASON}`);
       return;
     }
     setFetch(async (url) => {
@@ -503,10 +504,21 @@ await run(
       }
       return jsonResponse(200, {});
     });
-    const nav = elements.get("workspace-nav");
     const workspaceView = elements.get("workspace-view");
-    await nav.dispatch("click");
-    assertEqual(state.workspaceActive, true, "workspaceActive should be set true by the nav click");
+    // SIDEBAR-1: the Workspace entry now lives in the sidebar's SYSTEM
+    // settings group (plan-list.js) and routes through initPlanList's
+    // selectWorkspace callback into this exported handler, so the test
+    // drives the handler directly instead of clicking the removed
+    // #workspace-nav item.
+    // Pre-set the sibling view flags so the assertions below prove
+    // selectWorkspaceView actually clears them rather than observing
+    // their defaults.
+    state.commsActive = true;
+    state.configActive = true;
+    await selectWorkspaceView();
+    assertEqual(state.workspaceActive, true, "workspaceActive should be set true by selectWorkspaceView");
+    assertEqual(state.commsActive, false, "selectWorkspaceView should clear commsActive");
+    assertEqual(state.configActive, false, "selectWorkspaceView should clear configActive");
     assertTrue(
       workspaceView.classList.contains("hidden") === false,
       "getElementById('workspace-view') should be shown (hidden class removed)",
@@ -528,7 +540,7 @@ await run(
   async () => {
     const { elements, state, setFetch } = await bootstrapWiringApp();
     if (!wiringIsBound(elements)) {
-      record("a successful selectWorkspace (form submit) updates state and re-renders with the active marker", true, `SKIP — ${WIRING_FROZEN_SKIP_REASON}`);
+      record("a successful selectWorkspace (form submit) updates state and re-renders with the active marker", true, `SKIP — ${WIRING_ABSENT_SKIP_REASON}`);
       return;
     }
     let selectCalls = 0;
@@ -565,7 +577,7 @@ await run(
   async () => {
     const { elements, state, setFetch } = await bootstrapWiringApp();
     if (!wiringIsBound(elements)) {
-      record("a failed selectWorkspace (form submit) surfaces the escaped error and leaves state unchanged", true, `SKIP — ${WIRING_FROZEN_SKIP_REASON}`);
+      record("a failed selectWorkspace (form submit) surfaces the escaped error and leaves state unchanged", true, `SKIP — ${WIRING_ABSENT_SKIP_REASON}`);
       return;
     }
     setFetch(async (url, opts) => {
@@ -606,7 +618,7 @@ await run(
   async () => {
     const { elements, state, setFetch } = await bootstrapWiringApp();
     if (!wiringIsBound(elements)) {
-      record("clicking a picker item with data-path selects that workspace", true, `SKIP — ${WIRING_FROZEN_SKIP_REASON}`);
+      record("clicking a picker item with data-path selects that workspace", true, `SKIP — ${WIRING_ABSENT_SKIP_REASON}`);
       return;
     }
     let postedBody = null;

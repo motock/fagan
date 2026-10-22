@@ -142,7 +142,12 @@ function _renderSettingsGroup(nav) {
       <div class="plan-name">Workspace</div>
       <div class="plan-meta">active repo</div>
     `;
-    workspace.addEventListener("click", () => _selectWorkspace());
+    // Both callbacks are required by initPlanList's contract; the typeof
+    // guard keeps a caller that omits one from turning a click into a
+    // TypeError.
+    workspace.addEventListener("click", () => {
+      if (typeof _selectWorkspace === "function") _selectWorkspace();
+    });
     group.appendChild(workspace);
 
     const config = document.createElement("div");
@@ -152,7 +157,9 @@ function _renderSettingsGroup(nav) {
       <div class="plan-name">Config</div>
       <div class="plan-meta">roles & env</div>
     `;
-    config.addEventListener("click", () => _selectConfig());
+    config.addEventListener("click", () => {
+      if (typeof _selectConfig === "function") _selectConfig();
+    });
     group.appendChild(config);
 
     nav.appendChild(group);

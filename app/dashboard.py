@@ -56,6 +56,16 @@ from app.dashboard_routes import (
     get_story_log,
     get_story_replay,
 )
+from app.dashboard_routes_story import (
+    approve_merge_route,
+    dispatch_story_route,
+    interrupt_story_route,
+    mark_story_done_route,
+    patch_story_route,
+    review_story_route,
+    set_story_status_route,
+    start_story_route,
+)
 from app.story_replay import build_replay_events  # noqa: F401
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
@@ -65,6 +75,15 @@ from pipeline.usage import collect_backend_status
 
 # Patched here by tests; the moved get_plan route resolves them via this module.
 from pipeline.wedge import collect_story_wedge_signals, wedge_verdict  # noqa: F401
+
+# Request models re-exported for `from app.dashboard import X` / `dashboard.X` callers.
+__all__ = [
+    "DecomposeRequest",
+    "IngestPlanRequest",
+    "SavePlanRequest",
+    "StoryPatchBody",
+    "StoryStatusBody",
+]
 
 PLAN_DIR = LiveRef("PLAN_DIR")
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
@@ -533,107 +552,6 @@ def set_plan_role_config_route(
     return {**result, "effective_config": effective}
 
 
-@app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")
-def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.dispatch_story(plan_name, story_key)."""
-    result = _service.dispatch_story(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error during dispatch"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/start")
-def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.mark_story_in_progress(plan_name, story_key)."""
-    result = _service.mark_story_in_progress(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error when starting story"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/interrupt")
-def interrupt_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.interrupt_story(plan_name, story_key)."""
-    result = _service.interrupt_story(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error when interrupting story"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/status")
-def set_story_status_route(
-    plan_name: str, story_key: str, body: StoryStatusBody
-) -> dict[str, Any]:
-    """Delegates to _service.set_story_status(plan_name, story_key, status)."""
-    result = _service.set_story_status(plan_name, story_key, body.status)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error when setting story status"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/patch")
-def patch_story_route(
-    plan_name: str, story_key: str, body: StoryPatchBody
-) -> dict[str, Any]:
-    """Delegates to _service.patch_story(plan_name, story_key, fields=...)."""
-    fields = body.model_dump(exclude_unset=True)
-    result = _service.patch_story(plan_name, story_key, fields=fields)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=400,
-            detail=result.get("error", "Unknown error when patching story"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/review")
-def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.review_story(plan_name, story_key)."""
-    result = _service.review_story(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error during review"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")
-def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.approve_merge(plan_name, story_key)."""
-    result = _service.approve_merge(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error during approve_merge"),
-        )
-    return result
-
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/done")
-def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.mark_story_done(plan_name, story_key)."""
-    result = _service.mark_story_done(plan_name, story_key)
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=404,
-            detail=result.get("error", "Unknown error when marking story as done"),
-        )
-    return result
-
-
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):
     workspace = request.workspace if request.workspace is not None else _service.get_active_workspace()
@@ -993,6 +911,15 @@ def apply_worktree_patch_route(
     return result
 
 
+
+app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")(dispatch_story_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/start")(start_story_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/interrupt")(interrupt_story_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/status")(set_story_status_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/patch")(patch_story_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/review")(review_story_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")(approve_merge_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/done")(mark_story_done_route)
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

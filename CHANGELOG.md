@@ -7,6 +7,105 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [0.8.0] - 2026-10-22
+
+### Added
+
+**Agent tooling**
+
+- `restore_file` gains an optional `from_base` mode that restores a file
+  from origin's default branch, giving an agent a first-class way back when
+  its own commit captured a bad change (the destructive-git block refuses a
+  base-scoped checkout). The default path is unchanged, and the per-path cap
+  applies to both modes.
+- `scripts/agent_log_scorecard.py <worktree>/agent.log [--json]` reports a
+  per-attempt scorecard from an agent log: step totals, per-tool counts, the
+  first mutating step, the productive-step ratio, guard trips by normalized
+  label, and the outcome with its done summary or parked reason. It slices
+  at the final `[boot]` line so a resumed run is scored on its last attempt,
+  and reads the same grammar the log writers emit.
+
+**PR review**
+
+- A warn-only `pr_title_mismatch` notification fires after a PR opens when
+  its title shares no 4+ letter word with the story summary or the changed
+  files. It fails open and never alters the PR, verdict, or merge path.
+
+**Scheduler**
+
+- The scheduler notifies when the running checkout trails upstream by
+  commits that touch `pipeline/` or `app/`, since merged orchestration
+  changes are otherwise invisible until the daemon restarts. The notice
+  dedups on the upstream SHA and points at `scripts/reload_pipeline_daemon.sh`.
+
+### Changed
+
+- Python 3.11 is now the floor everywhere — install check, `ruff`
+  `target-version`, and a new 3.11 CI leg (3.11-3.14) — with a consistency
+  test so the three cannot drift. Python 3.10 is no longer supported.
+- Dependencies: `fastapi>=0.143.0`, `ruff==0.17.0`.
+- The on-device dispatch tier is documented as not cleared for story
+  dispatch, including its measured first-pass-clean rates and the preflight
+  an operator must run to route it back.
+
+### Fixed
+
+**Security**
+
+- Acceptance fixture paths that are absolute or contain `..` are rejected at
+  ingest and skipped with an operator notice at dispatch, so plan-authored
+  data can no longer write outside the worktree (security audit 2026-10-19).
+- Pipeline secrets (`PIPELINE_NOTIFY_EMAIL_PASSWORD`, `PLANE_API_KEY`,
+  `GH_TOKEN`, `GITHUB_TOKEN`) are stripped from every agent subprocess
+  environment, including locally spawned agents that inherit the parent
+  environment.
+
+**Dispatch and merge**
+
+- A story re-dispatched while still `todo` no longer preserves a stale or
+  half-written acceptance fixture from a dead earlier attempt: the skip is
+  gated on the story's status, so a fixture-only oracle cannot go green with
+  no implementation (Mode 45).
+- A merge-gate CI-fail rework keeps any earlier review feedback instead of
+  replacing it with only the CI error, so the implementer cannot silently
+  re-break what the reviewer asked for.
+- An escalation whose resolved target equals the story's current
+  backend/model is skipped rather than resetting the rework budget and
+  inflating the first-pass-clean metric.
+
+**Local agent**
+
+- Every write path rejects a file whose last non-blank line is a trailing
+  omission marker (e.g. `# ... (rest of file remains same)`), so a
+  context-exhausted model cannot silently land a truncated file.
+- `replace_lines` computes dropped top-level symbols unconditionally, so a
+  renamed definition can no longer slip past the symbol-loss check.
+- `create_file` overwrites of non-`.py` files reject content that drops more
+  than ~10% (floor of two) of the original lines unless `confirm_removals`
+  is set, covering markdown and other text files the AST guard cannot see.
+
+**Review, chat and classification**
+
+- The review loop makes one final no-tools call for a verdict when it
+  exhausts without one, failing closed to the existing no-verdict path.
+- At the turn cap, chat strips `[TOOL_CALL]` markup and answers in prose; a
+  near-cap nudge asks the model to do so before the budget runs out.
+- Legacy event-less sidecar notices map to the same reason names structured
+  events use, so escalations are no longer double-counted and benign topic
+  words no longer mark a clean story non-clean.
+
+**Scheduler, usage and notifications**
+
+- The staleness check receives the config fingerprint it compares, so the
+  trailing-checkout advisory actually fires in production.
+- Subscription usage percentages parse when the `resets ...` suffix is
+  absent (e.g. `Current session: 0% used`), instead of falling back to the
+  request-count approximation and potentially pausing an available
+  subscription.
+- The review-gate deferral notice fires once per gated episode instead of
+  once per scheduler tick (one plan accumulated 159 identical records in
+  3.2 hours).
+
 ## [0.7.0] - 2026-10-09
 
 ### Added

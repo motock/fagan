@@ -133,4 +133,4 @@ async function applyPatch(patchId, confirmationToken) {
   return res.json();
 }
 
-export { renderPatchRecord, fetchPatchRecord, applyPatch };
+export { renderDiff, renderPatchRecord, fetchPatchRecord, applyPatch };

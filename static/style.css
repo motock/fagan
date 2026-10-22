@@ -1178,6 +1178,12 @@ body.trace-off .trace-detail { display: none !important; }
 .msg .bubble a { color: var(--accent); text-decoration: underline; }
 .msg .bubble a:hover { color: var(--accent-hover); }
 
+/* Sidebar settings group (SYSTEM) */
+.plan-item.settings-item { color: var(--text-dim); border-bottom: none; }
+.plan-item.settings-item .plan-name { color: var(--text-dim); }
+.plan-item.settings-item.active { border-left-color: var(--accent); }
+#config-view, #workspace-view { flex: 1; }
+
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }
 .config-table th, .config-table td { padding: var(--sp-2); border: 1px solid var(--border); }

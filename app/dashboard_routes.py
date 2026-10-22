@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from app import role_registry
 from app.dashboard_helpers import (
@@ -331,6 +332,37 @@ def get_story_replay(
             "review.log": source_flags["review.log"],
         },
     }
+
+
+def get_story_diff(
+    plan_name: str, story_key: str, path: str | None = None
+) -> JSONResponse:
+    """Return the story worktree's diff summary, or one file's diff when
+    ``?path=`` names a file in that summary.
+
+    404 only for an unknown plan or story; an absent/deleted/non-git
+    worktree or missing base is 200 + available:false + reason; a ``path``
+    outside the summary is 400. Every response is ``no-store`` and diff
+    content is never logged.
+    """
+    no_store = {"Cache-Control": "no-store"}
+    manifest = _service.get_manifest_or_none(plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No manifest for plan '{plan_name}'",
+            headers=no_store,
+        )
+    result = _service.get_story_diff(plan_name, story_key, manifest, path)
+    if result.get("ok") is False:
+        status = result.get("status", 400)
+        detail = (
+            f"No story '{story_key}' in plan '{plan_name}'"
+            if status == 404
+            else result.get("error", "invalid request")
+        )
+        raise HTTPException(status_code=status, detail=detail, headers=no_store)
+    return JSONResponse(content=result, headers=no_store)
 
 
 def effective_config(plan: str | None = None) -> dict[str, Any]:

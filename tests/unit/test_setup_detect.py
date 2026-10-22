@@ -281,8 +281,9 @@ def test_services_darwin_label_as_substring_of_another_line(tmp_path):
 
     result = detect.detect_services(repo, platform="darwin", runner=runner)
 
-    # The contract is "output contains the label", so a longer line matches.
-    assert result["running"] is True
+    # A sibling label that merely contains ours is a different service: the
+    # match is on the whole label field, never a substring of the line.
+    assert result["running"] is False
 
 
 def test_services_darwin_probe_failure_is_none(tmp_path):

@@ -22,12 +22,18 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 __all__ = ["collect_state", "detect_registry", "detect_services"]
 
 #: The service label the scheduler installs under on both daemons.
 LABEL = "com.fagan.pipeline.advance-scheduler"
+
+#: Injectables. ``runner`` executes an argv and returns
+#: ``(returncode, stdout, stderr)``; ``which`` locates an executable.
+Runner = Callable[..., tuple[int, str, str]]
+Which = Callable[[str], "str | None"]
 
 # Every probe is bounded; nothing in this module may hang the installer.
 CHECKS_TIMEOUT = 60
@@ -41,7 +47,7 @@ _COMMITTED_REGISTRY = "model_registry.json"
 _IMPORT_PROBE = "import mcp, httpx, fastapi, uvicorn"
 
 
-def _default_runner(argv, timeout=None):
+def _default_runner(argv: Sequence[str], timeout: int | None = None):
     """Run ``argv`` and report ``(returncode, stdout, stderr)``.
 
     This is the only place the module starts a host process. It never raises
@@ -150,7 +156,7 @@ def _personas(repo, home):
     }
 
 
-def detect_registry(repo_root, *, environ=None) -> dict:
+def detect_registry(repo_root, *, environ: Mapping[str, str] | None = None) -> dict:
     """Resolve and parse the model registry without leaking its secrets.
 
     The path is chosen in priority order: ``PIPELINE_MODEL_REGISTRY_PATH`` when
@@ -202,7 +208,29 @@ def detect_registry(repo_root, *, environ=None) -> dict:
     }
 
 
-def detect_services(repo_root, *, platform=None, runner=None) -> dict:
+def _launchctl_running(runner):
+    """True when ``launchctl list`` shows the scheduler label as a whole field.
+
+    The label must be the last whitespace-separated field of its own line: a
+    sibling service whose label merely *contains* ours (``...-backup``) is a
+    different service and must not read as running. A failed probe is ``None``.
+    """
+    probe = _probe(runner, ["launchctl", "list"], SERVICE_TIMEOUT)
+    if probe is None:
+        return None
+    for line in probe[1].splitlines():
+        fields = line.split()
+        if fields and fields[-1] == LABEL:
+            return True
+    return False
+
+
+def detect_services(
+    repo_root,
+    *,
+    platform: str | None = None,
+    runner: Runner | None = None,
+) -> dict:
     """Report rendered and running state of the pipeline daemons.
 
     ``platform`` defaults to ``sys.platform``. On darwin the rendered services
@@ -219,9 +247,11 @@ def detect_services(repo_root, *, platform=None, runner=None) -> dict:
 
     if chosen == "darwin":
         rendered = _existing(repo / "launchd", "com.fagan.pipeline.*.plist")
-        probe = _probe(run, ["launchctl", "list"], SERVICE_TIMEOUT)
-        running = None if probe is None else LABEL in probe[1]
-        return {"platform": chosen, "rendered": rendered, "running": running}
+        return {
+            "platform": chosen,
+            "rendered": rendered,
+            "running": _launchctl_running(run),
+        }
 
     if chosen == "linux":
         rendered = _existing(repo / "systemd", "*.service")
@@ -239,10 +269,10 @@ def detect_services(repo_root, *, platform=None, runner=None) -> dict:
 def collect_state(
     repo_root,
     *,
-    home=None,
-    runner=None,
-    which=None,
-    environ=None,
+    home: Path | None = None,
+    runner: Runner | None = None,
+    which: Which | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict:
     """Snapshot everything the guided installer needs to know.
 

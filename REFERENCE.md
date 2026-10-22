@@ -62,10 +62,6 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   `failed`. The merge gate (`_reverify_acceptance`) still blocks any
   APPROVE'd-but-failing merge.
 
-- `get_story_diff(plan_name, story_key, path=None)` — return the in-flight
-  story's worktree diff summary, or one file's diff when `path` is given. A
-  story with no worktree returns `available: false` with a reason; never 500s.
-
 ### Resumability (checkpoint / interrupt)
 - `checkpoint_story(plan_name, story_key, step, summary, next_hint="")` — commits
   any uncommitted work in the story's worktree as `wip(<key>): <step>` and

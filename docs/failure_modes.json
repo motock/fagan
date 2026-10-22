@@ -300,7 +300,7 @@
     "date": "2026-07-22",
     "class": "harness-bug (diagnosis process)",
     "status": "PARTIAL (2026-10-22: per-run agent.log scorecard added; orientation grace, dispatch-time symbol resolution and executor prompt slimming remain deferred)",
-    "fix_ref": "`a074d74` + `64ef86d`; PR #<n> for the scorecard",
+    "fix_ref": "`a074d74` + `64ef86d`; PR #1161 (`58a36d8`) for the scorecard",
     "guard": "none identified for the shipped guards; the scorecard is guarded by tests/unit/test_agent_log_scorecard.py"
   },
   {

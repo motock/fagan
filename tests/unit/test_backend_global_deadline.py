@@ -14,18 +14,33 @@ import pytest
 from app import backend_ollama as b
 
 
+class _FakeTime:
+    """Stand-in for the `time` module: `monotonic()` reads the virtual clock and
+    `sleep()` advances it instead of blocking.
+
+    Patched onto `b.time` (the module's own reference) rather than onto the real
+    `time` module's attributes, so the fake stays confined to backend_ollama. A
+    global `time.sleep`/`time.monotonic` patch would also reach pytest,
+    subprocess and httpx inside the same xdist worker.
+    """
+
+    def __init__(self, clock, sleeps):
+        self._clock = clock
+        self._sleeps = sleeps
+
+    def monotonic(self):
+        return self._clock["now"]
+
+    def sleep(self, seconds):
+        self._sleeps.append(seconds)
+        self._clock["now"] += seconds
+
+
 def _fake_clock(monkeypatch):
     """Virtual monotonic clock: `time.sleep` advances it instead of blocking."""
     clock = {"now": 0.0}
     sleeps = []
-
-    monkeypatch.setattr(b.time, "monotonic", lambda: clock["now"])
-
-    def _sleep(seconds):
-        sleeps.append(seconds)
-        clock["now"] += seconds
-
-    monkeypatch.setattr(b.time, "sleep", _sleep)
+    monkeypatch.setattr(b, "time", _FakeTime(clock, sleeps))
     return clock, sleeps
 
 

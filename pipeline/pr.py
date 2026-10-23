@@ -22,7 +22,7 @@ from typing import Any
 from .branch_names import story_branch
 
 
-def _convention_branch(story_key: str) -> str:
+def _convention_branch(story_key: str, recorded: str | None = None) -> str:
     """The pre-alias convention branch name for a story key.
 
     Single definition of ``agent/<key>`` so callers that cannot probe a
@@ -30,10 +30,12 @@ def _convention_branch(story_key: str) -> str:
     exist) degrade to the same name the resolver itself would fail open to,
     without re-hardcoding the literal at each call site.
     """
-    return story_branch(story_key)
+    return story_branch(story_key, recorded)
 
 
-def _resolve_story_branch(worktree: str, story_key: str) -> str:
+def _resolve_story_branch(
+    worktree: str, story_key: str, recorded: str | None = None
+) -> str:
     """Return the branch _open_pr/_merge_pr must operate on for this story.
 
     Normally that is the convention branch agent/<key>, but a rework round
@@ -48,7 +50,7 @@ def _resolve_story_branch(worktree: str, story_key: str) -> str:
     story worktrees that may legitimately not exist yet, and a probe failure
     must degrade to the old convention-branch behaviour, never raise.
     """
-    convention = story_branch(story_key)
+    convention = story_branch(story_key, recorded)
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],

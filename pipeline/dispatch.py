@@ -11,7 +11,7 @@ from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
 from .branch_guard import BranchGuardError, refusal, remote_branch_exists
-from .branch_names import story_branch
+from .branch_names import record_story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
 from .dispatch_attempt import (
@@ -158,16 +158,16 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 ),
             }
 
-        # W4-logging slice: mint this story's correlation ID once, on its
-        # first dispatch, and persist it immediately — before ANY subprocess
-        # work (git fetch/worktree add, the agent launch itself) so a failed
-        # launch still leaves the id on the manifest for the retry to reuse.
-        # Rework/redispatch keeps the SAME id (the falsy guard).
+        # W4-logging slice: mint the correlation ID once (the falsy guard keeps
+        # it across redispatch) and record the branch, persisting both before
+        # ANY subprocess work so a failed launch leaves them for the retry.
+        try:
+            branch = record_story_branch(story, story_key)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "story_key": story_key}
         if not story.get("correlation_id"):
             story["correlation_id"] = uuid.uuid4().hex[:12]
-            _atomic_write_json(manifest_path, manifest)
-
-        branch = story_branch(story_key)
+        _atomic_write_json(manifest_path, manifest)
         worktree_path = WORKTREE_ROOT / story_key
         # Branch and worktree derive from the key alone, so a key another plan
         # still holds would adopt that plan's worktree (as a "resume") and

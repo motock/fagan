@@ -1,4 +1,4 @@
-"""Cross-plan awareness: in-flight file overlap and ``blocked_by`` gaps.
+"""Cross-plan awareness: in-flight file overlap, ``blocked_by`` gaps and key conflicts.
 
 Read-only helpers over the plan manifests. They never write, and every
 unreadable or ambiguous input resolves toward "do not release work".
@@ -13,6 +13,7 @@ __all__ = [
     "blocked_by_gaps",
     "file_overlaps",
     "in_flight_stories",
+    "key_conflicts",
     "load_manifests",
 ]
 
@@ -85,3 +86,37 @@ def blocked_by_gaps(story: dict, manifests: dict[str, dict]) -> list[str]:
         if not isinstance(target, dict) or target.get("status") not in _SATISFIED_STATUSES:
             gaps.append(ref)
     return gaps
+
+
+def key_conflicts(keys, manifests: dict[str, dict], worktree_root) -> list[dict]:
+    """Return the other-plan stories whose key collides with one of *keys*.
+
+    A story's branch and worktree are derived from its key alone, so another
+    plan's story with the same key (case-insensitively: branches are lowercased
+    and macOS filesystems are case-insensitive) shares them. It conflicts unless
+    it is done or merged and its worktree directory is gone. A missing status
+    counts as unsatisfied: an unknown state must not release a collision.
+    """
+    wanted = {}
+    for key in keys:
+        if isinstance(key, str) and key:
+            wanted.setdefault(key.lower(), []).append(key)
+    conflicts = []
+    for plan, manifest in manifests.items():
+        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        if not isinstance(stories, dict):
+            continue
+        for other_key, story in stories.items():
+            if not isinstance(story, dict) or not isinstance(other_key, str):
+                continue
+            requested = wanted.get(other_key.lower())
+            if not requested:
+                continue
+            status = story.get("status")
+            if status in _SATISFIED_STATUSES and not (Path(worktree_root) / other_key).exists():
+                continue
+            for key in requested:
+                conflicts.append(
+                    {"key": key, "plan": plan, "other_key": other_key, "status": status}
+                )
+    return sorted(conflicts, key=lambda c: (c["plan"], c["other_key"]))

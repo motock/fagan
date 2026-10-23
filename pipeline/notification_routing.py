@@ -92,6 +92,17 @@ def _require_str_list(value: Any, path: str) -> list[str]:
     return value
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    # json.loads would silently keep the last of two identical keys, dropping
+    # the first definition; a typo must not quietly reroute messages.
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise NotificationConfigError(f"duplicate key {key!r} in config")
+        seen[key] = value
+    return seen
+
+
 def _build_instances(raw: Any, env: Mapping[str, str]) -> dict[str, Any]:
     raw = _require_object(raw, "instances")
     instances: dict[str, Any] = {}
@@ -172,7 +183,9 @@ def load_notification_config(
     if size > MAX_CONFIG_BYTES:
         raise NotificationConfigError(f"config file exceeds {MAX_CONFIG_BYTES} bytes")
     try:
-        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        data = json.loads(
+            cfg_path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys
+        )
     except (OSError, UnicodeDecodeError) as exc:
         raise NotificationConfigError(f"config file unreadable ({type(exc).__name__})") from exc
     except json.JSONDecodeError as exc:

@@ -151,6 +151,15 @@ def test_bad_json_raises(tmp_path):
         _load(tmp_path, "{nope")
 
 
+def test_duplicate_instance_name_raises(tmp_path):
+    raw = (
+        '{"version": 1, "instances": {"mail": {"type": "fakeroute"}, '
+        '"mail": {"type": "fakeroute"}}, "routes": []}'
+    )
+    with pytest.raises(NotificationConfigError, match="duplicate key 'mail'"):
+        _load(tmp_path, raw)
+
+
 def test_top_level_non_object_raises(tmp_path):
     with pytest.raises(NotificationConfigError, match="must be an object"):
         _load(tmp_path, "[]")

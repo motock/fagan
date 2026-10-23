@@ -438,6 +438,10 @@ def test_importing_schema_in_a_temp_cwd_touches_no_file_and_no_environ(tmp_path)
     env.pop("PYTHONDONTWRITEBYTECODE", None)
     code = (
         "import json, os\n"
+        # The package import runs the repo-root .pipeline.env loader (inert
+        # only under pytest, which this subprocess is not), so take the
+        # snapshot after it: only the schema import is under test here.
+        "import pipeline\n"
         "before = dict(os.environ)\n"
         "import pipeline.setup.schema as s\n"
         "after = dict(os.environ)\n"

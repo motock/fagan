@@ -380,6 +380,39 @@ merge, all routed through the same gated API the kanban board's own buttons
 call. More screenshots (the live kanban board and the workspace picker) are
 in [docs/DEMO.md](docs/DEMO.md#screenshots).
 
+### Beyond the core loop
+
+- **Not just Python.** The test, lint and build gates detect the target
+  repo's ecosystem from its build files, and a committed `.fagan.json`
+  declares the commands for anything they can't detect. See
+  [Test, lint and build commands](REFERENCE.md#test-lint-and-build-commands).
+- **Notifications.** Every pipeline event goes to a per-plan notification
+  log. Opt in to e-mail (`PIPELINE_NOTIFY_EMAIL_ENABLED=1`) and the scheduler
+  sends plan completions, parked stories, and dispatch, test and agent
+  failures through an outbox that keeps undelivered messages for the next
+  attempt. See
+  [Notifications](REFERENCE.md#notifications-plan_completed-and-the-outbound-e-mail-channel).
+- **Review from the dashboard.** Each story's modal shows a read-only diff of
+  its worktree against its fork point (also the `get_story_diff` tool), a
+  stuck story can take a proposed patch through
+  [patch review and apply](REFERENCE.md#patch-review--apply-wap-9wap-10), and
+  the plan list scopes to the active repository.
+- **Cross-plan coordination.** A story can wait on a story in another plan
+  (`blocked_by`), and the pipeline warns when two plans' in-flight stories
+  edit the same files. See
+  [Cross-plan coordination](REFERENCE.md#cross-plan-coordination).
+- **Human-gated merges.** `PIPELINE_AUTO_MERGE=0` keeps dispatch and review
+  automatic but parks every reviewed PR for you to merge, with
+  `approve_merge` or by hand.
+- **Where agents run.** Opt-in [Docker sandboxing](docs/specs/DOCKER_SANDBOX.md),
+  [remote dispatch or review over SSH](docs/specs/REMOTE_EXECUTION.md), and
+  [LiteLLM routing](docs/specs/LITELLM_PROVIDER.md) to hosted vendors.
+- **Stuck-story handling.** The scheduler flags an in-progress story whose
+  agent has gone quiet (30 minutes by default), and with
+  `PIPELINE_AUTO_TRIAGE=1` the overlord rules on a failed or parked story:
+  escalate the model, split the story, patch a broken acceptance fixture, or
+  hold it for you. `pause_plan` stops one plan without touching the others.
+
 ---
 
 ## Architecture

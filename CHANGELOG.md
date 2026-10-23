@@ -7,6 +7,51 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [Unreleased]
+
+### Added
+
+**Setup**
+
+- `scripts/configure.py` runs a guided setup: it detects what is already
+  installed and writes `.pipeline.env`, per-role provider and model routing,
+  policy, optional e-mail and Plane settings, the Claude Code assets, and
+  (optionally) the background services. `scripts/install.sh` runs it last.
+  It prompts only on a TTY, applies secure defaults with `--yes` or when
+  piped, writes secret-bearing env files as 0600, and supports `--dry-run`.
+  See `docs/guided-setup.md`.
+
+**Merge**
+
+- `PIPELINE_AUTO_MERGE=0` keeps dispatch and review automatic but parks every
+  reviewed PR for a human merge (`approve_merge` or by hand). The default
+  (`1`) is unchanged. The parked-story notification now includes the PR URL.
+
+**Cross-plan coordination**
+
+- A story can declare `blocked_by: ["<plan>:<story_key>", ...]`. It is held
+  out of `list_ready_stories` and `advance_pipeline` until every referenced
+  story is done or merged; a malformed or unknown reference holds it.
+  `ingest_plan` validates the shape, and `patch_story` can set it.
+- A `file_overlap` notification warns when a story's `files` overlap another
+  plan's in-flight story, at ingest and when the story becomes ready. It
+  never blocks.
+
+**Dashboard**
+
+- The story modal has a read-only **Diff** section showing the worktree's
+  changes against its fork point, including uncommitted and untracked files.
+  The same data is available as the `get_story_diff` MCP tool and
+  `GET /api/plans/{plan}/stories/{key}/diff`.
+- The sidebar has a SYSTEM settings group, and each settings view has a
+  deep-linkable URL hash.
+
+**Tests**
+
+- A frozen-pin guard (`tests/unit/test_pin_guard_baseline.py`) fails CI on a
+  new SHA-256 pin, exact enumeration or exact count of a cumulative artifact
+  in `tests/`, against a baseline that may only shrink.
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

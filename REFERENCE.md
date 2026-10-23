@@ -193,6 +193,31 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
 
 ---
 
+## Plan pausing and story diff tools
+
+These tools were added after the reference above was written. Each one also
+has a dashboard HTTP route.
+
+- `pause_plan(plan_name)` — stop `advance_pipeline`/`advance_all_plans` from
+  dispatching, reviewing or merging anything in this one plan, leaving every
+  other plan's ticks unaffected. Any `in_progress` story is interrupted
+  (checkpointed and left resumable), so a paused plan does not keep using
+  model quota in the background. HTTP: `POST /api/plans/{plan_name}/pause`.
+- `resume_plan(plan_name)` — clear the pause; the plan's stories are eligible
+  again on the next tick. HTTP: `POST /api/plans/{plan_name}/resume`.
+- `get_story_diff(plan_name, story_key, path=None)` — the story's worktree
+  changes against its fork point, including staged, unstaged and untracked
+  files. Without `path` it returns a summary of changed files (capped at 500,
+  with a `truncated` flag). With `path` it returns that one file's unified
+  diff, truncated to 40,000 characters; `path` must be one of the files the
+  summary lists, so the tool cannot read outside the story's change set. A
+  story with no worktree returns `{"available": false, "reason": ...}`, and an
+  unknown plan or story returns `{"ok": false, "status": 404}`. Read-only; it
+  backs the story modal's **Diff** section. HTTP:
+  `GET /api/plans/{plan_name}/stories/{story_key}/diff?path=...`.
+
+---
+
 ## Overlord decision fail-open
 
 `request_decision` (see "MCP tools reference" above) fails open when the
@@ -890,6 +915,32 @@ event instead of the plain advisory warning. When the default is not a
 `:cloud` tag the story is left as authored and the advisory warning carries an
 `; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag`
 suffix.
+
+---
+
+## Cross-plan coordination
+
+Plans are independent by default. Two mechanisms connect them, both read from
+the other plans' manifests in the same plan directory.
+
+**`blocked_by` (gating).** A story may list prerequisites in other plans as
+`"<plan>:<story_key>"` strings. Such a story is not ready (it is absent from
+`list_ready_stories` and is not dispatched by `advance_pipeline`) until every
+referenced story exists and is `done` or `merged`. A malformed reference, or
+one naming a plan or story that does not exist, counts as unsatisfied, so a
+typo holds the story rather than releasing it. `ingest_plan` validates only
+the shape, because the target plan may not be ingested yet. Set or change it
+with `patch_story` or by re-ingesting; omitting it on re-ingest clears it.
+
+**File-overlap advisory (warning only).** When a story declares `files` and
+another plan has an in-flight story (`in_progress`, `interrupted`,
+`changes_requested`, `tests_passed` or `pr_open`) whose `files` share a path,
+the pipeline emits a `file_overlap` notification naming the shared paths and
+the other story. It fires at `ingest_plan`, whose result also lists the
+overlaps under `file_overlaps`, and again when the story becomes ready,
+at most once per process for each pair of stories. It never blocks
+dispatch; sequence the work with `blocked_by` or `dependencies` if the overlap
+matters. A story without `files` produces no advisory.
 
 ---
 

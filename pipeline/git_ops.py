@@ -16,6 +16,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from .branch_names import story_branch
+
 # Scratchpad files are the dispatched agent's own running notes. They must
 # never be tracked by a checkpoint commit: .gitignore keeps a NEW one out, but
 # ignore rules do nothing once a file is tracked, and a tracked scratchpad has
@@ -234,7 +236,7 @@ def _worktree_new_commits(worktree: Path, story_key: str, base_branch: str) -> t
     base = _resolve_base_branch(worktree, base_branch)
     if not base:
         return "unknown", ""
-    branch = f"agent/{story_key.lower()}"
+    branch = story_branch(story_key)
     r = subprocess.run(
         ["git", "log", f"{base}..{branch}", "--oneline"],
         check=False, cwd=str(worktree), capture_output=True, text=True,
@@ -285,7 +287,7 @@ def _worktree_has_non_wip_commits(
     mixed-case key (e.g. a UUID) must match either way. Returns False on any
     git error (fail open, mirroring ``_worktree_has_new_commits``).
     """
-    branch = f"agent/{story_key.lower()}"
+    branch = story_branch(story_key)
     prefix = f"wip({story_key}):".lower()
     r = subprocess.run(
         ["git", "log", f"{base_branch}..{branch}", "--format=%s"],

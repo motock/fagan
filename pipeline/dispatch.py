@@ -10,6 +10,7 @@ from typing import Any
 from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
+from .branch_names import story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
 from .dispatch_attempt import (
@@ -127,7 +128,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             story["correlation_id"] = uuid.uuid4().hex[:12]
             _atomic_write_json(manifest_path, manifest)
 
-        branch = f"agent/{story_key.lower()}"
+        branch = story_branch(story_key)
         worktree_path = WORKTREE_ROOT / story_key
         # Branch and worktree derive from the key alone, so a key another plan
         # still holds would adopt that plan's worktree (as a "resume") and

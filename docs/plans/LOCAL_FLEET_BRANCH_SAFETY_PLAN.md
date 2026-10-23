@@ -59,10 +59,10 @@ dispatch a story whose lowercased key equals the configured namespace.
 
 The topology record says not to build T3 until someone can answer "who answers
 a decision on a plan they did not create". The ADR records that answer. The
-decision is the project owner's, so the story drafts it with a recommended rule
-and **Status: Proposed**; it is not Accepted until confirmed.
+decision is the project owner's, who confirmed the rule below on 2026-10-23, so
+the story records it as **Status: Accepted**.
 
-Recommended rule to put in the draft: a plan has one `owner`, taken from the
+Decided rule: a plan has one `owner`, taken from the
 authenticated MCP caller at ingest; `request_decision` goes to the overlord
 first, and anything the overlord escalates goes to the plan owner, with an
 optional `delegates` list that may also answer; a decision nobody answers within
@@ -151,8 +151,8 @@ in the ADR: team-owned plans, and routing by risk class.
         {
           "key": "SHT-04",
           "summary": "Write ADR 0006 on decision routing and plan ownership for a shared pipeline server",
-          "description": "Doc-only. Drafts the answer the topology record requires before any T3 work; stays Proposed until the project owner confirms it.",
-          "agent_instructions": "Read `docs/plans/SHARED_SERVICE_TOPOLOGY_PLAN.md` (T3 section and 'Prerequisites for C') and `docs/plans/LOCAL_FLEET_BRANCH_SAFETY_PLAN.md` §3. Write `docs/adr/0006-decision-routing-on-a-shared-server.md` following `docs/adr/template.md`, with **Status:** Proposed and **Date:** 2026-10-23, and add its row to the index table in `docs/adr/README.md`. Record: the question (who answers a decision on a plan they did not create); the recommended rule from §3 (single plan `owner` taken from the authenticated MCP caller at ingest; overlord first; escalation to the owner with an optional `delegates` list; an unanswered decision parks the story after a bounded time); the alternatives considered (team-owned plans, routing by risk class, last-writer answers) and why each was not chosen; that ownership must be enforced in the mutating tool surface and not only in routing; that namespaced branches (PIPELINE_BRANCH_NAMESPACE) are a prerequisite for a multi-tenant server; and the consequences, including that `.pipeline.env` precedence and the stdio transport are not addressed here. State plainly that nothing is decided until the status changes to Accepted. Do not write code and do not edit any existing ADR. [no-new-tests] — `tests/unit/test_adr_records.py` already grades format and index membership. Success: that test file and `tests/unit/test_docs_have_no_personal_home_path.py` pass.",
+          "description": "Doc-only. Records the answer the topology record requires before any T3 work; the project owner confirmed the rule on 2026-10-23, so it is recorded as Accepted.",
+          "agent_instructions": "Read `docs/plans/SHARED_SERVICE_TOPOLOGY_PLAN.md` (T3 section and 'Prerequisites for C') and `docs/plans/LOCAL_FLEET_BRANCH_SAFETY_PLAN.md` §3. Write `docs/adr/0006-decision-routing-on-a-shared-server.md` following `docs/adr/template.md`, with **Status:** Accepted and **Date:** 2026-10-23, and add its row (status Accepted) to the index table in `docs/adr/README.md`. The project owner confirmed the decision rule on 2026-10-23; the ADR records it as decided. Record: the question (who answers a decision on a plan they did not create); the decided rule (single plan `owner` taken from the authenticated MCP caller at ingest; overlord first; escalation to the owner with an optional `delegates` list; an unanswered decision parks the story after a bounded time); the alternatives considered (team-owned plans, routing by risk class, last-writer answers) and why each was not chosen; that ownership must be enforced in the mutating tool surface and not only in routing; that namespaced branches (PIPELINE_BRANCH_NAMESPACE) are a prerequisite for a multi-tenant server; and the consequences, including that `.pipeline.env` precedence and the stdio transport are not addressed by this decision and still need their own ADRs, and that no T3 code is authorized by it. Do not write code and do not edit any existing ADR. [no-new-tests] — `tests/unit/test_adr_records.py` already grades format and index membership. Success: that test file and `tests/unit/test_docs_have_no_personal_home_path.py` pass.",
           "persona": "tech-writer",
           "risk": "low",
           "files": [
@@ -176,4 +176,4 @@ in the ADR: team-owned plans, and routing by risk class.
   a recorded reason and the first branch is untouched. Print the refusal
   beside the branch's untouched SHA (per `testing-config-gates.md`: validate a
   gate that withholds work against a real environment).
-- ADR 0006 merged as Proposed; its status is changed only by the project owner.
+- ADR 0006 merged as Accepted, recording the owner-confirmed routing rule.

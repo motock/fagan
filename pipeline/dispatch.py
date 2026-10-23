@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -9,7 +10,8 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
-from . import cross_plan
+from . import context_sources as ctxsrc
+from . import cross_plan, paths
 from .branch_guard import BranchGuardError, refusal, remote_branch_exists
 from .branch_names import record_story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
@@ -23,9 +25,7 @@ from .dispatch_baseline import (
     _BASELINE_TEST_TIMEOUT_S,  # noqa: F401
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
-    _step_record_baseline,
 )
-from .dispatch_context import _step_resolve_context
 from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
@@ -134,6 +134,96 @@ def _refuse_if_remote_branch_taken(
     )
     return {"ok": False, "error": reason, "story_key": story_key,
             "branch": branch, "outcome": outcome}
+
+
+def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
+    """Return the snapshot for a previously recorded digest, verifying it."""
+    digest = recorded["digest"]
+    hexdigest = digest.removeprefix("sha256:")
+    path = paths.PLAN_DIR / "context" / hexdigest / "content.txt"
+    try:
+        text = path.read_text(encoding="utf-8") if hexdigest.isalnum() else None
+    except OSError:
+        text = None
+    if text is None:
+        # Snapshot lost: refetch, but only accept byte-identical content.
+        text = ctxsrc.resolve_dir_source(source)["text"]
+        ctxsrc.snapshot_context(text)
+    if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        raise ctxsrc.ContextSourceError(
+            f"source {source['name']!r}: context no longer matches recorded digest {digest}"
+        )
+    return {"text": text, "digest": digest, "bytes": recorded["bytes"]}
+
+
+def _fetch_context(source: dict[str, Any], story: dict[str, Any], now: str) -> dict[str, Any]:
+    resolved = ctxsrc.resolve_dir_source(source)
+    ctxsrc.snapshot_context(resolved["text"])
+    story["context_digests"][source["name"]] = {
+        "provider": source["provider"],
+        "uri": source["uri"],
+        "digest": resolved["digest"],
+        "bytes": resolved["bytes"],
+        "files": resolved["files"],
+        "truncated": resolved["truncated"],
+        "fetched_at": now,
+    }
+    return resolved
+
+
+def _step_resolve_context(
+    plan_name: str,
+    story_key: str,
+    story: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_path: Path,
+) -> tuple[str, dict[str, Any] | None]:
+    """Resolve the plan's dispatch-phase context sources for a story.
+
+    Returns ``(rendered_block, blocked_result)``; a non-None result is a
+    required-source failure that must be returned as-is (status unchanged).
+    Recorded ``context_digests`` are reused on rework/resume, never refetched.
+    """
+    context = manifest.get("context")
+    sources = ctxsrc.sources_for_phase(context["sources"], "dispatch") if context else []
+    if not sources:
+        return "", None
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    digests = story.setdefault("context_digests", {})
+    resolved = []
+    for source in sources:
+        try:
+            recorded = digests.get(source["name"])
+            loaded = (
+                _load_recorded_context(source, recorded)
+                if recorded
+                else _fetch_context(source, story, now)
+            )
+        except ctxsrc.ContextSourceError as exc:
+            if source.get("required", True):
+                reason = f"required context source failed: {exc}"
+                story["dispatch_block_reason"] = reason
+                _atomic_write_json(manifest_path, manifest)
+                logging.getLogger("pipeline").warning(
+                    "dispatch blocked by required context source",
+                    extra={"plan": plan_name, "story_key": story_key},
+                )
+                return "", {"ok": False, "error": reason, "story_key": story_key}
+            _notify_user(
+                plan_name,
+                f"optional context source {source['name']} unavailable for "
+                f"{story_key}; dispatching without it",
+                story_key=story_key,
+                severity="warning",
+                event="context_missing",
+                dedup_key=f"context_missing:{story_key}:{source['name']}",
+            )
+            continue
+        resolved.append({**source, **{k: loaded[k] for k in ("text", "digest", "bytes")}})
+    if story["context_digests"]:
+        _atomic_write_json(manifest_path, manifest)
+    max_total = context.get("max_total_chars", ctxsrc.DEFAULT_MAX_TOTAL_CHARS)
+    return ctxsrc.render_context_block(resolved, max_total_chars=max_total), None
 
 
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -385,13 +475,53 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
-        # BASELINE-1 (see _step_record_baseline): first-dispatch test snapshot.
-        _step_record_baseline(
-            story, worktree_path,
-            worktree_path / ".dispatch_baseline_test_checked",
-            _run_baseline_test_snapshot,
-            is_local=dispatch_backend in _LOCAL_BACKEND_NAMES, resuming=resuming,
-        )
+        # BASELINE-1: on a story's FIRST dispatch, run the detected test
+        # command ONCE against the freshly created, still-unmodified worktree
+        # and remember whether it already failed. Observed live 2026-09-17:
+        # 4 separate dispatched stories each independently rediscovered the
+        # same pre-existing, out-of-scope failures (a "5 pre-existing ...
+        # failures (httpx missing in subprocess interpreter)" pattern, named
+        # almost verbatim in 4 separate journal entries across 2 plans) and
+        # each spent part of its own step/rework budget investigating them
+        # before concluding they were unrelated to its task. Recording the
+        # baseline here lets the prompt below tell the agent up front which
+        # failures predate its own changes. Gated exactly like the
+        # test-author/planner phases further down:
+        #   - a local-family backend (the same weak-local-executor rationale)
+        #   - not resuming (a resumed dispatch acts on a worktree the agent
+        #     has already been editing, so there is no meaningful "before"
+        #     state left to snapshot)
+        #   - no existing marker (belt-and-suspenders with `resuming`, and
+        #     what stops a second run on a later fresh-looking call)
+        # Never a gate: the helper is wrapped so any failure degrades to "no
+        # baseline", and the marker is written unconditionally right after so
+        # a raising snapshot is not retried on every subsequent dispatch.
+        baseline_marker = worktree_path / ".dispatch_baseline_test_checked"
+        if (
+            dispatch_backend in _LOCAL_BACKEND_NAMES
+            and not resuming
+            and not baseline_marker.exists()
+        ):
+            try:
+                baseline = _run_baseline_test_snapshot(worktree_path)
+            except Exception:  # noqa: BLE001 (observability hook, never a gate)
+                baseline = None
+            try:
+                # The marker carries the baseline's failing node ids, not a
+                # bare "ok": the agent-side full-suite done-gate reads them
+                # back out of the worktree to tell a failure the story's own
+                # change introduced from one that was already failing before
+                # it touched the tree (mirroring the tick-side grade's own
+                # baseline exemption). No recorded ids -> an empty list, which
+                # exempts nothing.
+                baseline_ids = (baseline or {}).get("failed_node_ids") or []
+                baseline_marker.write_text(
+                    json.dumps({"failed_node_ids": baseline_ids})
+                )
+            except OSError:
+                pass
+            if baseline is not None and baseline.get("returncode") != 0:
+                story["baseline_test_check"] = baseline
 
         # A rework redispatch (changes_requested with stored review_feedback)
         # on the local Ollama driver can resume the prior dispatch's message

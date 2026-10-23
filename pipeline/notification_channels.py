@@ -125,7 +125,7 @@ def as_sender(channel: Channel) -> Callable[[dict], bool]:
     def sender(record: dict) -> bool:
         try:
             result = channel.send(record)
-        except Exception as exc:  # send must not raise; treat as retryable
+        except Exception as exc:  # noqa: BLE001 - a bad channel must not break the drain
             logger.warning(
                 "channel send raised: channel=%s error_type=%s",
                 channel.name,

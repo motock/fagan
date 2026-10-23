@@ -9,6 +9,7 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
+from . import cross_plan
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
 from .dispatch_attempt import (
@@ -128,6 +129,38 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
         branch = f"agent/{story_key.lower()}"
         worktree_path = WORKTREE_ROOT / story_key
+        # Branch and worktree derive from the key alone, so a key another plan
+        # still holds would adopt that plan's worktree (as a "resume") and
+        # push to its branch. Refuse before any worktree or git work.
+        collisions = cross_plan.key_conflicts(
+            [story_key],
+            cross_plan.load_manifests(
+                _store.manifest_path(plan_name).parent, exclude_plan=plan_name
+            ),
+            worktree_path.parent,
+        )
+        if collisions:
+            other = collisions[0]
+            logging.getLogger("pipeline").warning(
+                "story key collides with another plan",
+                extra={"plan": plan_name, "story_key": story_key,
+                       "other_plan": other["plan"]},
+            )
+            _notify_user(
+                plan_name,
+                f"Refused to dispatch {story_key}: plan {other['plan']} still "
+                f"holds story key {other['other_key']}",
+                story_key=story_key,
+                severity="warning",
+                event="story_key_conflict",
+                dedup_key=f"story_key_conflict:{story_key}",
+            )
+            return {
+                "ok": False,
+                "error": "story key collides with another plan",
+                "plan": other["plan"],
+                "other_key": other["other_key"],
+            }
         resuming = (
             story.get("status") in ("interrupted", "changes_requested")
             or worktree_path.exists()

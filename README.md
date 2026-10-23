@@ -385,46 +385,46 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
 ## Architecture
 
 ```
- ┌───────────────────────────────────────────────────────────┐
- │ Scheduler daemon (or a manual advance_pipeline call)       │
- │ advance_pipeline(plan) — one idempotent tick               │
- └───────────────────────────┬───────────────────────────────┘
-                              │ ready stories (deps satisfied)
-                              ▼
- ┌───────────────┐  resolve backend +    ┌───────────────────────────────┐
- │ Plan/Manifest │  persona/model        │ Dispatch                      │
- │ (JSON, Plane) │──────────────────────►│  claude -p  OR  local loop    │
- └───────────────┘                       │  (tech-lead plans for local → │
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ Scheduler daemon (or a manual advance_pipeline call)                   │
+ │ advance_pipeline(plan) — one idempotent tick                           │
+ └────────────────────────────────────────────────────────┬───────────────┘
+                          ready stories (deps satisfied)  │
+                                                          ▼
+ ┌───────────────┐  resolve backend +     ┌───────────────────────────────┐
+ │ Plan/Manifest │  persona/model         │ Dispatch                      │
+ │ (JSON, Plane) │───────────────────────►│  claude -p  OR  local loop    │
+ └───────────────┘                        │  (tech-lead plans for local → │
                                           │   .agent_plan.md)             │
                                           └───────────────┬───────────────┘
-                                                           ▼
+                                                          ▼
                                           ┌───────────────────────────────┐
                                           │ Headless story agent, TDD-    │
                                           │ first, in an isolated git     │
                                           │ worktree                      │
                                           └───────────────┬───────────────┘
-                                    local fail → escalate  │ tests +
-                                    to claude (`auto`)     │ acceptance oracle
-                                                           ▼
+                                   local fail → escalate  │ tests +
+                                      to claude (`auto`)  │ acceptance oracle
+                                                          ▼
                                           ┌───────────────────────────────┐
                                           │ code-reviewer: VERDICT,       │
                                           │ opens a PR                    │
                                           └───────────────┬───────────────┘
-                                                           ▼
+                                                          ▼
       low    → decide silently            ┌───────────────────────────────┐
       medium → decide, notify the user    │ Overlord adjudicates risk     │──► decisions log
       high   → park, wait for a human     │ (blocked decisions, merge,    │    (audit trail)
-                                           │  scope disputes)              │
-                                           └───────────────┬───────────────┘
-                                                            ▼ approved
-                                           ┌───────────────────────────────┐
-                                           │ Merge gate: rebase on master, │
-                                           │ force-push, poll CI, re-run   │
-                                           │ the suite on the rebased      │
-                                           │ branch                        │
-                                           └───────────────┬───────────────┘
-                                                            ▼
-                                                         master
+                                          │  scope disputes)              │
+                                          └───────────────┬───────────────┘
+                                                          ▼ approved
+                                          ┌───────────────────────────────┐
+                                          │ Merge gate: rebase on master, │
+                                          │ force-push, poll CI, re-run   │
+                                          │ the suite on the rebased      │
+                                          │ branch                        │
+                                          └───────────────┬───────────────┘
+                                                          ▼
+                                                       master
 ```
 
 ## Personas (`~/.claude/agents/`)

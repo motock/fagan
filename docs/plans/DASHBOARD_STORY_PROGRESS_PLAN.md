@@ -1,5 +1,9 @@
 # Plan — Story-Level Progress in the Dashboard
 
+> **Status (verified 2026-10-22): Tier 2 still open (low priority).** Tiers
+> 0-1 are in; no step-budget badge exists in the dashboard yet. The status text below is the
+> original header, kept as history.
+
 **Status:** Tier 0 and Tier 1 shipped; Tier 2 not started (as of 2026-09-01).
 Written 2026-07-15. The Tier 1 blocker resolved 2026-07-19
 (`GUIDED_DECOMPOSITION_PLAN.md` §4.5 ship/kill → "ship narrow"). Landed since:

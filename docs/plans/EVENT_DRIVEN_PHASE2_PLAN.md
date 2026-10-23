@@ -1,5 +1,10 @@
 # Event-driven pipeline — Phase 2 (wiring) — DRAFT
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plans
+> `event-driven-pipeline-phase2` (5 stories) and `event-driven-pipeline-phase3`
+> (12 stories), all merged. The status text below is the
+> original header, kept as history.
+
 Status: **draft, not ingested.** Phase 1 is the ingested `event-driven-pipeline`
 plan (S1–S9, currently paused, all `todo`). Phase 1 ships the parts; nothing in
 it changes runtime behavior except S4+S5 (the non-blocking CI poll). This

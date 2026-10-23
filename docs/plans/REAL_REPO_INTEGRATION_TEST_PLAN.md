@@ -1,5 +1,9 @@
 # Plan: Real-repo integration test for the E2E harness (MODE-29-REVIEW-STORY-LOCK-GUARD)
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `real-repo-integration-test` (2 stories, merged). The status text below is the
+> original header, kept as history.
+
 **Status:** Planned, not started. Persisted 2026-07-23 for later ingestion (as a
 pipeline story, or direct build) — not executed this session.
 **Origin:** 2026-07-22/23 MODE-29-REVIEW-STORY-LOCK-GUARD redispatch (see

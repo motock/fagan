@@ -1,5 +1,11 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
+> **Status (verified 2026-10-22): only W4 remains open.** W4
+> (multi-tenant) is now framed as topology T3 in
+> `SHARED_SERVICE_TOPOLOGY_PLAN.md`, which recommends deferring it until the
+> decision-ownership question is answered. The status text below is the
+> original header, kept as history.
+
 > Status: **In execution (last updated 2026-09-14).** W3a, W1a, W1b, W1c, W2,
 > W3b, `server-app-file-split`, `workspace-selection`, `local-agent-file-split`,
 > `b5-export-the-moat`, `w4-logging-correlation`, `a3-maturity-metrics`,

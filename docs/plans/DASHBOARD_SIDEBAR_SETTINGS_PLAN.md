@@ -1,5 +1,9 @@
 # Dashboard sidebar settings realignment plan
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `dashboard-sidebar-settings` (5 stories, merged). The status text below is the
+> original header, kept as history.
+
 > Draft plan document, 2026-10-21. **Not ingested.** This is a persisted
 > design/scope document to revisit later and decompose into an ingestable
 > plan (per `.claude/rules/pipeline-story-schema.md`) when we're ready to

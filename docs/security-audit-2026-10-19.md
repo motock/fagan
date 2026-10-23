@@ -9,6 +9,18 @@ Method: source review of the files named below plus targeted greps for
 secret-bearing paths; a `git log -S` check that no known secret was ever
 committed; and permission checks on the local secret files.
 
+## Resolution (verified 2026-10-22)
+
+Plan `security-audit-fixes-2026-10` (3 stories, merged 2026-10-19) fixed both
+Medium findings and the Host-header Low finding: fixture paths that escape the
+worktree are rejected (`a04b3a9`), pipeline secrets are stripped from agent
+subprocess environments, and the dashboard rejects non-loopback Host headers
+(`app/auth.py`). The guided installer's env-file writer now uses mode 0600 for
+secret-bearing files (`pipeline/setup/envfile.py`), but an existing
+`.pipeline.env` keeps its old mode until it is rewritten or `chmod 600`'d, and
+nothing enforces the mode at load. The reviewer-bash item stays an accepted
+risk.
+
 ## Findings
 
 ### Medium — acceptance fixture paths are not validated before materialization

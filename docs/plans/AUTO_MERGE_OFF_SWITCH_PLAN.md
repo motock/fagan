@@ -1,5 +1,9 @@
 # Plan: `PIPELINE_AUTO_MERGE` opt-out flag — human-in-the-loop merges
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `pipeline-auto-merge-off` (4 stories, merged; `PIPELINE_AUTO_MERGE` is in REFERENCE.md). The status text below is the
+> original header, kept as history.
+
 > Authored 2026-10-21. **Not ingested.** Persisted here to revisit later.
 > Status: drafted, pending decomposition review and `ingest_plan`.
 

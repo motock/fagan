@@ -1,5 +1,9 @@
 # Always-on checklist (guided decomposition) and TDD-split
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `always-on-checklist-and-tdd-split` (2 stories, merged). The status text below is the
+> original header, kept as history.
+
 **Status:** proposed 2026-07-20, revised same day to unify the planner's
 provider/model resolution. Not yet implemented.
 **Scope:** remove the on/off *toggles* for the two tech-lead features so they

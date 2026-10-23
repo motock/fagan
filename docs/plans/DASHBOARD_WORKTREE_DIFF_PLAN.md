@@ -1,5 +1,9 @@
 # Plan — Worktree Diff Snapshot in the Story Modal
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `dashboard-worktree-diff` (7 stories, merged). The status text below is the
+> original header, kept as history.
+
 **Status:** Proposed, not yet ingested (2026-10-22).
 **One-line goal:** let a human in the dashboard see what an in-flight story's
 agent has actually changed in its worktree — a live `git diff` snapshot against

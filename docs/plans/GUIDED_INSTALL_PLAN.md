@@ -1,5 +1,9 @@
 # Guided installation plan
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan `guided-install`
+> (13 stories, merged; see `docs/guided-setup.md`). The status text below is the
+> original header, kept as history.
+
 **Status:** proposal, not implemented. The pipeline registration of this plan
 is `~/.claude/plans/guided-install.json` (3 epics, 13 stories); implementation
 is deferred, and every story still needs its mandatory impact-run preflight

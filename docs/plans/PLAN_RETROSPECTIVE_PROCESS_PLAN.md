@@ -1,5 +1,11 @@
 # Plan retrospective process
 
+> **Status (verified 2026-10-22): DONE.** The §2.1 durable marker shipped as
+> plan `retro-pending-marker`: `_record_retro_pending` now appends to
+> `retros/PENDING.md` when a plan's last story goes done, and the 2026-09-29
+> drain policy (window retros) keeps that backlog moving. The status text below is the
+> original header, kept as history.
+
 **Status:** partially implemented. The `mark_story_done` completion signal
 (§2, transient `plan_completed: true` return value) shipped 2026-07-21
 (#156) and works, but the loop it was meant to feed went dormant

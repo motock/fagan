@@ -66,6 +66,12 @@ Diff from `eb08922` (0.8.0) to `a7d3b5f`:
 
 ## Follow-ups
 
+> **Update 2026-10-22:** `dashboard-worktree-diff`, `dashboard-pin-guard-and-split`
+> and `cross-plan-awareness` have since shipped (all stories merged), and
+> `fagan-ruff-0-17-target` made the tree lint-clean under ruff 0.17 (now pinned
+> at 0.17.1). Only
+> `external-context-sources` is still held. The list below is as written.
+
 - Held plans ready to prep/ingest: `dashboard-worktree-diff`,
   `external-context-sources`, `dashboard-pin-guard-and-split`,
   `cross-plan-awareness`. Re-run the preflight impact run first; master moved.

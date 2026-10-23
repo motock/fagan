@@ -1,5 +1,9 @@
 # Overlord Parked-Story Autonomy Plan
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `overlord-parked-story-autonomy` (9 stories, PRs #736-#747). The status text below is the
+> original header, kept as history.
+
 **Status: design doc → plan draft (2026-09-14).** Companion to
 `OVERLORD_FAILURE_TRIAGE_PLAN.md` (which built the triage skeleton) and
 `AUTONOMY_GAP_CLOSURE_PLAN.md` (whose G2/G3/G4 are closed; G1 shrinks to a

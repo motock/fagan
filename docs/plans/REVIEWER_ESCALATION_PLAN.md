@@ -1,5 +1,9 @@
 # Plan: Escalating, enforceable rework feedback
 
+> **Status (verified 2026-10-22): DONE.** Layers 2-3 shipped as pipeline plan
+> `reviewer-escalation-l2l3` (4 stories, merged), so all three layers are in. The status text below is the
+> original header, kept as history.
+
 **Status:** Layer 1 IMPLEMENTED 2026-07-17 (signal threading + benchmark &
 production full-suite done-bars; TDD tests in test_local_agent_oracle.py,
 test_local_agent.py, test_backend.py, test_pipeline_mcp_server.py — all

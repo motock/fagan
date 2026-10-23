@@ -45,7 +45,8 @@ modes — it is not a hands-off "describe a feature, get a PR" tool yet.
 
 Developed and run day-to-day on **macOS**. The core (MCP server, dashboard,
 Claude-backend dispatch/review, the full test suite) is plain Python and CI
-tests it on Ubuntu across Python 3.11–3.14 on every push. Two pieces are
+tests it on Ubuntu across Python 3.11–3.14, plus macOS on 3.14, on every
+push. Two pieces are
 **macOS-only**:
 
 - **`launchd/*.plist`** — the scheduler/MLX-supervisor/usage-poller are
@@ -365,9 +366,9 @@ Pass `--dry-run` to print the plan without writing anything. Every flag, key, an
 | Pipeline MCP server | `app/pipeline_mcp_server.py` (launch shim) → `pipeline/` package | All pipeline tools + orchestration; `pipeline/server.py` is the entry module, split across `pipeline/*.py` (dispatch, review, ci, advance, store, etc.) |
 | Backend seam | `app/backend.py` | Per-role driver routing (`claude` / `ollama` / `lmstudio` / `mlx` / `local`); single-shot, review, dispatch, resource gate |
 | Local agent loop | `scripts/local_agent.py` | Native-tool-calling write loop for local dispatch (subprocess) |
-| Monitoring dashboard | `app/dashboard.py`, `static/` | FastAPI status/lifecycle viewer; in standalone mode (see "Running standalone" below) it also drives save/ingest/dispatch/review/merge directly |
+| Monitoring dashboard | `app/dashboard.py`, `static/` | FastAPI status/lifecycle viewer; in standalone mode (see "Running standalone" above) it also drives save/ingest/dispatch/review/merge directly |
 | Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
-| Tests | `tests/unit/` (10,500+ tests) | `pytest`, run via the venv |
+| Tests | `tests/unit/` (15,000+ tests) | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |
@@ -385,7 +386,7 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
 
 ```
  ┌───────────────────────────────────────────────────────────┐
- │ Orchestrator loop (cron / /loop skill)                     │
+ │ Scheduler daemon (or a manual advance_pipeline call)       │
  │ advance_pipeline(plan) — one idempotent tick               │
  └───────────────────────────┬───────────────────────────────┘
                               │ ready stories (deps satisfied)
@@ -451,7 +452,7 @@ context and are lower-volume.
 | `devops-release-engineer` | sonnet | Build/CI, branch & worktree hygiene, releases |
 | `code-reviewer` | sonnet | Reviews a branch, emits a `VERDICT`, opens a PR |
 | `tech-writer` | haiku | Docs for externally visible changes |
-| `overlord` | opus | The decision authority (see below) |
+| `overlord` | sonnet | The decision authority (see below) |
 
 Existing mobile specialists (`mobile-architect`, `mobile-engineer`,
 `ux-mobile-principal`, `qa-test-engineer`) are unchanged and used for mobile work.
@@ -499,7 +500,7 @@ For the one-command guided setup (flags, configuration keys, secure defaults, tr
 ## Prerequisites
 
 - **Python 3.11+** and the project venv. CI tests 3.11–3.14 on Ubuntu and
-  macOS on every push.
+  3.14 on macOS on every push.
 - **git** on PATH.
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).

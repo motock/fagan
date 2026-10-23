@@ -141,6 +141,13 @@ one.
 
 ## Related
 
+> **Update 2026-10-22:** Plan 1 shipped as `dashboard-pin-guard-and-split` and
+> Plan 2 as `cross-plan-awareness`, which closes latent hazard 4 (in-flight file
+> overlap is now advised on, and `blocked_by` gates ready stories). Hazards 1-3
+> are still open in the code: branch names are `agent/{story_key.lower()}`, the
+> worktree is `WORKTREE_ROOT / story_key`, and `_rebase_and_push_for_merge` runs
+> without the git lock.
+
 - Plan 1 (frozen-pin lint; dashboard split) — removes a conflict class that
   behaves identically in all three topologies.
 - Plan 2 (cross-plan file-overlap advisory and `blocked_by`) — the T2

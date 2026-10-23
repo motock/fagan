@@ -1,5 +1,11 @@
 # Plan: Expand MLX tool-call format support (Mistral + Qwen3-Coder)
 
+> **Status (verified 2026-10-22): PARKED, not started.** No Mistral
+> `[TOOL_CALLS]` parsing or `--chat-template` override exists in the tree.
+> Dispatch has since standardized on Ollama (cloud and on-device) and Claude,
+> so this only matters if MLX dispatch is revived. The status text below is the
+> original header, kept as history.
+
 > **Status (2026-07-15):** DRAFT, not started. Persisted for execution later. Written during the
 > MLX-default-provider investigation (see `MLX_DEFAULT_PROVIDER_PLAN.md`) after establishing that
 > most non-Qwen models in the 14B→30B gap are blocked purely by tool-call *plumbing*, not model

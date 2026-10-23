@@ -1,5 +1,9 @@
 # Scheduler Reconcile Resilience Plan
 
+> **Status (verified 2026-10-22): DONE.** Shipped as pipeline plan
+> `scheduler-reconcile-resilience` (2 stories, merged 2026-09-14). The status text below is the
+> original header, kept as history.
+
 **Status: design doc → plan draft (2026-09-14).** Born from a live incident
 the same morning: the freshly-ingested `overlord-parked-story-autonomy`
 plan wedged on the dashboard — two stories `in_progress` with dead agent

@@ -19,5 +19,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0003](0003-dispatch-backend-resolves-from-environment.md) | Dispatch backend resolves from the environment, not the registry | Accepted |
 | [0004](0004-safety-gates-default-on-and-fail-closed.md) | Safety gates default on and fail closed | Accepted |
 | [0005](0005-external-context-sources.md) | External context sources are reference data, pinned by digest | Proposed |
+| [0006](0006-decision-routing-on-a-shared-server.md) | Decisions on a shared server route to the plan owner | Accepted |
 
 See [`template.md`](template.md) when adding one.

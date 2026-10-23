@@ -12,7 +12,7 @@ class BranchGuardError(RuntimeError):
 
 def _has_origin(repo_root: Path) -> bool:
     result = subprocess.run(
-        ["git", "remote"], cwd=repo_root, capture_output=True, text=True
+        ["git", "remote"], cwd=repo_root, capture_output=True, text=True, check=False
     )
     return result.returncode == 0 and "origin" in result.stdout.split()
 
@@ -34,6 +34,7 @@ def remote_branch_exists(repo_root: Path | str, branch: str) -> bool:
             capture_output=True,
             text=True,
             timeout=_LS_REMOTE_TIMEOUT_SECONDS,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BranchGuardError(
@@ -46,4 +47,18 @@ def remote_branch_exists(repo_root: Path | str, branch: str) -> bool:
     raise BranchGuardError(
         f"could not query origin for branch {branch} "
         f"(git ls-remote exit {result.returncode})"
+    )
+
+
+def refusal(
+    story_key: str, branch: str, error: BranchGuardError | None = None
+) -> tuple[str, str]:
+    """(outcome, reason) for a fresh dispatch the guard blocked."""
+    if error is None:
+        return "remote_branch_exists", (
+            f"Refused to dispatch {story_key}: origin already has branch {branch}"
+        )
+    return "origin_unreachable", (
+        f"Refused to dispatch {story_key}: could not verify branch {branch} "
+        f"on origin ({error}); retry when origin is reachable"
     )

@@ -10,7 +10,7 @@ from typing import Any
 from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
-from .branch_guard import BranchGuardError, remote_branch_exists
+from .branch_guard import BranchGuardError, refusal, remote_branch_exists
 from .branch_names import story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
@@ -112,17 +112,9 @@ def _refuse_if_remote_branch_taken(
         with _scoped_repo_root(plan_name) as repo_root:
             if not remote_branch_exists(repo_root, branch):
                 return None
-        outcome = "remote_branch_exists"
-        reason = (
-            f"Refused to dispatch {story_key}: origin already has branch "
-            f"{branch}"
-        )
+        outcome, reason = refusal(story_key, branch)
     except BranchGuardError as exc:
-        outcome = "origin_unreachable"
-        reason = (
-            f"Refused to dispatch {story_key}: could not verify branch "
-            f"{branch} on origin ({exc}); retry when origin is reachable"
-        )
+        outcome, reason = refusal(story_key, branch, exc)
     story["dispatch_block_reason"] = reason
     _atomic_write_json(manifest_path, manifest)
     logging.getLogger("pipeline").warning(

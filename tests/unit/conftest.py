@@ -32,6 +32,18 @@ def _isolate_environ():
 
 
 @pytest.fixture(autouse=True)
+def _no_remote_branch_probe(request, monkeypatch):
+    """Dispatch tests fake subprocess.run/Popen wholesale, which the fresh-
+    dispatch remote-branch guard would trip over. Neutralize it everywhere
+    except test_branch_guard.py, which exercises it for real."""
+    if request.module.__name__.endswith("test_branch_guard"):
+        return
+    from pipeline import dispatch
+
+    monkeypatch.setattr(dispatch, "remote_branch_exists", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_registry_state():
     """Reset the model-registry memo around every test (function-scoped,
     autouse - mirrors _isolate_environ).

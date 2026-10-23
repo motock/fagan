@@ -20,7 +20,7 @@ def _run(args, cwd):
 
 class _FakeProc:
     pid = 4242
-    args: list = []
+    args: list = []  # noqa: RUF012
     returncode = 0
 
     def communicate(self, input=None, timeout=None):

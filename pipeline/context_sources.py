@@ -1,9 +1,18 @@
-"""Pure validation and normalization of the plan-level ``context`` block.
+"""Plan-level ``context`` block: validation, normalization, and the ``dir`` provider.
 
-See docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md §4.2 and §4.9. No I/O here.
+See docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md §4.2, §4.4, §4.9 and §5.
+Validation and normalization are pure; only the ``dir`` provider and the
+snapshot store below do I/O.
 """
 
+import hashlib
+import json
+import os
 import re
+from pathlib import Path
+
+from . import paths
+from .global_rules_install import _write_atomic
 
 SUPPORTED_PROVIDERS = ("dir",)
 SUPPORTED_MODES = ("prompt",)
@@ -203,3 +212,112 @@ def render_context_block(resolved: list[dict], *, max_total_chars: int) -> str:
     if skipped:
         parts.append(f"\n[... context truncated at {max_total_chars} chars ...]\n")
     return "".join(parts)
+
+
+# ---------- dir provider, secret scan, snapshot store ----------
+
+MAX_FILE_BYTES = 1024 * 1024
+_BINARY_SNIFF_BYTES = 8192
+
+_SECRET_PATTERNS = (
+    ("PEM private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("AWS access key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("GitHub token", re.compile(r"ghp_[A-Za-z0-9]{36}")),
+    ("API key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
+)
+
+
+def scan_for_secrets(text: str) -> list[str]:
+    """Return the labels of secret patterns found in *text*; never the values."""
+    return [label for label, pattern in _SECRET_PATTERNS if pattern.search(text)]
+
+
+def _glob_to_regex(pattern: str) -> re.Pattern:
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _read_text_if_selectable(path: Path, root: Path) -> str | None:
+    """Return the file's text, or None when it must be skipped."""
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        return None
+    if not resolved.is_file() or resolved.stat().st_size > MAX_FILE_BYTES:
+        return None
+    data = resolved.read_bytes()
+    if b"\x00" in data[:_BINARY_SNIFF_BYTES]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def resolve_dir_source(source: dict) -> dict:
+    """Resolve a ``dir`` source to ``{text, files, bytes, truncated, digest}``."""
+    root = Path(source["uri"]).expanduser().resolve()
+    if not root.is_dir():
+        raise ContextSourceError(f"source {source.get('name')!r}: uri is not a directory")
+
+    include = [_glob_to_regex(p) for p in source.get("include", list(DEFAULT_INCLUDE))]
+    exclude = [_glob_to_regex(p) for p in source.get("exclude", [])]
+    max_chars = source.get("max_chars", DEFAULT_MAX_CHARS)
+
+    relpaths = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            rel = (Path(dirpath) / filename).relative_to(root).as_posix()
+            if any(r.match(rel) for r in include) and not any(r.match(rel) for r in exclude):
+                relpaths.append(rel)
+
+    entries = []
+    for rel in sorted(relpaths):
+        content = _read_text_if_selectable(root / rel, root)
+        if content is None:
+            continue
+        labels = scan_for_secrets(content)
+        if labels:
+            raise ContextSourceError(
+                f"source {source.get('name')!r}: file {rel!r} matches secret pattern {labels[0]!r}"
+            )
+        entries.append(f"--- {rel} ---\n{content}")
+
+    text = "".join(entries)
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars] + f"\n[... truncated at {max_chars} chars ...]"
+    return {
+        "text": text,
+        "files": len(entries),
+        "bytes": len(text.encode("utf-8")),
+        "truncated": truncated,
+        "digest": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
+def snapshot_context(text: str) -> str:
+    """Persist *text* under ``PLAN_DIR/context/<digest-hex>/`` and return its digest."""
+    payload = text.encode("utf-8")
+    hexdigest = hashlib.sha256(payload).hexdigest()
+    digest = "sha256:" + hexdigest
+    folder = paths.PLAN_DIR / "context" / hexdigest
+    if (folder / "meta.json").exists():
+        return digest
+    folder.mkdir(parents=True, exist_ok=True)
+    _write_atomic(folder / "content.txt", text)
+    _write_atomic(folder / "meta.json", json.dumps({"digest": digest, "bytes": len(payload)}))
+    return digest

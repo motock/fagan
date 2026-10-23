@@ -1,6 +1,10 @@
 # Plan — `check_story_status` raises on finished stories and unknown plans
 
-**Status:** Proposed, not yet ingested (2026-10-22). Claude-class dispatch
+**Status (2026-10-23): ingested** as pipeline plan `check-story-status-terminal`
+(story `CSST-1`). Re-verified on master `23777ba` before ingest: the bug still
+reproduces, and an impact run of a stand-in fix gave 0 pre-existing failures.
+
+**Original status:** Proposed, not yet ingested (2026-10-22). Claude-class dispatch
 (live registry `roles.dispatch` is claude/sonnet), so the local-dispatch
 preflight does not apply.
 **One-line goal:** make `check_story_status` return a structured result instead

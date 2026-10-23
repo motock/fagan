@@ -18,7 +18,7 @@ update this index in the same change.
 
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
-| 1 | [`CHECK_STORY_STATUS_FIX_PLAN.md`](CHECK_STORY_STATUS_FIX_PLAN.md) | Brief written, not ingested | A live bug: `check_story_status` raises `FileNotFoundError` for any finished story and any unknown plan. One story, Claude-class, still reproduces on master. | `save_plan` and dispatch. |
+| 1 | [`CHECK_STORY_STATUS_FIX_PLAN.md`](CHECK_STORY_STATUS_FIX_PLAN.md) | Ingested 2026-10-23 as `check-story-status-terminal` | A live bug: `check_story_status` raises `FileNotFoundError` for any finished story and any unknown plan. One story, Claude-class, still reproduces on master. | In flight; mark done when CSST-1 merges. |
 | 2 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
 | 3 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
 | 4 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |

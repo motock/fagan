@@ -83,6 +83,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
     manifest_path = _store.manifest_path(plan_name)  # noqa: F821
+    if not manifest_path.exists():
+        return {"ok": False, "error": "Plan not found"}
     manifest = _store.get_manifest(plan_name)  # noqa: F821
     story = manifest["stories"].get(story_key)
     if not story or "pid" not in story:
@@ -91,6 +93,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # Incomplete by definition — running tests here would just record a
         # spurious failure instead of leaving it resumable.
         return {"status": "interrupted", "pid": story["pid"]}
+    if story["status"] in ("done", "merged"):
+        # Finished stories keep their pid but their worktree is gone, so
+        # there is nothing to test; report the terminal state as-is.
+        return {"status": story["status"], "pid": story["pid"]}
 
     pid = story["pid"]
     try:

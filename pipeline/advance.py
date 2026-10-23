@@ -18,6 +18,7 @@ import logging
 import os
 from typing import Any
 
+from . import cross_plan
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -310,11 +311,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     )
 
     done = _completed_dep_ids(stories)
+    neighbours = cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
     ready = [
         k
         for k, v in stories.items()
         if v["status"] in ("todo", "interrupted", "changes_requested")
         and all(d in done for d in v.get("dependencies", []))
+        and not cross_plan.blocked_by_gaps(v, neighbours)
     ]
 
     # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (comparisons

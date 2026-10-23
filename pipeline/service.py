@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from pipeline import worktree_diff
+from pipeline import cross_plan, worktree_diff
 from pipeline.workspace import normalize_workspace_path, validate_workspace
 
 logger = logging.getLogger(__name__)
@@ -617,12 +617,14 @@ class PipelineService:
         stories = manifest["stories"]
         done = _completed_dep_ids(stories)
 
+        neighbours = cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
+
         ready = []
         for key, story in stories.items():
             if story["status"] != "todo":
                 continue
             deps_met = all(dep in done for dep in story["dependencies"])
-            if deps_met:
+            if deps_met and not cross_plan.blocked_by_gaps(story, neighbours):
                 ready.append({"key": key, "summary": story["summary"]})
         return ready
     def save_plan(self, plan_name: str, plan_json: str, workspace: str | None = None) -> dict[str, Any]:

@@ -1,6 +1,11 @@
 # Plan — topology collision guards (story-key reuse and the unchecked merge fetch)
 
-**Status:** Proposed, saved as pipeline plan `topology-collision-guards`, not yet
+**Status (verified 2026-10-23): DONE.** All four stories merged (PRs
+#1205-#1208, CI green). Measured after merge against the live plan store
+(401 plans): 0 would-be ingest rejections and 0 dispatchable stories refused,
+as expected.
+
+**Original status:** Proposed, saved as pipeline plan `topology-collision-guards`, not yet
 ingested (2026-10-22). Claude-class dispatch: the live registry routes `dispatch`
 to claude/sonnet and `PIPELINE_BACKEND_DISPATCH` is unset, so the local-dispatch
 preflight is not mandatory. An impact run was still done (below).

@@ -143,10 +143,14 @@ one.
 
 > **Update 2026-10-22:** Plan 1 shipped as `dashboard-pin-guard-and-split` and
 > Plan 2 as `cross-plan-awareness`, which closes latent hazard 4 (in-flight file
-> overlap is now advised on, and `blocked_by` gates ready stories). Hazards 1-3
-> are still open in the code: branch names are `agent/{story_key.lower()}`, the
-> worktree is `WORKTREE_ROOT / story_key`, and `_rebase_and_push_for_merge` runs
-> without the git lock.
+> overlap is now advised on, and `blocked_by` gates ready stories).
+>
+> **Update 2026-10-23:** `topology-collision-guards` (PRs #1205-#1208) closed
+> hazards 1-3 for T2: `ingest_plan` and dispatch refuse a story key another plan
+> still holds, and the merge gate fails, then retries, on a failed
+> `git fetch origin` instead of rebasing onto a stale base. Branches and
+> worktrees are still keyed by the story key alone, so two machines sharing
+> only `origin` (T1) can still collide; namespacing remains a T3 prerequisite.
 
 - Plan 1 (frozen-pin lint; dashboard split) — removes a conflict class that
   behaves identically in all three topologies.

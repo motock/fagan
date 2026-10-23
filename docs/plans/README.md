@@ -19,18 +19,18 @@ update this index in the same change.
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
 | 1 | [`CHECK_STORY_STATUS_FIX_PLAN.md`](CHECK_STORY_STATUS_FIX_PLAN.md) | Brief written, not ingested | A live bug: `check_story_status` raises `FileNotFoundError` for any finished story and any unknown plan. One story, Claude-class, still reproduces on master. | `save_plan` and dispatch. |
-| 2 | [`TOPOLOGY_COLLISION_GUARDS_PLAN.md`](TOPOLOGY_COLLISION_GUARDS_PLAN.md) (hazards 1-3 of the topology record) | Saved as `topology-collision-guards`, not ingested | Latent correctness bugs today, not just for teams: 5 author-written keys are already reused across plans, and a reused key shares a branch and a worktree, which dispatch then resumes. Separately, the merge gate ignores a failed `git fetch`. 4 Claude-class stories; impact run clean. | `ingest_plan`. |
-| 3 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
-| 4 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
-| 5 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
-| 6 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 7 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
+| 2 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
+| 3 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
+| 4 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
+| 5 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
+| 6 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
 option B (several sessions on one shared host) now and defers T3 (hosted,
 multi-tenant) until someone can say who answers a decision on a plan they did
-not create. Accepting B is what makes item 2 the right next build.
+not create. Option B's prerequisites (the latent hazards it names) shipped in
+`TOPOLOGY_COLLISION_GUARDS_PLAN.md`, so accepting B needs no further build.
 
 **Parked (revisit only if the trigger happens):**
 
@@ -88,7 +88,9 @@ merged; follow-ups in `wap-review-followups`).
 **Architecture of the pipeline itself**: `PIPELINE_MCP_DECOMPOSITION_PLAN.md`,
 `EVENT_DRIVEN_PHASE2_PLAN.md` (`event-driven-pipeline-phase2` and `-phase3`),
 `server-app-file-split.json`, `OVERSIZED_MODULE_SPLIT_PLAN.json`,
-`PIPELINE_COLD_IMPORTS_PLAN.json`, `PIPELINE_COLD_IMPORTS_PHASE2_PLAN.json`.
+`PIPELINE_COLD_IMPORTS_PLAN.json`, `PIPELINE_COLD_IMPORTS_PHASE2_PLAN.json`,
+`TOPOLOGY_COLLISION_GUARDS_PLAN.md` (story-key uniqueness at ingest and
+dispatch, checked merge fetch).
 
 **Reporting and metrics**: `POST_LD90_REPORTING_FIX_PLAN.json`,
 `REPORTING_LAYER_FOLLOWUPS_PLAN.json`.

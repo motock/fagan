@@ -838,6 +838,28 @@ it. To re-run such a story deliberately, change its status with
 `set_story_status` first. The scheduler tick is unaffected: it only ever
 dispatches `todo`, `interrupted` and `changes_requested` stories.
 
+## Fresh dispatch refuses a branch origin already has
+
+Story branches are `agent/<key>`, so two machines sharing one `origin` and
+using the same story key would push to the same branch. Before a FRESH
+dispatch creates the worktree (no existing worktree and status not
+`interrupted`/`changes_requested`), `pipeline/branch_guard.py` runs
+`git ls-remote --exit-code --heads origin <branch>`:
+
+- Branch exists on origin: the dispatch is refused with `ok: False`, the story
+  stays `todo`, and the reason (naming the story and branch) is stored on the
+  story as `dispatch_block_reason` and sent as a `remote_branch_exists`
+  notification.
+- `origin` is configured but cannot be queried (network, auth, timeout): the
+  dispatch is refused the same way with an `origin_unreachable` notification.
+  The guard denies by default; retry once origin is reachable. Error text never
+  includes the remote URL.
+- Branch absent, or the repo has no `origin` remote: the dispatch proceeds.
+
+Resume and rework dispatches own their branch and never call the guard. To
+proceed past a refusal for a branch you know is yours, delete the remote
+branch or choose a different story key.
+
 ## Acceptance fixture grading
 
 An `acceptance` fixture that calls the changed function directly — never

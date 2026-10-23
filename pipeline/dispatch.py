@@ -10,6 +10,7 @@ from typing import Any
 from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
+from .branch_guard import BranchGuardError, remote_branch_exists
 from .branch_names import story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
@@ -93,6 +94,52 @@ get_ticket_provider = _ServerRef("get_ticket_provider")
 # already merged or awaiting merge, so a fresh worktree would be cut from a
 # base that may already contain it. set_story_status is the explicit way back.
 _NON_DISPATCHABLE_STATUSES = frozenset({"done", "pr_open"})
+
+
+def _refuse_if_remote_branch_taken(
+    plan_name: str,
+    story_key: str,
+    story: dict[str, Any],
+    branch: str,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Fail-closed guard for a FRESH dispatch: block when origin already holds
+    ``branch`` or cannot be queried (a second push would overwrite another
+    machine's work). Returns the refusal result, or None to proceed. The story
+    stays ``todo`` with the reason recorded on it."""
+    try:
+        with _scoped_repo_root(plan_name) as repo_root:
+            if not remote_branch_exists(repo_root, branch):
+                return None
+        outcome = "remote_branch_exists"
+        reason = (
+            f"Refused to dispatch {story_key}: origin already has branch "
+            f"{branch}"
+        )
+    except BranchGuardError as exc:
+        outcome = "origin_unreachable"
+        reason = (
+            f"Refused to dispatch {story_key}: could not verify branch "
+            f"{branch} on origin ({exc}); retry when origin is reachable"
+        )
+    story["dispatch_block_reason"] = reason
+    _atomic_write_json(manifest_path, manifest)
+    logging.getLogger("pipeline").warning(
+        "fresh dispatch blocked by remote branch guard",
+        extra={"plan": plan_name, "story_key": story_key, "branch": branch,
+               "outcome": outcome},
+    )
+    _notify_user(
+        plan_name,
+        reason,
+        story_key=story_key,
+        severity="warning",
+        event=outcome,
+        dedup_key=f"{outcome}:{story_key}",
+    )
+    return {"ok": False, "error": reason, "story_key": story_key,
+            "branch": branch, "outcome": outcome}
 
 
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -180,6 +227,12 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         journal = _read_journal(plan_name, story_key) if resuming else []
 
         if not resuming:
+            block = _refuse_if_remote_branch_taken(
+                plan_name, story_key, story, branch, manifest_path, manifest
+            )
+            if block is not None:
+                return block
+            story.pop("dispatch_block_reason", None)
             setup_error = _create_fresh_worktree(plan_name, branch, worktree_path)
             if setup_error is not None:
                 return setup_error

@@ -860,6 +860,20 @@ Resume and rework dispatches own their branch and never call the guard. To
 proceed past a refusal for a branch you know is yours, delete the remote
 branch or choose a different story key.
 
+### Branch namespace (`PIPELINE_BRANCH_NAMESPACE`)
+
+Set `PIPELINE_BRANCH_NAMESPACE` to opt in to `agent/<ns>/<key>` branch names
+for newly dispatched stories; unset (the default) keeps `agent/<key>`. The
+value must match `^[a-z0-9][a-z0-9-]{0,31}$`; any other non-empty value
+raises a `ValueError` naming the variable rather than being ignored. Two
+operators sharing one `origin` should each set a distinct value.
+
+Dispatch records the chosen name on the story as `branch`, and every reader
+that has the story prefers it, so a story dispatched before the variable was
+set resumes on its old branch. A story whose lowercased key equals the
+namespace is refused at dispatch, because git cannot hold both `agent/x` and
+`agent/x/y`.
+
 ## Acceptance fixture grading
 
 An `acceptance` fixture that calls the changed function directly — never

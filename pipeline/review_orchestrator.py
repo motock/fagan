@@ -19,7 +19,7 @@ patch it land too.
 
 from typing import Any
 
-from .branch_names import story_branch
+from .branch_names import recorded_kwargs, story_branch
 from .parsers import _is_transient_backend_exception
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
 from .review import _first_review_base, build_review_story_context
@@ -58,7 +58,8 @@ def _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **kwargs):
     """Warn-only: never alters the PR, the verdict, or the returned pr_url."""
     try:
         message = _pr_title_mismatch_message(
-            worktree, _resolve_story_branch(worktree, story_key), story.get("summary", ""))
+            worktree, _resolve_story_branch(worktree, story_key, **recorded_kwargs(story)),
+            story.get("summary", ""))
         if message:
             _notify_user(plan_name, f"{story_key}: {message}", story_key=story_key,
                          severity="warning", event="pr_title_mismatch", **kwargs)
@@ -115,7 +116,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if not story:
         return {"ok": False, "error": f"No such story {story_key}"}
 
-    branch = story_branch(story_key)
+    branch = story_branch(story_key, story.get("branch"))
     worktree = story.get("worktree", "")
     # W4L-04: stamp every story-scoped notification with the correlation_id
     # dispatch minted for this story. Older manifests predate the field - the

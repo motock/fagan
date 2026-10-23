@@ -38,6 +38,13 @@ Selection rules:
   :data:`pipeline.persistence.NOTIFICATIONS_KEEP_N` — the same policy as
   ``file_log_sink``, so it cannot drift.
 
+Per-instance queues (notification channels): when a notification config file
+exists, each event is also appended to the outbox of every instance its routes
+deliver to, and :func:`drain_channel_outboxes` drains those through the
+instances.  The routes are the allowlist there (``PIPELINE_NOTIFY_OUTBOX_EVENTS``
+only filters the legacy file).  Files of instances removed from the config are
+left untouched, not deleted.
+
 Like every sink, this one never raises into the bus: any failure is logged at
 ERROR level with ``exc_info=True`` and swallowed, so a notification failure
 can never break a pipeline tick.
@@ -53,6 +60,8 @@ from pathlib import Path
 from typing import Any
 
 from . import paths, persistence
+from .notification_channels import as_sender, channel_outbox_path
+from .notification_routing import safe_load_notification_config
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,58 @@ OUTBOX_SUFFIX = ".outbox.jsonl"
 # phases cover all plans at once), so its drain phase passes this instead of a
 # single plan name.
 ALL_PLANS = "*"
+
+
+def _append_rotating(path: Path, line: str) -> None:
+    persistence._rotate_if_needed(
+        path,
+        persistence.NOTIFICATIONS_MAX_BYTES,
+        persistence.NOTIFICATIONS_KEEP_N,
+    )
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
+def _spool_legacy(plan: str, evt_name: str | None, line: str) -> None:
+    if os.environ.get(OUTBOX_ENABLED_ENV, "0") != "1":
+        # Secure default: outbound sinks ship disabled.  Read per call so
+        # tests (and operators) can flip it without a process restart.
+        return
+    raw = os.environ.get(OUTBOX_EVENTS_ENV, DEFAULT_OUTBOX_EVENTS)
+    allowed = {s.strip() for s in raw.split(",") if s.strip()}
+    if evt_name not in allowed:
+        # Not allowlisted (or no structured event name): silently skip.
+        return
+    _append_rotating(PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}", line)
+
+
+def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
+    """Append ``line`` to the queue of each instance the config routes it to.
+
+    A config file's routes are the allowlist for these queues (the legacy
+    ``PIPELINE_NOTIFY_OUTBOX_EVENTS`` is not consulted), and the file's
+    presence is the opt-in.  No file means nothing here.  One instance's write
+    failure is logged (type only) and never stops the others or the legacy
+    write.
+    """
+    try:
+        config = safe_load_notification_config()
+        if config is None:
+            return
+        for name in config.resolve(plan, evt_name):
+            try:
+                _append_rotating(channel_outbox_path(plan, config.instances[name]), line)
+            except Exception as exc:  # noqa: BLE001 - isolate one instance's failure
+                logger.error(
+                    "Failed to spool notification to instance outbox: instance=%s error_type=%s",
+                    name,
+                    type(exc).__name__,
+                )
+    except Exception as exc:  # noqa: BLE001 - the sink never raises into the bus
+        logger.error(
+            "Failed to route notification to instance outboxes: error_type=%s",
+            type(exc).__name__,
+        )
 
 
 def outbox_sink(event: dict[str, Any]) -> None:
@@ -102,29 +163,15 @@ def outbox_sink(event: dict[str, Any]) -> None:
             )
             return
 
-        if os.environ.get(OUTBOX_ENABLED_ENV, "0") != "1":
-            # Secure default: outbound sinks ship disabled.  Read per call so
-            # tests (and operators) can flip it without a process restart.
-            return
-
         payload = event.get("payload")
         evt_name = payload.get("event") if isinstance(payload, dict) else None
+        line = json.dumps(dict(event), default=str) + "\n"
 
-        raw = os.environ.get(OUTBOX_EVENTS_ENV, DEFAULT_OUTBOX_EVENTS)
-        allowed = {s.strip() for s in raw.split(",") if s.strip()}
-        if evt_name not in allowed:
-            # Not allowlisted (or no structured event name): silently skip.
-            return
-
-        path = PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}"
-        persistence._rotate_if_needed(
-            path,
-            persistence.NOTIFICATIONS_MAX_BYTES,
-            persistence.NOTIFICATIONS_KEEP_N,
-        )
-        record = dict(event)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, default=str) + "\n")
+        try:
+            _spool_legacy(plan, evt_name, line)
+        finally:
+            # A legacy write failure must not stop the instance queues.
+            _spool_instances(plan, evt_name, line)
     except Exception:  # pragma: no cover - defensive
         logger.exception(
             "Failed to spool notification to outbox for event %s", event
@@ -265,3 +312,35 @@ def drain_outbox(plan_name: str, sender) -> int:
             total += _drain_one_outbox(outbox_path, sender)
         return total
     return _drain_one_outbox(PLAN_DIR / f"{plan_name}{OUTBOX_SUFFIX}", sender)
+
+
+def drain_channel_outboxes(plan_name: str = ALL_PLANS) -> dict[str, int]:
+    """Drain every configured instance's outbox through that instance.
+
+    Returns delivered counts keyed by instance name.  Files belonging to an
+    instance no longer in the config are left untouched (not drained, not
+    deleted).  No config file means no instances, so nothing happens.  Never
+    raises.
+    """
+    delivered: dict[str, int] = {}
+    try:
+        config = safe_load_notification_config()
+        if config is None:
+            return delivered
+        for name, channel in config.instances.items():
+            try:
+                if plan_name == ALL_PLANS:
+                    files = sorted(PLAN_DIR.glob(f"*{channel.outbox_suffix}"))
+                else:
+                    files = [channel_outbox_path(plan_name, channel)]
+                sender = as_sender(channel)
+                delivered[name] = sum(_drain_one_outbox(f, sender) for f in files)
+            except Exception as exc:  # noqa: BLE001 - one instance must not block another
+                logger.error(
+                    "Failed to drain instance outbox: instance=%s error_type=%s",
+                    name,
+                    type(exc).__name__,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to drain channel outboxes: error_type=%s", type(exc).__name__)
+    return delivered

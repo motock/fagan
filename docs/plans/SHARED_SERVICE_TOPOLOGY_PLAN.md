@@ -99,6 +99,25 @@ input, never a reservation. Nothing asks whether another in-flight story is
 editing the same path. This is the gap Plan 2 (file-overlap advisory and
 cross-plan `blocked_by`) closes for T2, and would close for T3 once T3 exists.
 
+## Stated use cases (2026-10-23)
+
+The two use cases the project owner wants to serve, mapped to the topologies:
+
+1. **Many developers, each running the pipeline locally, no shared filesystem,
+   several plans against one `origin`.** This is **T1**. It needs no new
+   server. What it lacks is cross-engineer visibility and collision-proof
+   naming: latent hazard 1 (branch names keyed by story key alone) is the live
+   risk, and Plan 2's advisory cannot see another machine's manifests.
+2. **Enterprise: one remote pipeline, each engineer connecting over MCP, several
+   plans against one remote `origin`.** This is **T3**, with everything listed
+   under "Why T3 is not a configuration change" plus the C prerequisites below.
+
+**T2 (one box, several sessions) is not one of the stated use cases.** It is the
+topology the existing locks assume and the one the collision guards target, but
+it is neither a developer's laptop nor the enterprise deployment. The
+recommendation below was written before these use cases were stated and should
+be re-read against them.
+
 ## Decision options
 
 | Option | What it means | Cost | Cost of being wrong |
@@ -108,6 +127,10 @@ cross-plan `blocked_by`) closes for T2, and would close for T3 once T3 exists.
 | **C. Build T3** | A hosted server with identity. | Large: transport, auth, tenancy, routing, per-operator config. | Expensive to build before knowing the ownership model. |
 
 ## Recommendation
+
+**Superseded in part by the stated use cases above:** use case 1 is option A
+hardened with namespacing (hazard 1), and use case 2 is option C. Option B
+serves neither directly. The original reasoning follows.
 
 **Choose B now, and treat C as a separate product decision.** B is the only
 option that is both runnable today and materially better than A, and its
@@ -145,16 +168,20 @@ one.
 > Plan 2 as `cross-plan-awareness`, which closes latent hazard 4 (in-flight file
 > overlap is now advised on, and `blocked_by` gates ready stories).
 >
-> **Update 2026-10-23:** `topology-collision-guards` (PRs #1205-#1208) closed
-> hazards 1-3 for T2: `ingest_plan` and dispatch refuse a story key another plan
-> still holds, and the merge gate fails, then retries, on a failed
-> `git fetch origin` instead of rebasing onto a stale base. Branches and
-> worktrees are still keyed by the story key alone, so two machines sharing
-> only `origin` (T1) can still collide; namespacing remains a T3 prerequisite.
+> **Update 2026-10-23:** `topology-collision-guards` (PRs #1205-#1208) guards
+> hazards 1-3 for T2. `ingest_plan` and dispatch refuse a story key another plan
+> still holds, which guards hazards 1 and 2 on one machine without changing how
+> branches and worktrees are named. For hazard 3, the merge gate now fails, then
+> retries, on a failed `git fetch origin` instead of rebasing onto a stale base;
+> `_rebase_and_push_for_merge` still does not take the git lock, so that hazard is
+> mitigated, not closed. Branches and worktrees are still keyed by the story key
+> alone, so two machines sharing only `origin` (T1) can still collide;
+> namespacing remains open and is a T3 prerequisite.
 
-- Plan 1 (frozen-pin lint; dashboard split) — removes a conflict class that
-  behaves identically in all three topologies.
-- Plan 2 (cross-plan file-overlap advisory and `blocked_by`) — the T2
-  coordination layer.
+- Plan 1 (`dashboard-pin-guard-and-split`: frozen-pin lint; dashboard split) —
+  removes a conflict class that behaves identically in all three topologies.
+- Plan 2 (`cross-plan-awareness`: file-overlap advisory and `blocked_by`) — the
+  T2 coordination layer. It reads local manifests, so it sees nothing across
+  machines (T1).
 - `docs/plans/server-app-file-split.json` — the historical split chain and the
   monkeypatch hazard it documents.

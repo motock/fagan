@@ -19,6 +19,7 @@ patch it land too.
 
 from typing import Any
 
+from .branch_names import story_branch
 from .parsers import _is_transient_backend_exception
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
 from .review import _first_review_base, build_review_story_context
@@ -114,7 +115,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if not story:
         return {"ok": False, "error": f"No such story {story_key}"}
 
-    branch = f"agent/{story_key.lower()}"
+    branch = story_branch(story_key)
     worktree = story.get("worktree", "")
     # W4L-04: stamp every story-scoped notification with the correlation_id
     # dispatch minted for this story. Older manifests predate the field - the

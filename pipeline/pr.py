@@ -19,6 +19,8 @@ import subprocess
 from logging import getLogger
 from typing import Any
 
+from .branch_names import story_branch
+
 
 def _convention_branch(story_key: str) -> str:
     """The pre-alias convention branch name for a story key.
@@ -28,7 +30,7 @@ def _convention_branch(story_key: str) -> str:
     exist) degrade to the same name the resolver itself would fail open to,
     without re-hardcoding the literal at each call site.
     """
-    return f"agent/{story_key.lower()}"
+    return story_branch(story_key)
 
 
 def _resolve_story_branch(worktree: str, story_key: str) -> str:
@@ -46,7 +48,7 @@ def _resolve_story_branch(worktree: str, story_key: str) -> str:
     story worktrees that may legitimately not exist yet, and a probe failure
     must degrade to the old convention-branch behaviour, never raise.
     """
-    convention = f"agent/{story_key.lower()}"
+    convention = story_branch(story_key)
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],

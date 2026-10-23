@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .branch_names import story_branch
 from .ecosystem_detect import (  # noqa: F401 - re-exported
     _apply_pytest_collection_overrides,
     _build_command_for,
@@ -594,7 +595,7 @@ def _added_pytest_test_paths(
     (FM-A, _scope_test_cmd_to_acceptance), and adding the model's own tests
     back in would undermine that.
     """
-    branch = f"agent/{story_key.lower()}"
+    branch = story_branch(story_key)
     try:
         r = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=ACM",

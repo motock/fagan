@@ -26,6 +26,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .branch_names import story_branch
+
 _lock_state = {}
 
 
@@ -563,7 +565,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # that was never pushed to it. Resolve only when there is a
                 # worktree to probe; a missing/anomalous worktree degrades to
                 # the convention branch without paying a subprocess.
-                branch = f"agent/{story_key.lower()}"
+                branch = story_branch(story_key)
                 if worktree and Path(worktree).is_dir():
                     branch = _resolve_story_branch(worktree, story_key)
                 rb = _rebase_onto_master(worktree, branch)

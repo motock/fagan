@@ -773,6 +773,45 @@ Graceful degradation for optional components — absence is never an error:
 
 ---
 
+## Plan-level `context` block
+
+Documents the optional plan-level `context` field of the plan JSON (a sibling
+of `epics`, like `role_config`): external reference sources injected into role
+prompts. Design: `docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md` §4.2, §4.7, §4.9.
+
+`ingest_plan` validates the block before taking the plan lock and rejects an
+invalid one with every error joined in a single message; an unknown key at
+either level is an error. The normalized, fully-defaulted block is stored in
+the manifest as `context: {"max_total_chars": ..., "sources": [...]}`.
+Re-ingesting a plan that omits `context` preserves the prior manifest's block.
+Story-level fields are unchanged.
+
+Shape: `{"max_total_chars": 60000, "sources": [{...}]}`. `max_total_chars` is a
+positive integer (default `60000`); `sources` is a non-empty list. Source
+fields:
+
+| Field | Required | Rule |
+|---|---|---|
+| `name` | yes | unique, `^[a-z0-9][a-z0-9-]{0,63}$` |
+| `provider` | yes | this release: `dir` only |
+| `uri` | yes | `dir`: absolute path with no `..` segment |
+| `include` / `exclude` | no | relative glob lists (no leading `/`, no `..`); default include `["**/*"]`, default exclude `[]` |
+| `phases` | yes | non-empty subset of `dispatch`, `review`, `security_review`; any other phase is rejected in this release |
+| `mode` | no | default `prompt`; this release: `prompt` only |
+| `authority` | no | `reference` (default) or `policy` |
+| `priority` | no | integer, default `0`; higher wins within the same authority |
+| `max_chars` | no | integer 1–`100000`, default `20000` |
+| `required` | no | boolean, default `true` |
+
+Precedence, highest to lowest: the code-enforced safety core (test-file
+protection, story `files` scope, review/CI/merge gates, tool allow-lists,
+secret handling) → `authority: policy` sources (by descending `priority`) →
+the story's `agent_instructions` → `authority: reference` sources → repo
+`CLAUDE.md` / `.claude/rules/` → global fagan rules → persona defaults. A
+source can never override the safety core.
+
+---
+
 ## Preflight ingest gate
 
 `ingest_plan` gates stories that will be dispatched to a non-Claude provider. The provider is resolved from the story's `backend`, then the plan-level `role_config.dispatch.provider`, then `PIPELINE_BACKEND_DISPATCH`, then the registry's `roles.dispatch.provider`; anything other than `claude` (including `auto`) is gated.

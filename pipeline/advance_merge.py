@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .branch_names import recorded_kwargs
 from .module_ref import _ModuleRef
 
 MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
@@ -134,7 +133,7 @@ def _readjudicate_parked_merge_hold(
 
     worktree = story.get("worktree", "")
     if worktree and Path(worktree).is_dir():
-        branch = _resolve_story_branch(worktree, key, **recorded_kwargs(story))
+        branch = _resolve_story_branch(worktree, key)
     else:
         # No worktree to probe: hand the gather no branch at all, exactly
         # like the merge path - a locally computed convention branch is the
@@ -251,7 +250,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         from .pr import _resolve_story_branch
 
         if worktree and Path(worktree).is_dir():
-            branch = _resolve_story_branch(worktree, key, **recorded_kwargs(story))
+            branch = _resolve_story_branch(worktree, key)
         else:
             # No worktree to probe (missing/anomalous): nothing was
             # dispatched, so no alias can exist. Hand the gate NO

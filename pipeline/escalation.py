@@ -21,7 +21,7 @@ from typing import Any
 
 from app import role_registry
 
-from .branch_names import recorded_kwargs, story_branch
+from .branch_names import story_branch
 from .parsers import _atomic_write_json
 from .persistence import _notify_user
 from .rebrief import (
@@ -138,7 +138,7 @@ def _escalate_to_claude(
     story = manifest["stories"][story_key]
     repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
-    branch = story_branch(story_key, story.get("branch"))
+    branch = story_branch(story_key)
     # A rework round can leave the worktree HEAD on an alias branch
     # agent/<key>-<suffix>. Resolve it BEFORE the worktree is removed below
     # (rev-parse needs the worktree) so the teardown deletes the branch the
@@ -146,7 +146,7 @@ def _escalate_to_claude(
     # alias lingers after the force worktree removal.
     from .pr import _resolve_story_branch
 
-    resolved = _resolve_story_branch(worktree, story_key, **recorded_kwargs(story))
+    resolved = _resolve_story_branch(worktree, story_key)
     # CLAUDE.md Step 9: encode the diagnosis into the next attempt's
     # instructions rather than an open-ended retry. Must run BEFORE the
     # worktree is removed below - the evidence (agent.log) lives there.
@@ -215,14 +215,14 @@ def _escalate_to_local_fallback_model(
     story = manifest["stories"][story_key]
     repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
-    branch = story_branch(story_key, story.get("branch"))
+    branch = story_branch(story_key)
     # A rework round can leave the worktree HEAD on an alias branch
     # keep local backend, set fallback model
     story["backend"] = "local"
     story["model"] = fallback_model
     from .pr import _resolve_story_branch
 
-    resolved = _resolve_story_branch(worktree, story_key, **recorded_kwargs(story))
+    resolved = _resolve_story_branch(worktree, story_key)
     # CLAUDE.md Step 9: encode the diagnosis into the next attempt's
     # instructions rather than an open-ended retry. Must run BEFORE the
     # worktree is removed below - the evidence (agent.log) lives there.

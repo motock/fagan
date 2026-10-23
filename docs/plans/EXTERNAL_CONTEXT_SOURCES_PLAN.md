@@ -596,7 +596,7 @@ lines are intentionally absent; see §10 of this document and
           "description": "Phase 1 review wiring. Reads snapshots, never refetches.",
           "agent_instructions": "Read `docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md` §4.3, §4.7, and §6. In `pipeline/review.py`, extend `build_review_story_context(story_key, manifest)` to append the story's recorded `context_digests` content after the brief/sibling sections, using `sources_for_phase(..., \"review\")` and `render_context_block`; load the snapshot by digest, never refetch. If a recorded snapshot is missing, append one visible line naming the source and stating that the review cannot verify it, rather than silently omitting it. Deliberate contract change: return None only when BOTH the brief and the context are absent; a story with context but no brief must still return the context block. Add a test for that case and justify the change in the commit message. Also append the `security_review`-phase block to `_run_security_reviewer`'s prompt. Keep `REVIEW_CONTEXT_SCOPE_RULE` behavior unchanged. Tests: reviewer context contains the block; missing snapshot produces the warning line; context-without-brief returns a block; blank brief and no context still returns None; security reviewer gets its phase block. Do NOT modify `pipeline/review_orchestrator.py`. Success: new tests plus the existing review suites pass; `ruff check .` clean.",
           "persona": "software-engineer",
-          "risk": "medium",
+          "risk": "high",
           "files": [
             "pipeline/review.py"
           ],

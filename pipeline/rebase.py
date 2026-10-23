@@ -13,6 +13,7 @@ _default_branch via lazy imports from the server (circular-avoidance).
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -154,6 +155,19 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         except OSError as e:
             return subprocess.CompletedProcess(argv, 127, "", str(e))
 
+    def _fetch_origin(repo_root) -> tuple[subprocess.CompletedProcess, int]:
+        # Concurrent fetches lose the `cannot lock ref` race and network
+        # blips are transient, so retry briefly (1s, then 2s) before failing.
+        result = _run(["git", "fetch", "origin"], repo_root)
+        attempts = 1
+        for delay in (1, 2):
+            if result.returncode == 0:
+                break
+            time.sleep(delay)
+            result = _run(["git", "fetch", "origin"], repo_root)
+            attempts += 1
+        return result, attempts
+
     if not Path(worktree).is_dir():
         # No worktree to rebase in (missing/anomalous). The merge gate falls
         # back to the CI gate + the original conflict-at-`gh pr merge` check;
@@ -205,7 +219,16 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
     # legacy / local bench clones); hardcoding `origin/master` would break
     # every merge-gate attempt on a main-default repo (live-`gh` probe,
     # PROOF.md note #1).
-    _run(["git", "fetch", "origin"], REPO_ROOT)
+    fetch, fetch_attempts = _fetch_origin(REPO_ROOT)
+    if fetch.returncode != 0:
+        # Rebasing onto a stale origin/<default> would let the merge gate pass
+        # against an old base. Never echo the fetch's output: git can print
+        # the remote URL, and an HTTPS remote may embed a token.
+        logging.getLogger("pipeline").warning(
+            "git fetch origin failed; skipping rebase",
+            extra={"returncode": fetch.returncode, "attempts": fetch_attempts},
+        )
+        return {"ok": False, "conflict": False, "error": f"git fetch origin failed (exit {fetch.returncode})"}
     r = _run(["git", "rebase", f"origin/{_default_branch()}"], worktree)
     if r.returncode == 0:
         return {"ok": True, "conflict": False, "error": ""}

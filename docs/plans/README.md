@@ -18,12 +18,11 @@ update this index in the same change.
 
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
-| 1 | [`CHECK_STORY_STATUS_FIX_PLAN.md`](CHECK_STORY_STATUS_FIX_PLAN.md) | Ingested 2026-10-23 as `check-story-status-terminal` | A live bug: `check_story_status` raises `FileNotFoundError` for any finished story and any unknown plan. One story, Claude-class, still reproduces on master. | In flight; mark done when CSST-1 merges. |
-| 2 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
-| 3 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
-| 4 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
-| 5 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 6 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
+| 1 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
+| 2 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
+| 3 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
+| 4 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
+| 5 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -90,7 +89,8 @@ merged; follow-ups in `wap-review-followups`).
 `server-app-file-split.json`, `OVERSIZED_MODULE_SPLIT_PLAN.json`,
 `PIPELINE_COLD_IMPORTS_PLAN.json`, `PIPELINE_COLD_IMPORTS_PHASE2_PLAN.json`,
 `TOPOLOGY_COLLISION_GUARDS_PLAN.md` (story-key uniqueness at ingest and
-dispatch, checked merge fetch).
+dispatch, checked merge fetch), `CHECK_STORY_STATUS_FIX_PLAN.md`
+(`check_story_status` returns a result for finished stories and unknown plans).
 
 **Reporting and metrics**: `POST_LD90_REPORTING_FIX_PLAN.json`,
 `REPORTING_LAYER_FOLLOWUPS_PLAN.json`.

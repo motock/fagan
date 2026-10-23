@@ -1,7 +1,10 @@
 # Plan — `check_story_status` raises on finished stories and unknown plans
 
-**Status (2026-10-23): ingested** as pipeline plan `check-story-status-terminal`
-(story `CSST-1`). Re-verified on master `23777ba` before ingest: the bug still
+**Status (verified 2026-10-23): DONE.** Merged as PR #1209 (pipeline plan
+`check-story-status-terminal`, story `CSST-1`, CI green): a finished story and
+an unknown plan now return a result instead of raising.
+
+**Earlier status:** ingested as `check-story-status-terminal`. Re-verified on master `23777ba` before ingest: the bug still
 reproduces, and an impact run of a stand-in fix gave 0 pre-existing failures.
 
 **Original status:** Proposed, not yet ingested (2026-10-22). Claude-class dispatch

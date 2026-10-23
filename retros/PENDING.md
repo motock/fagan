@@ -95,3 +95,9 @@ if a precise date is needed when writing one of these up.
 - scheduler-heartbeat-flake-bound — completed 2026-10-22, 1 story
 
 <!-- Context for scheduler-heartbeat-flake-bound's eventual window retro (marker stays until then): PR #1162 (commit a79dcfc). test_worker_outliving_deadline_is_abandoned_at_deadline's upper bound moved from 0.55s to 1.0s for its 0.4s join deadline, after 15 parallel runs measured 0.436-0.597s (6 over the old ceiling). The bound still fails loudly on the real regression (the worker running its full 5s). The harness-gap backlog line was discharged in the same commit. -->
+- pipeline-auto-merge-off — completed 2026-10-22, 4 stories
+- dashboard-sidebar-settings — completed 2026-10-22, 5 stories
+- guided-install — completed 2026-10-22, 13 stories
+- dashboard-pin-guard-and-split — completed 2026-10-22, 4 stories
+- dashboard-worktree-diff — completed 2026-10-22, 7 stories
+- cross-plan-awareness — completed 2026-10-23, 5 stories

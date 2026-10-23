@@ -189,7 +189,7 @@ def test_build_dispatch_command_reads_rework_attempts_from_story_not_param():
     sig = inspect.signature(pper._build_dispatch_command)
     params = list(sig.parameters)
     assert params == ["story", "story_key", "plan_name", "resume_journal",
-                      "review_feedback"]
+                      "review_feedback", "context_block"]
     # No 'rework_attempts' / 'rework_round' parameter leaked into the signature.
     assert "rework_attempts" not in params
     assert "rework_round" not in params

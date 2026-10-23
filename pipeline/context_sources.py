@@ -321,3 +321,88 @@ def snapshot_context(text: str) -> str:
     _write_atomic(folder / "content.txt", text)
     _write_atomic(folder / "meta.json", json.dumps({"digest": digest, "bytes": len(payload)}))
     return digest
+
+
+# ---------- per-story resolution (dispatch phase) ----------
+
+
+def load_snapshot(digest: str) -> str | None:
+    """Return the stored text for *digest*, or None when absent.
+
+    Raises ContextSourceError when the stored content no longer hashes to the
+    digest (a tampered or corrupt snapshot must not become the story's input).
+    """
+    hexdigest = digest.removeprefix("sha256:")
+    if not re.fullmatch(r"[0-9a-f]{64}", hexdigest):
+        raise ContextSourceError(f"malformed context digest {digest!r}")
+    path = paths.PLAN_DIR / "context" / hexdigest / "content.txt"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        raise ContextSourceError(f"context snapshot {digest} failed digest verification")
+    return text
+
+
+def _fetch_and_record(source: dict, story: dict, now: str) -> dict:
+    resolved = resolve_dir_source(source)
+    snapshot_context(resolved["text"])
+    story["context_digests"][source["name"]] = {
+        "provider": source["provider"],
+        "uri": source["uri"],
+        "digest": resolved["digest"],
+        "bytes": resolved["bytes"],
+        "files": resolved["files"],
+        "truncated": resolved["truncated"],
+        "fetched_at": now,
+    }
+    return resolved
+
+
+def _load_recorded(source: dict, recorded: dict) -> dict:
+    text = load_snapshot(recorded["digest"])
+    if text is None:
+        # Snapshot lost: refetch, but only accept byte-identical content.
+        refetched = resolve_dir_source(source)
+        if refetched["digest"] != recorded["digest"]:
+            raise ContextSourceError(
+                f"source {source['name']!r}: content changed since dispatch and the "
+                "recorded snapshot is missing; refusing to alter the story's inputs"
+            )
+        snapshot_context(refetched["text"])
+        text = refetched["text"]
+    return {"text": text, "digest": recorded["digest"], "bytes": recorded["bytes"]}
+
+
+def resolve_dispatch_context(
+    context: dict | None, story: dict, now: str
+) -> tuple[str, list[tuple[str, str]]]:
+    """Resolve the ``dispatch``-phase sources for *story*.
+
+    Records ``story["context_digests"]`` for newly fetched sources and reuses
+    recorded snapshots otherwise. Returns ``(rendered_block, missing)`` where
+    ``missing`` lists ``(source_name, reason)`` for optional sources that
+    failed. A required source failing raises ContextSourceError.
+    """
+    if not context:
+        return "", []
+    sources = sources_for_phase(context["sources"], "dispatch")
+    if not sources:
+        return "", []
+    digests = story.setdefault("context_digests", {})
+    resolved, missing = [], []
+    for source in sources:
+        try:
+            recorded = digests.get(source["name"])
+            if recorded:
+                loaded = _load_recorded(source, recorded)
+            else:
+                loaded = _fetch_and_record(source, story, now)
+        except ContextSourceError as exc:
+            if source.get("required", True):
+                raise
+            missing.append((source["name"], str(exc)))
+            continue
+        resolved.append({**source, **{k: loaded[k] for k in ("text", "digest", "bytes")}})
+    max_total = context.get("max_total_chars", DEFAULT_MAX_TOTAL_CHARS)
+    return render_context_block(resolved, max_total_chars=max_total), missing

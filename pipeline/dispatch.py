@@ -23,7 +23,9 @@ from .dispatch_baseline import (
     _BASELINE_TEST_TIMEOUT_S,  # noqa: F401
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
+    _step_record_baseline,
 )
+from .dispatch_context import _step_resolve_context
 from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
@@ -362,6 +364,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         exc_info=True,
                     )
 
+        # Resolve external context BEFORE the ticket moves to in-progress so a
+        # required-source failure leaves the story's status untouched.
+        context_block, blocked = _step_resolve_context(
+            plan_name, story_key, story, manifest, manifest_path
+        )
+        if blocked is not None:
+            return blocked
+
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
         # Resolve concrete backend AND model for this story (shared with the
@@ -375,53 +385,13 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
-        # BASELINE-1: on a story's FIRST dispatch, run the detected test
-        # command ONCE against the freshly created, still-unmodified worktree
-        # and remember whether it already failed. Observed live 2026-09-17:
-        # 4 separate dispatched stories each independently rediscovered the
-        # same pre-existing, out-of-scope failures (a "5 pre-existing ...
-        # failures (httpx missing in subprocess interpreter)" pattern, named
-        # almost verbatim in 4 separate journal entries across 2 plans) and
-        # each spent part of its own step/rework budget investigating them
-        # before concluding they were unrelated to its task. Recording the
-        # baseline here lets the prompt below tell the agent up front which
-        # failures predate its own changes. Gated exactly like the
-        # test-author/planner phases further down:
-        #   - a local-family backend (the same weak-local-executor rationale)
-        #   - not resuming (a resumed dispatch acts on a worktree the agent
-        #     has already been editing, so there is no meaningful "before"
-        #     state left to snapshot)
-        #   - no existing marker (belt-and-suspenders with `resuming`, and
-        #     what stops a second run on a later fresh-looking call)
-        # Never a gate: the helper is wrapped so any failure degrades to "no
-        # baseline", and the marker is written unconditionally right after so
-        # a raising snapshot is not retried on every subsequent dispatch.
-        baseline_marker = worktree_path / ".dispatch_baseline_test_checked"
-        if (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and not resuming
-            and not baseline_marker.exists()
-        ):
-            try:
-                baseline = _run_baseline_test_snapshot(worktree_path)
-            except Exception:  # noqa: BLE001 (observability hook, never a gate)
-                baseline = None
-            try:
-                # The marker carries the baseline's failing node ids, not a
-                # bare "ok": the agent-side full-suite done-gate reads them
-                # back out of the worktree to tell a failure the story's own
-                # change introduced from one that was already failing before
-                # it touched the tree (mirroring the tick-side grade's own
-                # baseline exemption). No recorded ids -> an empty list, which
-                # exempts nothing.
-                baseline_ids = (baseline or {}).get("failed_node_ids") or []
-                baseline_marker.write_text(
-                    json.dumps({"failed_node_ids": baseline_ids})
-                )
-            except OSError:
-                pass
-            if baseline is not None and baseline.get("returncode") != 0:
-                story["baseline_test_check"] = baseline
+        # BASELINE-1 (see _step_record_baseline): first-dispatch test snapshot.
+        _step_record_baseline(
+            story, worktree_path,
+            worktree_path / ".dispatch_baseline_test_checked",
+            _run_baseline_test_snapshot,
+            is_local=dispatch_backend in _LOCAL_BACKEND_NAMES, resuming=resuming,
+        )
 
         # A rework redispatch (changes_requested with stored review_feedback)
         # on the local Ollama driver can resume the prior dispatch's message
@@ -454,6 +424,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             plan_name=plan_name,
             resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
+            context_block=context_block,
         )
         # REG-1: dispatch_model is the resolved model for this story - the
         # story's own pin translated to a concrete tag, else the registry's

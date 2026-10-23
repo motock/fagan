@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -70,3 +71,37 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
         "stderr_tail": (r.stderr or "")[-1000:],
     }
 
+
+
+def _step_record_baseline(
+    story: dict,
+    worktree_path: Path,
+    baseline_marker: Path,
+    snapshot_fn,
+    *,
+    is_local: bool,
+    resuming: bool,
+) -> None:
+    """BASELINE-1: on a story's FIRST dispatch, snapshot the test command's
+    result on the still-unmodified worktree so the agent is told up front
+    which failures predate its changes. Gated on a local-family backend, not
+    resuming, and no existing marker. Never a gate: a raising snapshot
+    degrades to "no baseline", and the marker is written unconditionally so
+    it is not retried on every later dispatch.
+    """
+    if not is_local or resuming or baseline_marker.exists():
+        return
+    try:
+        baseline = snapshot_fn(worktree_path)
+    except Exception:  # noqa: BLE001 (observability hook, never a gate)
+        baseline = None
+    try:
+        # The marker carries the failing node ids (not a bare "ok") so the
+        # agent-side full-suite done-gate can tell a failure its own change
+        # introduced from one already failing. No ids -> exempts nothing.
+        baseline_ids = (baseline or {}).get("failed_node_ids") or []
+        baseline_marker.write_text(json.dumps({"failed_node_ids": baseline_ids}))
+    except OSError:
+        pass
+    if baseline is not None and baseline.get("returncode") != 0:
+        story["baseline_test_check"] = baseline

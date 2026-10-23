@@ -36,6 +36,7 @@ from .service import _ServerRef
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
 PLAN_DIR = _ServerRef("PLAN_DIR")
+WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 _store = _ServerRef("_store")
 _validate_key = _ServerRef("_validate_key")
 get_ticket_provider = _ServerRef("get_ticket_provider")
@@ -382,6 +383,38 @@ def _file_overlap_advisories(plan_name: str, stories: dict) -> list[dict]:
     return advisories
 
 
+def _story_key_conflict_error(
+    plan_name: str, plan: dict, only_epics: list[str] | None
+) -> str | None:
+    """Error text when an explicit story key is still held by another plan, else None.
+
+    Branch (``agent/<key>``) and worktree path are keyed by the story key
+    alone, so a key another plan's unfinished story (or leftover worktree)
+    holds would be shared across both plans.
+    """
+    keys = [
+        story["key"]
+        for epic in plan["epics"]
+        if not only_epics or epic["summary"] in only_epics
+        for story in epic.get("stories", [])
+        if isinstance(story.get("key"), str) and story["key"]
+    ]
+    conflicts = cross_plan.key_conflicts(
+        keys,
+        cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name),
+        WORKTREE_ROOT._value(),
+    )
+    if not conflicts:
+        return None
+    first = conflicts[0]
+    return (
+        f"story key {first['key']!r} is already used by plan {first['plan']!r} "
+        f"(story {first['other_key']!r}, status {first['status']!r}); story "
+        "keys share a branch and a worktree across plans, so choose a key "
+        "unique to this plan or wait for that story to finish."
+    )
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:
@@ -568,6 +601,9 @@ def _ingest_plan_impl(
     )
     if keyless_error is not None:
         return {"ok": False, "error": keyless_error}
+    key_conflict_error = _story_key_conflict_error(plan_name, plan, only_epics)
+    if key_conflict_error is not None:
+        return {"ok": False, "error": key_conflict_error}
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:

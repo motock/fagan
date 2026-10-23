@@ -24,6 +24,11 @@ from typing import Any
 
 from . import cross_plan, testfiles
 from .build_detect import _lint_acceptance_fixtures
+from .context_sources import (
+    DEFAULT_MAX_TOTAL_CHARS,
+    normalize_context_sources,
+    validate_context_config,
+)
 from .ecosystem_detect import (
     UNSUPPORTED_MARKERS,
     detect_test_command,
@@ -595,6 +600,18 @@ def _ingest_plan_impl(
             if kind == "finding":
                 return {"ok": False, "error": lint_msg}
 
+    plan_context = None
+    if "context" in plan:
+        context_errors = validate_context_config(plan["context"])
+        if context_errors:
+            return {"ok": False, "error": "; ".join(context_errors)}
+        plan_context = {
+            "max_total_chars": plan["context"].get(
+                "max_total_chars", DEFAULT_MAX_TOTAL_CHARS
+            ),
+            "sources": normalize_context_sources(plan["context"]),
+        }
+
     manifest_path = _store.manifest_path(plan_name)
     keyless_error = _keyless_reingest_error(
         plan, only_epics, manifest_path.exists(), overwrite
@@ -721,6 +738,8 @@ def _ingest_plan_impl(
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )
+        if plan_context is not None:
+            final_manifest["context"] = plan_context
 
         # Auto-route oversized on-device stories to the host's :cloud default
         # model before the manifest is written: an oversized story is still

@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import testfiles
+from . import cross_plan, testfiles
 from .build_detect import _lint_acceptance_fixtures
 from .ecosystem_detect import (
     UNSUPPORTED_MARKERS,
@@ -355,6 +355,31 @@ def _acceptance_field_error(story: dict) -> str | None:
                 f"got {path!r}"
             )
     return None
+
+
+def _file_overlap_advisories(plan_name: str, stories: dict) -> list[dict]:
+    """Notify (never block) for each story sharing files with another plan's in-flight story.
+
+    Returns ``[{"story", "plan", "key", "files"}, ...]`` so the caller sees the
+    collisions without reading the log. Absent ``files`` on either side means
+    no advisory.
+    """
+    others = cross_plan.in_flight_stories(
+        cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
+    )
+    advisories = []
+    for key, story in stories.items():
+        for hit in cross_plan.file_overlaps(story.get("files"), others):
+            shared = sorted(set(story["files"]) & set(hit["files"]))
+            message = (
+                f"{key}: shares {', '.join(shared)} with in-flight "
+                f"{hit['plan']}/{hit['key']}; consider splitting or sequencing"
+            )
+            _notify_user(plan_name, message, story_key=key, event="file_overlap")
+            advisories.append(
+                {"story": key, "plan": hit["plan"], "key": hit["key"], "files": shared}
+            )
+    return advisories
 
 
 def _keyless_reingest_error(
@@ -767,4 +792,11 @@ def _ingest_plan_impl(
                 _notify_user(plan_name, f"{key}: {role_msg}")
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {role_msg}")
 
-    return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
+        file_overlaps = _file_overlap_advisories(plan_name, final_manifest["stories"])
+
+    return {
+        "ok": True,
+        "manifest_path": str(manifest_path),
+        **final_manifest,
+        "file_overlaps": file_overlaps,
+    }

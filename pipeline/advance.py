@@ -283,6 +283,30 @@ def _count_on_device_in_progress_agents() -> int:
     return count
 
 
+# (ready story, neighbour plan, neighbour key) triples already announced by this
+# process, so a story that stays ready is not re-notified every tick.
+_NOTIFIED_FILE_OVERLAPS: set[tuple[str, str, str, str]] = set()
+
+
+def _warn_file_overlaps(plan_name: str, stories: dict, ready: list[str], neighbours: dict) -> None:
+    """Advise (never block) once per process per (plan, story, neighbour) pair."""
+    others = cross_plan.in_flight_stories(neighbours)
+    for key in ready:
+        for hit in cross_plan.file_overlaps(stories[key].get("files"), others):
+            pair = (plan_name, key, hit["plan"], hit["key"])
+            if pair in _NOTIFIED_FILE_OVERLAPS:
+                continue
+            _NOTIFIED_FILE_OVERLAPS.add(pair)
+            shared = sorted(set(stories[key]["files"]) & set(hit["files"]))
+            _notify_user(
+                plan_name,
+                f"{key}: shares {', '.join(shared)} with in-flight "
+                f"{hit['plan']}/{hit['key']}; consider sequencing",
+                story_key=key,
+                event="file_overlap",
+            )
+
+
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     manifest_path = _store.manifest_path(plan_name)
     if not manifest_path.exists():
@@ -319,6 +343,8 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         and all(d in done for d in v.get("dependencies", []))
         and not cross_plan.blocked_by_gaps(v, neighbours)
     ]
+
+    _warn_file_overlaps(plan_name, stories, ready, neighbours)
 
     # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (comparisons
     # like `== "dry-run"` work via its __eq__), but the raw proxy object is

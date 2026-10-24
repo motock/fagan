@@ -237,14 +237,19 @@ def _story_is_doc_or_config_only(story: dict) -> bool:
     )
 
 
-def _test_author_prompt(agent_instructions: str) -> str:
+def _test_author_prompt(agent_instructions: str, context_block: str = "") -> str:
     """Build the test-authoring dispatch's prompt from the story's own
     agent_instructions (generalized from tests/benchmark/tdd_split_
     experiment.py's hardcoded phase1_prompt(), which could name one task's
     spec verbatim; production stories vary, so the scope suffix below is
-    task-agnostic)."""
+    task-agnostic).
+
+    context_block: the story's already-rendered ``test_author``-phase
+    external context, appended after agent_instructions; "" leaves the
+    prompt unchanged."""
+    briefing = f"{agent_instructions}\n\n{context_block}" if context_block else agent_instructions
     return (
-        f"{agent_instructions}\n\n"
+        f"{briefing}\n\n"
         f"{WORKTREE_SCOPE_RULE}\n\n"
         "--- Test-authoring scope for THIS dispatch ---\n"
         "Write ONLY the test file(s) required to verify the task above - do "
@@ -462,6 +467,7 @@ def start_test_author_phase(
     local_model: str,
     plan_name: str,
     plan_role_config: dict | None = None,
+    context_block: str = "",
 ) -> dict | None:
     """Launch the test-authoring pre-executor dispatch and return
     immediately, without waiting for it to exit.
@@ -512,7 +518,7 @@ def start_test_author_phase(
     log_path = worktree_path / "test_author.log"
     try:
         handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
-            prompt=_test_author_prompt(story.get("agent_instructions", "")),
+            prompt=_test_author_prompt(story.get("agent_instructions", ""), context_block),
             system=_TEST_AUTHOR_SYSTEM,
             model=test_author_model,
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,

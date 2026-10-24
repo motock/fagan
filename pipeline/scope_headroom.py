@@ -43,6 +43,6 @@ def scope_headroom_warning(
         if not tight:
             return None
         return f"declared files near the {limit}-line limit: {', '.join(tight)}; {_ADVICE}"
-    except Exception:  # noqa: BLE001 - advisory check must never fail an ingest
+    except Exception:  # advisory check must never fail an ingest
         logger.debug("scope headroom check failed", exc_info=True)
         return None

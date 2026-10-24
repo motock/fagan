@@ -512,6 +512,100 @@ comma-separated, an operator who wants merge notices by e-mail can add
 mail can remove `story_parked`. A notification emitted without a structured
 `event` at all is never spooled, whatever its message says.
 
+### Notification routing
+
+Without a config file, notifications behave exactly as described above
+(e-mail via the environment variables and the legacy outbox). A JSON config
+file turns on per-team routing to named channel instances.
+
+**Where the file lives.** `PLAN_DIR/notifications.json`, or the path in
+`PIPELINE_NOTIFY_CONFIG_PATH`. The file is read on each spool and each drain
+tick, so an edit takes effect on the next event or tick. It is limited to
+256 KiB and duplicate keys are rejected.
+
+**Schema (version 1).** `instances` maps an instance name to its settings
+(`type` plus type-specific keys); `routes` is an ordered list of
+`{name, match: {plan: <glob>}, deliver: [{events: [...], to: [instances]}]}`.
+`events` holds event names or `"*"`.
+
+Worked example: team A gets plan completions by e-mail and parked/failed
+stories in Slack; team B gets everything by e-mail and nothing in Slack.
+
+```json
+{
+  "version": 1,
+  "instances": {
+    "team-a-mail": {"type": "email", "host": "smtp.example.com", "port": 587,
+                    "user": "notifier", "from": "pipeline@example.com",
+                    "to": ["team-a@example.com"], "password_env": "TEAM_A_SMTP_PASSWORD"},
+    "team-a-slack": {"type": "slack", "webhook_url_env": "TEAM_A_SLACK_WEBHOOK"},
+    "team-b-mail": {"type": "email", "host": "smtp.example.com", "port": 587,
+                    "user": "notifier", "from": "pipeline@example.com",
+                    "to": ["team-b@example.com"], "password_env": "TEAM_B_SMTP_PASSWORD"}
+  },
+  "routes": [
+    {"name": "team-a", "match": {"plan": "team-a-*"}, "deliver": [
+      {"events": ["plan_completed"], "to": ["team-a-mail"]},
+      {"events": ["story_parked", "dispatch_failed", "tests_failed", "agent_gave_up"],
+       "to": ["team-a-slack"]}]},
+    {"name": "team-b", "match": {"plan": "team-b-*"}, "deliver": [
+      {"events": ["*"], "to": ["team-b-mail"]}]}
+  ]
+}
+```
+
+Rules:
+
+- **First match wins.** The first route whose `match.plan` glob matches the
+  plan name decides; later routes are not consulted. Within it, the targets
+  are the union of every `deliver` entry listing the event or `"*"`.
+- **Deny by default.** An event the winning route does not list goes
+  nowhere, and a plan no route matches receives nothing from this file.
+- **Secrets are references.** A setting named `<x>_env` holds the NAME of an
+  environment variable, read at send time. A setting named like a secret
+  (`password`, `token`, `webhook_url`, `secret`, `api_key`) that holds the
+  value inline is rejected at load.
+- **Fail closed.** A broken file (bad JSON, unknown type, unknown instance,
+  inline secret) delivers nothing and logs an ERROR; it never falls back to
+  the legacy e-mail path.
+- **The routes are the event allowlist.** When a config file is present,
+  `PIPELINE_NOTIFY_OUTBOX_EVENTS` no longer applies; only events a route
+  lists are delivered.
+- **`match.owner` is reserved.** It is rejected at load until plans carry an
+  owner field; only `match.plan` is supported.
+
+Each instance has its own queue, `<plan>.outbox.<instance>.jsonl`, drained
+on the scheduler tick after the legacy e-mail outbox. The two drains run in
+the same bounded worker, each isolated from the other's failure.
+
+### Adding a channel type
+
+A channel type is a class in `pipeline/` registered with
+`register_channel_type` (see `pipeline/notification_channels.py`):
+
+- `type_name` — lowercase identifier (`[a-z][a-z0-9_]{0,31}`) used as
+  `"type"` in an instance's settings; registering a duplicate raises.
+- `from_settings(instance_name, settings, env)` — classmethod that validates
+  the settings and returns an instance with `name`, `outbox_suffix` and
+  `send`. It raises `ChannelConfigError` for bad settings and resolves
+  secrets from `env` via the `<x>_env` names. Messages name the instance and
+  setting key only.
+- `send(record) -> DeliveryResult` — delivers one spooled record.
+
+`DeliveryStatus` semantics: `DELIVERED` retires the record from this
+instance's queue; `RETRY` keeps it and it is retried on the next drain tick
+(`retry_after_seconds` is part of the contract but ignored in V1);
+`REJECTED` is a permanent failure — the record is dropped with one ERROR log
+so a revoked webhook cannot block its queue forever.
+
+There is one queue per instance, so each instance retries independently and
+a record is never resent to an instance that already accepted it.
+
+`send` must never raise (a raise is treated as `RETRY` and logged by
+exception type only) and must never log a payload, recipient, URL or
+credential. `DeliveryResult.reason` is a short fixed token, never exception
+text.
+
 ## Plan-conflict rulings
 
 When the grade fails only in pre-existing untouched tests, the pipeline asks

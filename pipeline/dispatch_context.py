@@ -5,6 +5,7 @@ Lives outside ``dispatch.py`` because that module is held under the
 """
 
 import hashlib
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 from . import context_sources as ctxsrc
 from . import paths
+from .persona import _with_files_pointers
 from .service import _ServerRef
 
 _atomic_write_json = _ServerRef("_atomic_write_json")
@@ -73,6 +75,7 @@ def _step_resolve_context(
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     digests = story.setdefault("context_digests", {})
     resolved = []
+    pointers: list[dict[str, Any]] = []
     for source in sources:
         try:
             recorded = digests.get(source["name"])
@@ -101,8 +104,25 @@ def _step_resolve_context(
                 dedup_key=f"context_missing:{story_key}:{source['name']}",
             )
             continue
-        resolved.append({**source, **{k: loaded[k] for k in ("text", "digest", "bytes")}})
+        entry = {**source, **{k: loaded[k] for k in ("text", "digest", "bytes")}}
+        # files mode: the snapshot is materialized outside the worktree and only a
+        # bounded pointer reaches the prompt, so the text is not rendered inline.
+        if source.get("mode", "prompt") == "files":
+            try:
+                folder = ctxsrc.materialize_context_files(source, loaded["text"])
+            except ctxsrc.ContextSourceError as exc:
+                if source.get("required", True):
+                    reason = f"required context source failed: {exc}"
+                    story["dispatch_block_reason"] = reason
+                    _atomic_write_json(manifest_path, manifest)
+                    return "", {"ok": False, "error": reason, "story_key": story_key}
+                continue
+            files = json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))["files"]
+            pointers.append({"name": source["name"], "path": folder, "files": files})
+            continue
+        resolved.append(entry)
     if story["context_digests"]:
         _atomic_write_json(manifest_path, manifest)
     max_total = context.get("max_total_chars", ctxsrc.DEFAULT_MAX_TOTAL_CHARS)
-    return ctxsrc.render_context_block(resolved, max_total_chars=max_total), None
+    block = ctxsrc.render_context_block(resolved, max_total_chars=max_total)
+    return _with_files_pointers(block, pointers), None

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import _LOCAL_SKIP_PERSONAS, DEFAULT_MODEL
+from .context_sources import render_files_pointer
 from .paths import AGENTS_DIR
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
@@ -53,6 +54,17 @@ _PERSONA_TOOLS = {
 
 def _allowed_tools_for(persona: str | None) -> str:
     return _PERSONA_TOOLS.get(persona or "", "Bash,Edit,Write,Read")
+
+
+def _with_files_pointers(context_block: str, pointers: list[dict[str, Any]]) -> str:
+    """Append a bounded snapshot pointer per files-mode source to *context_block*.
+
+    The pointer replaces the source's text, which is never rendered inline.
+    """
+    sections = [
+        render_files_pointer(p["name"], p["path"], p["files"]) for p in pointers
+    ]
+    return "\n".join(part for part in [context_block, *sections] if part)
 
 
 def _build_dispatch_command(
@@ -234,4 +246,5 @@ __all__ = [
     "_persona_path",
     "_persona_requires_claude",
     "_story_has_unwinnable_local_scope",
+    "_with_files_pointers",
 ]

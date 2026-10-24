@@ -190,7 +190,7 @@ def test_should_set_todo_otherwise(env, check):
 
 
 def test_should_write_manifest_notify_and_record_paths_only(env):
-    notes, records, path = env
+    notes, _records, path = env
     story = _story()
     _run(story, path)
     assert json.loads(path.read_text())["stories"]["S"]["files"][-1] == "pipeline/bar.py"

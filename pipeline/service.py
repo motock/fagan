@@ -167,6 +167,22 @@ from .service_decisions import _request_decision_impl
 from .service_role_config import _set_plan_role_config_impl, _set_role_default_impl
 
 
+def _decompose_context_root(workspace: str | None) -> str | None:
+    """Workspace whose ``.fagan.json`` context feeds decompose: the explicit
+    one, else the active one (the MCP tool passes none). An active record
+    that fails the boundary check reads as unset, as in get_active_workspace."""
+    if workspace is not None:
+        return workspace
+    path = _store.get_active_workspace()
+    if path is None:
+        return None
+    try:
+        normalize_workspace_path(path)
+    except ValueError:
+        return None
+    return path
+
+
 class PipelineService:
     """Transport-agnostic pipeline operations.
 
@@ -704,7 +720,7 @@ class PipelineService:
     _DECOMPOSE_JSON_RETRY_ATTEMPTS = 2
 
     def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
-        text, backend_error = _run_decompose_detailed(request)
+        text, backend_error = _run_decompose_detailed(request, repo_root=_decompose_context_root(workspace))
         plan: Any = None
         parse_error: json.JSONDecodeError | None = None
         retries_left = PipelineService._DECOMPOSE_JSON_RETRY_ATTEMPTS - 1
@@ -724,7 +740,7 @@ class PipelineService:
                 if retries_left <= 0:
                     break
                 retries_left -= 1
-                text, backend_error = _run_decompose_detailed(request)
+                text, backend_error = _run_decompose_detailed(request, repo_root=_decompose_context_root(workspace))
         if parse_error is not None:
             return {"ok": False, "error": f"invalid JSON: {parse_error}", "raw": text}
         if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):

@@ -421,13 +421,43 @@ def _story_key_conflict_error(
     )
 
 
-def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | None]:
-    """Merge ``.fagan.json`` context sources beneath the plan's own.
+# Org sources are read here, with the repo and plan levels, because plan context
+# resolution (``_merged_context``) is the single place the three levels merge.
+def _load_org_sources() -> tuple[list[dict], str | None]:
+    """Read the org context file named by ``PIPELINE_CONTEXT_CONFIG``.
 
-    On a duplicate source ``name`` the plan source wins. Returns
-    ``(context, None)``, ``(None, None)`` when neither level declares
+    Unset means no org sources. When set, a relative path, unreadable file,
+    malformed JSON, or invalid content is an error (fail closed). Returns
+    ``(sources, error)``.
+    """
+    path = os.environ.get("PIPELINE_CONTEXT_CONFIG")
+    if path is None:
+        return [], None
+    prefix = f"PIPELINE_CONTEXT_CONFIG {path!r}"
+    if not os.path.isabs(path):
+        return [], f"{prefix} must be an absolute path"
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [], f"{prefix} is unreadable or not valid JSON: {type(error).__name__}"
+    if not isinstance(data, dict) or data.keys() - {"sources"}:
+        return [], f"{prefix} must be an object with only a 'sources' key"
+    errors = validate_context_config(data)
+    if errors:
+        return [], f"{prefix} is invalid: " + "; ".join(errors)
+    return data["sources"], None
+
+
+def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | None]:
+    """Merge org and ``.fagan.json`` context sources beneath the plan's own.
+
+    On a duplicate source ``name`` plan wins over repo, and repo over org.
+    Returns ``(context, None)``, ``(None, None)`` when no level declares
     sources, or ``(None, error)`` when the merged list is invalid.
     """
+    org_sources, org_error = _load_org_sources()
+    if org_error is not None:
+        return None, org_error
     repo_config = load_repo_config(repo_root) or {}
     repo_sources = repo_config.get("context", {}).get("sources", [])
     plan_has_context = "context" in plan
@@ -437,7 +467,12 @@ def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | Non
             return None, "; ".join(errors)
     plan_sources = plan["context"]["sources"] if plan_has_context else []
     plan_names = {source["name"] for source in plan_sources}
-    merged = [s for s in repo_sources if s["name"] not in plan_names] + plan_sources
+    repo_names = {source["name"] for source in repo_sources}
+    merged = (
+        [s for s in org_sources if s["name"] not in plan_names | repo_names]
+        + [s for s in repo_sources if s["name"] not in plan_names]
+        + plan_sources
+    )
     if not merged:
         return None, None
     merged_context = {"sources": merged}
@@ -446,11 +481,14 @@ def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | Non
     errors = validate_context_config(merged_context)
     if errors:
         return None, "; ".join(errors)
-    repo_names = {source["name"] for source in repo_sources}
     sources = normalize_context_sources(merged_context)
     for source in sources:
-        is_repo = source["name"] in repo_names and source["name"] not in plan_names
-        source["origin"] = "repo" if is_repo else "plan"
+        if source["name"] in plan_names:
+            source["origin"] = "plan"
+        elif source["name"] in repo_names:
+            source["origin"] = "repo"
+        else:
+            source["origin"] = "org"
     return {
         "max_total_chars": merged_context.get("max_total_chars", DEFAULT_MAX_TOTAL_CHARS),
         "sources": sources,
@@ -640,6 +678,14 @@ def _ingest_plan_impl(
     plan_context, context_error = _merged_context(plan, Path(repo_root))
     if context_error is not None:
         return {"ok": False, "error": context_error}
+    org_path = os.environ.get("PIPELINE_CONTEXT_CONFIG")
+    if org_path is not None and plan_context is not None:
+        org_count = sum(1 for s in plan_context["sources"] if s["origin"] == "org")
+        _notify_user(
+            plan_name,
+            f"context_resolved: org config {org_path} contributed {org_count} source(s)",
+            event="context_resolved",
+        )
 
     manifest_path = _store.manifest_path(plan_name)
     keyless_error = _keyless_reingest_error(

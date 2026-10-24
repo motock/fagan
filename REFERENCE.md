@@ -912,6 +912,16 @@ it is stored in the manifest. An invalid repo `context` rejects ingest with the
 usual `invalid .fagan.json` error. When neither level declares sources the
 prior manifest's block is preserved as before.
 
+**Org defaults.** When `PIPELINE_CONTEXT_CONFIG` (an absolute path to a JSON
+file shaped `{"sources": [...]}`) is set, its sources are read once at
+`ingest_plan` and merged beneath the repo and plan sources: on a duplicate
+`name`, plan wins over repo and repo wins over org. Org entries are tagged
+`origin: "org"` and validated with the same rules as plan sources. A relative
+path, missing or unreadable file, malformed JSON, an unknown key, or an invalid
+source rejects ingest (fail closed). Unset means no org sources. A
+`context_resolved` event names the file and how many org sources it
+contributed.
+
 Shape: `{"max_total_chars": 60000, "sources": [{...}]}`. `max_total_chars` is a
 positive integer (default `60000`); `sources` is a non-empty list. Source
 fields:
@@ -1614,6 +1624,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |
 | `PIPELINE_WEEK_RESUME_THRESHOLD` | `70` | `%` the **week** window must drop below to clear the gate |
 | `PIPELINE_STATE_DIR` | *(unset → the pipeline-owned plans/manifests root, i.e. `PLAN_DIR`'s base)* | Override for the detached-grading state root. The detached grade's `result.json`/`grading.log` are written under `<state_root>/grading/<story_id>/` (mode `0o700`) and read back from exactly the path persisted in the story's manifest. Security rationale: the grade verdict and its log must live where the code under test cannot write — an agent-writable worktree would let a graded agent forge a passing verdict (`{"returncode": 0, ...}`) during its own build and bypass the acceptance gate at the collect tick. The default derives from the same root that owns the plans/manifests, so no operator setup is required; a *relative* `PIPELINE_STATE_DIR` value resolves against that fixed plans/manifests base (never the scheduler's CWD), so the spawn tick and the later collect tick resolve the same absolute path even if the daemon's working directory changes between them. |
+| `PIPELINE_CONTEXT_CONFIG` | *(unset → no org context sources)* | Absolute path to a JSON file `{"sources": [...]}` of org-level context sources, merged beneath repo and plan sources at `ingest_plan` (tagged `origin: "org"`; plan > repo > org on duplicate `name`). Set but relative, missing, or malformed → ingest is rejected (fail closed). See "Plan-level `context` block" |
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` \| `auto` (layered local-first with Claude fallback — see below). EMPTY-STATE-ONLY: ignored when `model_registry.json` pins this role's provider (a `roles` entry outranks the env var) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. EMPTY-STATE-ONLY: ignored when the registry pins this role's provider |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. EMPTY-STATE-ONLY: ignored when the registry pins this role's provider |

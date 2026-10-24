@@ -670,38 +670,38 @@ class SchedulerDaemon:
 
         # Drain phase (PLANNOTIFY-06): its own phase after scan and reconcile,
         # in its own try/except so a drain failure can never kill the loop or
-        # perturb the scanned/reconciled accounting above. The imports are
-        # function-local so importing this module does not pull in smtplib.
+        # perturb the scanned/reconciled accounting above. Imports are
+        # function-local to avoid pulling in smtplib at module import.
         # ALL_PLANS drains every outbox file in PLAN_DIR in one call, including
         # a plan whose manifest was since removed — a per-manifest glob would
         # silently orphan that plan's queued notifications forever.
         try:
-            from pipeline.notification_email import send_notification_email
-            from pipeline.notification_outbox import ALL_PLANS, drain_outbox
+            from pipeline import notification_email, notification_outbox
 
             def _drain_outbox_worker() -> None:
-                # Caught here rather than in the enclosing ``except`` below:
-                # this body runs on ``drain_worker``, so a raise would escape
-                # to that thread's excepthook instead of reaching the
-                # caller's handler. Same log-and-swallow contract as before
-                # the drain became bounded.
+                # Caught here, not in the enclosing ``except``: this body runs
+                # on ``drain_worker``, so a raise would reach that thread's
+                # excepthook instead of the caller's handler.
+                # Module attributes so patches apply; drains isolated.
                 try:
-                    drain_outbox(ALL_PLANS, send_notification_email)
-                except Exception:
-                    logger.exception(
-                        "notification outbox drain failed during tick"
+                    notification_outbox.drain_outbox(
+                        notification_outbox.ALL_PLANS,
+                        notification_email.send_notification_email,
                     )
+                except Exception:
+                    logger.exception("notification outbox drain failed during tick")
+                try:
+                    notification_outbox.drain_channel_outboxes()
+                except Exception:
+                    logger.exception("instance outbox drain failed during tick")
 
             if self._drain_worker is not None and self._drain_worker.is_alive():
-                # A previous tick's drain worker was abandoned by the join
-                # timeout below and is STILL running (a wedged SMTP send,
-                # say). Starting a second drainer now would race it:
-                # ``_drain_one_outbox``'s merge assumes its snapshot is a
-                # prefix of the current file, so a drainer that rewrites the
-                # file shorter while another is mid-drain makes the second
-                # one silently drop a record the sink spooled in between.
-                # Skip this tick's drain instead; the still-running worker
-                # (or the next tick, once it has exited) picks the queue up.
+                # A previous tick's worker was abandoned by the join timeout
+                # below and is STILL running (a wedged SMTP send, say). A
+                # second drainer would race it: ``_drain_one_outbox``'s merge
+                # assumes its snapshot is a prefix of the current file, so
+                # the second one could silently drop a freshly spooled
+                # record. Skip this tick; the next one picks the queue up.
                 logger.warning(
                     "previous notification outbox drain worker is still "
                     "alive; skipping this tick's drain to avoid two "

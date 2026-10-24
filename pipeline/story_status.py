@@ -55,6 +55,7 @@ from .escalation import (
     _escalation_target,
 )
 from .git_ops import _commit_wip, _untrack_scratchpad
+from .no_progress import classify_no_progress
 from .parsers import (
     _atomic_write_json,
     _is_give_up_summary,
@@ -809,6 +810,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             text=True,
         )
         if head_res.stdout.strip() == story["last_reviewed_sha"]:
+            parked = classify_no_progress(
+                plan_name, story_key, story, worktree, manifest, manifest_path)
+            if parked is not None:
+                return parked
             attempts = story.get("rework_attempts", 0) + 1
             story["rework_attempts"] = attempts
             # Zero commits since the last review is a stronger, distinct
@@ -963,6 +968,7 @@ def bind_to_server(_server: Any) -> None:
     # plan-conflict verdict.
     _server._record_test_check = _record_test_check
     _server._clear_failure_streaks = _clear_failure_streaks
+    _server.classify_no_progress = classify_no_progress
 
     # The post-agent scratchpad untrack has the detached-grade primitives'
     # reason AND one of its own: it shells out to git, so exporting the real

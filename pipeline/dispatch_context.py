@@ -105,6 +105,8 @@ def _step_resolve_context(
             )
             continue
         entry = {**source, **{k: loaded[k] for k in ("text", "digest", "bytes")}}
+        # files mode: the snapshot is materialized outside the worktree and only a
+        # bounded pointer reaches the prompt, so the text is not rendered inline.
         if source.get("mode", "prompt") == "files":
             try:
                 folder = ctxsrc.materialize_context_files(source, loaded["text"])

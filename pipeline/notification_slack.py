@@ -84,6 +84,9 @@ def _is_valid_webhook_url(url: str) -> bool:
         return False
 
 
+_MAX_TIMEOUT = 3600  # also keeps a huge JSON integer out of float()
+
+
 def _retry_after(headers: Any) -> float | None:
     raw = headers.get("Retry-After") if headers is not None else None
     if not isinstance(raw, str):
@@ -125,8 +128,9 @@ class SlackChannelType:
         if (
             isinstance(timeout, bool)
             or not isinstance(timeout, int | float)
-            or not math.isfinite(timeout)
             or timeout <= 0
+            or (isinstance(timeout, float) and not math.isfinite(timeout))
+            or timeout > _MAX_TIMEOUT
         ):
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting 'timeout' must be a positive number"

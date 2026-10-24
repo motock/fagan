@@ -275,6 +275,7 @@ def _run_planner(
     tests_already_authored: bool = False,
     authored_test_files: list[tuple[str, list[str]]] | None = None,
     worktree: str | None = None,
+    context_block: str = "",
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -296,6 +297,11 @@ def _run_planner(
     None/empty falls back to the prohibition-only clause; see
     _planner_system.
 
+    context_block: the story's already-rendered ``planner``-phase external
+    context (built from the snapshot recorded at dispatch, never refetched).
+    Appended to the user prompt after agent_instructions; "" leaves the
+    prompt unchanged.
+
     Returns the raw checklist text, or None on any failure. Callers MUST
     treat None as "no plan" and fall open to the existing no-plan dispatch
     path - a broken, slow, or rate-limited planner call must never block or
@@ -315,7 +321,7 @@ def _run_planner(
             cell_dir = None
 
         text = backend.get_backend("planner", name=backend_name).complete(
-            agent_instructions,
+            f"{agent_instructions}\n\n{context_block}" if context_block else agent_instructions,
             system=_planner_system(
                 include_scratchpad=include_scratchpad,
                 tests_already_authored=tests_already_authored,

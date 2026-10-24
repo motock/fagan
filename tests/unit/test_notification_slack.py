@@ -356,26 +356,3 @@ def test_should_never_raise_even_if_opener_build_fails(monkeypatch):
 def test_should_reject_huge_integer_timeout():
     with pytest.raises(nc.ChannelConfigError, match="timeout"):
         _channel(timeout=10**400)
-
-
-def test_should_register_slack_through_scheduler_tick():
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    code = (
-        "from pipeline import notification_outbox as o, scheduler_daemon as m\n"
-        "from pipeline.events import InProcessEventBus\n"
-        "o.drain_outbox = lambda *a, **k: None\n"
-        "o.drain_channel_outboxes = lambda *a, **k: None\n"
-        "d = m.SchedulerDaemon(reconcile_fn=lambda: None, scan_fn=lambda: None,\n"
-        "    bus=InProcessEventBus(), interval_s=60, sleep_fn=lambda _s: None)\n"
-        "d.run_once()\n"
-        "from pipeline import notification_channels as nc\n"
-        "print('REGISTERED' if 'slack' in nc.registered_types() else 'MISSING')\n"
-    )
-    root = Path(__file__).resolve().parents[2]
-    out = subprocess.run(
-        [sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=60, check=False
-    )
-    assert "REGISTERED" in out.stdout

@@ -606,6 +606,29 @@ exception type only) and must never log a payload, recipient, URL or
 credential. `DeliveryResult.reason` is a short fixed token, never exception
 text.
 
+### Slack channel type
+
+`"type": "slack"` posts each record to a Slack incoming webhook
+(`pipeline/notification_slack.py`).
+
+| Setting | Required | Default | Meaning |
+|---|---|---|---|
+| `webhook_url_env` | yes | — | NAME of the environment variable holding the webhook URL; read at send time |
+| `timeout` | no | `20` | Request timeout in seconds; must be > 0 |
+
+> **Warning:** the webhook URL is a secret; reference it by env var name.
+> An inline `webhook_url` is rejected at load, and the URL is never logged
+> or returned in a result.
+
+Delivery outcomes: 2xx is `DELIVERED`; HTTP 429 is `RETRY` (with
+`retry_after_seconds` when `Retry-After` is a non-negative number); 5xx,
+timeouts, DNS and connection errors are `RETRY`; any other 4xx (revoked or
+malformed webhook) is `REJECTED` with reason `http_4xx`. An unset variable or
+a URL that is not `https` is `RETRY` with reason `misconfigured` and one ERROR
+log naming the variable only, so fixing the environment recovers the queue.
+Redirects are never followed. Text escapes `&`, `<` and `>` and is capped at
+3000 characters with a `[... truncated ...]` marker.
+
 ## Plan-conflict rulings
 
 When the grade fails only in pre-existing untouched tests, the pipeline asks

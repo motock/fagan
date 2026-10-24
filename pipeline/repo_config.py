@@ -8,7 +8,9 @@ import json
 import sys
 from pathlib import Path
 
-_ALLOWED_KEYS = {"test_cmd", "test_cwd", "test_globs", "lint_cmd", "build_cmd"}
+from .context_sources import validate_context_config
+
+_ALLOWED_KEYS = {"test_cmd", "test_cwd", "test_globs", "lint_cmd", "build_cmd", "context"}
 _COMMAND_KEYS = ("test_cmd", "lint_cmd", "build_cmd")
 
 
@@ -52,7 +54,20 @@ def load_repo_config(repo_root: Path) -> dict | None:
             raise RepoConfigError(
                 "test_globs in .fagan.json must be a list of non-empty strings"
             )
+    if "context" in data:
+        _validate_context(data["context"])
     return data
+
+
+def _validate_context(value) -> None:
+    if isinstance(value, dict):
+        for key in sorted(value.keys() - {"sources"}, key=str):
+            raise RepoConfigError(
+                f"unknown key in .fagan.json context: {key!r} (only 'sources' is allowed)"
+            )
+    errors = validate_context_config(value)
+    if errors:
+        raise RepoConfigError("; ".join(errors))
 
 
 def _validate_command_key(key: str, value) -> None:

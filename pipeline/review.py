@@ -6,6 +6,7 @@ _LOCAL_SKIP_PERSONAS). Both are patched via p.<name> by tests; server call
 sites use bare names -> re-export -> patch lands.
 """
 
+import hashlib
 import os
 import re
 import shlex
@@ -14,6 +15,8 @@ from pathlib import Path
 
 from app import backend, role_registry
 
+from . import context_sources as ctxsrc
+from . import paths
 from .config import (
     _LOCAL_BACKEND_NAMES,
     DEFAULT_MODEL,
@@ -59,13 +62,64 @@ def _deferred_lines(text: str) -> list[str]:
     ]
 
 
+def _read_recorded_snapshot(recorded: dict) -> str | None:
+    """Return the snapshot text for a recorded digest, or None if it cannot be verified."""
+    digest = recorded.get("digest") or ""
+    hexdigest = digest.removeprefix("sha256:")
+    if not hexdigest.isalnum():
+        return None
+    try:
+        text = (paths.PLAN_DIR / "context" / hexdigest / "content.txt").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        return None
+    return text
+
+
+def build_phase_context_block(story_key: str, manifest: dict, phase: str) -> str:
+    """Render the story's recorded context for ``phase`` ("review" or "security_review").
+
+    Loads each snapshot by the digest recorded at dispatch and never refetches.
+    A recorded source whose snapshot is missing or fails its digest check
+    yields one visible line saying the review cannot verify it. Returns ""
+    when the plan has no context or the story recorded no digests.
+    """
+    context = manifest.get("context")
+    story = (manifest.get("stories") or {}).get(story_key) or {}
+    recorded_all = story.get("context_digests") or {}
+    if not context or not recorded_all:
+        return ""
+    resolved: list[dict] = []
+    warnings: list[str] = []
+    for source in ctxsrc.sources_for_phase(context["sources"], phase):
+        recorded = recorded_all.get(source["name"])
+        if not recorded:
+            continue
+        text = _read_recorded_snapshot(recorded)
+        if text is None:
+            warnings.append(
+                f"[context source {source['name']} was recorded for this story but its "
+                f"snapshot is unavailable; this review cannot verify it]"
+            )
+            continue
+        resolved.append(
+            {**source, "text": text, "digest": recorded["digest"], "bytes": recorded.get("bytes", len(text))}
+        )
+    max_total = context.get("max_total_chars", ctxsrc.DEFAULT_MAX_TOTAL_CHARS)
+    block = ctxsrc.render_context_block(resolved, max_total_chars=max_total)
+    return "\n".join(part for part in (block, *warnings) if part)
+
+
 def build_review_story_context(story_key: str, manifest: dict) -> str | None:
     """Render the story's brief, sibling status and Deferred lines for the
     reviewer prompt.
 
     Returns None when the story is missing from ``manifest["stories"]`` or
-    its ``agent_instructions`` is missing/blank - in that case the reviewer
-    prompt is left unchanged. Otherwise returns the brief (truncated to
+    both its ``agent_instructions`` and its recorded review-phase context
+    are absent - in that case the reviewer prompt is left unchanged. A story
+    with context but no brief returns the context block (and scope rule).
+    Otherwise returns the brief (truncated to
     REVIEW_BRIEF_MAX_CHARS), one line per sibling story (capped at
     REVIEW_SIBLINGS_MAX), the brief's own Deferred lines, and
     REVIEW_CONTEXT_SCOPE_RULE. The scope rule is appended unconditionally
@@ -79,17 +133,20 @@ def build_review_story_context(story_key: str, manifest: dict) -> str | None:
     if not story:
         return None
     brief = (story.get("agent_instructions") or "").strip()
-    if not brief:
+    context_block = build_phase_context_block(story_key, manifest, "review")
+    if not brief and not context_block:
         return None
 
-    sections: list[str] = [
-        "--- This story's brief (what the diff was asked to do) ---",
-        (
-            brief[:REVIEW_BRIEF_MAX_CHARS] + "\n[... brief truncated ...]"
-            if len(brief) > REVIEW_BRIEF_MAX_CHARS
-            else brief
-        ),
-    ]
+    sections: list[str] = []
+    if brief:
+        sections += [
+            "--- This story's brief (what the diff was asked to do) ---",
+            (
+                brief[:REVIEW_BRIEF_MAX_CHARS] + "\n[... brief truncated ...]"
+                if len(brief) > REVIEW_BRIEF_MAX_CHARS
+                else brief
+            ),
+        ]
 
     siblings = [key for key in stories if key != story_key]
     if siblings:
@@ -110,6 +167,9 @@ def build_review_story_context(story_key: str, manifest: dict) -> str | None:
     if deferred:
         sections.append("--- Work this brief defers to named sibling stories ---")
         sections.extend(deferred)
+
+    if context_block:
+        sections.append(context_block)
 
     sections.append(REVIEW_CONTEXT_SCOPE_RULE)
     return "\n".join(sections)
@@ -488,6 +548,7 @@ def _run_reviewer(
 def _run_security_reviewer(
     worktree: str, branch: str, since_sha: str | None = None,
     plan_role_config: dict | None = None,
+    context_block: str = "",
 ) -> str:
     """Run the security-engineer persona over a branch and return its raw output.
 
@@ -534,6 +595,8 @@ def _run_security_reviewer(
         f"and Secure-by-Design violations. End with your VERDICT line: "
         f"APPROVE or REQUEST_CHANGES."
     )
+    if context_block:
+        prompt = f"{prompt}\n\n{context_block}"
     if Path(worktree).parent.name == "worktrees":
         cell_dir = str(Path(worktree).resolve().parent)
     else:

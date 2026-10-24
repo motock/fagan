@@ -903,6 +903,15 @@ the manifest as `context: {"max_total_chars": ..., "sources": [...]}`.
 Re-ingesting a plan that omits `context` preserves the prior manifest's block.
 Story-level fields are unchanged.
 
+**Repo defaults and merge rule.** A repo's `.fagan.json` may declare a
+`context` key (`{"sources": [...]}`; see "Declaring commands in
+`.fagan.json`"). At ingest its sources are merged *beneath* the plan's: when
+the same `name` appears in both, the plan source wins. Each stored source is
+tagged `origin: "repo"` or `origin: "plan"`, the merged list is validated, and
+it is stored in the manifest. An invalid repo `context` rejects ingest with the
+usual `invalid .fagan.json` error. When neither level declares sources the
+prior manifest's block is preserved as before.
+
 Shape: `{"max_total_chars": 60000, "sources": [{...}]}`. `max_total_chars` is a
 positive integer (default `60000`); `sources` is a non-empty list. Source
 fields:
@@ -1205,6 +1214,11 @@ optional; any other top-level key is an error.
 - `build_cmd` — list of strings, the command that builds the repo
   (e.g. `["./mvnw", "-B", "package", "-DskipTests"]`). Overrides build
   detection.
+- `context` — optional repo-level context defaults, shaped
+  `{"sources": [...]}` with the same source fields as the plan-level
+  `context` block (see "Plan-level `context` block"). Validated with the
+  same rules; `max_total_chars` is not allowed here (set it on the plan).
+  These sources are merged beneath the plan's own at `ingest_plan`.
 
 An invalid `.fagan.json` (bad JSON, an unknown key, or a malformed value)
 does not fall back to detection: the affected gate fails visibly with the

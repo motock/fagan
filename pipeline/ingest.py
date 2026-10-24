@@ -35,6 +35,7 @@ from .ecosystem_detect import (
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
 )
+from .repo_config import load_repo_config
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -420,6 +421,42 @@ def _story_key_conflict_error(
     )
 
 
+def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | None]:
+    """Merge ``.fagan.json`` context sources beneath the plan's own.
+
+    On a duplicate source ``name`` the plan source wins. Returns
+    ``(context, None)``, ``(None, None)`` when neither level declares
+    sources, or ``(None, error)`` when the merged list is invalid.
+    """
+    repo_config = load_repo_config(repo_root) or {}
+    repo_sources = repo_config.get("context", {}).get("sources", [])
+    plan_has_context = "context" in plan
+    if plan_has_context:
+        errors = validate_context_config(plan["context"])
+        if errors:
+            return None, "; ".join(errors)
+    plan_sources = plan["context"]["sources"] if plan_has_context else []
+    plan_names = {source["name"] for source in plan_sources}
+    merged = [s for s in repo_sources if s["name"] not in plan_names] + plan_sources
+    if not merged:
+        return None, None
+    merged_context = {"sources": merged}
+    if plan_has_context and "max_total_chars" in plan["context"]:
+        merged_context["max_total_chars"] = plan["context"]["max_total_chars"]
+    errors = validate_context_config(merged_context)
+    if errors:
+        return None, "; ".join(errors)
+    repo_names = {source["name"] for source in repo_sources}
+    sources = normalize_context_sources(merged_context)
+    for source in sources:
+        is_repo = source["name"] in repo_names and source["name"] not in plan_names
+        source["origin"] = "repo" if is_repo else "plan"
+    return {
+        "max_total_chars": merged_context.get("max_total_chars", DEFAULT_MAX_TOTAL_CHARS),
+        "sources": sources,
+    }, None
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:
@@ -600,17 +637,9 @@ def _ingest_plan_impl(
             if kind == "finding":
                 return {"ok": False, "error": lint_msg}
 
-    plan_context = None
-    if "context" in plan:
-        context_errors = validate_context_config(plan["context"])
-        if context_errors:
-            return {"ok": False, "error": "; ".join(context_errors)}
-        plan_context = {
-            "max_total_chars": plan["context"].get(
-                "max_total_chars", DEFAULT_MAX_TOTAL_CHARS
-            ),
-            "sources": normalize_context_sources(plan["context"]),
-        }
+    plan_context, context_error = _merged_context(plan, Path(repo_root))
+    if context_error is not None:
+        return {"ok": False, "error": context_error}
 
     manifest_path = _store.manifest_path(plan_name)
     keyless_error = _keyless_reingest_error(

@@ -1,15 +1,20 @@
-"""Plan-level ``context`` block: validation, normalization, and the ``dir`` provider.
+"""Plan-level ``context`` block: validation, normalization, and the ``dir`` and ``git`` providers.
 
 See docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md §4.2, §4.4, §4.9 and §5.
-Validation and normalization are pure; only the ``dir`` provider and the
-snapshot store below do I/O.
+Validation and normalization are pure; only the ``dir`` provider, the
+``git`` provider (which shells out to git and clones into ``PLAN_DIR``)
+and the snapshot store below do I/O.
 """
 
 import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import paths
 from .global_rules_install import _write_atomic
@@ -309,8 +314,11 @@ def resolve_dir_source(source: dict) -> dict:
     }
 
 
-def snapshot_context(text: str) -> str:
-    """Persist *text* under ``PLAN_DIR/context/<digest-hex>/`` and return its digest."""
+def snapshot_context(text: str, meta: dict | None = None) -> str:
+    """Persist *text* under ``PLAN_DIR/context/<digest-hex>/`` and return its digest.
+
+    *meta* adds provider metadata (e.g. a resolved git ``sha``) to ``meta.json``.
+    """
     payload = text.encode("utf-8")
     hexdigest = hashlib.sha256(payload).hexdigest()
     digest = "sha256:" + hexdigest
@@ -319,5 +327,99 @@ def snapshot_context(text: str) -> str:
         return digest
     folder.mkdir(parents=True, exist_ok=True)
     _write_atomic(folder / "content.txt", text)
-    _write_atomic(folder / "meta.json", json.dumps({"digest": digest, "bytes": len(payload)}))
+    _write_atomic(folder / "meta.json", json.dumps({**(meta or {}), "digest": digest, "bytes": len(payload)}))
     return digest
+
+
+# ---------- git provider ----------
+
+_GIT_TIMEOUT_SECONDS = 120
+_FULL_SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def _run_git(args: list[str], *, cwd: Path | None = None) -> str:
+    # No credentials or auth flags: private remotes use the operator's own git
+    # configuration. Prompts are disabled so an unauthenticated remote fails
+    # closed instead of hanging.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=cwd, env=env, capture_output=True, text=True,
+            timeout=_GIT_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ContextSourceError(f"git {args[0]} failed: {type(exc).__name__}") from exc
+    if done.returncode != 0:
+        raise ContextSourceError(f"git {args[0]} failed (exit {done.returncode})")
+    return done.stdout
+
+
+def _parse_git_uri(source: dict) -> tuple[str, str]:
+    """Return ``(remote_url, ref)`` from a ``git+<scheme>://...#<ref>`` uri."""
+    name = source.get("name")
+    uri = source.get("uri", "")
+    if not uri.startswith(("git+https://", "git+file://")):
+        raise ContextSourceError(f"source {name!r}: unsupported git uri scheme")
+    parts = urlsplit(uri[len("git+"):])
+    if "@" in parts.netloc or parts.password is not None:
+        raise ContextSourceError(f"source {name!r}: git uri must not carry credentials")
+    ref = parts.fragment
+    if not ref or ref.startswith("-") or ".." in ref:
+        raise ContextSourceError(f"source {name!r}: git ref is missing or unsafe")
+    return parts._replace(fragment="").geturl(), ref
+
+
+def _resolve_ref_to_sha(name: object, url: str, ref: str) -> str:
+    if _FULL_SHA.match(ref):
+        return ref
+    candidates = (f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}", f"refs/heads/{ref}")
+    try:
+        out = _run_git(["ls-remote", "--", url, *candidates])
+    except ContextSourceError as exc:
+        raise ContextSourceError(f"source {name!r}: git remote unreachable or cannot resolve") from exc
+    found = {}
+    for line in out.splitlines():
+        sha, _, refname = line.partition("\t")
+        found[refname] = sha
+    for candidate in candidates:
+        if candidate in found:
+            return found[candidate]
+    raise ContextSourceError(f"source {name!r}: git ref {ref!r} not found")
+
+
+def _ensure_clone(name: object, url: str, sha: str) -> Path:
+    base = (paths.PLAN_DIR / "context" / "git").resolve()
+    target = (base / sha).resolve()
+    if target.parent != base or not _FULL_SHA.match(sha):
+        raise ContextSourceError(f"source {name!r}: git checkout path escapes the clone root")
+    if (target / ".git").is_dir():
+        return target
+    base.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f"{sha}.tmp-", dir=base))
+    try:
+        _run_git(["init", "-q"], cwd=staging)
+        _run_git(["fetch", "-q", "--depth", "1", "--", url, sha], cwd=staging)
+        _run_git(["checkout", "-q", "--detach", "FETCH_HEAD"], cwd=staging)
+        if _run_git(["rev-parse", "HEAD"], cwd=staging).strip() != sha:
+            raise ContextSourceError(f"source {name!r}: fetched commit does not match resolved sha")
+        shutil.rmtree(target, ignore_errors=True)
+        staging.rename(target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
+def resolve_git_source(source: dict) -> dict:
+    """Resolve a ``git`` source to the ``dir`` result plus the pinned commit ``sha``.
+
+    The ref is resolved to a commit, shallow-fetched once into
+    ``PLAN_DIR/context/git/<sha>/``, and read with the ``dir`` selection logic.
+    The remote is only ever read.
+    """
+    name = source.get("name")
+    url, ref = _parse_git_uri(source)
+    sha = _resolve_ref_to_sha(name, url, ref)
+    clone = _ensure_clone(name, url, sha)
+    exclude = [*source.get("exclude", []), ".git/**"]
+    result = resolve_dir_source({**source, "uri": str(clone), "exclude": exclude})
+    return {**result, "sha": sha}

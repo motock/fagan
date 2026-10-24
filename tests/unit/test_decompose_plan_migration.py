@@ -248,8 +248,8 @@ def test_method_calls_run_decompose_as_bare_name():
     if method is None:
         pytest.fail("PipelineService.decompose_plan does not exist yet")
     source = inspect.getsource(method)
-    assert "_run_decompose_detailed(request)" in source, (
-        "method must call _run_decompose_detailed(request) as a bare name"
+    assert "_run_decompose_detailed(request" in source, (
+        "method must call _run_decompose_detailed(request, ...) as a bare name"
     )
     assert "self._run_decompose" not in source, (
         "method must NOT call self._run_decompose (R1: free variables stay free)"

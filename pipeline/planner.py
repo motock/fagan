@@ -21,6 +21,8 @@ from pathlib import Path
 from app import backend, role_registry
 
 from .config import DEFAULT_MODEL
+from .context_sources import ContextSourceError
+from .decompose_context import build_decompose_context_block
 
 # _worktree_has_new_commits is no longer called here (both test-author phases
 # now use _worktree_has_non_wip_commits), but tests monkeypatch
@@ -31,6 +33,7 @@ from .git_ops import (  # noqa: F401
     _worktree_has_non_wip_commits,
 )
 from .persona import _persona_body, _persona_default_model
+from .repo_config import RepoConfigError
 
 # ---------- Guided-decomposition planner ----------
 _PLANNER_SYSTEM = (
@@ -538,7 +541,7 @@ def _dispatch_strength_tier(plan_role_config: dict | None = None) -> str:
 
 
 def _run_decompose_detailed(
-    request: str, *, plan_role_config: dict | None = None
+    request: str, *, plan_role_config: dict | None = None, repo_root: str | None = None
 ) -> tuple[str | None, str | None]:
     """Decompose with the cause preserved: returns (text, error).
 
@@ -548,7 +551,18 @@ def _run_decompose_detailed(
     dashboard) can tell a claude-CLI auth/cap failure apart from a
     proxy model-not-found 404 or a slow-but-working call. (text, None) on
     success; (None, "<ExcType>: <detail>") on any backend failure.
+
+    repo_root, when given, appends the workspace's ``.fagan.json`` decompose
+    context after the raw goal. A required source (or invalid config) failure
+    returns (None, "context error: ...") without calling the backend.
     """
+    if repo_root is not None:
+        try:
+            block = build_decompose_context_block(repo_root)
+        except (ContextSourceError, RepoConfigError) as exc:
+            return None, f"context error: {exc}"
+        if block:
+            request = f"{request}\n\n{block}"
     resolution = role_registry.resolve_role(
         "decompose",
         plan_role_config=plan_role_config,
@@ -569,7 +583,9 @@ def _run_decompose_detailed(
     return (text or None), None
 
 
-def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
+def _run_decompose(
+    request: str, *, plan_role_config: dict | None = None, repo_root: str | None = None
+) -> str | None:
     """Call a bounded, single-turn LLM (the product-analyst persona) to turn
     a raw goal/feature request into epics/stories JSON matching save_plan's
     schema.
@@ -590,7 +606,9 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     Callers that need the underlying failure cause (for surfacing to a user)
     use _run_decompose_detailed instead.
     """
-    return _run_decompose_detailed(request, plan_role_config=plan_role_config)[0]
+    return _run_decompose_detailed(
+        request, plan_role_config=plan_role_config, repo_root=repo_root
+    )[0]
 
 
 __all__ = [

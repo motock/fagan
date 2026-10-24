@@ -1,8 +1,9 @@
-"""Plan-level ``context`` block: validation, normalization, and the ``dir`` provider.
+"""Plan-level ``context`` block: validation, normalization, and the ``dir`` and ``git`` providers.
 
 See docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md §4.2, §4.4, §4.9 and §5.
-Validation and normalization are pure; only the ``dir`` provider and the
-snapshot store below do I/O.
+Validation and normalization are pure; only the ``dir`` provider, the
+``git`` provider (which shells out to git and clones into ``PLAN_DIR``)
+and the snapshot store below do I/O.
 """
 
 import hashlib
@@ -363,7 +364,7 @@ def _parse_git_uri(source: dict) -> tuple[str, str]:
     if "@" in parts.netloc or parts.password is not None:
         raise ContextSourceError(f"source {name!r}: git uri must not carry credentials")
     ref = parts.fragment
-    if not ref or ref.startswith("-") or ".." in ref.split("/") or ".." in ref:
+    if not ref or ref.startswith("-") or ".." in ref:
         raise ContextSourceError(f"source {name!r}: git ref is missing or unsafe")
     return parts._replace(fragment="").geturl(), ref
 

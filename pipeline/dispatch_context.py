@@ -1,4 +1,8 @@
-"""Resolve a plan's dispatch-phase external context sources for a story."""
+"""Resolve a plan's dispatch-phase external context sources for a story.
+
+Lives outside ``dispatch.py`` because that module is held under the
+1000-line limit enforced by the line-limit tests.
+"""
 
 import hashlib
 import logging

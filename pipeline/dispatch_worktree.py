@@ -110,6 +110,7 @@ def _create_fresh_worktree(
     return None
 
 
+# Kept here, not in dispatch.py, to hold dispatch.py under its 1000-line limit.
 def _refuse_if_remote_branch_taken(
     plan_name: str,
     story_key: str,

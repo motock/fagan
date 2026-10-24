@@ -24,6 +24,9 @@ from .dispatch_baseline import (
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
 )
+
+# Context resolution and the remote-branch guard live in their own modules to
+# keep this file under the 1000-line limit.
 from .dispatch_context import _step_resolve_context
 from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note

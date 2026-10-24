@@ -35,6 +35,7 @@ from pathlib import Path, PurePosixPath
 
 from pipeline import testfiles
 from pipeline.repo_config import RepoConfigError, load_repo_config
+from pipeline.scope_conflict import SCOPE_CONFLICT_PREFIX
 
 SCOPE_GATE_HEADER = (
     "SCOPE GATE: this branch changes production paths outside the story's "
@@ -58,8 +59,9 @@ SCOPE_GATE_REMEDY = (
     "Then commit the revert in the same step, so the last commit stops "
     "carrying it. "
     "If the brief requires a listed change, call request_decision naming the "
-    "path and why the brief needs it; if that tool is unavailable, end your "
-    "turn stating the conflict. Never delete a test or fixture to satisfy "
+    "path and why the brief needs it; if that tool is unavailable, do not "
+    f"revert; end your turn with one line per path in the form "
+    f"`{SCOPE_CONFLICT_PREFIX} <path> :: <why the brief needs it>`. Never delete a test or fixture to satisfy "
     "this gate."
 )
 

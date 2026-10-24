@@ -670,14 +670,13 @@ class SchedulerDaemon:
 
         # Drain phase (PLANNOTIFY-06): its own phase after scan and reconcile,
         # in its own try/except so a drain failure can never kill the loop or
-        # perturb the scanned/reconciled accounting above. Imports stay
-        # function-local (no smtplib at module import); slack registers its type.
+        # perturb the scanned/reconciled accounting above. Imports are
+        # function-local to avoid pulling in smtplib at module import.
         # ALL_PLANS drains every outbox file in PLAN_DIR in one call, including
         # a plan whose manifest was since removed — a per-manifest glob would
         # silently orphan that plan's queued notifications forever.
         try:
             from pipeline import notification_email, notification_outbox
-            from pipeline import notification_slack as _slack  # noqa: F401
 
             def _drain_outbox_worker() -> None:
                 # Caught here, not in the enclosing ``except``: this body runs
@@ -715,7 +714,8 @@ class SchedulerDaemon:
                     daemon=True,
                 )
                 # Remember the worker BEFORE joining it: the join below may
-                # abandon it, and the next tick needs this to skip, not overlap.
+                # abandon it while it is still alive, and the next tick needs
+                # this reference to skip rather than overlap the drain.
                 self._drain_worker = drain_worker
                 drain_worker.start()
                 drain_worker.join(_drain_join_timeout_seconds())

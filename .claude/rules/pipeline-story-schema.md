@@ -61,6 +61,57 @@ Sparse stories (a summary alone) leave the agent to guess. Populate, at minimum:
 
 For local-family dispatch the test-author phase is always-on: it writes a NEW failing test suite before the weak executor touches code. A **behavior-preserving refactor** (e.g. W1a's "move a tool body onto `PipelineService`; the existing `test_pipeline_mcp_server.py` already covers it") has no new test to write — forcing the phase to invent one produced a redundant, unsatisfiable structural-assertion oracle that parked mid-write (Mode 51, live 2026-08-10 on W1a-10). To skip the phase for such a story, place the literal token `[no-new-tests]` anywhere in `agent_instructions`. The phase then falls open to monolithic dispatch and the executor runs against the existing suite — the correct grade for a behavior-preserving move. The token is the exact bracketed string `[no-new-tests]`; free-text phrases like "no new tests" do NOT opt out (they are common in ordinary briefs and must not silently skip the phase). Use this only when the existing suite genuinely covers the change; if there is any new behavior to grade, let the phase run. The token opts a story out wherever it appears in `agent_instructions`, EXCEPT when the sentence containing it negates its own use (e.g. "[no-new-tests] must NOT be used for this story") -- such a sentence is read as a *mention* of the token, not an invocation, so a plan author explaining the opt-out cannot accidentally trigger it; say the same thing in prose instead, e.g. "the no-new-tests opt-out must not be used for this story" (without the brackets).
 
+## Declare `files` from where the code actually lives
+
+`files` is a hard gate: a branch that changes a production path outside it is
+sent back before any LLM review, and a dispatched agent has no way to ask for
+the path (`request_decision` is permission-denied in headless dispatch). An
+agent that correctly stops with 'the brief needs this file' is then counted as
+crashing and the story parks. Four stories parked this way in two days
+(2026-10-23/24, plan `external-context-sources-phase1/2`), every time because
+the author wrote `files` from the brief's wording instead of from the code:
+
+- **CL-14**: declared `pipeline/dispatch.py`, which was 999 lines against a
+  1000-line gate, so any addition forced a split into undeclared modules.
+- **CL-20**: files mode has to be wired where dispatch-phase sources are
+  resolved (`pipeline/dispatch_context.py`), which was not declared.
+- **CL-23**: the brief named `server.py` and `dashboard_routes.py`, but
+  `decompose_plan` had moved onto `PipelineService` in `pipeline/service.py`.
+- **CL-24**: the org-level merge belongs in `pipeline/ingest.py`
+  (`_merged_context`, where CL-22 put the repo-level merge); only
+  `context_sources.py` was declared.
+
+Before writing or ingesting `files`, for each story:
+
+1. **Find where the behavior lives.** Grep for the function or constant the
+   story extends and for its call sites; declare the file that owns it, not the
+   file the brief's prose mentions. Read the sibling story that last touched
+   the same behavior (a dependency's PR shows where its code went).
+2. **Check headroom.** Run `wc -l` on every declared `.py` file. Within ~50
+   lines of 1000 means the story cannot add its code there: declare the new
+   sibling module it will move to (or the existing module it will delegate to)
+   and say so in the brief. `scope_headroom` at ingest warns on this once the
+   parked-story recovery plan lands; until then check by hand.
+3. **Declare the wiring file.** A story that adds behavior to one module and
+   calls it from another declares both; see 'Grading the integration' above.
+4. **State a decided scope in the brief when it is not obvious.** If the brief
+   alone would make a reviewer or agent read a declared file as out of scope,
+   add 'SCOPE IS DECIDED, NOT A FINDING: ...' naming the files and why. The LLM
+   reviewer reads the brief, not the `files` list, and will otherwise demand
+   a revert the line limit forbids.
+5. **Parallel stories on one file.** Stories that run at the same time and add
+   to the same module (especially at one insertion point such as the end of
+   `context_sources.py`) conflict at the merge gate, which cannot resolve
+   conflicts. Chain them with `dependencies` or give each its own new module.
+
+Fixing it afterwards: `patch_story` cannot edit `files`. Update the plan file
+(and its brief), re-ingest (statuses and runtime state are kept, authored
+fields are refreshed, so first confirm the manifest briefs match the plan
+file), then rebase and push the finished branch by hand. A finished branch
+whose reviewer verdict is stale will not re-review until the flagged files
+change; that cosmetic-commit workaround is what the parked-story recovery plan
+(`docs/plans/PARKED_STORY_RECOVERY_PLAN.md`) removes.
+
 ## Grading the integration, not just the unit
 
 An acceptance fixture that calls the changed function directly — never

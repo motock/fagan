@@ -423,3 +423,71 @@ def resolve_git_source(source: dict) -> dict:
     exclude = [*source.get("exclude", []), ".git/**"]
     result = resolve_dir_source({**source, "uri": str(clone), "exclude": exclude})
     return {**result, "sha": sha}
+
+
+# ---------- files delivery mode ----------
+
+MAX_POINTER_PATHS = 200
+_FILE_HEADER = re.compile(r"^--- (.+?) ---\n", re.MULTILINE)
+
+
+def _split_file_entries(text: str) -> list[tuple[str, str]]:
+    """Split ``--- <relpath> ---`` concatenated text back into (relpath, content) pairs."""
+    headers = list(_FILE_HEADER.finditer(text))
+    entries = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        entries.append((header.group(1), text[header.end():end]))
+    return entries
+
+
+def _is_safe_relpath(rel: str) -> bool:
+    return not (rel.startswith("/") or "\\" in rel or ".." in rel.split("/"))
+
+
+def materialize_context_files(source: dict, text: str) -> str:
+    """Write resolved *text* as per-file entries under the snapshot store.
+
+    Lives under ``PLAN_DIR/context/<digest-hex>/files/`` (never the worktree,
+    where ``git add -A`` would commit it) and returns that digest folder.
+    Re-materializing an existing snapshot is a no-op.
+    """
+    hexdigest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    folder = paths.PLAN_DIR / "context" / hexdigest
+    if (folder / "meta.json").exists():
+        return str(folder)
+    entries = _split_file_entries(text)
+    if not entries:
+        raise ContextSourceError(f"source {source.get('name')!r}: no file entries to materialize")
+    for rel, _content in entries:
+        if not _is_safe_relpath(rel):
+            raise ContextSourceError(f"source {source.get('name')!r}: unsafe file path {rel!r}")
+    files_root = folder / "files"
+    for rel, content in entries:
+        target = files_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(target, content)
+    meta = {
+        "name": source.get("name"),
+        "provider": source.get("provider"),
+        "uri": source.get("uri"),
+        "digest": "sha256:" + hexdigest,
+        "files": [{"path": rel, "bytes": len(content.encode("utf-8"))} for rel, content in entries],
+    }
+    _write_atomic(folder / "meta.json", json.dumps(meta))
+    return str(folder)
+
+
+def render_files_pointer(name: str, path: str, files: list[dict]) -> str:
+    """Render the prompt section naming a materialized snapshot and up to 200 of its files."""
+    listed = files[:MAX_POINTER_PATHS]
+    lines = [
+        _PREAMBLE,
+        f"\n## Context source: {name} (delivery: files)",
+        f"Snapshot directory (read files on demand): {path}/files",
+        "Files (relative to that directory):",
+        *(f"- {entry['path']}" for entry in listed),
+    ]
+    if len(files) > len(listed):
+        lines.append(f"[... and {len(files) - len(listed)} more files not listed ...]")
+    return "\n".join(lines) + "\n"

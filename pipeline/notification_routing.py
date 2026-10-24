@@ -173,6 +173,10 @@ def load_notification_config(
 
     Raises NotificationConfigError on any invalid file.
     """
+    # Channel types register on import; config load must not depend on who
+    # imported what first (the spool side never imports these modules).
+    from . import notification_email, notification_slack  # noqa: F401
+
     cfg_path = _config_path(path, env)
     try:
         size = cfg_path.stat().st_size

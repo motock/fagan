@@ -421,6 +421,8 @@ def _story_key_conflict_error(
     )
 
 
+# Org sources are read here, with the repo and plan levels, because plan context
+# resolution (``_merged_context``) is the single place the three levels merge.
 def _load_org_sources() -> tuple[list[dict], str | None]:
     """Read the org context file named by ``PIPELINE_CONTEXT_CONFIG``.
 

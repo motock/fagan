@@ -36,6 +36,7 @@ from .ecosystem_detect import (
     is_unsupported_ecosystem_command,
 )
 from .repo_config import load_repo_config
+from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -893,6 +894,10 @@ def _ingest_plan_impl(
                     warning += _AUTO_ROUTE_SKIPPED_SUFFIX
                 _notify_user(plan_name, f"{key}: {warning}", event="sizing_risk", story_key=key)
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
+            headroom = scope_headroom_warning(story, repo_root)
+            if headroom:
+                _notify_user(plan_name, f"{key}: {headroom}", event="scope_headroom", story_key=key)
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {headroom}")
             # Non-blocking authoring nudge: flag acceptance fixtures that
             # depend on macOS-only tooling. Dispatch, the done-bar and the
             # merge-gate reverify all run on macOS, but CI runs ubuntu-latest

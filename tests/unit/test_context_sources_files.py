@@ -126,3 +126,17 @@ def test_persona_should_keep_prompt_block_before_pointer():
 def test_persona_prompt_mode_should_be_unchanged_without_pointers():
     assert _with_files_pointers("BLOCK", []) == "BLOCK"
     assert _with_files_pointers("", []) == ""
+
+
+def test_should_materialize_files_when_digest_folder_already_snapshotted(plan_dir):
+    cs.snapshot_context(TEXT)
+
+    folder = Path(cs.materialize_context_files(SOURCE, TEXT))
+
+    assert (folder / "files" / "a.txt").read_text() == "alpha\n"
+    assert json.loads((folder / "meta.json").read_text())["files"][0]["path"] == "a.txt"
+
+
+def test_should_reject_relpath_with_trailing_slash(plan_dir):
+    with pytest.raises(cs.ContextSourceError, match="unsafe"):
+        cs.materialize_context_files(SOURCE, "--- dir/ ---\nx\n")

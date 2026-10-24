@@ -432,7 +432,11 @@ _FILE_HEADER = re.compile(r"^--- (.+?) ---\n", re.MULTILINE)
 
 
 def _split_file_entries(text: str) -> list[tuple[str, str]]:
-    """Split ``--- <relpath> ---`` concatenated text back into (relpath, content) pairs."""
+    """Split ``--- <relpath> ---`` concatenated text back into (relpath, content) pairs.
+
+    Inherent to the format: a file whose own content has a line shaped like
+    ``--- x ---`` is split at that line.
+    """
     headers = list(_FILE_HEADER.finditer(text))
     entries = []
     for index, header in enumerate(headers):
@@ -442,7 +446,18 @@ def _split_file_entries(text: str) -> list[tuple[str, str]]:
 
 
 def _is_safe_relpath(rel: str) -> bool:
-    return not (rel.startswith("/") or "\\" in rel or ".." in rel.split("/"))
+    return not (
+        not rel or rel.startswith("/") or rel.endswith("/")
+        or "\\" in rel or ".." in rel.split("/")
+    )
+
+
+def _has_files_meta(meta_path) -> bool:
+    """True when *meta_path* is a files-mode meta (snapshot_context's has no ``files``)."""
+    try:
+        return "files" in json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
 
 
 def materialize_context_files(source: dict, text: str) -> str:
@@ -454,7 +469,7 @@ def materialize_context_files(source: dict, text: str) -> str:
     """
     hexdigest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     folder = paths.PLAN_DIR / "context" / hexdigest
-    if (folder / "meta.json").exists():
+    if _has_files_meta(folder / "meta.json"):
         return str(folder)
     entries = _split_file_entries(text)
     if not entries:

@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -41,12 +42,25 @@ if "REPO_ROOT" in os.environ:
 # CFG env bootstrap: pipeline/__init__.py reads <repo_root>/.pipeline.env at import time; this opt-out makes that loader inert for the whole pytest run so a developer's repo-root file (e.g. PLAN_DIR written by CFG-D2's standalone-setup.sh) never leaks into the suite. Set AFTER the scrub loop above (it deletes every PIPELINE_* key) and before any pipeline import can occur.
 os.environ["PIPELINE_SKIP_ENV_FILE"] = "1"
 
+# Notification config isolation: the config path defaults to
+# PLAN_DIR/notifications.json, and the instance-queue spooler is gated only by
+# that file's presence. With a developer's real config in ~/.claude/plans, fixture
+# events were spooled into the live per-instance queues and delivered to real
+# e-mail/Slack. Point the whole session at a path that never exists; tests that
+# need a config pass an explicit path or set the variable themselves.
+_NOTIFY_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="pytest-notify-config-")
+_NO_NOTIFY_CONFIG = str(Path(_NOTIFY_CONFIG_DIR.name) / "no-such-notifications.json")
+os.environ["PIPELINE_NOTIFY_CONFIG_PATH"] = _NO_NOTIFY_CONFIG
+
+
 @pytest.fixture(autouse=True)
 def _isolate_environ():
     snapshot = dict(os.environ)
     for key in list(os.environ):
         if key.startswith(_ISOLATED_ENV_PREFIXES):
             del os.environ[key]
+    # The scrub above would drop the session-wide notification isolation.
+    os.environ["PIPELINE_NOTIFY_CONFIG_PATH"] = _NO_NOTIFY_CONFIG
     yield
     os.environ.clear()
     os.environ.update(snapshot)

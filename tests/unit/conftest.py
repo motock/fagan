@@ -15,8 +15,12 @@ import pytest
 # see green, so it "fixed" a correct file until it broke).
 _ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_")
 
+# Set by tests/conftest.py to a nonexistent path so no test reads a developer's
+# real notifications.json; this scrub must not undo it.
+_SESSION_ENV_KEPT = "PIPELINE_NOTIFY_CONFIG_PATH"
+
 for _key in list(os.environ):
-    if _key.startswith(_ISOLATED_ENV_PREFIXES):
+    if _key.startswith(_ISOLATED_ENV_PREFIXES) and _key != _SESSION_ENV_KEPT:
         del os.environ[_key]
 
 
@@ -24,7 +28,7 @@ for _key in list(os.environ):
 def _isolate_environ():
     snapshot = dict(os.environ)
     for key in list(os.environ):
-        if key.startswith(_ISOLATED_ENV_PREFIXES):
+        if key.startswith(_ISOLATED_ENV_PREFIXES) and key != _SESSION_ENV_KEPT:
             del os.environ[key]
     yield
     os.environ.clear()

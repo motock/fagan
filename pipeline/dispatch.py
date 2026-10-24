@@ -10,7 +10,7 @@ from typing import Any
 from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
-from .branch_guard import BranchGuardError, refusal, remote_branch_exists
+from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
@@ -24,6 +24,10 @@ from .dispatch_baseline import (
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
 )
+
+# Context resolution and the remote-branch guard live in their own modules to
+# keep this file under the 1000-line limit.
+from .dispatch_context import _step_resolve_context
 from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
@@ -31,7 +35,7 @@ from .dispatch_routing import (
     _resolve_dispatch_backend,  # noqa: F401
     _resolve_dispatch_target,
 )
-from .dispatch_worktree import _create_fresh_worktree
+from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
 from .service import _ServerRef
 
 # Server-sourced members the moved functions reference as free variables. Each
@@ -94,44 +98,6 @@ get_ticket_provider = _ServerRef("get_ticket_provider")
 # already merged or awaiting merge, so a fresh worktree would be cut from a
 # base that may already contain it. set_story_status is the explicit way back.
 _NON_DISPATCHABLE_STATUSES = frozenset({"done", "pr_open"})
-
-
-def _refuse_if_remote_branch_taken(
-    plan_name: str,
-    story_key: str,
-    story: dict[str, Any],
-    branch: str,
-    manifest_path: Path,
-    manifest: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Fail-closed guard for a FRESH dispatch: block when origin already holds
-    ``branch`` or cannot be queried (a second push would overwrite another
-    machine's work). Returns the refusal result, or None to proceed. The story
-    stays ``todo`` with the reason recorded on it."""
-    try:
-        with _scoped_repo_root(plan_name) as repo_root:
-            if not remote_branch_exists(repo_root, branch):
-                return None
-        outcome, reason = refusal(story_key, branch)
-    except BranchGuardError as exc:
-        outcome, reason = refusal(story_key, branch, exc)
-    story["dispatch_block_reason"] = reason
-    _atomic_write_json(manifest_path, manifest)
-    logging.getLogger("pipeline").warning(
-        "fresh dispatch blocked by remote branch guard",
-        extra={"plan": plan_name, "story_key": story_key, "branch": branch,
-               "outcome": outcome},
-    )
-    _notify_user(
-        plan_name,
-        reason,
-        story_key=story_key,
-        severity="warning",
-        event=outcome,
-        dedup_key=f"{outcome}:{story_key}",
-    )
-    return {"ok": False, "error": reason, "story_key": story_key,
-            "branch": branch, "outcome": outcome}
 
 
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -362,6 +328,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         exc_info=True,
                     )
 
+        # Resolve external context BEFORE the ticket moves to in-progress so a
+        # required-source failure leaves the story's status untouched.
+        context_block, blocked = _step_resolve_context(
+            plan_name, story_key, story, manifest, manifest_path
+        )
+        if blocked is not None:
+            return blocked
+
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
         # Resolve concrete backend AND model for this story (shared with the
@@ -454,6 +428,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             plan_name=plan_name,
             resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
+            context_block=context_block,
         )
         # REG-1: dispatch_model is the resolved model for this story - the
         # story's own pin translated to a concrete tag, else the registry's

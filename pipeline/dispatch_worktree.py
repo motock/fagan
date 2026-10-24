@@ -6,14 +6,19 @@ of ``pipeline.dispatch`` is resolved lazily through ``_ModuleRef``, so
 ``monkeypatch.setattr(pipeline.dispatch, "NAME", ...)`` still lands.
 """
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from .branch_guard import BranchGuardError, refusal
 from .module_ref import _ModuleRef
 
 _scoped_repo_root = _ModuleRef("pipeline.dispatch", "_scoped_repo_root")
 _try_acquire_git_lock = _ModuleRef("pipeline.dispatch", "_try_acquire_git_lock")
+_atomic_write_json = _ModuleRef("pipeline.dispatch", "_atomic_write_json")
+_notify_user = _ModuleRef("pipeline.dispatch", "_notify_user")
+_remote_branch_exists = _ModuleRef("pipeline.dispatch", "remote_branch_exists")
 _default_branch = _ModuleRef("pipeline.dispatch", "_default_branch")
 _exclude_worktree_logs_from_tracking = _ModuleRef(
     "pipeline.dispatch", "_exclude_worktree_logs_from_tracking"
@@ -103,3 +108,42 @@ def _create_fresh_worktree(
     # requirements file.
     _provision_worktree_venv(worktree_path)
     return None
+
+
+# Kept here, not in dispatch.py, to hold dispatch.py under its 1000-line limit.
+def _refuse_if_remote_branch_taken(
+    plan_name: str,
+    story_key: str,
+    story: dict[str, Any],
+    branch: str,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Fail-closed guard for a FRESH dispatch: block when origin already holds
+    ``branch`` or cannot be queried (a second push would overwrite another
+    machine's work). Returns the refusal result, or None to proceed. The story
+    stays ``todo`` with the reason recorded on it."""
+    try:
+        with _scoped_repo_root(plan_name) as repo_root:
+            if not _remote_branch_exists(repo_root, branch):
+                return None
+        outcome, reason = refusal(story_key, branch)
+    except BranchGuardError as exc:
+        outcome, reason = refusal(story_key, branch, exc)
+    story["dispatch_block_reason"] = reason
+    _atomic_write_json(manifest_path, manifest)
+    logging.getLogger("pipeline").warning(
+        "fresh dispatch blocked by remote branch guard",
+        extra={"plan": plan_name, "story_key": story_key, "branch": branch,
+               "outcome": outcome},
+    )
+    _notify_user(
+        plan_name,
+        reason,
+        story_key=story_key,
+        severity="warning",
+        event=outcome,
+        dedup_key=f"{outcome}:{story_key}",
+    )
+    return {"ok": False, "error": reason, "story_key": story_key,
+            "branch": branch, "outcome": outcome}

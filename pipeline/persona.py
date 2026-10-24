@@ -60,6 +60,7 @@ def _build_dispatch_command(
     plan_name: str | None = None,
     resume_journal: list[dict[str, Any]] | None = None,
     review_feedback: str | None = None,
+    context_block: str = "",
 ) -> dict[str, Any]:
     """Build the backend-agnostic dispatch spec for a story: its prompt,
     persona system prompt, model tier, and tool allow-list. The chosen
@@ -111,6 +112,8 @@ def _build_dispatch_command(
             f"The code reviewer REQUESTED CHANGES on the previous attempt. "
             f"Address this feedback before finishing:\n{review_feedback}\n\n"
         )
+    # Reference data goes after the brief and before the rework instruction.
+    context_section = f"{context_block}\n\n" if context_block else ""
     if resume_journal:
         completed = "\n".join(
             f"  - [{e['step']}] {e['summary']}" for e in resume_journal
@@ -119,6 +122,7 @@ def _build_dispatch_command(
         prompt = (
             f"You are RESUMING issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"
+            f"{context_section}"
             f"This story was previously interrupted. The following steps are "
             f"already completed and committed — do not redo them:\n{completed}\n\n"
             f"Continue from here: {next_hint}\n\n"
@@ -134,6 +138,7 @@ def _build_dispatch_command(
         prompt = (
             f"You are completing issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"
+            f"{context_section}"
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"{no_wakeup_instruction}"

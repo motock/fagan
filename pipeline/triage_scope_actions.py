@@ -15,9 +15,27 @@ from .parsers import _atomic_write_json
 from .persistence import _notify_user
 
 _park = _ModuleRef("pipeline.triage", "_park")
-_record_execution = _ModuleRef("pipeline.triage", "_record_execution")
 
 MAX_SCOPE_AMENDMENTS = 3
+
+# Safety-gate modules: a reported conflict must never widen the gate that polices it.
+PROTECTED_MODULES = frozenset(
+    {
+        "pipeline/scope_gate.py",
+        "pipeline/scope_conflict.py",
+        "pipeline/no_progress.py",
+        "pipeline/branch_guard.py",
+        "pipeline/triage.py",
+        "pipeline/triage_scope_actions.py",
+        "pipeline/overlord.py",
+        "pipeline/review_orchestrator.py",
+        "pipeline/merge.py",
+        "pipeline/advance_merge.py",
+        "pipeline/dispatch_lease.py",
+        "pipeline/pin_guard.py",
+        "pipeline/security_audit.py",
+    }
+)
 
 _FORBIDDEN_PREFIXES = ("scripts/", ".github/", ".claude/", "docs/adr/")
 _FORBIDDEN_NAMES = ("pyproject.toml",)
@@ -33,7 +51,13 @@ _REVIEW_STATE_KEYS = (
 
 
 def _is_malformed(path: str) -> bool:
-    return not path or path.startswith("/") or "\\" in path or ".." in path.split("/")
+    return (
+        not path
+        or path.startswith("/")
+        or "\\" in path
+        or ".." in path.split("/")
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in path)
+    )
 
 
 def _is_sensitive(path: str) -> bool:
@@ -64,6 +88,10 @@ def check_scope_amendment(story: dict, paths: list[str]) -> tuple[list[str], dic
             refusals[str(path)] = "malformed_path"
         elif story.get("risk") == "high":
             refusals[path] = "high_risk_story"
+        elif _directory(path) == ".":
+            refusals[path] = "root_level_path"
+        elif path in PROTECTED_MODULES:
+            refusals[path] = "protected_module"
         elif path in declared or path in allowed:
             refusals[path] = "already_declared"
         elif _is_sensitive(path):
@@ -111,8 +139,6 @@ def _execute_amend_scope(plan_name, story_key, story, ruling, manifest, manifest
             f"amend_scope refused by guardrail ({tokens}); parked for a human",
         )
 
-    prior_status = story.get("status")
-    prior_parked_reason = story.get("parked_reason")
     rationale = str(ruling.get("rationale", ""))[:300]
     reasons = conflict.get("reasons") or {}
     now = datetime.now(UTC).isoformat()
@@ -146,14 +172,7 @@ def _execute_amend_scope(plan_name, story_key, story, ruling, manifest, manifest
             "scope_amended notification failed",
             extra={"story_key": story_key, "error_type": type(exc).__name__},
         )
-    _record_execution(
-        plan_name,
-        story_key,
-        ruling.get("action", "amend_scope"),
-        "amend_scope",
-        "gated",
-        prior_status,
-        prior_parked_reason,
-        amended_paths=allowed,
-    )
+    # The triage dispatcher records the ruling (with the real autonomy mode) and
+    # pops this into the record's extras.
+    story["_amended_paths"] = list(allowed)
     return "amend_scope"

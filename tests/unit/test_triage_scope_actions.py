@@ -190,12 +190,11 @@ def test_should_set_todo_otherwise(env, check):
 
 
 def test_should_write_manifest_notify_and_record_paths_only(env):
-    notes, records, path = env
+    notes, _records, path = env
     story = _story()
     _run(story, path)
     assert json.loads(path.read_text())["stories"]["S"]["files"][-1] == "pipeline/bar.py"
     (msg, kw), = notes
     assert kw["event"] == "scope_amended"
     assert "pipeline/bar.py" in msg
-    assert len(records) == 1
-    assert records[0][0][2] == "amend_scope"
+    assert story["_amended_paths"] == ["pipeline/bar.py"]

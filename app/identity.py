@@ -1,12 +1,16 @@
-"""Identity data types for the tenancy seam (ADR 0009).
+"""Identity types and the shared-secret provider for the tenancy seam (ADR 0009).
 
 This module is deliberately free-standing: it imports nothing from ``app.*``
 or ``pipeline.*`` so that both the dashboard and the service layer can depend
-on it without creating an import cycle. It holds data types only — no
-provider, no policy, no wiring and no enforcement.
+on it without creating an import cycle. It holds the identity data types, the
+``IdentityProvider`` protocol and the local shared-secret provider — no
+policy, no wiring and no enforcement.
 """
 
+import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 ROLE_AUTHOR = "author"
 ROLE_OWNER = "owner"
@@ -50,3 +54,63 @@ class Principal:
         for scope in self.scopes:
             if not isinstance(scope, str) or not scope:
                 raise IdentityError("invalid scope: must be a non-empty string")
+
+
+@runtime_checkable
+class IdentityProvider(Protocol):
+    """The authentication seam: turn a credential into a ``Principal``.
+
+    Implementations raise ``IdentityError`` for every rejected credential and
+    never leak the credential or the expected secret in the message.
+    """
+
+    def authenticate(self, credential: str | None) -> Principal:
+        """Return the principal for ``credential`` or raise ``IdentityError``."""
+        ...
+
+
+#: Today's single-operator identity. ADR 0009 section 7 defines local mode as
+#: this principal holding the full action set.
+LOCAL_OPERATOR = Principal(
+    subject="local-operator",
+    roles=ROLES,
+    scopes=("*",),
+    auth_method="shared-secret",
+)
+
+
+class SharedSecretProvider:
+    """Authenticate a shared secret against a fixed or lazily-resolved value.
+
+    ``expected_secret`` may be a callable so the dashboard can pass
+    ``app.auth.get_or_create_api_key``: the key is created or rotated lazily,
+    so the callable is consulted on every ``authenticate`` and never cached.
+    """
+
+    def __init__(self, expected_secret: str | Callable[[], str]) -> None:
+        self._expected_secret = expected_secret
+
+    def authenticate(self, credential: str | None) -> Principal:
+        """Return ``LOCAL_OPERATOR`` when the credential matches, else deny.
+
+        Comparison is constant-time over UTF-8 bytes. Encoding both sides is
+        load-bearing: ``secrets.compare_digest`` raises ``TypeError`` on a
+        non-ASCII ``str``, and an HTTP header can carry latin-1 bytes, so a
+        raw ``str`` comparison would surface as a 500 instead of a denial.
+        """
+        if not credential:
+            raise IdentityError("missing credential")
+
+        expected = self._expected_secret
+        if callable(expected):
+            expected = expected()
+
+        if not isinstance(expected, str) or not expected:
+            raise IdentityError("invalid credential")
+
+        if not secrets.compare_digest(
+            credential.encode("utf-8"), expected.encode("utf-8")
+        ):
+            raise IdentityError("invalid credential")
+
+        return LOCAL_OPERATOR

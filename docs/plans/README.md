@@ -22,12 +22,23 @@ update this index in the same change.
 | 2 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
 | 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
+**Enterprise platform readiness (assessed 2026-10-25):**
+[`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md) records
+the eventing, observability, auditability, and authn/authz findings. The only
+scheduled work from it is the behavior-preserving Tier 1 prep plan
+`enterprise-prep-tier1`; the remaining items are deferred and ranked in that
+document.
+
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
 option B (several sessions on one shared host) now and defers T3 (hosted,
 multi-tenant) until someone can say who answers a decision on a plan they did
 not create. Option B's prerequisites (the latent hazards it names) shipped in
 `TOPOLOGY_COLLISION_GUARDS_PLAN.md`, so accepting B needs no further build.
+**Update 2026-10-25:** the *direction* for T3 is now recorded in
+[ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md) (Proposed): a
+shared control plane with per-repo workers, federated per trust boundary. What
+remains is the tenancy/identity work, not the topology choice.
 
 **Parked (revisit only if the trigger happens):**
 

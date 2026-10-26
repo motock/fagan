@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import cross_plan, testfiles
+from .actor import actor_id
 from .build_detect import _lint_acceptance_fixtures
 from .context_sources import (
     DEFAULT_MAX_TOTAL_CHARS,
@@ -826,6 +827,7 @@ def _ingest_plan_impl(
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )
+        final_manifest["ingested_by"] = actor_id()
         if plan_context is not None:
             final_manifest["context"] = plan_context
 

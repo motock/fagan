@@ -16,15 +16,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from app.identity import Principal
+from app.identity import LOCAL_OPERATOR, Principal
 
 logger = logging.getLogger(__name__)
 
 #: The subject of the local single-operator deployment's principal.
-LOCAL_OPERATOR_SUBJECT = "local-operator"
-
-#: The principal the local single-operator deployment acts as.
-LOCAL_OPERATOR = Principal(subject=LOCAL_OPERATOR_SUBJECT)
+LOCAL_OPERATOR_SUBJECT = LOCAL_OPERATOR.subject
 
 
 class Action(str, Enum):

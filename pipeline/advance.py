@@ -307,24 +307,6 @@ def _warn_file_overlaps(plan_name: str, stories: dict, ready: list[str], neighbo
             )
 
 
-def _approval_is_current(manifest: dict[str, Any]) -> bool:
-    """True when the manifest's approval record covers its current content.
-
-    ``plan_approval.is_activatable`` checks the recorded status only; the
-    digest is what ties an approval to the authored content it approved. A
-    writer that bypasses ingest (``set_plan_role_config``) can leave an
-    ``approved`` record behind an authored change, so activation compares the
-    digest too and fails closed on an absent, malformed or stale record.
-    While the gate is disabled no approval is required and this is always true.
-    """
-    if not plan_approval.approval_enabled():
-        return True
-    approval = manifest.get("approval")
-    if not isinstance(approval, dict):
-        return False
-    return approval.get("digest") == plan_approval.canonical_digest(manifest)
-
-
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     manifest_path = _store.manifest_path(plan_name)
     if not manifest_path.exists():
@@ -347,9 +329,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     # sits before the resource gates so an unapproved plan never even
     # adjudicates merges, and it re-reads the record on every tick (no cached
     # negative) so approving the plan takes effect on the next tick.
-    if not plan_approval.is_activatable(manifest) or not _approval_is_current(
-        manifest
-    ):
+    if not plan_approval.is_activatable(manifest):
         return {"ok": True, "skipped": "plan_not_approved"}
 
     # Per-backend resource gate (Step 5): dispatch and review can run on

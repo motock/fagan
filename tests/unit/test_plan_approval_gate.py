@@ -15,10 +15,14 @@ story makes the *activation* paths honour it:
 With ``PIPELINE_PLAN_APPROVAL`` unset both paths are byte-identical to
 today: a manifest that *looks* pending still advances and dispatches.
 
-The digest is what ties an approval to the content it approved. A record
-whose ``digest`` no longer matches ``canonical_digest(manifest)`` (a writer
-that bypassed ingest, e.g. ``set_plan_role_config``) must fail closed, so
-absent, malformed and digest-mismatched records are covered here too.
+Activation gates on ``plan_approval.is_activatable`` alone - the recorded
+status - exactly as the story specifies. It deliberately does *not* re-check
+the content digest: dispatch itself persists ``story["backend"]`` and
+``tdd_split``, both authored fields, so a digest check here would invalidate
+an approval on the first real dispatch and deadlock the plan. Absent,
+malformed and non-approved records still fail closed, and
+``test_approved_plan_survives_the_pipelines_own_runtime_writes`` pins that
+decision.
 
 No git runs: a refused call returns before any worktree work, and the
 allowed case stops at a stubbed ``_create_fresh_worktree`` - the first
@@ -281,8 +285,8 @@ def test_tick_treats_an_approved_plan_as_ready(tick, approval_enabled):
     [
         pytest.param(_UNSET, id="absent"),
         pytest.param("approved", id="malformed-string"),
-        pytest.param({"status": "approved"}, id="malformed-no-digest"),
-        pytest.param({"status": "approved", "digest": "old"}, id="digest-mismatch"),
+        pytest.param({"status": "rejected", "digest": "d1"}, id="rejected"),
+        pytest.param({"status": "pending_approval"}, id="pending-no-digest"),
     ],
 )
 def test_tick_refuses_an_unusable_approval_record(tick, approval_enabled, approval):
@@ -295,13 +299,11 @@ def test_tick_refuses_an_unusable_approval_record(tick, approval_enabled, approv
     assert dispatched == []
 
 
-def test_tick_proceeds_once_the_approval_digest_matches_again(
-    tick, approval_enabled
-):
+def test_tick_proceeds_once_the_plan_is_approved(tick, approval_enabled):
     """The refusal must not be cached or repair the record behind our back."""
     dispatched, install = tick
     manifest = _manifest()
-    manifest["approval"] = {"status": "approved", "digest": "old"}
+    manifest["approval"] = _pending(manifest)
     path = install(manifest)
 
     assert _run_tick() == {"ok": True, "skipped": "plan_not_approved"}
@@ -315,6 +317,37 @@ def test_tick_proceeds_once_the_approval_digest_matches_again(
 
     assert result.get("skipped") != "plan_not_approved"
     assert dispatched == [(PLAN, STORY)]
+
+
+def test_approved_plan_survives_the_pipelines_own_runtime_writes(
+    tick, approval_enabled
+):
+    """Regression guard: the gate must not re-check the content digest.
+
+    A real dispatch persists ``story["backend"]`` (and ``tdd_split``), both of
+    which are authored fields in ``plan_approval.canonical_digest``. Gating on
+    the digest would therefore skip every tick after the first dispatch and
+    deadlock the plan, so an approval recorded against the pre-dispatch content
+    must keep activating the plan.
+    """
+    dispatched, install = tick
+    manifest = _manifest()
+    manifest["approval"] = _approved(manifest)
+    path = install(manifest)
+
+    assert _run_tick().get("skipped") != "plan_not_approved"
+    assert dispatched == [(PLAN, STORY)]
+
+    # What a real dispatch_story writes back to the manifest.
+    written = json.loads(path.read_text())
+    written["stories"][STORY]["backend"] = "local"
+    written["stories"][STORY]["tdd_split"] = {"test": "t", "impl": "i"}
+    path.write_text(json.dumps(written))
+
+    result = _run_tick()
+
+    assert result.get("skipped") != "plan_not_approved"
+    assert dispatched == [(PLAN, STORY), (PLAN, STORY)]
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +406,8 @@ def test_dispatch_proceeds_for_an_approved_plan(
     [
         pytest.param(_UNSET, id="absent"),
         pytest.param("approved", id="malformed-string"),
-        pytest.param({"status": "approved"}, id="malformed-no-digest"),
-        pytest.param({"status": "approved", "digest": "old"}, id="digest-mismatch"),
+        pytest.param({"status": "rejected", "digest": "d1"}, id="rejected"),
+        pytest.param({"status": "pending_approval"}, id="pending-no-digest"),
     ],
 )
 def test_dispatch_refuses_an_unusable_approval_record(
@@ -403,11 +436,12 @@ def test_direct_dispatch_bypassing_the_tick_is_refused(
     assert launcher == []
 
 
-def test_dispatch_proceeds_once_the_approval_digest_matches_again(
+def test_dispatch_proceeds_once_the_plan_is_approved(
     plan_dir, worktree_root, launcher, approval_enabled
 ):
+    """The refusal must not be cached or repair the record behind our back."""
     manifest = _manifest()
-    manifest["approval"] = {"status": "approved", "digest": "old"}
+    manifest["approval"] = _pending(manifest)
     path = _write(plan_dir, manifest)
 
     assert p.dispatch_story(PLAN, STORY) == {
@@ -425,3 +459,30 @@ def test_dispatch_proceeds_once_the_approval_digest_matches_again(
 
     assert result["error"] == "stub: stop before git"
     assert len(launcher) == 1
+
+
+def test_dispatch_proceeds_after_the_pipelines_own_runtime_writes(
+    plan_dir, worktree_root, launcher, approval_enabled
+):
+    """Regression guard: dispatch must not re-check the content digest.
+
+    ``_dispatch_story_impl`` persists ``story["backend"]`` and ``tdd_split``,
+    both authored fields, so a digest check would refuse the second dispatch of
+    an approved plan forever.
+    """
+    manifest = _manifest()
+    manifest["approval"] = _approved(manifest)
+    path = _write(plan_dir, manifest)
+
+    assert p.dispatch_story(PLAN, STORY)["error"] == "stub: stop before git"
+    assert len(launcher) == 1
+
+    written = json.loads(path.read_text())
+    written["stories"][STORY]["backend"] = "local"
+    written["stories"][STORY]["tdd_split"] = {"test": "t", "impl": "i"}
+    path.write_text(json.dumps(written))
+
+    result = p.dispatch_story(PLAN, STORY)
+
+    assert result["error"] == "stub: stop before git"
+    assert len(launcher) == 2

@@ -1129,6 +1129,25 @@ suffix.
 
 ---
 
+## Triage action: `amend_scope`
+
+When an agent reports a scope conflict (`scope_conflict` recorded on the
+parked story), the overlord's failure triage may rule `amend_scope`. The
+executor (`pipeline/triage_scope_actions.py`), not the overlord, enforces the
+guardrails and refuses, parking the story for a human, any path that is:
+outside the packages of the story's declared `files`, a protected safety-gate
+module (e.g. `pipeline/triage.py`, `pipeline/scope_gate.py`), a root-level
+file, under `scripts/`, `.github/`, `.claude/` or a config file, a new
+top-level directory, on a `risk: high` story, or beyond 3 amendments per
+story. An accepted amendment appends the paths to the story's `files`, records
+them in `scope_amendments`, and returns the story to `todo` (or `tests_passed`
+when green at HEAD). The decisions-log record carries the autonomy mode and
+`amended_paths`. It runs in `gated` and `full` and is notify-only in
+`dry-run`. A plan re-ingest refreshes `files` from the plan file, so a
+permanent scope change belongs in the plan too.
+
+---
+
 ## Cross-plan coordination
 
 Plans are independent by default. Two mechanisms connect them, both read from

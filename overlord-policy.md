@@ -99,7 +99,7 @@ effect with no described idempotency key or "did I already do this?" check:
 
 Once wired, the pipeline will ask the overlord what to do about it, supplying measured repo‑health findings and the story's attempt history in the prompt;
 
-All four ACTION values are defined:
+All seven ACTION values are defined:
 
 - `escalate_model` – the scope is right, the implementer is too weak; retry the same scope on a stronger rung of the existing ladder.
 - `split_story` – the scope is wrong for any implementer at this tier; the story needs to be broken up.
@@ -107,6 +107,7 @@ All four ACTION values are defined:
 - `park_for_human` – genuinely ambiguous; hold it.
 - `mark_done` – correct the story record to `done` only when live evidence corroborates that the work landed: `gh` reports the story's `pr_url` as MERGED. New commits, a green suite or an open PR never corroborate on their own, and branch ancestry proves nothing because the pipeline squash-merges; never act on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
 - `patch_acceptance` – the story's acceptance fixture is demonstrably broken at a clean baseline (a born-broken oracle: it cannot pass no matter what an implementer writes), so the fixture itself is the defect. The overlord returns a corrected fixture source between `===FIXTURE-START===` and `===FIXTURE-END===` markers plus a one-line `DIAGNOSIS:`. The executor validates BEFORE writing: the rewrite must pass the ingest lint/collection helper AND must still FAIL at a clean baseline (a rewrite that passes with no implementation is isolation-only and is rejected). Any failure to parse, lint, or stay born-broken parks the story loudly with the manifest's acceptance source untouched; on success the manifest is rewritten, the previous digests are snapshotted into the decisions log, and the story returns to `todo` for a fresh dispatch.
+- `amend_scope` – the story is parked on a reported scope conflict (`scope_conflict` recorded) and the path is directly required by the brief. The overlord only names the ruling; the executor, not the overlord, enforces the guardrails and refuses anything outside the same package as a declared file, a protected safety-gate module (e.g. `pipeline/triage.py`, `pipeline/scope_gate.py`), a root-level file, under `scripts/`, `.github/`, `.claude/` or config files, new top-level directories, `risk: high` stories, or beyond 3 amendments. A refused amendment parks the story for a human.
 
 The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` executes by filing one follow-up story (`<key>-repo-issue`) while the original is left parked for a human with a reason naming it, `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
 
@@ -127,11 +128,12 @@ and every executed action is reviewable post-hoc via the decisions log.
 | rework exhaustion with mechanical leftovers | `escalate_model` |
 | repeated step-caps on oversized scope | `split_story` |
 | acceptance fixture demonstrably broken at a clean baseline | `patch_acceptance` |
+| agent reported a scope conflict (`scope_conflict` recorded) and the path is needed by the brief | `amend_scope` |
 | `risk: high` merge hold | held in dry-run and gated; the overlord adjudicates it in full |
 | abandoned or superseded scope | stays parked BY RULING, with recorded reasoning |
 
 Autonomy ladder: `dry-run` = notify only; `gated` = execute reversible
-manifest-only actions (`mark_done`, `split_story`, `patch_acceptance`) with
+manifest-only actions (`mark_done`, `split_story`, `patch_acceptance`, `amend_scope`) with
 `risk: high` merges still held; `full` = gated plus overlord adjudication of
 `risk: high` merges. Some stories park permanently BY RULING (abandoned or
 superseded scope) — a correct outcome with recorded reasoning, not a failure.
@@ -164,7 +166,7 @@ TIER: routine | notify-async | park-and-ping
 RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
-ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance
+ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance | amend_scope
 SPLIT: <child A> || <child B>
 ```
 ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.

@@ -33,6 +33,7 @@ from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
 from .triage_repo_issue import _execute_repo_issue  # noqa: E402
+from .triage_scope_actions import _execute_amend_scope  # noqa: E402,F401
 from .triage_patch_acceptance import _FIXTURE_END_MARKER, _FIXTURE_START_MARKER, _acceptance_with_source, _execute_patch_acceptance, _parse_fixture_rewrite, _story_checkout  # noqa: E402,F401
 
 SIBLING_NOTE = "this is one half of a split; the sibling story owns the other half"
@@ -135,6 +136,10 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
         )
     if action == "repo_issue":
         return _execute_repo_issue(
+            plan_name, story_key, story, ruling, manifest, manifest_path
+        )
+    if action == "amend_scope":
+        return _execute_amend_scope(
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
     if action == "park_for_human":
@@ -289,6 +294,9 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manife
     children = story.pop("_split_children", None)
     if children:
         extra["children"] = children
+    paths = story.pop("_amended_paths", None)
+    if paths:
+        extra["amended_paths"] = paths
     # patch_acceptance records itself (it alone knows the prior acceptance
     # digests); pop the sentinel so the ruling is never recorded twice.
     if story.pop("_patch_acceptance_recorded", None):
@@ -806,6 +814,7 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
         for k in [
             "status",
             "parked_reason",
+            "scope_conflict",
             "backend",
             "model",
             "dispatched_model",

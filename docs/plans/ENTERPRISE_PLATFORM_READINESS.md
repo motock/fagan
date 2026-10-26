@@ -218,10 +218,13 @@ These are mechanical facts that will bite the next plan author:
   pins SHA-256 digests of `PipelineService.save_plan`, `resolve_workspace`,
   and `list_workspaces` as do-not-modify guards. Any story that intentionally
   changes a guarded function must pre-authorize the exact re-pin in its brief.
-- **Verbatim-pinned REFERENCE.md section.** `REFERENCE.md`'s
-  `## Configuration (environment variables)` body is compared byte-for-byte by
-  `tests/unit/test_readme_reference_split.py`. New env vars belong in a new
-  spec doc or a new H2 section, never inside that table.
+- **REFERENCE.md's pinned sections.** `tests/unit/test_readme_reference_split.py`
+  compares most moved sections byte-for-byte, but the
+  `## Configuration (environment variables)` section is explicitly exempt from
+  the final comparison (it only asserts two known corrections), so adding a
+  row to its env table is allowed — FORGE-S3 does exactly that and the test
+  passes. The other moved sections still reject insertions inside their
+  bodies.
 
 ## Cross-references
 

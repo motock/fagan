@@ -7,9 +7,13 @@ the argv this adapter issues.
 
 The CI verbs are implemented here: ``checks_snapshot`` classifies one
 snapshot of GitHub's two CI vocabularies into the canonical states, and
-``ci_configured`` / ``failure_log_excerpt`` / ``rerun_workflow`` own the
+``has_ci_config`` / ``failure_log_excerpt`` / ``rerun_workflow`` own the
 ``gh`` argv. The poll loop and the state machine stay above the adapter in
 ``pipeline/ci.py``, which is host-neutral.
+
+The CI verbs spawn ``gh`` directly rather than through :meth:`_run`: ``_run``
+is the PR-verb seam, and the CI verbs need ``capture_output``/``text`` and
+their own error handling, so they call ``subprocess.run`` themselves.
 """
 
 from __future__ import annotations
@@ -184,15 +188,10 @@ class GitHubForge(Forge):
 
         return _ci_rerun(sha)
 
-    def has_ci_config(self, repo_root: str) -> bool:
-        """True when the repo declares CI workflows (S1-era name)."""
-        from .ci import _repo_has_ci_configured
-
-        return _repo_has_ci_configured()
-
     # -- CI verbs: the implementations ------------------------------------
-    def ci_configured(self, repo_root: str) -> bool:
-        """True when ``repo_root`` declares GitHub Actions workflows.
+    @staticmethod
+    def _declares_workflows(repo_root: str) -> bool:
+        """True when ``repo_root`` has a ``.github/workflows/`` directory.
 
         ``is_dir()`` rather than "contains a workflow file": an empty
         ``.github/workflows/`` still means CI is configured, so an unreadable
@@ -201,6 +200,30 @@ class GitHubForge(Forge):
         from pathlib import Path
 
         return (Path(repo_root) / ".github" / "workflows").is_dir()
+
+    def has_ci_config(self, repo_root: str) -> bool:
+        """True when ``repo_root`` declares GitHub Actions workflows.
+
+        ``repo_root`` is the primary source, so a worktree or a scoped plan
+        repo is answered from its own ``.github/workflows/`` rather than from
+        the process-global ``server.REPO_ROOT``. When that root declares no
+        workflows we defer to ``pipeline.ci``'s process-repo shim: worktrees
+        are views of the same repo, so the repo as a whole is authoritative
+        for a root that declares nothing. The union is fail-safe - "CI is
+        configured" is the strict direction, yielding UNREADABLE/PENDING and
+        never NONE, which would permit merging without checks.
+
+        Asking about the process repo itself short-circuits: the shim would
+        only re-enter this method with the same root.
+        """
+        if self._declares_workflows(repo_root):
+            return True
+        from .ci import _repo_has_ci_configured
+        from .server import REPO_ROOT
+
+        if str(repo_root) == str(REPO_ROOT):
+            return False
+        return _repo_has_ci_configured()
 
     def checks_snapshot(self, branch: str, sha: str) -> CISnapshot:
         """ONE CI snapshot for ``branch``/``sha``; never polls.

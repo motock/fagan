@@ -82,7 +82,7 @@ def _repo_has_ci_configured() -> bool:
     """
     from .server import REPO_ROOT
 
-    return get_forge(str(REPO_ROOT)).ci_configured(str(REPO_ROOT))
+    return get_forge(str(REPO_ROOT)).has_ci_config(str(REPO_ROOT))
 
 
 def _scoped_repo_cwd() -> str:
@@ -231,6 +231,7 @@ def _ci_status(
         time.sleep(10)  # still pending — keep polling
     # Timeout reached – no terminal state.
     return {"state": PENDING, "error": "CI did not complete within timeout"}
+
 
 def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
     """Return the sorted list of acceptance fixture paths whose worktree

@@ -59,10 +59,6 @@ class FakeForge:
         self.calls.append(("has_ci_config", repo_root))
         return self._has_ci
 
-    def ci_configured(self, repo_root):
-        self.calls.append(("ci_configured", repo_root))
-        return self._has_ci
-
     def checks_snapshot(self, branch, sha):
         self.calls.append(("checks_snapshot", branch, sha))
         if self._raises is not None:

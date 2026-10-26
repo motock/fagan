@@ -4,13 +4,19 @@ Runs on a bare system python3 (before any venv exists), so this module
 imports stdlib only - no pipeline/, app/, or third-party imports. It is
 imported by tests/unit/test_install_checks.py and executed standalone via
 ``python3 scripts/install_checks.py [--json]``; scripts/install.sh (a later
-story) will consume its report and decide what to do, so ``main`` always
-returns 0: missing OPTIONAL tools are graceful degradation, not failure.
+story) will consume its report and decide what to do. ``main`` returns 0
+when the report is usable, 1 when the resolved forge's CLI is missing, and
+2 when ``PIPELINE_FORGE`` names an unknown forge: missing OPTIONAL tools
+are graceful degradation, not failure, but a missing required CLI is.
 
-Checks, in report order: python >= 3.11, git, gh, claude (required);
-ollama, docker (optional). Every check carries a static, actionable,
-host-independent hint; a discovered binary path goes in ``detail``, never
-in ``hint``.
+Checks, in report order: python >= 3.11, git, the resolved forge's CLI,
+claude (required); ollama, docker (optional). The forge CLI is the
+exception to a fixed list: the doctor resolves the active forge
+(``PIPELINE_FORGE``, else the origin remote's host) and requires exactly
+that forge's CLI - gh for github, glab for gitlab - so a GitLab repo is
+never asked for gh. Every check carries a
+static, actionable, host-independent hint; a discovered binary path goes in
+``detail``, never in ``hint``.
 
 Beyond presence, three authorizations are probed (PP-04): gh (the pipeline
 opens and merges PRs through it, so an unauthenticated gh fails at the
@@ -21,13 +27,19 @@ credential - the app's OllamaProvider sends none). Statuses: ``ok``,
 ``missing``, ``unauthorized`` (present but not signed in - the remedy is a
 login, not an install), and ``unknown`` (the probe could not decide). The
 ollama sign-in is optional: only ``:cloud`` tags need it, so it never
-fails the run.
+fails the run. glab has no auth probe yet (deferred to the GitLab adapter
+story), so a GitLab repo's glab check is presence-only.
 
 The auth probes are reachable only through the two module-level seams
 ``_RUNNER`` (subprocess) and ``_URLOPEN`` (daemon HTTP), both ``None`` by
-default: with the defaults, ``collect_checks`` stays presence-only - the
+default: with the defaults, ``collect_checks`` does no auth probing - the
 contract the base suite pins - while ``main`` installs the real
-implementations so the standalone doctor verifies authorization too. Every
+implementations so the standalone doctor verifies authorization too. Forge
+resolution reads the origin remote through a third seam, ``_REMOTE_URL``
+(also ``None`` by default), so an in-process ``collect_checks`` call never
+shells out to git and its report cannot depend on the host this checkout
+happens to have cloned from; with the default seam the forge is unresolved
+and the report keeps the base contract (gh required, report-only). Every
 probe is bounded by ``_PROBE_TIMEOUT_SECONDS`` and never raises: a
 timeout, a nonzero exit, a missing binary, or an OSError all resolve to an
 ``unknown``/``unauthorized`` status, never a crash and never a hang. The
@@ -132,11 +144,19 @@ _GH_AUTH_ARGV = ("gh", "auth", "status")
 _CLAUDE_AUTH_ARGV = ("claude", "auth", "status", "--json")
 _OLLAMA_ME_URL = "http://127.0.0.1:11434/api/me"
 
-# Injectable seams, both None by default so collect_checks stays
-# presence-only (the base suite's pinned contract) and no test touches the
-# live host. main() installs the real implementations below.
+# Injectable seams, both None by default so collect_checks does no auth
+# probing (the base suite's pinned contract) and no test touches the live
+# host. main() installs the real implementations below.
 _RUNNER = None
 _URLOPEN = None
+
+# The origin-remote probe that resolves the forge under ``auto``, also a seam
+# and also None by default: an in-process ``collect_checks`` call must not
+# shell out to git, or its report would depend on whichever remote this
+# checkout happens to have. With the default the forge is unresolved and the
+# report keeps the base contract (gh required, report-only). main() installs
+# the real git-backed implementation.
+_REMOTE_URL = None
 
 
 def collect_checks(which=shutil.which, py_version=None):
@@ -258,16 +278,15 @@ def collect_checks(which=shutil.which, py_version=None):
                 f"{sorted(_FORGE_CLI)}."
             )
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _REMOTE_URL is None:
+            # No probe installed (an in-process collect_checks call): the
+            # forge is unresolved, so the report keeps the base contract.
+            return "github", False
         try:
-            proc = subprocess.run(
-                ["git", "-C", repo_root, "remote", "get-url", "origin"],
-                check=False, capture_output=True, text=True,
-                timeout=_PROBE_TIMEOUT_SECONDS,
-            )
+            url = _REMOTE_URL(repo_root) or ""
         except (OSError, subprocess.TimeoutExpired):
             return "github", False
-        url = (proc.stdout or "").strip() if proc.returncode == 0 else ""
-        match = _HOST_RE.match(url)
+        match = _HOST_RE.match(url.strip())
         host = match.group(1).lower() if match else ""
         if "gitlab" in host:
             return "gitlab", True
@@ -347,19 +366,40 @@ def collect_checks(which=shutil.which, py_version=None):
 
 
 def main(argv=None):
-    """Print one line per check (or a JSON list with --json); return 0.
+    """Print one line per check (or a JSON list with --json).
 
-    Installs the real subprocess/urllib probe seams before collecting, so
-    the standalone doctor verifies authorization, not just presence. The
-    exit code is always 0: a missing or unauthorized OPTIONAL tool is
-    graceful degradation, not failure.
+    Installs the real subprocess/urllib/remote probe seams before collecting,
+    so the standalone doctor verifies authorization and resolves the forge
+    from the actual origin remote, not just presence. Returns 0 when the
+    report is usable, 1 when the resolved forge's CLI is missing, and 2 when
+    ``PIPELINE_FORGE`` names an unknown forge. A missing or unauthorized
+    OPTIONAL tool is still graceful degradation, not failure.
     """
 
     def install_real_seams():
-        """Point the module seams at the real subprocess/urllib wrappers."""
-        global _RUNNER, _URLOPEN
-        _RUNNER = subprocess_runner
-        _URLOPEN = urllib_urlopen
+        """Point the unset module seams at the real subprocess/urllib/git wrappers.
+
+        A seam that is already set was injected (a test's stub), so it is left
+        alone: that is the injection point for the probe surfaces.
+        """
+        global _RUNNER, _URLOPEN, _REMOTE_URL
+        if _RUNNER is None:
+            _RUNNER = subprocess_runner
+        if _URLOPEN is None:
+            _URLOPEN = urllib_urlopen
+        if _REMOTE_URL is None:
+            _REMOTE_URL = git_origin_url
+
+    def git_origin_url(repo_root):
+        """Default remote seam: the origin remote's URL, or "" if unreadable."""
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "remote", "get-url", "origin"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+        return (proc.stdout or "").strip() if proc.returncode == 0 else ""
 
     def subprocess_runner(argv, timeout):
         """Default CLI runner: run argv, return (returncode, stdout, stderr)."""
@@ -378,7 +418,10 @@ def main(argv=None):
 
     install_real_seams()
     parser = argparse.ArgumentParser(
-        description="Report prerequisite tools for this repo (advisory only)."
+        description=(
+            "Report prerequisite tools for this repo and require the resolved "
+            "forge's CLI (gh for github, glab for gitlab)."
+        )
     )
     parser.add_argument(
         "--json",

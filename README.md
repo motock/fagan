@@ -535,7 +535,6 @@ For the one-command guided setup (flags, configuration keys, secure defaults, tr
 - **Python 3.11+** and the project venv. CI tests 3.11–3.14 on Ubuntu and
   3.14 on macOS on every push.
 - **git** on PATH.
-- **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).
 - **The active forge's CLI** — `PIPELINE_FORGE` selects the code host
   (`auto` \| `github` \| `gitlab`, default `auto`, resolved from the origin

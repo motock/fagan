@@ -15,7 +15,6 @@ through the existing ``collect_checks`` report plus a loud, non-zero exit from
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -151,24 +150,9 @@ def test_main_reports_an_unknown_forge_without_a_traceback(monkeypatch, capsys):
 # pick the wrong forge.
 
 
-class _Completed:
-    """The subset of ``subprocess.CompletedProcess`` the probe reads."""
-
-    def __init__(self, stdout="", returncode=0):
-        self.stdout = stdout
-        self.returncode = returncode
-
-
 def _patch_origin(monkeypatch, url):
-    """Make the origin-remote probe answer ``url``; leave other calls real."""
-    real_run = subprocess.run
-
-    def _run(argv, *args, **kwargs):
-        if list(argv)[:1] == ["git"]:
-            return _Completed(stdout=f"{url}\n")
-        return real_run(argv, *args, **kwargs)
-
-    monkeypatch.setattr(ic.subprocess, "run", _run)
+    """Make the origin-remote seam answer ``url``."""
+    monkeypatch.setattr(ic, "_REMOTE_URL", lambda repo_root: url)
 
 
 @pytest.mark.parametrize(
@@ -217,3 +201,43 @@ def test_auto_with_a_confident_host_fails_loudly_when_its_cli_is_missing(
     err = capsys.readouterr().err
     assert "glab" in err, "the message must name the missing CLI"
     assert "gitlab" in err, "the message must name the resolved forge"
+
+
+# ---------------------------------------------------------------------------
+# the module docstring and argparse description are the contract the next
+# story (scripts/install.sh) reads: they must not promise "always returns 0"
+# or a hardcoded gh now that main() can exit 1 and 2 and the required CLI is
+# the resolved forge's.
+# ---------------------------------------------------------------------------
+
+
+def test_module_docstring_documents_the_nonzero_exits():
+    """The docstring must name the new exit codes, not "always returns 0"."""
+    doc = " ".join((ic.__doc__ or "").split())
+    assert "always returns 0" not in doc, "the docstring still promises exit 0"
+    assert "returns 0" in doc, "the docstring must state the success exit code"
+    assert "1 when the resolved forge's CLI is missing" in doc
+    assert "2 when ``PIPELINE_FORGE`` names an unknown forge" in doc
+
+
+def test_module_docstring_does_not_claim_presence_only_collect_checks():
+    """collect_checks resolves the forge, so "stays presence-only" is false."""
+    doc = " ".join((ic.__doc__ or "").split())
+    assert "stays presence-only" not in doc
+    assert "does no auth probing" in doc
+
+
+def test_module_docstring_names_the_forge_cli_rule():
+    """The docstring must say the required CLI is the resolved forge's."""
+    doc = " ".join((ic.__doc__ or "").split())
+    assert "gh for github, glab for gitlab" in doc
+    assert "resolved forge's CLI" in doc
+
+
+def test_argparse_description_is_not_advisory_only(capsys):
+    """``--help`` must not still call the doctor "advisory only"."""
+    with pytest.raises(SystemExit):
+        ic.main(["--help"])
+    out = capsys.readouterr().out
+    assert "advisory only" not in out
+    assert "resolved" in out and "forge" in out

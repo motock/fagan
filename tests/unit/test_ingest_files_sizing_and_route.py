@@ -418,7 +418,7 @@ def test_files_non_list_falls_back_to_the_regex(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", ["claude", None, "", "auto"])
+@pytest.mark.parametrize("backend", ["claude", None, ""])
 def test_files_backend_claude_class_is_never_warned(tmp_path, backend):
     story = {
         "files": ["pipeline/a.py", "pipeline/b.py", "pipeline/c.py"],

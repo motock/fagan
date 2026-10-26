@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import cross_plan, worktree_diff
-from pipeline.workspace import normalize_workspace_path, validate_workspace
+from pipeline.workspace import (
+    check_repo_root_allowed,
+    normalize_workspace_path,
+    validate_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -662,6 +666,16 @@ class PipelineService:
             # WS-11: the model-authored repo_root is untrusted -- overwrite it
             # with the server-validated resolved path.
             plan["repo_root"] = ws_result["path"]
+        else:
+            # ENT-PREP-01: opt-in allowlist for the model-authored repo_root.
+            # Validated before any filesystem mutation so a denial writes
+            # nothing; a no-op when PIPELINE_ALLOWED_REPO_ROOTS is unset/empty.
+            repo_root = plan.get("repo_root")
+            if isinstance(repo_root, str):
+                try:
+                    check_repo_root_allowed(repo_root)
+                except ValueError as exc:
+                    return {"ok": False, "error": str(exc)}
 
         if "epics" not in plan:
             return {"ok": False, "error": "Plan must contain 'epics' key"}

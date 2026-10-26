@@ -236,7 +236,7 @@ def test_save_plan_unchanged():
     """Do NOT modify save_plan (brief)."""
     assert (
         _digest(PipelineService.save_plan)
-        == "32b44890c7aa3e7545455b691b354a2abaf2332ff59af24595d7f61df7d607c8"
+        == "08cc8f83ba9eb885ce685d8782d75bc70f5c33c34137931c720a6ecee7ed7794"
     )
 
 

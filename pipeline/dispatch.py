@@ -9,7 +9,7 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
-from . import cross_plan
+from . import cross_plan, plan_approval
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
@@ -100,6 +100,22 @@ get_ticket_provider = _ServerRef("get_ticket_provider")
 _NON_DISPATCHABLE_STATUSES = frozenset({"done", "pr_open"})
 
 
+def _approval_is_current(manifest: dict[str, Any]) -> bool:
+    """True when the approval record covers the manifest's current content.
+
+    ``is_activatable`` checks the status only; the digest is what ties an
+    approval to the authored content it approved, so a record left behind by a
+    writer that bypassed ingest (``set_plan_role_config``) must not activate.
+    Always true while the gate is disabled.
+    """
+    if not plan_approval.approval_enabled():
+        return True
+    approval = manifest.get("approval")
+    if not isinstance(approval, dict):
+        return False
+    return approval.get("digest") == plan_approval.canonical_digest(manifest)
+
+
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
@@ -115,6 +131,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story = manifest["stories"].get(story_key)
         if not story:
             return {"ok": False, "error": f"No such story {story_key}"}
+        # ENT-LC-04: the tick is not the only entry point - the MCP and
+        # dashboard tools call dispatch_story directly. Refuse an unapproved
+        # plan before any worktree, git or agent work. Re-read on every call
+        # (no cached negative), so approving takes effect immediately.
+        if not plan_approval.is_activatable(manifest) or not _approval_is_current(
+            manifest
+        ):
+            return {"ok": False, "error": "plan is not approved", "plan": plan_name}
         if story.get("status") in _NON_DISPATCHABLE_STATUSES:
             return {
                 "ok": False,

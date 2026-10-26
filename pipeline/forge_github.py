@@ -156,13 +156,18 @@ class GitHubForge(Forge):
         return (proc.stdout or "").strip()
 
     def pr_state(self, handle: str) -> str:
-        """One of MERGED | OPEN | CLOSED | UNKNOWN for the PR ``handle``."""
+        """One of MERGED | OPEN | CLOSED | UNKNOWN for the PR ``handle``.
+
+        The argv (``--jq .state``) and the 30s bound are the invocation the
+        pre-forge helper issued, so this adapter stays a behaviour-preserving
+        extraction (plan S1: "byte-identical argv and return values").
+        """
         try:
             proc = self._run(
-                ["gh", "pr", "view", handle, "--json", "state", "-q", ".state"],
-                check=False, capture_output=True, text=True,
+                ["gh", "pr", "view", handle, "--json", "state", "--jq", ".state"],
+                check=False, capture_output=True, text=True, timeout=30,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             return "UNKNOWN"
         if proc is None or proc.returncode != 0:
             return "UNKNOWN"

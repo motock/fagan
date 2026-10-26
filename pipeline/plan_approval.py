@@ -35,7 +35,7 @@ from typing import Any
 
 from app.identity import Principal
 
-from .actor import current_principal
+from .actor import current_correlation_id, current_principal
 
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 
@@ -289,6 +289,7 @@ class PlanApprovalMixin:
                 "digest": digest,
                 "decided_by": principal.subject,
                 "at": datetime.now(UTC).isoformat(),
+                "correlation_id": current_correlation_id(),
                 "role": _primary_role(principal),
                 "self_approved": principal.subject == ingested_by,
                 "warnings_seen": list(warnings_seen),

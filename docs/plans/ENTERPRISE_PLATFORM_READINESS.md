@@ -201,8 +201,8 @@ selected by configuration and fails closed if misconfigured (ADR 0004). The
 
 ## 5. Deferred low-hanging fruit, ranked
 
-These are behavior-preserving candidates for a later Tier 1-style plan. Item 5
-shipped in `tenancy-seams`; the rest are unregistered.
+These are behavior-preserving candidates for a later Tier 1-style plan. Items 1,
+2, and 5 have shipped; the rest are unregistered.
 
 | # | Item | Default-preserving shape | Value | Blocker |
 |---|---|---|---|---|

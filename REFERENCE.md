@@ -2014,25 +2014,6 @@ full contracts live in the specs each row links.
 | `PIPELINE_WORKTREE_NAMESPACE` | *(unset → `WORKTREE_ROOT/<key>`)* | Inserts a namespace segment into worktree directory names (`WORKTREE_ROOT/<ns>/<key>`), mirroring `PIPELINE_BRANCH_NAMESPACE`. The value must match `^[a-z0-9][a-z0-9-]{0,31}$`; any other non-empty value raises. Set it before dispatching, and give two operators sharing one host distinct values. | [docs/specs/WORKTREE_NAMESPACE.md](docs/specs/WORKTREE_NAMESPACE.md) |
 | `PIPELINE_PLAN_APPROVAL` | *(unset → off)* | Enables the plan-approval lifecycle: ingest records an `approval` block plus a digest of the authored content, the scheduler tick and `dispatch_story` both refuse a plan that is not `approved`, and `approve_plan` / `reject_plan` move it through `pending_approval` → `approved` \| `changes_requested`. Any authored-content change (`patch_story`, `patch_plan`, re-ingest) resets the record. Unset writes manifests byte-identically to the pre-approval shape; an unrecognized value raises rather than silently enabling or disabling the gate. | [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) |
 
----
-
-## Periodic security-audit reminder
-
-`record_security_audit(repo_root, sha=None)` stamps a repo as security-audited at `sha` (default HEAD, recorded in full) and returns `{ok, repo_root, last_audited_sha, last_audited_at}` or `{ok: false, error}`.
-
-The reminder is optional and off unless a threshold is set. The scheduler sweep
-checks each repo named by an ingested, unpaused plan and sends a
-`security_audit_due` notice filed under the first such plan, at most once per 24
-hours per process.
-
-| Env var | Default | Meaning |
-| --- | --- | --- |
-| `PIPELINE_SECURITY_AUDIT_EVERY_COMMITS` | `0` (off) | Notify when at least this many commits landed on HEAD since the last recorded audit. |
-| `PIPELINE_SECURITY_AUDIT_EVERY_DAYS` | `0` (off) | Notify when at least this many days passed since the last recorded audit. |
-
-A repo with no recorded audit is due as soon as either threshold is on, and a
-value that is not a non-negative integer disables that check.
-
 ### Structured log format (`PIPELINE_LOG_FORMAT`)
 
 Unset — the default — logging is exactly as it was before: plain-text lines
@@ -2072,6 +2053,26 @@ The formatter is wired into three entry points: the MCP launch shim
 `app/pipeline_mcp_server.py`, `run_daemon` in `pipeline/scheduler_daemon.py`,
 and the startup preflight in `app/dashboard.py`. Any other entry point keeps
 plain-text logging.
+
+---
+
+## Periodic security-audit reminder
+
+`record_security_audit(repo_root, sha=None)` stamps a repo as security-audited at `sha` (default HEAD, recorded in full) and returns `{ok, repo_root, last_audited_sha, last_audited_at}` or `{ok: false, error}`.
+
+The reminder is optional and off unless a threshold is set. The scheduler sweep
+checks each repo named by an ingested, unpaused plan and sends a
+`security_audit_due` notice filed under the first such plan, at most once per 24
+hours per process.
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_SECURITY_AUDIT_EVERY_COMMITS` | `0` (off) | Notify when at least this many commits landed on HEAD since the last recorded audit. |
+| `PIPELINE_SECURITY_AUDIT_EVERY_DAYS` | `0` (off) | Notify when at least this many days passed since the last recorded audit. |
+
+A repo with no recorded audit is due as soon as either threshold is on, and a
+value that is not a non-negative integer disables that check.
+
 
 ## End-to-end workflow
 

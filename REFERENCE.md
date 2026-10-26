@@ -736,6 +736,13 @@ Each record has the following keys:
   rebrief in `pipeline/advance.py`. Patching a never-dispatched story, patching any other
   field, re-setting identical text, or rebriefing with a no-op diagnosis emits
   nothing.
+  `usage_capacity_hit` is emitted when a dispatch dies on the backend's
+  usage-cap banner before any tool step ran: the story is set back to
+  `changes_requested` and redispatched without charging `rework_attempts` or
+  `transport_retries`, a separate `capacity_waits` counter is incremented, and
+  the usage cooldown is latched. After 20 such waits the story parks with
+  `story_parked` and the reason `usage cap kept interrupting this story: 20
+  waits`.
   One notification is intentionally excluded from this vocabulary: the
   dispatch‑retry notice (`"<key> dispatch attempt n/max failed …; will
   retry."`), a transient scheduling state rather than a terminal story

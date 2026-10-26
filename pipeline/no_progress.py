@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import usage_cooldown, usage_transitions
 from .build_detect import _last_done_summary
+from .parsers import _RATE_LIMIT_PATTERNS
 from .scope_conflict import parse_scope_conflict
 from .service import _ServerRef
 
@@ -17,6 +19,7 @@ _atomic_write_json = _ServerRef("_atomic_write_json")
 _notify_user = _ServerRef("_notify_user")
 
 MAX_TRANSPORT_RETRIES = 5
+MAX_CAPACITY_WAITS = 20
 _TRANSPORT_FAILURE_RE = re.compile(
     r"LLM call failed:.*?(?:\b429\b|\b5\d\d\b|timed out|ConnectError|ConnectionError)"
 )
@@ -27,6 +30,74 @@ def is_transport_failure(log_tail: str) -> bool:
     """True when the current run died on an LLM transport failure before any tool ran."""
     segment = log_tail.rsplit("[boot]", 1)[-1]
     return bool(_TRANSPORT_FAILURE_RE.search(segment)) and not _TOOL_STEP_RE.search(segment)
+
+
+def is_capacity_failure(log_tail: str) -> bool:
+    """True when the current run died on the backend's usage-cap banner.
+
+    A usage-cap death is the same class as a transport failure (the agent never
+    got to work), but waiting for the reset is not exhaustion, so it must not
+    burn the transport budget. Reuses the rate-limit anchors already defined in
+    `pipeline.parsers` and, like `is_transport_failure`, only looks at the
+    segment after the last `[boot]` and requires that no tool step ran — a long
+    run that merely mentions a limit is not misclassified.
+    """
+    segment = log_tail.rsplit("[boot]", 1)[-1]
+    if _TOOL_STEP_RE.search(segment):
+        return False
+    return any(re.search(pat, segment, re.IGNORECASE) for pat in _RATE_LIMIT_PATTERNS)
+
+
+def _wait_for_capacity(
+    plan_name: str,
+    story_key: str,
+    story: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_path: Path,
+) -> dict[str, str]:
+    """Redispatch without charging rework; park after MAX_CAPACITY_WAITS."""
+    waits = int(story.get("capacity_waits", 0)) + 1
+    story["capacity_waits"] = waits
+    exhausted = waits >= MAX_CAPACITY_WAITS
+    if exhausted:
+        story["status"] = "parked"
+        story["parked_reason"] = (
+            f"usage cap kept interrupting this story: {MAX_CAPACITY_WAITS} waits"
+        )
+    else:
+        story["status"] = "changes_requested"
+    _atomic_write_json(manifest_path, manifest)
+    # Latch the cooldown and announce the gate so the scheduler stops
+    # redispatching into the same wall. Neither may take the status change
+    # down: a cooldown that cannot be recorded is not a reason to crash.
+    try:
+        usage_cooldown.trip()
+    except Exception as exc:  # noqa: BLE001 - never break the caller
+        logging.getLogger("pipeline").warning(
+            "usage cooldown trip failed (%s)", type(exc).__name__
+        )
+    try:
+        usage_transitions.announce(True, {}, reason="agent hit the usage cap")
+    except Exception as exc:  # noqa: BLE001 - never break the caller
+        logging.getLogger("pipeline").warning(
+            "usage transition announce failed (%s)", type(exc).__name__
+        )
+    if exhausted:
+        _notify_user(
+            plan_name,
+            f"{story_key} parked: {story['parked_reason']}.",
+            event="story_parked",
+            story_key=story_key,
+        )
+        return {"status": "parked", "reason": "usage_capacity_exhausted"}
+    _notify_user(
+        plan_name,
+        f"{story_key} dispatch hit the usage cap before any step "
+        f"(wait {waits}/{MAX_CAPACITY_WAITS}); waiting for the reset and redispatching.",
+        event="usage_capacity_hit",
+        story_key=story_key,
+    )
+    return {"status": "changes_requested", "reason": "usage_capacity"}
 
 
 def _read_log(worktree: str) -> str:
@@ -96,7 +167,10 @@ def classify_no_progress(
         return None
     conflicts = parse_scope_conflict(summary)
     if not conflicts:
-        if is_transport_failure(_read_log(worktree)):
+        log_tail = _read_log(worktree)
+        if is_capacity_failure(log_tail):
+            return _wait_for_capacity(plan_name, story_key, story, manifest, manifest_path)
+        if is_transport_failure(log_tail):
             return _retry_transport(plan_name, story_key, story, manifest, manifest_path)
         return None
     paths = [c.path for c in conflicts]

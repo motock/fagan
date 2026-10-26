@@ -195,7 +195,7 @@ is registered today.
 | 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | Wiring the entrypoints touches `pipeline/server.py` (1000 lines) and `pipeline/scheduler_daemon.py` (999) — both at the hard line gate. A split is needed first, or configure from `pipeline/__init__.py`. |
 | 3 | Optional event-envelope fields | Add `event_id`, `schema_version`, `idempotency_key` only when supplied; the legacy dict shape is unchanged. | Preps a broker without changing today's semantics. | `pipeline/events.py` has room; tests pin only the no-optional-args shape. |
 | 4 | Event bus factory | `PIPELINE_EVENT_BUS=inprocess`, unknown fails closed. | Makes a broker adapter selectable. | Cosmetic until a second bus exists; pair with #3 (ADR 0004's warning about invisible gates). |
-| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | Speculative until an OIDC provider is imminent; defer unless it is. |
+| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). The remaining follow-up is enforcement in `PipelineService` (ADR 0009 §2); the seam is inert until then. |
 
 ### Not low-hanging (the fork)
 

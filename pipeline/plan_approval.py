@@ -35,7 +35,7 @@ from typing import Any
 
 from app.identity import Principal
 
-from .actor import current_principal
+from .actor import current_correlation_id, current_principal
 
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 
@@ -70,6 +70,7 @@ _PRESERVED_DECISION_FIELDS = (
     "decided_by",
     "at",
     "decided_at",
+    "correlation_id",
     "role",
     "self_approved",
 )
@@ -145,8 +146,9 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
     The digest is recomputed from the authored content and compared against the
     previous record *before* anything is assigned, so a content change always
     resets the status to ``pending_approval``. Previous decision metadata
-    (``decided_by``, ``at``, ``role``, ``self_approved``, ``warnings_seen``) is
-    preserved for auditability. The input manifest is not mutated.
+    (``decided_by``, ``at``, ``correlation_id``, ``role``, ``self_approved``,
+    ``warnings_seen``) is preserved for auditability. The input manifest is not
+    mutated.
     """
     previous = manifest.get("approval")
     if not isinstance(previous, dict):
@@ -178,8 +180,9 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
     Compares ``canonical_digest(manifest)`` with the digest stored on the
     ``approval`` record. When they differ the record is reset to
     ``pending_approval``, the decision metadata (``decided_by``, ``at``,
-    ``role``, ``self_approved``, plus a ``changes_requested`` ``reason``) is
-    cleared and the digest is updated; the function returns ``True``. A
+    ``correlation_id``, ``role``, ``self_approved``, plus a
+    ``changes_requested`` ``reason``) is cleared and the digest is updated; the
+    function returns ``True``. A
     matching digest returns ``False`` and changes nothing.
 
     While the gate is disabled this is a no-op that returns ``False`` without
@@ -289,6 +292,7 @@ class PlanApprovalMixin:
                 "digest": digest,
                 "decided_by": principal.subject,
                 "at": datetime.now(UTC).isoformat(),
+                "correlation_id": current_correlation_id(),
                 "role": _primary_role(principal),
                 "self_approved": principal.subject == ingested_by,
                 "warnings_seen": list(warnings_seen),

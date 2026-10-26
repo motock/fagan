@@ -78,7 +78,14 @@ from app.dashboard_routes_story import (
 from app.identity import IdentityError, SharedSecretProvider
 from app.story_replay import build_replay_events  # noqa: F401
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
-from pipeline.actor import ANONYMOUS, actor_id, bind_principal
+from pipeline.actor import (
+    ANONYMOUS,
+    actor_id,
+    bind_correlation_id,
+    bind_principal,
+    current_correlation_id,
+    request_correlation_id,
+)
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.live_ref import LiveRef
 from pipeline.server import PipelineService
@@ -135,15 +142,27 @@ _identity = SharedSecretProvider(get_or_create_api_key)
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
     server = request.scope.get("server") or ()
+    # One correlation id per inbound request: the caller's when it is well
+    # formed, otherwise a freshly minted one. Every response -- including the
+    # 401/403 refusals -- carries it back, and the decision/approval records
+    # written downstream are stamped with it.
+    correlation = request_correlation_id(request.headers.get("x-correlation-id"))
+
+    def _tagged(response: Response) -> Response:
+        response.headers["X-Correlation-ID"] = correlation
+        return response
+
     if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):
-        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+        return _tagged(JSONResponse(status_code=403, content={"detail": "Forbidden"}))
     if request.url.path.startswith("/api/"):
         try:
             require_api_key(
                 request.headers.get("x-pipeline-api-key"), request.url.path
             )
         except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            return _tagged(
+                JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            )
         # The gate passed. Attach the authenticated principal for the service
         # layer (ADR 0009). This is identity, not enforcement: the middleware
         # binds the principal for the life of the request via pipeline.actor
@@ -172,8 +191,8 @@ async def _enforce_api_key(request: Request, call_next):
     # principal is either a non-/api/ page or the chat-stream k- pass-through;
     # ANONYMOUS keeps that distinct from the local operator.
     principal = getattr(request.state, "principal", None) or ANONYMOUS
-    with bind_principal(principal):
-        return await call_next(request)
+    with bind_principal(principal), bind_correlation_id(correlation):
+        return _tagged(await call_next(request))
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +515,7 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
         "rationale": body.context,
         "decided_by": body.decided_by,
         "actor": actor_id(),
+        "correlation_id": current_correlation_id(),
         "decided_at": decided_at,
     }
     _service.append_decision(plan_name, record)

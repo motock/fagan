@@ -117,6 +117,13 @@ def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
     failure is logged (type only) and never stops the others or the legacy
     write.
     """
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        _default_plans = (Path.home() / ".claude" / "plans").resolve()
+        if Path(PLAN_DIR).resolve() == _default_plans:
+            logger.warning(
+                "refusing to spool instance notifications into the live plan directory under pytest"
+            )
+            return
     try:
         config = safe_load_notification_config()
         if config is None:

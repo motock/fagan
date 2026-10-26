@@ -9,6 +9,7 @@ and treats exactly one return value - the string ``"MERGED"`` - as merged.
 
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -49,3 +50,30 @@ def test_pr_is_merged_false_for_open_closed_unknown_and_empty(forge, state):
 
     assert triage_story_actions._pr_is_merged(_HANDLE) is False
     assert forge.seen == [_HANDLE], "the handle must reach pr_state untouched"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValueError("No forge adapter registered for 'gitlab'"),
+        OSError("gh exploded"),
+        subprocess.TimeoutExpired("gh", 30),
+    ],
+)
+def test_pr_is_merged_fails_closed_when_the_forge_cannot_be_resolved(
+    monkeypatch, exc
+):
+    """An unresolvable forge must not crash triage - it must not corroborate.
+
+    ``get_forge`` raises ``ValueError`` for a forge with no registered adapter
+    (gitlab until S4), and the adapter may raise ``OSError``/``TimeoutExpired``.
+    ``mark_done`` corroboration is fail-closed: any of those means "not merged",
+    never an exception escaping into the triage executor.
+    """
+
+    def boom(repo_root):
+        raise exc
+
+    monkeypatch.setattr(triage_story_actions, "get_forge", boom)
+
+    assert triage_story_actions._pr_is_merged(_HANDLE) is False

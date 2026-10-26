@@ -143,7 +143,11 @@ def _pr_is_merged(handle: str) -> bool:
 
     try:
         return get_forge(REPO_ROOT).pr_state(handle) == "MERGED"
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        # Fail closed: an unresolvable forge (``get_forge`` raises ValueError
+        # for a host with no registered adapter, e.g. gitlab until S4) or a
+        # broken CLI must never corroborate a mark_done, and must never crash
+        # the triage executor.
         return False
 
 

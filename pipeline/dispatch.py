@@ -11,7 +11,7 @@ from app import backend, role_registry  # noqa: F401
 
 from . import cross_plan
 from .branch_guard import remote_branch_exists  # noqa: F401
-from .branch_names import record_story_branch
+from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .config import WORKTREE_SCOPE_RULE
 from .dispatch_attempt import (
@@ -134,7 +134,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         if not story.get("correlation_id"):
             story["correlation_id"] = uuid.uuid4().hex[:12]
         _atomic_write_json(manifest_path, manifest)
-        worktree_path = WORKTREE_ROOT / story_key
+        worktree_path = WORKTREE_ROOT / worktree_dir_name(story_key)
         # Branch and worktree derive from the key alone, so a key another plan
         # still holds would adopt that plan's worktree (as a "resume") and
         # push to its branch. Refuse before any worktree or git work.

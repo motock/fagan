@@ -4,6 +4,7 @@ import os
 import re
 
 NAMESPACE_ENV = "PIPELINE_BRANCH_NAMESPACE"
+WORKTREE_NAMESPACE_ENV = "PIPELINE_WORKTREE_NAMESPACE"
 _NAMESPACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 
@@ -19,6 +20,27 @@ def record_story_branch(story: dict, story_key: str) -> str:
     return it."""
     story["branch"] = story_branch(story_key, story.get("branch"))
     return story["branch"]
+
+
+def worktree_dir_name(story_key: str) -> str:
+    """Directory name for a story's worktree, relative to ``WORKTREE_ROOT``.
+
+    Unset or empty ``PIPELINE_WORKTREE_NAMESPACE`` returns ``story_key``
+    unchanged (the historical layout). When set, the result is
+    ``<namespace>/<story_key>``. An invalid namespace raises.
+
+    The key's case is preserved: git refs are case-insensitive on macOS, so
+    ``story_branch`` lowercases, but directory names are not and dispatch must
+    keep the exact key spelling it has always used.
+    """
+    namespace = os.environ.get(WORKTREE_NAMESPACE_ENV, "")
+    if not namespace:
+        return story_key
+    if not _NAMESPACE_RE.fullmatch(namespace):
+        raise ValueError(
+            f"{WORKTREE_NAMESPACE_ENV} must match {_NAMESPACE_RE.pattern}"
+        )
+    return f"{namespace}/{story_key}"
 
 
 def story_branch(story_key: str, recorded: str | None = None) -> str:

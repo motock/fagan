@@ -21,7 +21,13 @@ classify a red build but never explain it.
 ``UNREADABLE`` and ``NONE`` are kept strictly apart: a repo that declares
 ``.gitlab-ci.yml`` but whose status cannot be read is ``UNREADABLE`` (the
 merge gate refuses), while a repo with no ``.gitlab-ci.yml`` is ``NONE`` (the
-gate may merge without checks).
+gate may merge without checks). The repo root is resolved from
+``server.REPO_ROOT`` (the scoped plan repo), never from ``os.getcwd()``, so a
+process running outside the repo cannot misread a CI-declaring repo as NONE.
+
+``prepare_merge`` is the one merge verb this adapter owns: it performs the
+local rebase and the force-push that publish the rewritten branch, so
+``merge_pr`` stays a pure "land it" verb.
 """
 
 from __future__ import annotations
@@ -101,6 +107,26 @@ def _mr_url(text: str) -> str:
             return str(url)
     match = _URL_RE.search(text)
     return match.group(0) if match else ""
+
+
+def _repo_cwd() -> str:
+    """Directory ``glab`` must run in: the scoped plan repo, read at call time.
+
+    ``pipeline.ci._scoped_repo_root`` reassigns ``server.REPO_ROOT`` without
+    chdir, so a bare ``glab`` call would query whichever repo the process was
+    launched in. Reading the root here - never ``os.getcwd()`` - is what keeps
+    a repo that declares CI from being misread as NONE (the merge gate's
+    permission to merge without checks) just because the process happens to
+    run somewhere else.
+    """
+    from .server import REPO_ROOT
+
+    return str(REPO_ROOT)
+
+
+def _declares_ci(repo_root: str | os.PathLike[str]) -> bool:
+    """True when ``repo_root`` holds a ``.gitlab-ci.yml``."""
+    return (Path(repo_root) / _CI_CONFIG).is_file()
 
 
 class GitLabForge(Forge):
@@ -232,17 +258,89 @@ class GitLabForge(Forge):
         return _MR_STATES.get(str(data.get("state") or "").lower(), UNKNOWN)
 
 
+    # -- merge preparation ------------------------------------------------
+    def prepare_merge(self, worktree: str, branch: str) -> dict[str, Any]:
+        """Rebase ``branch`` onto the default branch, then force-push it.
+
+        This is the whole "make it landable" half of a merge - the local
+        rebase plus the force-push that publishes the rewritten history - so
+        :meth:`merge_pr` can stay a pure "land it" verb. GitLab's merge
+        endpoint does not rebase for us, so the adapter must own it exactly as
+        :class:`pipeline.forge_github.GitHubForge` does. Returns::
+
+            {"ok": bool, "error": str, "pushed_sha": str, "auto_resolved": bool}
+
+        ``error`` is the bare ``rebase: <git stderr>`` / ``push: <stderr>``
+        text, never wrapped: the merge gate's conflict-rework route matches
+        ``gate_error.startswith("rebase:")`` and ``"conflict" in gate_error``,
+        so a prefix like ``prepare_merge failed: rebase: ...`` would silently
+        disable that route.
+
+        A conflicted rebase short-circuits before the push, so a rework
+        round's follow-up call re-runs the rebase first instead of
+        force-pushing stale history. No "already prepared" flag is kept for
+        the same reason: state across calls would let call 2 skip the rebase.
+        """
+        from .server import REPO_ROOT, _rebase_onto_master
+
+        rb = _rebase_onto_master(worktree, branch)
+        auto_resolved = bool(rb.get("auto_resolved"))
+        if not rb["ok"]:
+            return {
+                "ok": False,
+                "error": f"rebase: {rb['error']}",
+                "pushed_sha": "",
+                "auto_resolved": auto_resolved,
+            }
+        pushed_sha = ""
+        if Path(worktree).is_dir():
+            push = self._run(
+                ["git", "push", "--force-with-lease", "origin", branch],
+                cwd=REPO_ROOT, check=False,
+            )
+            if push.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": f"push: {(push.stderr or push.stdout).strip()[:200]}",
+                    "pushed_sha": "",
+                    "auto_resolved": auto_resolved,
+                }
+            rev = self._run(
+                ["git", "rev-parse", "HEAD"], cwd=worktree, check=False
+            )
+            pushed_sha = rev.stdout.strip()
+        return {
+            "ok": True,
+            "error": "",
+            "pushed_sha": pushed_sha,
+            "auto_resolved": auto_resolved,
+        }
+
     # -- CI verbs ---------------------------------------------------------
     # The poll loop and the state machine stay above the adapter, in
     # ``pipeline/ci.py``; each verb here answers exactly one question.
     def has_ci_config(self, repo_root: str) -> bool:
         """True when ``repo_root`` declares GitLab CI (``.gitlab-ci.yml``).
 
+        ``repo_root`` is the primary source, so a worktree or a scoped plan
+        repo is answered from its own ``.gitlab-ci.yml``. A root that declares
+        nothing defers to the repo ``glab`` will actually query
+        (:func:`_repo_cwd`) and to the process repo: worktrees and the process
+        cwd are views of the same repo, so the repo as a whole is
+        authoritative. The union is fail-safe - "CI is configured" is the
+        strict direction, yielding UNREADABLE/PENDING and never NONE, which
+        would permit merging without checks.
+
         Read from disk on every call, never cached: a repo can gain or lose
         its CI config between two polls, and a stale ``False`` would read as
         NONE and permit a merge without checks.
         """
-        return (Path(repo_root) / _CI_CONFIG).is_file()
+        if _declares_ci(repo_root):
+            return True
+        for other in (_repo_cwd(), os.getcwd()):
+            if str(other) != str(repo_root) and _declares_ci(other):
+                return True
+        return False
 
     def checks_status(self, branch: str, sha: str) -> dict[str, str]:
         """ONE pipeline snapshot for ``branch``/``sha``; never polls.
@@ -253,7 +351,7 @@ class GitLabForge(Forge):
         the status - missing ``glab``, non-zero exit, unparseable JSON - is
         UNREADABLE, never NONE.
         """
-        cwd = os.getcwd()
+        cwd = _repo_cwd()
         if not self.has_ci_config(cwd):
             return {"pipeline": NONE}
 
@@ -301,7 +399,7 @@ class GitLabForge(Forge):
         the failing test output. Returns None on any failure - the caller
         falls back to the classification-only detail.
         """
-        cwd = os.getcwd()
+        cwd = _repo_cwd()
         try:
             pipeline_id = self._latest_pipeline_id(cwd, ref=branch)
             if pipeline_id is None:
@@ -334,7 +432,7 @@ class GitLabForge(Forge):
         A pipeline retry, not a single-job retry: the pipeline re-runs exactly
         the jobs that failed and keeps the rest of the graph intact.
         """
-        cwd = os.getcwd()
+        cwd = _repo_cwd()
         try:
             pipeline_id = self._latest_pipeline_id(cwd, sha=sha)
             if pipeline_id is None:

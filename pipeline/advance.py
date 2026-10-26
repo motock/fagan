@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Any
 
-from . import cross_plan
+from . import cross_plan, plan_approval
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -324,6 +324,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 if story["status"] == "in_progress" and "pid" in story:
                     interrupt_story(plan_name, key)
         return {"ok": True, "skipped": "plan_paused"}
+
+    # ENT-LC-04: an unapproved plan must not dispatch, review or merge. This
+    # sits before the resource gates so an unapproved plan never even
+    # adjudicates merges, and it re-reads the record on every tick (no cached
+    # negative) so approving the plan takes effect on the next tick.
+    if not plan_approval.is_activatable(manifest):
+        return {"ok": True, "skipped": "plan_not_approved"}
 
     # Per-backend resource gate (Step 5): dispatch and review can run on
     # different backends, so gate each by ITS backend's availability rather

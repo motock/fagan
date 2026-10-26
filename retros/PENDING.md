@@ -49,3 +49,5 @@ if a precise date is needed when writing one of these up.
 - harness-instrument-fixes — completed 2026-10-26, 2 stories
 - retro-p0-fixes — completed 2026-10-26, 5 stories
 - actor-identity — completed 2026-10-26, 5 stories
+- request-correlation — completed 2026-10-26, 3 stories
+- structured-logs — completed 2026-10-26, 4 stories

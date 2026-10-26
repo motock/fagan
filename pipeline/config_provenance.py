@@ -19,6 +19,7 @@ import json
 import os
 import pathlib
 import plistlib
+import sys
 import xml.parsers.expat
 from dataclasses import dataclass
 
@@ -566,3 +567,44 @@ def effective_role_config(*, plan_role_config=None, registry=None, model_fallbac
         )
         results.append(result)
     return results
+
+
+def report_env_conflicts(benign_one_sided: frozenset[str]) -> None:
+    """Warn about env var conflicts between launchd plist and MCP server.
+
+    ``benign_one_sided`` names the one-sided diffs that are known-benign and
+    must not warn; every other divergence is reported to stderr. Only
+    non-secret ``PIPELINE_`` names may echo a value.
+    """
+    try:
+        plist = read_plist_env()
+        mcp = read_mcp_server_env()
+
+        def _render(name: str, value: str | None) -> str:
+            if value is None:
+                return "<unset>"
+            # Only non-secret PIPELINE_ names may echo a value; anything else
+            # is reported as differing but never printed.
+            if _is_secret(name) or not name.startswith("PIPELINE_"):
+                return "***"
+            return value
+
+        for name in sorted(set(plist) | set(mcp)):
+            if name in benign_one_sided:
+                continue
+            p_val = plist.get(name)
+            m_val = mcp.get(name)
+            if p_val is not None and m_val is not None and p_val == m_val:
+                continue
+            print(
+                f"scheduler_daemon: WARNING {name} differs between config layers: "
+                f"launchd_plist={_render(name, p_val)} "
+                f"mcp_server_env={_render(name, m_val)} "
+                f"(this scheduler uses launchd_plist)",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )

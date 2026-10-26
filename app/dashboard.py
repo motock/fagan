@@ -88,6 +88,7 @@ from pipeline.actor import (
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.live_ref import LiveRef
+from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService
 from pipeline.topology_identity import resolved_topology
 from pipeline.usage import collect_backend_status
@@ -199,6 +200,7 @@ logger = logging.getLogger(__name__)
 
 def _log_startup_preflight() -> None:
     """Log one startup preflight summary line; never block dashboard startup."""
+    configure_logging_from_env()
     try:
         results = preflight.run_preflight()
         summary = preflight.summarize(results)

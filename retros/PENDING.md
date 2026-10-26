@@ -46,3 +46,6 @@ if a precise date is needed when writing one of these up.
 - failure-mode-catalog-sync — completed 2026-10-18, 1 story
 - python-311-floor-ci-and-ruff — completed 2026-10-18, 1 story
 - pr-title-diff-mismatch-warning — completed 2026-10-18, 1 story
+- harness-instrument-fixes — completed 2026-10-26, 2 stories
+- retro-p0-fixes — completed 2026-10-26, 5 stories
+- actor-identity — completed 2026-10-26, 5 stories

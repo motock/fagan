@@ -241,7 +241,7 @@ def _plan_summary(
     if include_notification_summary:
         records = _collapse_duplicate_notifications(_store.get_notification_records(plan_name, limit=5))
         latest_notification = records[-1] if records else None
-    return {
+    summary = {
         "name": plan_name,
         "paused": bool(manifest.get("paused", False)),
         "story_count": len(stories),
@@ -253,6 +253,28 @@ def _plan_summary(
         "repo_root": (manifest or {}).get("repo_root"),
         **({"latest_notification": latest_notification} if include_notification_summary else {}),
     }
+    # Plan-approval state (ENT-LC-05). Surfaced only when the manifest carries
+    # an approval record, so the default-off response stays byte-identical to
+    # the pre-approval shape: no key, not even a null one. The record is
+    # projected field-by-field (never passed through) so the dashboard cannot
+    # leak unrelated manifest state, and the manifest is not mutated.
+    #
+    # A non-dict `approval` (hand-edited or legacy manifest) is treated as
+    # absent rather than raising: same convention as pipeline.plan_approval's
+    # readers, so one malformed plan cannot 500 the whole plan list.
+    approval = manifest.get("approval")
+    if isinstance(approval, dict):
+        warnings_seen = approval.get("warnings_seen")
+        summary["approval"] = {
+            "status": approval.get("status"),
+            "digest": approval.get("digest"),
+            "decided_by": approval.get("decided_by"),
+            "at": approval.get("at"),
+            "self_approved": approval.get("self_approved"),
+            # Copy so a consumer mutating the summary cannot reach the manifest.
+            "warnings_seen": list(warnings_seen) if isinstance(warnings_seen, list) else warnings_seen,
+        }
+    return summary
 
 
 def _parse_iso(ts: str | None) -> datetime | None:

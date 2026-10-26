@@ -43,17 +43,28 @@ def _manifest(**overrides):
 
 
 def _approved(manifest):
-    """Return ``manifest`` with an ``approved`` record matching its content."""
+    """Return ``manifest`` with an ``approved`` record matching its content.
+
+    The record mirrors what ``PlanApprovalMixin._decide_plan`` actually writes
+    (``plan``/``status``/``digest``/``decided_by``/``at``/``role``/
+    ``self_approved``/``warnings_seen``), so the reset assertions below cannot
+    pass vacuously against a field production never writes.
+    """
     manifest["approval"] = {
+        "plan": "p",
         "status": "approved",
         "digest": canonical_digest(manifest),
         "decided_by": "local-operator",
-        "decided_at": "2026-01-01T00:00:00+00:00",
+        "at": "2026-01-01T00:00:00+00:00",
         "role": "local-operator",
         "self_approved": True,
         "warnings_seen": ["w1"],
     }
     return manifest
+
+
+#: Decision metadata that must not survive a reset.
+_DECISION_FIELDS = ("decided_by", "at", "role", "self_approved", "reason")
 
 
 @pytest.fixture
@@ -91,7 +102,7 @@ def test_reset_if_changed_resets_on_authored_change(enabled):
     approval = manifest["approval"]
     assert approval["status"] == "pending_approval"
     assert approval["digest"] == canonical_digest(manifest)
-    for field in ("decided_by", "decided_at", "role", "self_approved"):
+    for field in _DECISION_FIELDS:
         assert field not in approval
     # Audit-only metadata that is not a decision is preserved.
     assert approval["warnings_seen"] == ["w1"]
@@ -123,6 +134,39 @@ def test_reset_if_changed_records_pending_when_no_approval_exists(enabled):
     assert manifest["approval"]["digest"] == canonical_digest(manifest)
 
 
+def test_reset_if_changed_clears_a_changes_requested_reason(enabled):
+    """A ``changes_requested`` reason must not outlive the decision it explains."""
+    manifest = _approved(_manifest())
+    manifest["approval"].update(
+        {"status": "changes_requested", "reason": "needs more detail"}
+    )
+    manifest["stories"]["S1"]["agent_instructions"] = "new instructions"
+
+    assert reset_if_changed(manifest) is True
+
+    approval = manifest["approval"]
+    assert approval["status"] == "pending_approval"
+    assert "reason" not in approval
+    assert "at" not in approval
+
+
+def test_approved_fixture_matches_the_record_decide_plan_writes(plan, enabled):
+    """Guard against vacuous assertions: the fixture must mirror production.
+
+    ``_approved()`` fabricates the record the reset assertions inspect. If it
+    drifted from what ``PlanApprovalMixin._decide_plan`` actually writes, those
+    assertions could pass while a real decision field survived a reset.
+    """
+    pending = _manifest()
+    pending["approval"] = plan_approval.on_ingest(pending)
+    (plan / "p.manifest.json").write_text(json.dumps(pending))
+
+    decided = PipelineService().approve_plan("p")
+
+    assert decided["ok"] is True
+    assert set(decided) == set(_approved(_manifest())["approval"]) | {"ok"}
+    assert decided["at"] == _read_manifest(plan)["approval"]["at"]
+
 # --- patch_story ------------------------------------------------------------
 
 
@@ -136,7 +180,7 @@ def test_patch_story_resets_approval_when_instructions_change(plan, enabled):
     assert manifest["stories"]["S1"]["agent_instructions"] == "new instructions"
     approval = manifest["approval"]
     assert approval["status"] == "pending_approval"
-    for field in ("decided_by", "decided_at", "role", "self_approved"):
+    for field in _DECISION_FIELDS:
         assert field not in approval
 
 
@@ -192,7 +236,7 @@ def test_patch_plan_resets_approval_when_role_config_changes(plan, enabled):
     assert manifest["role_config"] == {"engineer": {"model": "opus"}}
     approval = manifest["approval"]
     assert approval["status"] == "pending_approval"
-    for field in ("decided_by", "decided_at", "role", "self_approved"):
+    for field in _DECISION_FIELDS:
         assert field not in approval
     assert approval["digest"] == canonical_digest(manifest)
 

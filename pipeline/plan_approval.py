@@ -20,8 +20,9 @@ change therefore resets the record to ``pending_approval`` while preserving the
 previous decision metadata for auditability.
 
 ``reset_if_changed`` applies the same digest rule to edits made through the
-patch tools (``patch_story`` / ``patch_plan``): an approval can never outlive
-the authored content it approved.
+patch tools (``patch_story`` / ``patch_plan``): an approval cannot outlive an
+authored change made through those tools. Other writers of authored fields
+(``save_plan``, ``set_plan_role_config``) are covered by their own guards.
 """
 import hashlib
 import json
@@ -55,12 +56,20 @@ _TRUE_VALUES = frozenset({"on", "1", "true"})
 _FALSE_VALUES = frozenset({"", "off", "0", "false"})
 
 #: Previous decision metadata carried forward across re-ingests for audit.
+#: ``at`` is the decision timestamp written by ``PlanApprovalMixin._decide_plan``
+#: (``datetime.now(UTC).isoformat()``); ``decided_at`` is accepted as a legacy
+#: alias so records written by older builds keep their audit trail.
 _PRESERVED_DECISION_FIELDS = (
     "decided_by",
+    "at",
     "decided_at",
     "role",
     "self_approved",
 )
+
+#: Decision metadata cleared when the authored content changes. ``reason`` is
+#: written by a ``changes_requested`` decision and must not outlive it.
+_CLEARED_DECISION_FIELDS = _PRESERVED_DECISION_FIELDS + ("reason",)
 
 
 def approval_enabled() -> bool:
@@ -129,9 +138,8 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
     The digest is recomputed from the authored content and compared against the
     previous record *before* anything is assigned, so a content change always
     resets the status to ``pending_approval``. Previous decision metadata
-    (``decided_by``, ``decided_at``, ``role``, ``self_approved``,
-    ``warnings_seen``) is preserved for auditability. The input manifest is not
-    mutated.
+    (``decided_by``, ``at``, ``role``, ``self_approved``, ``warnings_seen``) is
+    preserved for auditability. The input manifest is not mutated.
     """
     previous = manifest.get("approval")
     if not isinstance(previous, dict):
@@ -162,10 +170,10 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
 
     Compares ``canonical_digest(manifest)`` with the digest stored on the
     ``approval`` record. When they differ the record is reset to
-    ``pending_approval``, the decision metadata (``decided_by``,
-    ``decided_at``, ``role``, ``self_approved``) is cleared and the digest is
-    updated; the function returns ``True``. A matching digest returns ``False``
-    and changes nothing.
+    ``pending_approval``, the decision metadata (``decided_by``, ``at``,
+    ``role``, ``self_approved``, plus a ``changes_requested`` ``reason``) is
+    cleared and the digest is updated; the function returns ``True``. A
+    matching digest returns ``False`` and changes nothing.
 
     While the gate is disabled this is a no-op that returns ``False`` without
     touching the manifest, so the default-off path stays byte-identical to
@@ -183,7 +191,7 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
         return False
 
     record = {**previous, "status": "pending_approval", "digest": digest}
-    for field in _PRESERVED_DECISION_FIELDS:
+    for field in _CLEARED_DECISION_FIELDS:
         record.pop(field, None)
     manifest["approval"] = record
     return True

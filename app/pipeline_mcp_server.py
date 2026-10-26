@@ -29,5 +29,12 @@ for _name in dir(_server):
 
 mcp = _server.mcp
 
+def _assert_interpreter() -> None:
+    from pipeline.runtime_check import assert_interpreter
+
+    assert_interpreter()
+
+
 if __name__ == "__main__":
+    _assert_interpreter()
     mcp.run()

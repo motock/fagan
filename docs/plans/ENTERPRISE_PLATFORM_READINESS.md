@@ -101,10 +101,16 @@ test-only. The notification channel layer is the template for the rest.
   default formatter drops `extra={...}`. Structured fields survive only in the
   explicit JSONL sidecars. This is a direct mismatch with the project's own
   logging standard.
-- **No request-level correlation.** `correlation_id` is minted per *story* at
+- **Request correlation exists on the dashboard path only.** The dashboard
+  middleware mints or preserves one id per inbound request and returns it in the
+  `X-Correlation-ID` response header on every response, including the 401/403
+  refusals, and stamps it as `correlation_id` on the decisions record and the
+  plan-approval record. A story's `correlation_id` is still minted per *story* at
   dispatch and propagated to the agent subprocess, notifications, events, and
-  logs. The dashboard and MCP paths do not assign one per inbound request and
-  do not return one in an error response.
+  logs. What still does not exist: the MCP/stdio path has no request to
+  correlate, and application logs still drop the id because the dashboard does
+  not install a structured formatter — that remains the separate open item
+  above.
 - **No tracing and no metrics sink.** There is no OpenTelemetry, Prometheus,
   StatsD, or span instrumentation. Metrics are computed on demand by scanning
   notification JSONL (`story_metrics.load_notification_records`), which is
@@ -200,7 +206,7 @@ shipped in `tenancy-seams`; the rest are unregistered.
 
 | # | Item | Default-preserving shape | Value | Blocker |
 |---|---|---|---|---|
-| 1 | Request correlation middleware | Generate a request ID when absent, echo it in an `X-Correlation-ID` response header and structured logs. No error-body change. | Closes the per-request correlation gap; high value for support. | None in `app/dashboard.py` (874 lines). MCP/stdio needs the remote transport first. |
+| 1 | Request correlation middleware | Generate a request ID when absent, echo it in an `X-Correlation-ID` response header and structured logs. No error-body change. | Closes the per-request correlation gap; high value for support. | **Shipped in `request-correlation`** — the header on every response and the id on the decision and approval records. The structured-log half is item 2, still open. |
 | 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | Wiring the entrypoints touches `pipeline/server.py` (1000 lines) and `pipeline/scheduler_daemon.py` (999) — both at the hard line gate. A split is needed first, or configure from `pipeline/__init__.py`. |
 | 3 | Optional event-envelope fields | Add `event_id`, `schema_version`, `idempotency_key` only when supplied; the legacy dict shape is unchanged. | Preps a broker without changing today's semantics. | `pipeline/events.py` has room; tests pin only the no-optional-args shape. |
 | 4 | Event bus factory | `PIPELINE_EVENT_BUS=inprocess`, unknown fails closed. | Makes a broker adapter selectable. | Cosmetic until a second bus exists; pair with #3 (ADR 0004's warning about invisible gates). |

@@ -155,6 +155,80 @@ registered MCP tool and failing on any named `actor`, `principal`, `decided_by`,
 
 Everything else still records no actor — see §4.
 
+**Request correlation.**
+
+The actor seam answers *who* is asking. A second `ContextVar` with the same
+request lifetime answers *which request* it is, so a support report can name
+both the inbound request and the log lines that served it.
+
+| Symbol | What it is |
+| --- | --- |
+| `new_correlation_id()` | Mints a fresh id: 12 lowercase hex characters, the same shape dispatch mints per story. |
+| `request_correlation_id(candidate)` | Returns *candidate* when it is well formed, else a freshly minted id. Pure: it never binds. |
+| `CORRELATION_ID_RE` | `^[A-Za-z0-9._-]{1,64}$` — the shape an inbound id must have to be accepted. |
+| `bind_correlation_id(value)` | Context manager that binds *value* for the duration of one request. |
+| `current_correlation_id()` | The bound id, or `""` outside a request. |
+
+The shape check exists because an inbound header is caller-controlled. Echoing
+it unchecked into a response header and into logs is log forging: a value
+carrying a newline or a space can split a log line or inject a header. So
+`request_correlation_id` accepts only 1–64 characters drawn from
+`[A-Za-z0-9._-]` and mints otherwise. It matches with `fullmatch`, not `match`,
+because Python's `$` also matches just before a single trailing newline —
+`"9f3c1a7b2e04\n"` would otherwise pass the guard and be echoed back verbatim.
+
+Worked examples:
+
+- `new_correlation_id()` → `"9f3c1a7b2e04"` (12 lowercase hex).
+- `request_correlation_id("9f3c1a7b2e04")` → `"9f3c1a7b2e04"` — preserved.
+- `request_correlation_id("9F3C1A7B2E04")` → `"9F3C1A7B2E04"` — preserved: the
+  accepted class is case-insensitive, so an uppercase id is echoed as given.
+- `request_correlation_id("")` → a freshly minted id.
+- `request_correlation_id("9f3c1a7b2e04\n")` → a freshly minted id: the trailing
+  newline fails `fullmatch`.
+- `request_correlation_id("x y")` → a freshly minted id: a space is outside the
+  accepted class.
+- `request_correlation_id("a" * 65)` → a freshly minted id: longer than 64.
+- The mistake to avoid is accepting any non-empty string and echoing it into
+  the header and the logs — that is the log-forging and header-injection hole
+  the shape check closes.
+
+`bind_correlation_id` is a `ContextVar` binding with the same lifetime as the
+principal: a transport nests the two `with` statements, the binding is restored
+on exit including when the handler raises, and outside any request
+`current_correlation_id()` is `""` — not `None`. The empty string is what lets a
+stdio MCP call record an empty id rather than a fabricated one.
+
+Worked examples:
+
+- `current_correlation_id()` before any bind → `""`.
+- Inside `with bind_correlation_id("9f3c1a7b2e04")` → `"9f3c1a7b2e04"`; after the
+  block exits → `""` again.
+- Nested: bind `"aaaaaaaaaaaa"`, then an inner bind of `"bbbbbbbbbbbb"`; the
+  inner exit restores `"aaaaaaaaaaaa"`, the outer exit restores `""`, and a
+  follow-up call after both exits is `""`.
+- The mistakes to avoid: storing the id in a module global without restoring it
+  in a `finally`, so the next request on that thread sees the previous request's
+  id (a cross-request leak); or restoring to `None` so `current_correlation_id()`
+  returns `None` instead of `""` and the stdio path records a fabricated id.
+
+**Division of labour with dispatch.** The two ids are different lifetimes and
+are never conflated. A *story's* correlation id (`pipeline/dispatch.py`)
+identifies the agent run: dispatch mints it once, persists it on the manifest,
+and exports it to the agent subprocess as `PIPELINE_CORRELATION_ID`. A
+*request's* id identifies the inbound HTTP request and lives only for that
+request. The environment variable is never written from a request handler,
+because it is process-global: with two concurrent requests A and B, a handler
+that did `os.environ["PIPELINE_CORRELATION_ID"] = <request id>` would clobber
+A's subprocess environment with B's id. The request id travels in the
+`ContextVar` and the response header, never in the environment.
+
+**Where it lands.** The dashboard middleware mints or preserves one id per
+inbound request and returns it in the `X-Correlation-ID` response header on
+every response, including the 401 and 403 refusals. The same id is stamped as
+`correlation_id` on the dashboard decisions record and on the plan-approval
+record.
+
 ### The one consumer: `app/dashboard.py`
 
 The `/api/` middleware (`_enforce_api_key`) already gates every API request on

@@ -227,7 +227,12 @@ A's subprocess environment with B's id. The request id travels in the
 inbound request and returns it in the `X-Correlation-ID` response header on
 every response, including the 401 and 403 refusals. The same id is stamped as
 `correlation_id` on the dashboard decisions record and on the plan-approval
-record.
+record. It also reaches application logs: when the opt-in
+`PIPELINE_LOG_FORMAT=json` formatter is enabled, every JSON line carries
+`correlation_id`, read from this same bound context — so a line inside request
+A (bound to `corr-abc`) shows `"correlation_id":"corr-abc"`, and the next line
+after that request ends shows `"correlation_id":""` rather than a stale id.
+With the formatter off, logs are unchanged.
 
 ### The one consumer: `app/dashboard.py`
 

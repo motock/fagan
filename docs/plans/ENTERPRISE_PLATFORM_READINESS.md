@@ -18,7 +18,7 @@
 | Area | Current state | Enterprise-ready? | Gap class |
 |---|---|---|---|
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
-| Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | JSON app logs, request correlation, metrics sink |
+| Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | Decisions, journals, notifications, agent logs | **Not audit-grade** | Actor identity + tamper-evidence |
 | AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam exists but nothing enforces it | **Seam, not a control** | Service-layer enforcement + ownership records + audit |
 
@@ -96,11 +96,13 @@ test-only. The notification channel layer is the template for the rest.
 
 ### Gaps
 
-- **Application logs are not structured.** There is no JSON formatter
-  configured in-repo; the MCP servers call `logging.basicConfig`, whose
-  default formatter drops `extra={...}`. Structured fields survive only in the
-  explicit JSONL sidecars. This is a direct mismatch with the project's own
-  logging standard.
+- **Application logs are structured only on request.** An opt-in
+  `PIPELINE_LOG_FORMAT=json` formatter now renders the standard fields
+  (`timestamp`, `level`, `service`, `correlation_id`, `message`) and preserves
+  every `extra=` key instead of dropping it. It is off by default, so an
+  unconfigured process still logs plain text. `correlation_id` reaches log
+  lines because the formatter reads the request-scoped id, and is empty outside
+  a request.
 - **Request correlation exists on the dashboard path only.** The dashboard
   middleware mints or preserves one id per inbound request and returns it in the
   `X-Correlation-ID` response header on every response, including the 401/403
@@ -108,9 +110,7 @@ test-only. The notification channel layer is the template for the rest.
   plan-approval record. A story's `correlation_id` is still minted per *story* at
   dispatch and propagated to the agent subprocess, notifications, events, and
   logs. What still does not exist: the MCP/stdio path has no request to
-  correlate, and application logs still drop the id because the dashboard does
-  not install a structured formatter — that remains the separate open item
-  above.
+  correlate, so those calls record an empty id.
 - **No tracing and no metrics sink.** There is no OpenTelemetry, Prometheus,
   StatsD, or span instrumentation. Metrics are computed on demand by scanning
   notification JSONL (`story_metrics.load_notification_records`), which is
@@ -201,13 +201,13 @@ selected by configuration and fails closed if misconfigured (ADR 0004). The
 
 ## 5. Deferred low-hanging fruit, ranked
 
-These are behavior-preserving candidates for a later Tier 1-style plan. Item 5
-shipped in `tenancy-seams`; the rest are unregistered.
+These are behavior-preserving candidates for a later Tier 1-style plan. Items 1,
+2, and 5 have shipped; the rest are unregistered.
 
 | # | Item | Default-preserving shape | Value | Blocker |
 |---|---|---|---|---|
-| 1 | Request correlation middleware | Generate a request ID when absent, echo it in an `X-Correlation-ID` response header and structured logs. No error-body change. | Closes the per-request correlation gap; high value for support. | **Shipped in `request-correlation`** — the header on every response and the id on the decision and approval records. The structured-log half is item 2, still open. |
-| 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | Wiring the entrypoints touches `pipeline/server.py` (1000 lines) and `pipeline/scheduler_daemon.py` (999) — both at the hard line gate. A split is needed first, or configure from `pipeline/__init__.py`. |
+| 1 | Request correlation middleware | Generate a request ID when absent, echo it in an `X-Correlation-ID` response header and structured logs. No error-body change. | Closes the per-request correlation gap; high value for support. | **Shipped in `request-correlation`** — the header on every response and the id on the decision and approval records. The structured-log half is item 2, now shipped. |
+| 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | **Shipped** — `pipeline/log_format.py`, wired into `app/pipeline_mcp_server.py`, `run_daemon`, and the dashboard startup preflight. Off by default. |
 | 3 | Optional event-envelope fields | Add `event_id`, `schema_version`, `idempotency_key` only when supplied; the legacy dict shape is unchanged. | Preps a broker without changing today's semantics. | `pipeline/events.py` has room; tests pin only the no-optional-args shape. |
 | 4 | Event bus factory | `PIPELINE_EVENT_BUS=inprocess`, unknown fails closed. | Makes a broker adapter selectable. | Cosmetic until a second bus exists; pair with #3 (ADR 0004's warning about invisible gates). |
 | 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). The remaining follow-up is enforcement in `PipelineService` (ADR 0009 §2); the seam is inert until then. |

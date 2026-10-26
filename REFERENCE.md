@@ -2014,6 +2014,46 @@ full contracts live in the specs each row links.
 | `PIPELINE_WORKTREE_NAMESPACE` | *(unset → `WORKTREE_ROOT/<key>`)* | Inserts a namespace segment into worktree directory names (`WORKTREE_ROOT/<ns>/<key>`), mirroring `PIPELINE_BRANCH_NAMESPACE`. The value must match `^[a-z0-9][a-z0-9-]{0,31}$`; any other non-empty value raises. Set it before dispatching, and give two operators sharing one host distinct values. | [docs/specs/WORKTREE_NAMESPACE.md](docs/specs/WORKTREE_NAMESPACE.md) |
 | `PIPELINE_PLAN_APPROVAL` | *(unset → off)* | Enables the plan-approval lifecycle: ingest records an `approval` block plus a digest of the authored content, the scheduler tick and `dispatch_story` both refuse a plan that is not `approved`, and `approve_plan` / `reject_plan` move it through `pending_approval` → `approved` \| `changes_requested`. Any authored-content change (`patch_story`, `patch_plan`, re-ingest) resets the record. Unset writes manifests byte-identically to the pre-approval shape; an unrecognized value raises rather than silently enabling or disabling the gate. | [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) |
 
+### Structured log format (`PIPELINE_LOG_FORMAT`)
+
+Unset — the default — logging is exactly as it was before: plain-text lines
+from whatever handlers the process already installed. Set `PIPELINE_LOG_FORMAT`
+to the exact value `json` to opt in to structured output. Case and surrounding
+whitespace are ignored, so `json`, `JSON`, and `" json "` all opt in, while
+`jsonl`, `yaml`, and an empty value do not. The check is exact equality after
+normalisation — not a `startswith("json")` prefix match and not a truthiness
+test.
+
+When it is on, the process installs a JSON formatter on the root logger and
+clears the existing plain-text handlers first, so each record is emitted once.
+A single call such as
+
+```python
+logger.info("paid", extra={"invoice_id": "inv-7"})
+```
+
+produces exactly one line — not one JSON line plus one plain line — carrying
+`timestamp`, `level`, `service`, `correlation_id`, `message`, and every key
+passed through `extra=`:
+
+```json
+{"timestamp": "2026-10-26T12:00:00.000Z", "level": "INFO", "service": "pipeline", "correlation_id": "", "message": "paid", "invoice_id": "inv-7"}
+```
+
+`correlation_id` is read from the request-scoped context (see
+`docs/specs/IDENTITY_AND_POLICY.md`), so it is populated inside a request and
+empty outside one.
+
+The root logger's level is deliberately left untouched: if it was `WARNING`
+(30) before the formatter was enabled it is still 30 afterwards, not reset to
+`INFO` (20). There is no log-level environment variable — set the level in code
+or through your own logging configuration.
+
+The formatter is wired into three entry points: the MCP launch shim
+`app/pipeline_mcp_server.py`, `run_daemon` in `pipeline/scheduler_daemon.py`,
+and the startup preflight in `app/dashboard.py`. Any other entry point keeps
+plain-text logging.
+
 ---
 
 ## Periodic security-audit reminder
@@ -2032,6 +2072,7 @@ hours per process.
 
 A repo with no recorded audit is due as soon as either threshold is on, and a
 value that is not a non-negative integer disables that check.
+
 
 ## End-to-end workflow
 

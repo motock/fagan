@@ -14,11 +14,16 @@ snapshot of GitHub's two CI vocabularies into the canonical states, and
 The CI verbs spawn ``gh`` directly rather than through :meth:`_run`: ``_run``
 is the PR-verb seam, and the CI verbs need ``capture_output``/``text`` and
 their own error handling, so they call ``subprocess.run`` themselves.
+
+``prepare_merge`` is the one merge verb this adapter owns: it performs the
+local rebase and the force-push that publish the rewritten branch, so
+``merge_pr`` stays a pure "land it" verb.
 """
 
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .forge import (
@@ -431,13 +436,61 @@ class GitHubForge(Forge):
 
 
     # -- merge preparation ------------------------------------------------
-    def prepare_merge(self, worktree: str, branch: str) -> None:
-        """Rebase ``branch`` onto the default branch and push it."""
-        from .rebase import _rebase_onto_master, _sync_branch_remote
+    def prepare_merge(self, worktree: str, branch: str) -> dict[str, Any]:
+        """Rebase ``branch`` onto the default branch, then force-push it.
 
-        result = _rebase_onto_master(worktree, branch)
-        if result.get("ok"):
-            _sync_branch_remote(worktree, branch)
+        This is the whole "make it landable" half of a merge - the local
+        rebase plus the force-push that publishes the rewritten history - so
+        :meth:`merge_pr` can stay a pure "land it" verb. Returns::
+
+            {"ok": bool, "error": str, "pushed_sha": str, "auto_resolved": bool}
+
+        ``error`` is the bare ``rebase: <git stderr>`` / ``push: <stderr>``
+        text, never wrapped: the merge gate's conflict-rework route matches
+        ``gate_error.startswith("rebase:")`` and ``"conflict" in gate_error``,
+        so a prefix like ``prepare_merge failed: rebase: ...`` would silently
+        disable that route.
+
+        A conflicted rebase short-circuits before the push, so a rework
+        round's follow-up call re-runs the rebase first instead of
+        force-pushing stale history. No "already prepared" flag is kept for
+        the same reason: state across calls would let call 2 skip the rebase.
+        """
+        from .server import REPO_ROOT, _rebase_onto_master
+
+        rb = _rebase_onto_master(worktree, branch)
+        auto_resolved = bool(rb.get("auto_resolved"))
+        if not rb["ok"]:
+            return {
+                "ok": False,
+                "error": f"rebase: {rb['error']}",
+                "pushed_sha": "",
+                "auto_resolved": auto_resolved,
+            }
+        pushed_sha = ""
+        if Path(worktree).is_dir():
+            push = self._run(
+                ["git", "push", "--force-with-lease", "origin", branch],
+                cwd=REPO_ROOT, check=False, capture_output=True, text=True,
+            )
+            if push.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": f"push: {(push.stderr or push.stdout).strip()[:200]}",
+                    "pushed_sha": "",
+                    "auto_resolved": auto_resolved,
+                }
+            rev = self._run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree, check=False, capture_output=True, text=True,
+            )
+            pushed_sha = rev.stdout.strip()
+        return {
+            "ok": True,
+            "error": "",
+            "pushed_sha": pushed_sha,
+            "auto_resolved": auto_resolved,
+        }
 
 
 __all__ = ["GitHubForge"]

@@ -20,9 +20,14 @@ from pipeline import usage_transitions as ut
 
 @pytest.fixture
 def state_path(tmp_path, monkeypatch):
-    """Isolate the usage state (and therefore the announced sidecar) file."""
+    """Isolate the usage state (and therefore the announced sidecar) file.
+
+    Patches ``pipeline.usage.USAGE_STATE_PATH`` — the same seam the suite's
+    autouse ``_isolate_usage_state`` fixture patches — because
+    ``usage_transitions`` resolves the sidecar path from that module lazily.
+    """
     path = tmp_path / "usage_state.json"
-    monkeypatch.setattr(ut, "USAGE_STATE_PATH", path)
+    monkeypatch.setattr(u, "USAGE_STATE_PATH", path)
     return path
 
 
@@ -116,6 +121,30 @@ def test_announced_value_is_persisted_next_to_usage_state(state_path, notificati
     assert json.loads(announced.read_text())["paused"] is True
 
 
+def test_sidecar_follows_the_patched_usage_state_path(state_path, notifications):
+    """The sidecar must track pipeline.usage.USAGE_STATE_PATH, not the real home.
+
+    Regression guard: binding USAGE_STATE_PATH at import time made every test
+    that drives _check_usage_impl read and write the developer's live
+    ~/.claude/usage_announced.json, so announcements were order- and
+    machine-dependent.
+    """
+    assert ut._announced_path() == state_path.parent / "usage_announced.json"
+
+    ut.announce(True, _paused_state())
+
+    assert (state_path.parent / "usage_announced.json").exists()
+
+
+def test_hysteresis_pause_names_the_gate_not_a_window(state_path, notifications):
+    # Both windows under threshold but the gate is still held paused.
+    ut.announce(True, _paused_state(session_pct=10, week_pct=5))
+
+    message = notifications[0]["message"]
+    assert "hysteresis" in message
+    assert "usage gate over threshold" not in message
+
+
 # ---------------------------------------------------------------------------
 # Message content
 # ---------------------------------------------------------------------------
@@ -189,7 +218,7 @@ def test_unwritable_announced_path_does_not_propagate(tmp_path, monkeypatch):
     # fail; announce() must swallow it rather than break the usage poll.
     state_path = tmp_path / "usage_state.json"
     (tmp_path / "usage_announced.json").mkdir()
-    monkeypatch.setattr(ut, "USAGE_STATE_PATH", state_path)
+    monkeypatch.setattr(u, "USAGE_STATE_PATH", state_path)
     monkeypatch.setattr(server, "_notify_user", lambda *a, **k: None)
 
     ut.announce(True, _paused_state())
@@ -202,7 +231,6 @@ def test_unwritable_announced_path_does_not_propagate(tmp_path, monkeypatch):
 def test_check_usage_impl_announces_pause_then_resume(tmp_path, monkeypatch):
     state_path = tmp_path / "usage_state.json"
     monkeypatch.setattr(u, "USAGE_STATE_PATH", state_path)
-    monkeypatch.setattr(ut, "USAGE_STATE_PATH", state_path)
 
     calls = []
     monkeypatch.setattr(
@@ -241,7 +269,6 @@ def test_check_usage_impl_announces_pause_on_parse_failure_fallback(
     """
     state_path = tmp_path / "usage_state.json"
     monkeypatch.setattr(u, "USAGE_STATE_PATH", state_path)
-    monkeypatch.setattr(ut, "USAGE_STATE_PATH", state_path)
 
     calls = []
     monkeypatch.setattr(

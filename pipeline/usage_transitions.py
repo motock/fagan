@@ -12,9 +12,10 @@ operator already knows about. A missing or corrupt announced-file reads as
 "not paused", so the first pause is always announced and a garbled file can
 never suppress it.
 
-``USAGE_STATE_PATH`` is read as a module-level free variable (the Option B
-pattern used across the pipeline): tests patch
-``pipeline_usage_transitions.USAGE_STATE_PATH`` directly.
+The sidecar path is resolved lazily from :mod:`pipeline.usage`, so patching
+``pipeline.usage.USAGE_STATE_PATH`` (as the suite's autouse
+``_isolate_usage_state`` fixture does) isolates both files and no test ever
+touches the developer's live ``~/.claude`` directory.
 """
 
 import json
@@ -23,7 +24,6 @@ from datetime import UTC, datetime
 
 from .config import SESSION_PAUSE_THRESHOLD, WEEK_PAUSE_THRESHOLD
 from .parsers import _atomic_write_json
-from .paths import USAGE_STATE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,18 @@ ANNOUNCED_FILENAME = "usage_announced.json"
 
 
 def _announced_path():
-    """Path of the announced-state sidecar, next to the usage state file."""
-    return USAGE_STATE_PATH.parent / ANNOUNCED_FILENAME
+    """Path of the announced-state sidecar, next to the usage state file.
+
+    Resolved lazily from :mod:`pipeline.usage` (which imports this module, so a
+    module-level import would be circular) rather than binding
+    ``USAGE_STATE_PATH`` at import time: the suite's autouse
+    ``_isolate_usage_state`` fixture patches ``pipeline.usage.USAGE_STATE_PATH``,
+    and a module-level copy would keep pointing at the developer's real
+    ``~/.claude`` directory, making announcements order- and machine-dependent.
+    """
+    from . import usage as _usage
+
+    return _usage.USAGE_STATE_PATH.parent / ANNOUNCED_FILENAME
 
 
 def _read_announced() -> bool:
@@ -67,8 +77,8 @@ def _reset_clause(state: dict, key: str) -> str:
     return f" (resets {text.strip()})"
 
 
-def _tripped_windows(state: dict) -> str:
-    """Name the window(s) at or over their pause threshold."""
+def _tripped_windows(state: dict) -> str | None:
+    """Name the window(s) at or over their pause threshold, or None."""
     session_pct = _pct(state.get("session_pct"))
     week_pct = _pct(state.get("week_pct"))
     tripped = []
@@ -79,15 +89,21 @@ def _tripped_windows(state: dict) -> str:
     if not tripped:
         # Paused without a window over threshold: hysteresis, or the
         # fail-closed blind branch. Name the gate rather than a window.
-        return "usage gate"
+        return None
     if len(tripped) == 2:
         return "session and week windows"
     return f"{tripped[0]} window"
 
 
 def _paused_message(state: dict, reason: str) -> str:
+    tripped = _tripped_windows(state)
+    headline = (
+        f"Usage gate PAUSED ({tripped} over threshold)"
+        if tripped
+        else "Usage gate PAUSED (gate held paused by hysteresis)"
+    )
     message = (
-        f"Usage gate PAUSED ({_tripped_windows(state)} over threshold): "
+        f"{headline}: "
         f"session {_pct(state.get('session_pct'))}%"
         f"{_reset_clause(state, 'session_reset')}, "
         f"week {_pct(state.get('week_pct'))}%"
@@ -119,7 +135,7 @@ def announce(paused: bool, state: dict, *, reason: str = "") -> str | None:
     usage poller's tick is never taken down by this side channel.
     """
     try:
-        paused = bool(paused)
+        paused = paused is True
         if _read_announced() == paused:
             return None
 
@@ -136,6 +152,8 @@ def announce(paused: bool, state: dict, *, reason: str = "") -> str | None:
 
         # Notify before persisting so a failed notification is retried on the
         # next poll instead of being recorded as already announced.
+        # "usage_gate" is a pseudo plan name (no real plan is called that): it
+        # only names the notification log file, PLAN_DIR/usage_gate.notifications.log.
         _notify_user("usage_gate", message, event=event, severity="warning")
         _atomic_write_json(
             _announced_path(),

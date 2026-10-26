@@ -648,8 +648,8 @@ is always announced.
 
 Neither event is in the default e-mail allowlist (see "Which events are
 e-mailed by default" above), because a pause is routine back-pressure rather
-than a call for a human. To route them, add them to an `events` list in
-`notifications.json` — for example
+than a call for a human. To route them, add a `deliver` entry to
+`notifications.json` whose `events` list names them — for example
 `{"events": ["usage_paused", "usage_resumed"], "to": ["team-a-mail"]}` — or add
 them to `PIPELINE_NOTIFY_OUTBOX_EVENTS` for the legacy outbox.
 

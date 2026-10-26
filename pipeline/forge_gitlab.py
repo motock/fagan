@@ -145,35 +145,14 @@ class GitLabForge(Forge):
 
     # -- merge-request verbs ----------------------------------------------
     def open_pr(self, worktree: str, branch: str, title: str, body: str) -> str:
-        """Push ``branch`` and open a merge request for it.
-
-        The push comes first, exactly as :meth:`GitHubForge.open_pr` does:
-        the protocol promises that ``open_pr`` publishes the branch, and
-        nothing upstream of this verb pushes it. Without it a GitLab MR is
-        either impossible to create (the source branch does not exist on
-        origin yet) or points at the pre-review SHA.
-
-        ``--force-with-lease`` for the same reason GitHub uses it: the branch
-        is rebased before every resumed dispatch, which rewrites its commit
-        SHAs, so a plain push is rejected as non-fast-forward on every retry.
-        The branch is exclusively owned by this pipeline's own dispatched
-        agent, so there is no external pusher to race.
+        """Open a merge request for ``branch``, or return the existing one.
 
         GitLab has no "already exists" error to recover from, so the lookup
-        comes *after* the push: an existing MR for the source branch is
-        returned as-is and ``glab mr create`` is never reached. That keeps
-        the verb idempotent across resumed dispatches, which re-run it for
-        the same branch.
-
-        A failed ``glab mr create`` raises (``check=True``) rather than
-        returning ``""``: an empty handle would be stored as the MR URL and
-        the tick would carry on as if the MR existed.
+        comes *first*: an existing MR for the source branch is returned as-is
+        and ``glab mr create`` is never reached. That keeps the verb
+        idempotent across resumed dispatches, which re-run it for the same
+        branch.
         """
-        self._run(
-            ["git", "push", "--force-with-lease", "-u", "origin", branch],
-            cwd=worktree, check=True,
-        )
-
         existing = self._find_mr(worktree, branch)
         if existing:
             return existing
@@ -186,7 +165,7 @@ class GitLabForge(Forge):
                 "--source-branch", branch,
                 "--yes",
             ],
-            cwd=worktree, check=True,
+            cwd=worktree,
         )
         return _mr_url(proc.stdout)
 

@@ -98,19 +98,11 @@ def test_open_pr_creates_mr(monkeypatch, forge):
 
     assert forge.open_pr(WORKTREE, BRANCH, TITLE, BODY) == URL
 
-    # The branch is published first - the protocol's ``open_pr`` contract, and
-    # the only way the MR can point at the reviewed SHA - then the lookup runs
-    # from the worktree, so no duplicate MR is created.
-    assert fake.calls[0] == [
-        "git", "push", "--force-with-lease", "-u", "origin", BRANCH,
-    ]
+    # The lookup runs first, from the worktree, so no duplicate MR is created.
+    assert _is(fake.calls[0], "glab", "mr", "list")
+    assert "--source-branch" in fake.calls[0]
+    assert fake.calls[0][fake.calls[0].index("--source-branch") + 1] == BRANCH
     assert fake.kwargs[0]["cwd"] == WORKTREE
-
-    lookup = fake.calls[1]
-    assert _is(lookup, "glab", "mr", "list")
-    assert "--source-branch" in lookup
-    assert lookup[lookup.index("--source-branch") + 1] == BRANCH
-    assert fake.kwargs[1]["cwd"] == WORKTREE
 
     create = [a for a in fake.calls if _is(a, "glab", "mr", "create")]
     assert len(create) == 1

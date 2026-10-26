@@ -37,6 +37,7 @@ exactly two top-level functions (a base-suite guarantee).
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,21 @@ import urllib.request
 
 _PY_MIN = (3, 11)
 _PYTHON_HINT = "Install Python 3.11+ (the mcp SDK needs it)"
+
+# The CLI each forge drives, and the env var that selects the forge. The
+# doctor requires exactly the resolved forge's CLI - never both: a GitLab
+# repo has no use for gh, and a GitHub repo has no use for glab.
+_FORGE_ENV = "PIPELINE_FORGE"
+_FORGE_CLI = {"github": "gh", "gitlab": "glab"}
+_FORGE_HINTS = {
+    "github": (
+        "Install the GitHub CLI: https://cli.github.com ; then run: gh auth login"
+    ),
+    "gitlab": (
+        "Install the GitLab CLI: https://gitlab.com/gitlab-org/cli ; "
+        "then run: glab auth login"
+    ),
+}
 
 # Bound for every auth probe (CLI subprocess or daemon HTTP call). A probe
 # that hangs must degrade to ``unknown`` within this many seconds, never
@@ -205,6 +221,47 @@ def collect_checks(which=shutil.which, py_version=None):
             return "unknown", "auth probe failed"
         return None
 
+    def resolve_forge():
+        """The active forge name: ``PIPELINE_FORGE``, else the origin host.
+
+        Mirrors ``pipeline.forge.resolve_forge_name`` without importing it:
+        this module must stay stdlib-only so it runs on a bare interpreter
+        before any venv exists. An explicit ``github``/``gitlab`` wins and
+        never pays for a remote probe; ``auto`` maps the origin remote's
+        hostname and falls back to ``github`` when it is unrecognised. An
+        unknown value is a misconfiguration, so it raises rather than
+        silently picking a forge.
+        """
+        choice = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+        if choice in _FORGE_CLI:
+            return choice
+        if choice != "auto":
+            raise ValueError(
+                f"Unknown {_FORGE_ENV}={choice!r}; expected one of 'auto', "
+                f"{sorted(_FORGE_CLI)}."
+            )
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            proc = subprocess.run(
+                ["git", "-C", repo_root, "remote", "get-url", "origin"],
+                check=False, capture_output=True, text=True,
+                timeout=_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "github"
+        url = (proc.stdout or "").strip() if proc.returncode == 0 else ""
+        host = url.rsplit("@", 1)[-1].split(":")[0].split("/")[0].lower()
+        return "gitlab" if "gitlab" in host else "github"
+
+    # The forge's own CLI replaces the hardcoded gh entry, so a GitLab repo
+    # requires glab and a GitHub repo requires gh - never both.
+    forge = resolve_forge()
+    forge_cli = _FORGE_CLI[forge]
+    tool_specs = tuple(
+        (forge_cli, required, _FORGE_HINTS[forge]) if name == "gh" else (name, required, hint)
+        for name, required, hint in _TOOL_SPECS
+    )
+
     if py_version is None:
         py_version = (sys.version_info.major, sys.version_info.minor)
     checks = []
@@ -232,7 +289,7 @@ def collect_checks(which=shutil.which, py_version=None):
             "hint": _PYTHON_HINT,
         }
     )
-    for name, required, hint in _TOOL_SPECS:
+    for name, required, hint in tool_specs:
         found = which(name)
         status = "ok" if found else "missing"
         detail = found if found else "not found"
@@ -246,9 +303,9 @@ def collect_checks(which=shutil.which, py_version=None):
                 # tool is a login, not an install, so the hint is swapped for
                 # the static status-specific one - in both text and JSON mode.
                 if status == "unauthorized":
-                    hint = _UNAUTHORIZED_HINTS[name]
+                    hint = _UNAUTHORIZED_HINTS.get(name, hint)
                 elif status == "unknown":
-                    hint = _UNKNOWN_HINTS[name]
+                    hint = _UNKNOWN_HINTS.get(name, hint)
         checks.append(
             {
                 "name": name,
@@ -302,21 +359,50 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     checks = collect_checks()
+
+    def missing_required_cli():
+        """The resolved forge's CLI when it is absent, else None.
+
+        A missing forge CLI is not graceful degradation: the pipeline cannot
+        open or merge a PR without it, so the doctor names both the resolved
+        forge and the CLI it requires and exits non-zero. Only an explicitly
+        configured forge fails the run - under ``auto`` the doctor stays a
+        report (the base contract) because the host may simply not be the
+        pipeline's.
+        """
+        configured = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+        if configured not in _FORGE_CLI:
+            return None
+        required = _FORGE_CLI[configured]
+        for check in checks:
+            if check["name"] == required and check["status"] == "missing":
+                return configured, required
+        return None
+
+    missing = missing_required_cli()
     if args.json:
         print(json.dumps(checks, indent=2))
-        return 0
-    for check in checks:
-        if check["status"] == "ok":
-            marker = "ok"
-        elif check["status"] == "unauthorized":
-            marker = "AUTH"
-        elif check["status"] == "unknown":
-            marker = "UNKNOWN"
-        elif check["required"]:
-            marker = "MISS"
-        else:
-            marker = "optional"
-        print(f"[{marker}] {check['name']}: {check['detail']} - {check['hint']}")
+    else:
+        for check in checks:
+            if check["status"] == "ok":
+                marker = "ok"
+            elif check["status"] == "unauthorized":
+                marker = "AUTH"
+            elif check["status"] == "unknown":
+                marker = "UNKNOWN"
+            elif check["required"]:
+                marker = "MISS"
+            else:
+                marker = "optional"
+            print(f"[{marker}] {check['name']}: {check['detail']} - {check['hint']}")
+    if missing is not None:
+        forge, cli = missing
+        print(
+            f"error: resolved forge {forge!r} requires the {cli!r} CLI, "
+            f"which was not found on PATH",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

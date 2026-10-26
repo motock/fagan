@@ -9,6 +9,7 @@ keeps landing on the moved code. pipeline.triage re-exports the moved names.
 
 import subprocess
 
+from .forge import get_forge
 from .module_ref import _ModuleRef
 
 SIBLING_NOTE = _ModuleRef("pipeline.triage", "SIBLING_NOTE")
@@ -127,21 +128,23 @@ _SUITE_PASSES_SENTINEL = (
 )
 
 
-def _pr_is_merged(pr_url: str) -> bool:
-    """Return True only when `gh pr view` reports the PR state as MERGED."""
-    if not pr_url:
+def _pr_is_merged(handle: str) -> bool:
+    """Return True only when the resolved forge reports ``handle`` as MERGED.
+
+    ``handle`` is opaque - it is whatever ``Forge.open_pr`` returned - so it is
+    passed to :meth:`Forge.pr_state` untouched and never parsed here. Exactly
+    one return value counts as merged: the string ``"MERGED"``. ``"OPEN"``,
+    ``"CLOSED"``, ``"UNKNOWN"`` (the failed-call path), ``""`` and ``None`` all
+    mean not merged, so an unreadable PR never corroborates a ``mark_done``.
+    """
+    if not handle:
         return False
+    from .server import REPO_ROOT
+
     try:
-        result = subprocess.run(
-            ["gh", "pr", "view", pr_url, "--json", "state", "--jq", ".state"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        return get_forge(REPO_ROOT).pr_state(handle) == "MERGED"
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0 and result.stdout.strip() == "MERGED"
 
 
 def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:

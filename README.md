@@ -537,6 +537,10 @@ For the one-command guided setup (flags, configuration keys, secure defaults, tr
 - **git** on PATH.
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).
+- **The active forge's CLI** — `PIPELINE_FORGE` selects the code host
+  (`auto` \| `github` \| `gitlab`, default `auto`, resolved from the origin
+  remote's hostname): `gh` for `github`, `glab` for `gitlab`. An unknown
+  value raises.
 
 ## Scheduler
 

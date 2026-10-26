@@ -1673,6 +1673,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | Variable | Default | Purpose |
 |---|---|---|
 | `PIPELINE_TICKET_PROVIDER` | `auto` | `auto` \| `none` \| `plane` \| `jira` — see table above |
+| `PIPELINE_FORGE` | `auto` | `auto` \| `github` \| `gitlab` — the code host whose CLI the pipeline drives. `auto` resolves from the origin remote's hostname (falling back to `github` for an unrecognised host); an unknown value raises |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
 | `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
 | `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |

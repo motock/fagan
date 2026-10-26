@@ -258,15 +258,21 @@ def _plan_summary(
     # the pre-approval shape: no key, not even a null one. The record is
     # projected field-by-field (never passed through) so the dashboard cannot
     # leak unrelated manifest state, and the manifest is not mutated.
+    #
+    # A non-dict `approval` (hand-edited or legacy manifest) is treated as
+    # absent rather than raising: same convention as pipeline.plan_approval's
+    # readers, so one malformed plan cannot 500 the whole plan list.
     approval = manifest.get("approval")
-    if approval is not None:
+    if isinstance(approval, dict):
+        warnings_seen = approval.get("warnings_seen")
         summary["approval"] = {
             "status": approval.get("status"),
             "digest": approval.get("digest"),
             "decided_by": approval.get("decided_by"),
             "at": approval.get("at"),
             "self_approved": approval.get("self_approved"),
-            "warnings_seen": approval.get("warnings_seen"),
+            # Copy so a consumer mutating the summary cannot reach the manifest.
+            "warnings_seen": list(warnings_seen) if isinstance(warnings_seen, list) else warnings_seen,
         }
     return summary
 

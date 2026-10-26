@@ -53,9 +53,12 @@ draft ──ingest──▶ pending_approval ──approve_plan──▶ approve
   content has not been approved (yet). This is also the state a previously
   `approved` plan falls back to when its authored content changes (see §4).
 - **`approved`** — a decision was recorded against *this exact* authored
-  content. Only this state is activatable when the gate is on.
+  content. `is_activatable()` returns true only for this state; wiring that
+  check into dispatch is tracked separately (see §10), so until it lands an
+  approval is advisory rather than enforced.
 - **`changes_requested`** — a reviewer asked for changes; the record carries
-  the reviewer's `reason`. The plan is not activatable.
+  the reviewer's `reason`. The plan is not activatable once dispatch
+  enforcement lands (see §10); today it still dispatches.
 
 `changes_requested` is not terminal: a later `approve_plan` moves the plan to
 `approved`, and a re-ingest after an authored change resets it to
@@ -107,8 +110,11 @@ byte-identical to before the feature existed.
 
 - **`approve_plan(plan_name)`** — `pending_approval` (or
   `changes_requested`) → `approved`.
-- **`reject_plan(plan_name, reason="")`** — `pending_approval` → 
-  `changes_requested`, recording `reason` when given.
+- **`reject_plan(plan_name, reason="")`** — `pending_approval` →
+  `changes_requested`, recording `reason` when given. The transition is
+  **unguarded**: `_decide_plan` never checks the current status, so
+  `approved` → `changes_requested` is accepted too (a reviewer may revoke an
+  approval).
 
 Both delegate to `_decide_plan`, which:
 

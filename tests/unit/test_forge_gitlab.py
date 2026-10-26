@@ -18,10 +18,10 @@ import json
 import subprocess
 
 import pytest
-from pipeline.forge_gitlab import GitLabForge
 
 from pipeline import forge as forge_mod
 from pipeline.forge import CANCELLED, FAIL, NONE, PASS, PENDING, UNREADABLE
+from pipeline.forge_gitlab import GitLabForge
 
 WORKTREE = "/some/worktree"
 BRANCH = "feature/x"

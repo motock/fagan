@@ -75,6 +75,7 @@ from app.dashboard_routes_story import (
     set_story_status_route,
     start_story_route,
 )
+from app.identity import IdentityError, SharedSecretProvider
 from app.story_replay import build_replay_events  # noqa: F401
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
@@ -123,6 +124,12 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 app = FastAPI(title="Agent Pipeline Dashboard")
 _service = PipelineService()
 
+# ADR 0009 identity seam: the one provider the dashboard resolves credentials
+# with. The callable form (not ``get_or_create_api_key()``) is load-bearing —
+# the key is created lazily on first use and can be rotated, so it must be
+# read per request rather than frozen at import time.
+_identity = SharedSecretProvider(get_or_create_api_key)
+
 
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
@@ -136,6 +143,27 @@ async def _enforce_api_key(request: Request, call_next):
             )
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        # The gate passed. Attach the authenticated principal for the service
+        # layer (ADR 0009). This is identity, not enforcement: nothing reads
+        # request.state.principal yet.
+        presented_key = request.headers.get("x-pipeline-api-key")
+        if (
+            request.url.path == auth.CHAT_STREAM_PATH
+            and presented_key
+            and presented_key.startswith(auth.PIPELINE_KEY_PREFIX)
+        ):
+            # Chat-stream pass-through: this gate does NOT authenticate the
+            # caller-supplied k- value (the pipeline validates it upstream), so
+            # there is no identity here. Never mistake a pass-through for one.
+            request.state.principal = None
+        else:
+            try:
+                request.state.principal = _identity.authenticate(presented_key)
+            except IdentityError:
+                # Unreachable for a secret-auth request that just passed the
+                # gate; kept so a provider rejection can never turn a pass
+                # into a 500.
+                request.state.principal = None
     return await call_next(request)
 
 logger = logging.getLogger(__name__)

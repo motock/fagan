@@ -229,9 +229,10 @@ radius of the latter is every thread in the worker, not the test.
    different file. Addressed in `harness-instrument-fixes` (HIF-01).
 4. **Record manual manifest surgery.** A human unblocking a parked story by
    clearing `rework_attempts` / `last_review_findings` (allowed, but invisible)
-   currently corrupts the retro instrument (§2.6). An append-only sidecar event
-   (`story_unparked_manually`, with the cleared field names) would keep the record
-   honest without forbidding the intervention.
+   used to corrupt the retro instrument (§2.6). `python -m pipeline.unpark
+   <plan> <story> --clear <fields>` now performs the unblock under the plan
+   lock and appends a `story_unparked_manually` record to the plan's
+   notification sidecar. Addressed in `harness-instrument-fixes` (HIF-02).
 
 ### P2 — process
 

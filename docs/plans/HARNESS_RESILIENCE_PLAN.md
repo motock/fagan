@@ -1,6 +1,6 @@
 # Harness resilience plan
 
-Status: draft, not ingested. Tier: whatever the live registry's `dispatch` role
+Status: ingested 2026-10-25 as plan `harness-resilience` (all stories `todo`). Tier: whatever the live registry's `dispatch` role
 resolves to when the plan runs (planned: ollama, 2026-10-25 evening; no
 per-story pin). Ingest JSON:
 `~/.claude/plans/harness-resilience.json` (plan name `harness-resilience`).
@@ -70,9 +70,10 @@ measured ages printed beside the threshold (UC-04); the `PIPELINE_REWORK_ON_CONF
 
 ## 7. Ollama-tier note
 
-Dispatch will resolve to ollama when this runs. Before ingest, re-check each
-story against `.claude/rules/local-dispatch-preflight.md`: add the `Preflight:`
-line from a scratch-worktree impact run, and route the three stories that edit
-`REFERENCE.md` (over 2000 lines: UC-01, UC-04, RC-02) to a stronger tier, since
-the sizing rules bar `.md` files over about 1000 lines from the weakest tier.
-RC-02 is also an anchored insertion into a large function.
+Dispatch now resolves to `ollama` / `deepseek-v4.1-flash` (all roles), so every
+story carries a one-line `Preflight:` summary — impact run 2026-10-25 on
+`901a4ac` in a scratch worktree, rough stand-in per story, full suite and
+`ruff` (0 conflicts; the local venv's ruff 0.16.8 flags one pre-existing `I001`
+in `tests/unit/test_branch_namespace.py` that the pinned ruff 0.17.1 accepts).
+The three `REFERENCE.md` stories (UC-01, UC-04, RC-02) are chained by
+`dependencies` so their edits to that file never race at the merge gate.

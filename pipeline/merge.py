@@ -495,6 +495,7 @@ def _merge_decision(
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    from .authorization import authorize
     from .pr import _resolve_story_branch
     from .server import (
         _atomic_write_json,
@@ -513,6 +514,10 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         _store,
         _validate_key,
     )
+
+    refusal = authorize("story:merge", plan_name=plan_name, story_key=story_key)
+    if refusal is not None:
+        return refusal
 
     _validate_key(plan_name)
     _validate_key(story_key)
@@ -692,7 +697,12 @@ def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
+    from .authorization import authorize
     from .server import _store
+
+    refusal = authorize("plan:pause", plan_name=plan_name)
+    if refusal is not None:
+        return refusal
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:

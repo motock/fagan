@@ -147,7 +147,7 @@ def test_approve_appends_exactly_one_decision_record(plan, enabled):
     assert record["plan"] == "p"
     assert record["digest"] == canonical_digest(_read_manifest(plan))
     assert record["decided_by"] == "local-operator"
-    assert record["role"] == "local-operator"
+    assert record["role"] == "admin"
     assert record["self_approved"] is True
     assert record["warnings_seen"] == ["w1"]
     assert record["at"].endswith("+00:00")
@@ -169,7 +169,7 @@ def test_decision_record_is_returned_and_persisted_on_manifest(plan, enabled):
     approval = _read_manifest(plan)["approval"]
     assert approval["status"] == "approved"
     assert approval["decided_by"] == "local-operator"
-    assert approval["role"] == "local-operator"
+    assert approval["role"] == "admin"
     assert approval["self_approved"] is True
     assert approval["warnings_seen"] == ["w1"]
     assert approval["at"] == result["at"]

@@ -15,6 +15,7 @@ through the existing ``collect_checks`` report plus a loud, non-zero exit from
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -139,3 +140,80 @@ def test_main_reports_an_unknown_forge_without_a_traceback(monkeypatch, capsys):
     assert "PIPELINE_FORGE" in err
     assert "bitbucket" in err
     assert "Traceback" not in err
+
+
+# ---------------------------------------------------------------------------
+# auto resolution: the origin remote's host decides the forge
+# ---------------------------------------------------------------------------
+# The doctor must parse every remote form git accepts - https://, ssh:// and
+# scp-like ``git@host:path`` - and take the HOST, not the scheme. A bare
+# ``split(":")[0]`` yields "https" for an https remote, which would silently
+# pick the wrong forge.
+
+
+class _Completed:
+    """The subset of ``subprocess.CompletedProcess`` the probe reads."""
+
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def _patch_origin(monkeypatch, url):
+    """Make the origin-remote probe answer ``url``; leave other calls real."""
+    real_run = subprocess.run
+
+    def _run(argv, *args, **kwargs):
+        if list(argv)[:1] == ["git"]:
+            return _Completed(stdout=f"{url}\n")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(ic.subprocess, "run", _run)
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://gitlab.com/group/project.git", "glab"),
+        ("https://github.com/owner/project.git", "gh"),
+        ("ssh://git@gitlab.com/group/project.git", "glab"),
+        ("git@gitlab.com:group/project.git", "glab"),
+        ("git@github.com:owner/project.git", "gh"),
+    ],
+)
+def test_auto_resolves_the_forge_from_the_origin_host(monkeypatch, url, expected):
+    monkeypatch.delenv("PIPELINE_FORGE", raising=False)
+    _patch_origin(monkeypatch, url)
+
+    by_name = {c["name"]: c for c in _collect(_ALL_TOOLS)}
+
+    assert expected in by_name, f"{url} must resolve to the {expected} CLI"
+    assert by_name[expected]["required"] is True
+    other = "gh" if expected == "glab" else "glab"
+    assert other not in by_name, "only the resolved forge's CLI is required"
+
+
+def test_auto_with_an_unrecognised_host_stays_report_only(monkeypatch, capsys):
+    """The repo may not be the pipeline's: an unknown host must not fail."""
+    monkeypatch.delenv("PIPELINE_FORGE", raising=False)
+    _patch_origin(monkeypatch, "https://git.example.com/group/project.git")
+    _patch_which(monkeypatch, set(_ALL_TOOLS) - {"gh", "glab"})
+
+    assert ic.main([]) == 0
+    assert "error:" not in capsys.readouterr().err
+
+
+def test_auto_with_a_confident_host_fails_loudly_when_its_cli_is_missing(
+    monkeypatch, capsys
+):
+    """A host that confidently names a forge makes its CLI mandatory."""
+    monkeypatch.delenv("PIPELINE_FORGE", raising=False)
+    _patch_origin(monkeypatch, "https://gitlab.com/group/project.git")
+    _patch_which(monkeypatch, set(_ALL_TOOLS) - {"glab"})
+
+    exit_code = ic.main([])
+
+    assert exit_code != 0, "a confidently resolved forge's missing CLI must fail"
+    err = capsys.readouterr().err
+    assert "glab" in err, "the message must name the missing CLI"
+    assert "gitlab" in err, "the message must name the resolved forge"

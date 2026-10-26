@@ -38,6 +38,7 @@ exactly two top-level functions (a base-suite guarantee).
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,17 @@ _PYTHON_HINT = "Install Python 3.11+ (the mcp SDK needs it)"
 # repo has no use for gh, and a GitHub repo has no use for glab.
 _FORGE_ENV = "PIPELINE_FORGE"
 _FORGE_CLI = {"github": "gh", "gitlab": "glab"}
+# The host of a git remote URL: an optional scheme, an optional ``user@``, then
+# the host up to the first ``:`` or ``/``. Mirrors ``pipeline.forge._HOST_RE``
+# without importing it (this script stays stdlib-only). Splitting on ``:``
+# alone is wrong: it yields "https" for an https remote.
+_HOST_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:[^@/]+@)?([^/:]+)")
+
+# The forge resolution the last ``collect_checks`` call performed. ``main``
+# reads it to tell a confidently resolved host from the unrecognised fallback
+# without probing the remote a second time; it clears the dict before
+# collecting, so a stubbed ``collect_checks`` leaves it empty (report-only).
+_RESOLUTION = {}
 _FORGE_HINTS = {
     "github": (
         "Install the GitHub CLI: https://cli.github.com ; then run: gh auth login"
@@ -222,7 +234,7 @@ def collect_checks(which=shutil.which, py_version=None):
         return None
 
     def resolve_forge():
-        """The active forge name: ``PIPELINE_FORGE``, else the origin host.
+        """The active forge name and whether the host confidently named it.
 
         Mirrors ``pipeline.forge.resolve_forge_name`` without importing it:
         this module must stay stdlib-only so it runs on a bare interpreter
@@ -231,10 +243,15 @@ def collect_checks(which=shutil.which, py_version=None):
         hostname and falls back to ``github`` when it is unrecognised. An
         unknown value is a misconfiguration, so it raises rather than
         silently picking a forge.
+
+        The second element is True only when the origin host itself named a
+        forge. An unrecognised host (or an unreadable remote) is a fallback,
+        not a resolution: the repo may simply not be the pipeline's, so the
+        doctor must stay a report rather than fail on the fallback's CLI.
         """
         choice = os.environ.get(_FORGE_ENV, "auto").strip().lower()
         if choice in _FORGE_CLI:
-            return choice
+            return choice, True
         if choice != "auto":
             raise ValueError(
                 f"Unknown {_FORGE_ENV}={choice!r}; expected one of 'auto', "
@@ -248,14 +265,25 @@ def collect_checks(which=shutil.which, py_version=None):
                 timeout=_PROBE_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return "github"
+            return "github", False
         url = (proc.stdout or "").strip() if proc.returncode == 0 else ""
-        host = url.rsplit("@", 1)[-1].split(":")[0].split("/")[0].lower()
-        return "gitlab" if "gitlab" in host else "github"
+        match = _HOST_RE.match(url)
+        host = match.group(1).lower() if match else ""
+        if "gitlab" in host:
+            return "gitlab", True
+        if "github" in host:
+            return "github", True
+        return "github", False
 
     # The forge's own CLI replaces the hardcoded gh entry, so a GitLab repo
     # requires glab and a GitHub repo requires gh - never both.
-    forge = resolve_forge()
+    forge, confident = resolve_forge()
+    # Recorded for main(), which must fail loudly on a confidently resolved
+    # forge's missing CLI without probing the remote a second time. main()
+    # clears this first, so a stubbed collect_checks (the base suite's
+    # determinism seam) leaves it empty and main() stays report-only.
+    _RESOLUTION.clear()
+    _RESOLUTION.update(forge=forge, confident=confident)
     forge_cli = _FORGE_CLI[forge]
     tool_specs = tuple(
         (forge_cli, required, _FORGE_HINTS[forge]) if name == "gh" else (name, required, hint)
@@ -358,6 +386,7 @@ def main(argv=None):
         help="print the check results as a JSON list instead of text",
     )
     args = parser.parse_args(argv)
+    _RESOLUTION.clear()
     try:
         checks = collect_checks()
     except ValueError as exc:
@@ -371,18 +400,22 @@ def main(argv=None):
 
         A missing forge CLI is not graceful degradation: the pipeline cannot
         open or merge a PR without it, so the doctor names both the resolved
-        forge and the CLI it requires and exits non-zero. Only an explicitly
-        configured forge fails the run - under ``auto`` the doctor stays a
-        report (the base contract) because the host may simply not be the
-        pipeline's.
+        forge and the CLI it requires and exits non-zero. An explicitly
+        configured forge always fails the run; under ``auto`` only a host that
+        confidently named a forge does, because an unrecognised host may
+        simply not be the pipeline's (the base report-only contract).
         """
         configured = os.environ.get(_FORGE_ENV, "auto").strip().lower()
-        if configured not in _FORGE_CLI:
+        if configured in _FORGE_CLI:
+            forge = configured
+        elif _RESOLUTION.get("confident"):
+            forge = _RESOLUTION["forge"]
+        else:
             return None
-        required = _FORGE_CLI[configured]
+        required = _FORGE_CLI[forge]
         for check in checks:
             if check["name"] == required and check["status"] == "missing":
-                return configured, required
+                return forge, required
         return None
 
     missing = missing_required_cli()

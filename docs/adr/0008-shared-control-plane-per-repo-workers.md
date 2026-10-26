@@ -82,6 +82,68 @@ that a single plane can safely hold all repositories' plans and briefs.
    workers report capacity and heartbeats.
 4. Generic or ephemeral workers, and federation per trust boundary.
 
+## Prep list: low-hanging fruit that preserves local behavior
+
+The topology above is a fork, not a toggle. Three modes are worth naming
+separately, because only the third crosses the fork:
+
+1. **local** — today: one operator, `FileStore`, stdio MCP, no auth, plans
+   auto-approved, one repo per process.
+2. **one-repo server** — a shared identity, registry, approval, and audit
+   layer, but each control-plane process still owns one repo. The existing
+   process globals remain valid. This is the cheapest enterprise step and
+   likely the one most teams need first.
+3. **multi-tenant server** — one process serving many repos concurrently
+   and/or distributed workers. This is the fork: `REPO_ROOT` and the other
+   globals must become request-scoped, the store must be a database, and the
+   scheduler must become a queue with heartbeats.
+
+Every prep item below must satisfy two tests: (a) its default reproduces
+today's behavior exactly, and (b) it pays for itself today, ideally by closing
+an existing hazard. Anything that fails either test is the server
+implementation, not prep.
+
+### Tier 1 — behavior-preserving, also closes a current hazard
+
+- **Optional repo-root allowlist.** `validate_workspace` applies a deny list
+  (`pipeline/workspace.py:451`) but no allow list; only `create_workspace`
+  does (`:515`). Any existing git repository outside the deny list is a valid
+  plan target. Add `PIPELINE_ALLOWED_REPO_ROOTS`; unset means today's
+  behavior, set means fail closed. This preps multi-user and closes a
+  prompt-injection path-targeting hole.
+- **Worktree path namespacing.** Branch namespacing already shipped as opt-in
+  (`pipeline/branch_names.py`, `PIPELINE_BRANCH_NAMESPACE`, default
+  `agent/<key>`); worktrees have no equivalent (`pipeline/dispatch.py:137` is
+  still `WORKTREE_ROOT / story_key`). Add an optional
+  `PIPELINE_WORKTREE_NAMESPACE` with the same default-preserving shape.
+- **Surface effective topology in health.** Add `plan_dir`, `repo_root`,
+  `branch_namespace`, and `worktree_namespace` to the scheduler health file
+  and `/api/health`. Pure additive.
+
+These three are behavior-preserving and may be registered independently of
+this record; none of them implements T3.
+
+### Tier 2 — cheap seams, but they touch a public shape
+
+- **Plan metadata at save time:** `saved_at`, `saved_by` (default
+  `local-operator`), and a content digest, stored inside the plan JSON (not a
+  sidecar, which would add `list_plans` noise). Ingest ignores unknown
+  top-level keys. Preps ADR 0007 without implementing the gate.
+- **Store factory:** `PIPELINE_STORE=file`, with an unknown value failing
+  closed, replacing `_store = FileStore()` at `pipeline/server.py:573`. A
+  one-line seam with no behavior change.
+
+### Not prep — these cross the fork
+
+Request-scoped repo/config, replacing `_scoped_repo_root`; a database-backed
+`Store` with distributed locks; a queue, worker registration, and heartbeats
+replacing pid liveness; AuthN/AuthZ and HTTP transport; plan-name scoping per
+owner/tenant and row-level repo authorization.
+
+Do not add a `PIPELINE_MODE` flag until at least one gate consumes it. A mode
+switch nothing enforces is cosmetic, and ADR 0004 records the cost of a gate
+that reports success while it is off.
+
 ## Consequences
 
 - The control plane's operational surface is constant regardless of repository

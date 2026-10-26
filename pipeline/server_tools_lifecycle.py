@@ -236,3 +236,20 @@ def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, A
     full_sha = proc.stdout.strip()
     state = security_audit.record_audit(paths.PLAN_DIR, repo_root, full_sha, datetime.now(UTC))
     return {"ok": True, **state}
+
+
+# The tools this module provides, in registration order. pipeline.server
+# iterates this tuple to register each one on its FastMCP instance and to
+# re-export it under the same name, so adding a tool here is the only edit
+# needed on the server side.
+TOOLS = (
+    request_decision,
+    list_decisions,
+    review_story,
+    advance_pipeline,
+    approve_merge,
+    pause_plan,
+    resume_plan,
+    advance_all_plans,
+    record_security_audit,
+)

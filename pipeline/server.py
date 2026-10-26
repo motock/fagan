@@ -977,15 +977,9 @@ from pipeline.review_orchestrator import (  # verbatim move; re-export for monke
 from . import server_tools_lifecycle as _lifecycle_tools
 from . import server_tools_read as _read_tools
 
-request_decision = mcp.tool()(_lifecycle_tools.request_decision)
-list_decisions = mcp.tool()(_lifecycle_tools.list_decisions)
-review_story = mcp.tool()(_lifecycle_tools.review_story)
-advance_pipeline = mcp.tool()(_lifecycle_tools.advance_pipeline)
-approve_merge = mcp.tool()(_lifecycle_tools.approve_merge)
-pause_plan = mcp.tool()(_lifecycle_tools.pause_plan)
-resume_plan = mcp.tool()(_lifecycle_tools.resume_plan)
-advance_all_plans = mcp.tool()(_lifecycle_tools.advance_all_plans)
-record_security_audit = mcp.tool()(_lifecycle_tools.record_security_audit)
+for _tool in _lifecycle_tools.TOOLS:
+    globals()[_tool.__name__] = _tool
+    mcp.tool()(_tool)
 get_story_diff = mcp.tool()(_read_tools.get_story_diff)
 
 if __name__ == "__main__":

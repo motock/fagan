@@ -154,9 +154,9 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
     uncorroborated ``mark_done`` is the dangerous direction, so the executor
     acts only on corroborated LIVE evidence - never on the overlord's word
     alone and never on ``parked_reason`` text. There is exactly one live
-    predicate: :func:`_pr_is_merged` asks ``gh pr view <pr_url> --json state
-    --jq .state`` and corroboration requires it to report the story's
-    ``pr_url`` as ``MERGED``. An open PR corroborates nothing - ``pr_url`` is
+    predicate: :func:`_pr_is_merged` asks the resolved forge's
+    :meth:`Forge.pr_state` for the story's ``pr_url`` and corroboration
+    requires it to report ``MERGED``. An open PR corroborates nothing - ``pr_url`` is
     set as soon as a PR is OPENED, so new commits, a green suite and an open
     PR can all coexist with work that never landed (the anagram DSG-1
     incident). Branch ancestry proves nothing either: the pipeline

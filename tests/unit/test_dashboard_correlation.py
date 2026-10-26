@@ -204,11 +204,14 @@ def test_binding_does_not_leak_between_requests(key_file):
 
 
 def test_binding_does_not_leak_after_a_testclient_request(key_file, correlation_probe):
-    """A real request must not leave an id bound for whatever runs next.
+    """A second real request is not served the previous request's id.
 
-    The follow-up request is the observable: it must get its own id rather than
-    inheriting the previous one. (A bare ``current_correlation_id() == ""`` here
-    would be vacuous -- TestClient runs the app in a copied context.)
+    This is an end-to-end guard only: it grades that the id is recomputed per
+    request, not that the contextvar was reset -- the middleware rebinds before
+    the route runs and each TestClient request gets a fresh context copy, so a
+    missing reset is invisible here. The reset itself is graded by
+    ``test_binding_does_not_leak_between_requests``, which drives the middleware
+    in this process's own context.
     """
     client = _client()
     client.get(_PROBE_PATH, headers={_CORRELATION_HEADER: "abc-123"})

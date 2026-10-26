@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import cross_plan, worktree_diff
-from pipeline.plan_approval import PlanApprovalMixin
+from pipeline.plan_approval import (
+    PlanApprovalMixin,
+    approval_enabled,
+    reset_if_changed,
+)
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -855,6 +859,13 @@ class PipelineService(PlanApprovalMixin):
             story = _store.update_story(plan_name, story_key, fields)
             if story is None:
                 return {"ok": False, "error": f"No such story {story_key!r}"}
+            if approval_enabled():
+                # Re-read so the digest reflects the edit just persisted, and
+                # reset in the same transaction so an approval can never
+                # outlive the content it approved.
+                manifest = _store.get_manifest(plan_name)
+                if reset_if_changed(manifest):
+                    _store.save_manifest(plan_name, manifest)
             if (
                 was_dispatched
                 and "agent_instructions" in fields
@@ -907,6 +918,7 @@ class PipelineService(PlanApprovalMixin):
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)
             manifest.update(fields)
+            reset_if_changed(manifest)
             _store.save_manifest(plan_name, manifest)
             return {"ok": True, "plan_name": plan_name}
 

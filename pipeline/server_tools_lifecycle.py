@@ -22,6 +22,24 @@ from .module_ref import _ModuleRef
 _service = _ModuleRef("pipeline.server", "_service")
 
 
+def approve_plan(plan_name: str):
+    """Approve a plan.
+
+    Fail-closed: when plan approval is disabled the request is skipped and
+    nothing is approved. Self-approval is permitted and recorded.
+    """
+    return _service.approve_plan(plan_name)
+
+
+def reject_plan(plan_name: str, reason: str = ""):
+    """Reject a plan.
+
+    Fail-closed: when plan approval is disabled the request is skipped and
+    nothing is rejected. Self-approval is permitted and recorded.
+    """
+    return _service.reject_plan(plan_name, reason)
+
+
 def request_decision(
     plan_name: str,
     story_key: str,
@@ -252,4 +270,6 @@ TOOLS = (
     resume_plan,
     advance_all_plans,
     record_security_audit,
+    approve_plan,
+    reject_plan,
 )

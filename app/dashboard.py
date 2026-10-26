@@ -80,6 +80,7 @@ from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.live_ref import LiveRef
 from pipeline.server import PipelineService
+from pipeline.topology_identity import resolved_topology
 from pipeline.usage import collect_backend_status
 
 # Patched here by tests; the moved get_plan route resolves them via this module.
@@ -231,6 +232,10 @@ def health() -> dict[str, Any]:
     Fail-soft (mirrors ``_degraded_liveness_report``): any problem reading or
     parsing the fingerprint degrades to ``scheduler=None`` /
     ``config_mismatch=[]`` with HTTP 200 — a health check must never 500.
+
+    ``topology`` is additive and observational: the process's resolved
+    ``plan_dir`` / ``repo_root`` / branch and worktree namespaces, read live
+    per request by :func:`pipeline.topology_identity.resolved_topology`.
     """
     plan_dir = str(PLAN_DIR)
     scheduler: Any = None
@@ -260,6 +265,7 @@ def health() -> dict[str, Any]:
         "plan_dir": plan_dir,
         "scheduler": scheduler,
         "config_mismatch": config_mismatch,
+        "topology": resolved_topology(),
     }
 
 

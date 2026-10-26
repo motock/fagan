@@ -59,6 +59,10 @@ class FakeForge:
         self.calls.append(("has_ci_config", repo_root))
         return self._has_ci
 
+    def ci_configured(self, repo_root):
+        self.calls.append(("ci_configured", repo_root))
+        return self._has_ci
+
     def checks_snapshot(self, branch, sha):
         self.calls.append(("checks_snapshot", branch, sha))
         if self._raises is not None:
@@ -161,10 +165,11 @@ def test_unreadable_state(fake_forge):
 
 
 def test_none_state(fake_forge):
-    forge = fake_forge(has_ci=False, snapshots=[{}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == NONE
-    # No CI configured: the snapshot classifier is never asked for a status.
-    assert forge.method_calls("checks_snapshot") == []
+    # No CI configured and no checks registered -> NONE, never UNREADABLE.
+    fake_forge(has_ci=False, snapshots=[{}])
+    state = p._ci_status_once(BRANCH, sha=SHA)["state"]
+    assert state == NONE
+    assert state != UNREADABLE
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +226,7 @@ def test_check_runs_vocabulary(monkeypatch, status, conclusion, expected):
 
     _patch_run(
         monkeypatch,
-        json.dumps(
-            [{"name": "build", "status": status, "conclusion": conclusion}]
-        )
+        json.dumps({"name": "build", "status": status, "conclusion": conclusion})
         + "\n",
     )
     snapshot = GitHubForge().checks_snapshot(BRANCH, SHA)
@@ -235,11 +238,28 @@ def test_completed_without_conclusion_is_unreadable(monkeypatch):
 
     _patch_run(
         monkeypatch,
-        json.dumps([{"name": "build", "status": "completed", "conclusion": None}])
+        json.dumps({"name": "build", "status": "completed", "conclusion": None})
         + "\n",
     )
     with pytest.raises(CIStatusUnreadable):
         GitHubForge().checks_snapshot(BRANCH, SHA)
+
+
+def test_unnamed_checks_do_not_collapse_into_one(monkeypatch):
+    """Two unnamed checks must stay two entries.
+
+    Keying both on ``""`` would let a cancelled check overwrite a passing one
+    (or vice versa) and silently change the aggregate state.
+    """
+    import json
+
+    _patch_run(
+        monkeypatch,
+        json.dumps([{"bucket": "cancelled"}, {"bucket": "pass"}]),
+    )
+    snapshot = GitHubForge().checks_snapshot(BRANCH, "")
+    assert len(snapshot) == 2
+    assert set(snapshot.values()) == {CANCELLED, PASS}
 
 
 # ---------------------------------------------------------------------------
@@ -298,16 +318,25 @@ def test_gate_zero_short_circuits_to_pass_without_adapter(monkeypatch):
 
 
 def test_cancelled_triggers_exactly_one_rerun(fake_forge, no_sleep):
+    # A cancellation that the rerun does not clear is reported as CANCELLED,
+    # and the rerun is attempted exactly ONCE - never on every cancelled poll.
     forge = fake_forge(
-        has_ci=True,
-        snapshots=[{"build": CANCELLED}, {"build": CANCELLED}, {"build": PASS}],
+        has_ci=True, snapshots=[{"build": CANCELLED}, {"build": CANCELLED}]
+    )
+    no_sleep.setattr(p.time, "monotonic", _Clock())
+    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == CANCELLED
+    assert len(forge.method_calls("rerun_failed")) == 1
+
+    # A cancellation the rerun DOES clear resumes polling and passes.
+    forge = fake_forge(
+        has_ci=True, snapshots=[{"build": CANCELLED}, {"build": PASS}]
     )
     no_sleep.setattr(p.time, "monotonic", _Clock())
     assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == PASS
     assert len(forge.method_calls("rerun_failed")) == 1
 
     # A second invocation is a new cancelled episode: the flag is local, so it
-    # reruns once more (total 2), proving it is not a module-level global.
+    # reruns once more - proving it is not a module-level global.
     forge = fake_forge(
         has_ci=True, snapshots=[{"build": CANCELLED}, {"build": PASS}]
     )

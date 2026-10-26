@@ -40,6 +40,35 @@ NONE = "none"
 
 CI_STATES = frozenset({PASS, FAIL, PENDING, CANCELLED, UNREADABLE, NONE})
 
+
+class CIStatusUnreadable(Exception):
+    """CI is configured, but its status could not be read.
+
+    Adapters raise this instead of returning a state: the caller maps it to
+    :data:`UNREADABLE` (never :data:`NONE`), so "could not read" can never be
+    mistaken for "no CI configured" - the latter permits merging without
+    checks, the former refuses the merge.
+    """
+
+
+class CISnapshot(dict):
+    """One CI snapshot: ``{check_name: canonical_state}`` plus raw detail.
+
+    A plain ``dict`` subclass, so an adapter's snapshot is consumed as the
+    ``dict[str, str]`` the protocol promises. ``detail`` carries the host's
+    own vocabulary (``"Lint: failure"``) for the rework feedback the merge
+    gate surfaces; ``excerpt`` carries an optional bounded log tail. Both are
+    presentation only - the state machine reads the mapping.
+    """
+
+    detail: str = ""
+    excerpt: str | None = None
+
+    def __init__(self, mapping=None, *, detail: str = "", excerpt=None):
+        super().__init__(mapping or {})
+        self.detail = detail
+        self.excerpt = excerpt
+
 _FORGE_ENV = "PIPELINE_FORGE"
 _DEFAULT_FORGE = "github"
 _KNOWN_FORGES = ("github", "gitlab")
@@ -83,27 +112,49 @@ class Forge(Protocol):
         """One of MERGED | OPEN | CLOSED | UNKNOWN for ``handle``."""
         ...
 
+    # -- CI verbs ---------------------------------------------------------
+    # The poll loop and the state machine live above the adapter (in
+    # ``pipeline/ci.py``); an adapter answers exactly one question per call.
     def checks_status(self, branch: str, sha: str) -> dict[str, str]:
-        """ONE CI snapshot for ``branch``/``sha``; never polls."""
+        """ONE CI snapshot for ``branch``/``sha``; never polls.
+
+        Kept as the S1-era name; it delegates to :meth:`checks_snapshot` and
+        returns the bare ``{check_name: canonical_state}`` mapping.
+        """
+        ...
+
+    def has_ci_config(self, repo_root: str) -> bool:
+        """True when the repo declares CI configuration.
+
+        This is what keeps :data:`UNREADABLE` from collapsing into
+        :data:`NONE`: a repo that declares CI but whose status cannot be read
+        must refuse the merge, while a repo with no CI may merge without
+        checks.
+        """
+        ...
+
+    def checks_snapshot(self, branch: str, sha: str) -> CISnapshot:
+        """ONE CI snapshot for ``branch``/``sha``; never polls.
+
+        Returns ``{check_name: canonical_state}``. Raises
+        :class:`CIStatusUnreadable` when the status cannot be read or its
+        vocabulary is unrecognised. An empty snapshot means "CI is configured
+        but no checks have registered yet" - the caller treats that as
+        :data:`PENDING`, never :data:`NONE`.
+        """
         ...
 
     def failure_excerpt(self, branch: str) -> str | None:
-        """A bounded failing-test excerpt, or None."""
+        """A bounded failing-test log excerpt, or None."""
         ...
 
     def rerun_failed(self, sha: str) -> bool:
         """Rerun the failed jobs for ``sha``; False on any failure."""
         ...
 
-    def has_ci_config(self, repo_root: str) -> bool:
-        """True when the repo declares CI workflows."""
-        ...
-
     def prepare_merge(self, worktree: str, branch: str) -> None:
         """Rebase ``branch`` onto the default branch and push it."""
         ...
-
-
 # ---------------------------------------------------------------------------
 # Remote probe
 # ---------------------------------------------------------------------------
@@ -221,6 +272,8 @@ __all__ = [
     "PASS",
     "PENDING",
     "UNREADABLE",
+    "CISnapshot",
+    "CIStatusUnreadable",
     "Forge",
     "get_forge",
     "resolve_forge_name",

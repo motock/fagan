@@ -7,7 +7,6 @@ directly.
 """
 
 import hashlib
-import json
 import logging
 import os
 import re
@@ -40,6 +39,16 @@ from .config_provenance import (
     effective_role_config,
     ignored_env_vars_present,
 )
+from .forge import (
+    CANCELLED,
+    FAIL,
+    NONE,
+    PASS,
+    PENDING,
+    UNREADABLE,
+    CIStatusUnreadable,
+    get_forge,
+)
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
 
@@ -66,24 +75,14 @@ def _repo_has_ci_configured() -> bool:
     """Return ``True`` if the repo declares any GitHub Actions workflows.
 
     Distinguishes *genuinely no CI* from *CI exists but hasn't registered
-    checks for this branch yet* in :func:`_ci_status` – PR #48 merged with a red
-    Linux CI job because an empty ``gh pr checks`` result was treated
-    identically to "no CI configured".
+    checks for this branch yet* – PR #48 merged with a red Linux CI job
+    because an empty ``gh pr checks`` result was treated identically to "no CI
+    configured". Delegates to the active forge adapter, which owns the
+    host-specific notion of "CI is configured".
     """
     from .server import REPO_ROOT
 
-    return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
-
-
-def _unreadable_or_none(error: str) -> dict[str, str]:
-    """Classify a failure to read CI status.
-
-    With workflows declared, an unreadable status must not look like "no CI"
-    (the merge gate would treat it as permission to merge), so it is
-    ``unreadable``; repos without workflows keep ``none``.
-    """
-    state = "unreadable" if _repo_has_ci_configured() else "none"
-    return {"state": state, "error": error}
+    return get_forge(str(REPO_ROOT)).ci_configured(str(REPO_ROOT))
 
 
 def _scoped_repo_cwd() -> str:
@@ -100,45 +99,89 @@ def _scoped_repo_cwd() -> str:
 def _fetch_ci_failure_excerpt(branch: str) -> str | None:
     """Capture a bounded failing-test excerpt from the failed workflow run.
 
-    Resolves the most recent workflow run id for ``branch`` via ``gh run list``,
-    then pulls the failing job's log with ``gh run view --log-failed`` (falling
-    back to ``--log`` if that errors or returns empty). Returns a bounded tail
-    (~800 chars) of the log, or ``None`` on any failure so callers can fall back
-    to the classification-only ``error``. Never raises.
+    Delegates to the active forge adapter; returns ``None`` on any failure so
+    callers can fall back to the classification-only ``error``. Never raises.
     """
-    try:
-        run_list = subprocess.run(
-            [
-                "gh", "run", "list", "--branch", branch, "--limit", "1",
-                "--json", "databaseId", "--jq", ".[0].databaseId",
-            ],
-            check=False, capture_output=True, text=True, timeout=20,
+    return get_forge(_scoped_repo_cwd()).failure_log_excerpt(branch)
+
+
+def _ci_rerun(sha: str) -> bool:
+    """Rerun the failed/cancelled jobs of the workflow run for ``sha``.
+
+    Delegates to the active forge adapter. Never raises; on any failure it
+    returns ``False`` so callers can fall back to the ordinary retry logic.
+    """
+    return get_forge(_scoped_repo_cwd()).rerun_workflow(sha)
+
+
+def _aggregate_ci_states(snapshot: dict[str, str]) -> str:
+    """Fold a ``{check_name: state}`` snapshot into one canonical state.
+
+    Precedence is ``FAIL > CANCELLED > PENDING > PASS``: one red check fails
+    the whole gate, and a cancellation is reported ahead of a still-running
+    check so the caller can give it its one automatic rerun.
+    """
+    states = set(snapshot.values())
+    if FAIL in states:
+        return FAIL
+    if CANCELLED in states:
+        return CANCELLED
+    if PENDING in states:
+        return PENDING
+    if states == {PASS}:
+        return PASS
+    return UNREADABLE
+
+
+def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
+    """Return a single-poll CI status for ``branch``/``sha``.
+
+    Performs exactly one query and returns immediately instead of sleeping and
+    looping until a terminal state or timeout is reached. The host-neutral
+    state machine lives here; the adapter answers one question per call:
+    whether CI is configured, and one ``{check_name: state}`` snapshot.
+
+    An empty snapshot means "CI is configured but no checks have registered
+    yet" and is ``pending``, never ``none``: no checks is not no CI, and it is
+    certainly not a vacuous pass.
+    """
+    if not PIPELINE_MERGE_CI_GATE:
+        logger.warning(
+            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
+            "proceeding without checking CI"
         )
-        if run_list.returncode != 0:
-            return None
-        try:
-            data = json.loads(run_list.stdout or "[]")
-        except ValueError:
-            return None
-        if isinstance(data, list):
-            if not data:
-                return None
-            run_id = data[0].get("databaseId")
-        else:
-            run_id = data
-        if not run_id:
-            return None
-        run_id = str(run_id)
-        for flag in ("--log-failed", "--log"):
-            view = subprocess.run(
-                ["gh", "run", "view", run_id, flag],
-                check=False, capture_output=True, text=True, timeout=20,
-            )
-            if view.returncode == 0 and view.stdout.strip():
-                return view.stdout[-800:]
-        return None
-    except (subprocess.SubprocessError, OSError, ValueError):
-        return None
+        return {"state": PASS, "error": "CI gate disabled"}
+
+    repo_root = _scoped_repo_cwd()
+    forge = get_forge(repo_root)
+    try:
+        snapshot = forge.checks_snapshot(branch, sha)
+    except CIStatusUnreadable as unreadable:
+        # CI is configured but its status could not be read: refuse the merge.
+        # This must never fall through to ``none``, which permits merging.
+        if not _repo_has_ci_configured():
+            return {"state": NONE, "error": str(unreadable)}
+        return {"state": UNREADABLE, "error": str(unreadable)}
+
+    if not snapshot:
+        # No checks registered. That is "no CI" only when the repo declares
+        # none; otherwise CI exists and simply hasn't reported yet.
+        if not _repo_has_ci_configured():
+            return {"state": NONE, "error": ""}
+        return {"state": PENDING, "error": ""}
+
+    state = _aggregate_ci_states(snapshot)
+    detail = (getattr(snapshot, "detail", "") or "")[:300]
+    if state == FAIL:
+        excerpt = forge.failure_excerpt(branch)
+        if excerpt:
+            detail = f"{detail}\n\n{excerpt}"
+        return {"state": FAIL, "error": detail}
+    if state == CANCELLED:
+        return {"state": CANCELLED, "error": detail}
+    if state == UNREADABLE:
+        return {"state": UNREADABLE, "error": "unrecognised CI state"}
+    return {"state": state, "error": ""}
 
 
 def _ci_status(
@@ -165,269 +208,29 @@ def _ci_status(
             "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
             "proceeding without checking CI"
         )
-        return {"state": "pass", "error": "CI gate disabled"}
+        return {"state": PASS, "error": "CI gate disabled"}
 
     deadline = time.monotonic() + (
         timeout_s if timeout_s is not None else PIPELINE_MERGE_CI_TIMEOUT
     )
+    # Per-invocation, never module-level: each cancelled episode gets exactly
+    # one automatic rerun, and a later call is a new episode.
+    rerun_done = False
     while time.monotonic() < deadline:
-        try:
-            if sha:
-                r = subprocess.run(
-                    [
-                        "gh",
-                        "api",
-                        f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
-                        "--jq",
-                        ".check_runs[] | {name, status, conclusion}",
-                    ],
-                    check=False, capture_output=True, cwd=_scoped_repo_cwd(),
-                    text=True,
-                )
-            else:
-                r = subprocess.run(
-                    ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                    check=False, capture_output=True, cwd=_scoped_repo_cwd(),
-                    text=True,
-                )
-        except OSError as e:
-            return _unreadable_or_none(f"gh unavailable: {e}")
-
-        if r.returncode != 0:
-            return _unreadable_or_none(r.stderr.strip()[:200])
-
-        if sha:
-            try:
-                runs = [
-                    json.loads(line) for line in r.stdout.splitlines() if line.strip()
-                ]
-            except ValueError:
-                return _unreadable_or_none("unparseable gh api check-runs output")
-
-            if not runs:
-                if not _repo_has_ci_configured():
-                    return {"state": "none", "error": ""}
-                # Checks are configured but haven't registered for this SHA yet – keep polling.
-                time.sleep(10)
-                continue
-
-            conclusions = {c.get("conclusion") for c in runs}
-            if conclusions & {"failure", "timed_out", "action_required"}:
-                error = "; ".join(
-                    f"{r.get('name')}: {r.get('conclusion')}"
-                    for r in runs
-                    if r.get("conclusion")
-                    in {"failure", "timed_out", "action_required"}
-                )[:300]
-                excerpt = _fetch_ci_failure_excerpt(branch)
-                if excerpt:
-                    error = f"{error}\n\n{excerpt}"
-                return {"state": "fail", "error": error}
-            if "cancelled" in conclusions:
-                return {
-                    "state": "cancelled",
-                    "error": "; ".join(
-                        f"{r.get('name')}: {r.get('conclusion')}"
-                        for r in runs
-                        if r.get("conclusion") == "cancelled"
-                    )[:300],
-                }
-            if any(c.get("status") != "completed" for c in runs):
-                time.sleep(10)  # still pending — keep polling
-                continue
-            if conclusions <= {"success", "neutral", "skipped"}:
-                return {"state": "pass", "error": ""}
-            time.sleep(10)  # still pending — keep polling
-        else:
-            try:
-                entries = json.loads(r.stdout or "[]")
-                buckets = {c.get("bucket") for c in entries}
-            except ValueError:
-                return _unreadable_or_none("unparseable gh pr checks output")
-
-            if not buckets:
-                if not _repo_has_ci_configured():
-                    return {"state": "none", "error": ""}
-                time.sleep(10)
-                continue
-
-            if buckets & {"fail", "error", "action_required"}:
-                error = "; ".join(
-                    f"{e.get('name')}: {e.get('bucket')}"
-                    for e in entries
-                    if e.get("bucket") in {"fail", "error", "action_required"}
-                )[:300]
-                excerpt = _fetch_ci_failure_excerpt(branch)
-                if excerpt:
-                    error = f"{error}\n\n{excerpt}"
-                return {"state": "fail", "error": error}
-            if "cancelled" in buckets:
-                return {
-                    "state": "cancelled",
-                    "error": "; ".join(
-                        f"{e.get('name')}: {e.get('bucket')}"
-                        for e in entries
-                        if e.get("bucket") == "cancelled"
-                    )[:300],
-                }
-            if buckets <= {"pass"}:
-                return {"state": "pass", "error": ""}
-            time.sleep(10)  # still pending — keep polling
+        result = _ci_status_once(branch, sha=sha)
+        state = result["state"]
+        if state in (PASS, FAIL, NONE, UNREADABLE):
+            return result
+        if state == CANCELLED:
+            if rerun_done:
+                # The rerun did not clear the cancellation; it stands.
+                return result
+            rerun_done = True
+            get_forge(_scoped_repo_cwd()).rerun_failed(sha)
+            continue
+        time.sleep(10)  # still pending — keep polling
     # Timeout reached – no terminal state.
-    return {"state": "pending", "error": "CI did not complete within timeout"}
-
-
-def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
-    """Return a single-poll CI status for ``branch``/``sha``.
-
-    Mirrors :func:`_ci_status`'s classification logic exactly, but performs
-    exactly one query and returns immediately instead of sleeping and
-    looping until a terminal state or timeout is reached. Every point where
-    :func:`_ci_status` would ``time.sleep(10); continue`` instead returns
-    ``{"state": "pending"}`` here.
-    """
-    if not PIPELINE_MERGE_CI_GATE:
-        logger.warning(
-            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
-            "proceeding without checking CI"
-        )
-        return {"state": "pass", "error": "CI gate disabled"}
-
-    try:
-        if sha:
-            r = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
-                    "--jq",
-                    ".check_runs[] | {name, status, conclusion}",
-                ],
-                check=False, capture_output=True, cwd=_scoped_repo_cwd(),
-                text=True,
-            )
-        else:
-            r = subprocess.run(
-                ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                check=False, capture_output=True, cwd=_scoped_repo_cwd(),
-                text=True,
-            )
-    except OSError as e:
-        return _unreadable_or_none(f"gh unavailable: {e}")
-
-    if r.returncode != 0:
-        return _unreadable_or_none(r.stderr.strip()[:200])
-
-    if sha:
-        try:
-            runs = [
-                json.loads(line) for line in r.stdout.splitlines() if line.strip()
-            ]
-        except ValueError:
-            return _unreadable_or_none("unparseable gh api check-runs output")
-
-        if not runs:
-            if not _repo_has_ci_configured():
-                return {"state": "none", "error": ""}
-            return {"state": "pending", "error": ""}
-
-        conclusions = {c.get("conclusion") for c in runs}
-        if conclusions & {"failure", "timed_out", "action_required"}:
-            error = "; ".join(
-                f"{r.get('name')}: {r.get('conclusion')}"
-                for r in runs
-                if r.get("conclusion")
-                in {"failure", "timed_out", "action_required"}
-            )[:300]
-            excerpt = _fetch_ci_failure_excerpt(branch)
-            if excerpt:
-                error = f"{error}\n\n{excerpt}"
-            return {"state": "fail", "error": error}
-        if "cancelled" in conclusions:
-            return {
-                "state": "cancelled",
-                "error": "; ".join(
-                    f"{r.get('name')}: {r.get('conclusion')}"
-                    for r in runs
-                    if r.get("conclusion") == "cancelled"
-                )[:300],
-            }
-        if any(c.get("status") != "completed" for c in runs):
-            return {"state": "pending", "error": ""}
-        if conclusions <= {"success", "neutral", "skipped"}:
-            return {"state": "pass", "error": ""}
-        return {"state": "pending", "error": ""}
-    else:
-        try:
-            entries = json.loads(r.stdout or "[]")
-            buckets = {c.get("bucket") for c in entries}
-        except ValueError:
-            return _unreadable_or_none("unparseable gh pr checks output")
-
-        if not buckets:
-            if not _repo_has_ci_configured():
-                return {"state": "none", "error": ""}
-            return {"state": "pending", "error": ""}
-
-        if buckets & {"fail", "error", "action_required"}:
-            error = "; ".join(
-                f"{e.get('name')}: {e.get('bucket')}"
-                for e in entries
-                if e.get("bucket") in {"fail", "error", "action_required"}
-            )[:300]
-            excerpt = _fetch_ci_failure_excerpt(branch)
-            if excerpt:
-                error = f"{error}\n\n{excerpt}"
-            return {"state": "fail", "error": error}
-        if "cancelled" in buckets:
-            return {
-                "state": "cancelled",
-                "error": "; ".join(
-                    f"{e.get('name')}: {e.get('bucket')}"
-                    for e in entries
-                    if e.get("bucket") == "cancelled"
-                )[:300],
-            }
-        if buckets <= {"pass"}:
-            return {"state": "pass", "error": ""}
-        return {"state": "pending", "error": ""}
-
-
-def _ci_rerun(sha: str) -> bool:
-    """Rerun the failed/cancelled jobs of the workflow run for ``sha``.
-
-    The function never raises; on any failure it returns ``False`` so callers can
-    fall back to the ordinary retry logic.
-    """
-    try:
-        r = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
-                "--jq",
-                ".workflow_runs[0].id",
-            ],
-            check=False, capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return False
-    if r.returncode != 0:
-        return False
-    run_id = r.stdout.strip()
-    if not run_id:
-        return False
-    try:
-        rerun = subprocess.run(
-            ["gh", "run", "rerun", run_id, "--failed"],
-            check=False, capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return False
-    return rerun.returncode == 0
-
+    return {"state": PENDING, "error": "CI did not complete within timeout"}
 
 def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
     """Return the sorted list of acceptance fixture paths whose worktree

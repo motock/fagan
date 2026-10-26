@@ -5,8 +5,11 @@ Every ``gh``/``git`` invocation for the PR verbs goes through one runner seam,
 ``subprocess.run`` on the shared subprocess module, so they observe exactly
 the argv this adapter issues.
 
-The CI verbs and the merge-preparation helper are *delegations*, not
-reimplementations: S1 only declares the seam, a later story moves the bodies.
+The CI verbs are implemented here: ``checks_snapshot`` classifies one
+snapshot of GitHub's two CI vocabularies into the canonical states, and
+``ci_configured`` / ``failure_log_excerpt`` / ``rerun_workflow`` own the
+``gh`` argv. The poll loop and the state machine stay above the adapter in
+``pipeline/ci.py``, which is host-neutral.
 """
 
 from __future__ import annotations
@@ -14,7 +17,31 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
-from .forge import Forge
+from .forge import (
+    CANCELLED,
+    FAIL,
+    PASS,
+    PENDING,
+    CISnapshot,
+    CIStatusUnreadable,
+    Forge,
+)
+
+# GitHub's legacy commit-status ``bucket`` vocabulary, grouped by the canonical
+# state it maps to. ``skipping`` is a PASS: a skipped check is not a failure
+# and must not block a merge. ``cancel`` is CANCELLED, not FAIL - the merge
+# gate gives a cancellation exactly one automatic rerun.
+_BUCKET_FAIL = frozenset({"fail", "error", "action_required"})
+_BUCKET_CANCELLED = frozenset({"cancel", "cancelled"})
+_BUCKET_PASS = frozenset({"pass", "skipping"})
+_BUCKET_PENDING = frozenset({"pending"})
+
+# The check-runs vocabulary. ``completed`` with no conclusion is deliberately
+# absent from both sets: it is unreadable, never a vacuous PASS.
+_CHECK_RUN_FAIL_CONCLUSIONS = frozenset(
+    {"failure", "timed_out", "action_required"}
+)
+_CHECK_RUN_PASS_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
 
 class GitHubForge(Forge):
@@ -133,30 +160,252 @@ class GitHubForge(Forge):
         state = (proc.stdout or "").strip().upper()
         return state if state in {"MERGED", "OPEN", "CLOSED"} else "UNKNOWN"
 
-    # -- CI verbs: delegations, not reimplementations ---------------------
+    # -- CI verbs ---------------------------------------------------------
+    # The real implementations live here. The S1-era names
+    # (``checks_status``/``failure_excerpt``/``rerun_failed``/``has_ci_config``)
+    # stay thin delegations to ``pipeline.ci``'s public shims, which in turn
+    # delegate back to the ``*_impl`` methods below - so the seam is inverted
+    # without a delegation cycle and the S1 contract tests keep passing.
     def checks_status(self, branch: str, sha: str) -> dict[str, str]:
-        """ONE CI snapshot for ``branch``/``sha``; never polls."""
+        """ONE CI status for ``branch``/``sha``; never polls (S1-era name)."""
         from .ci import _ci_status_once
 
         return _ci_status_once(branch, sha=sha)
 
     def failure_excerpt(self, branch: str) -> str | None:
-        """A bounded failing-test excerpt, or None."""
+        """A bounded failing-test excerpt, or None (S1-era name)."""
         from .ci import _fetch_ci_failure_excerpt
 
         return _fetch_ci_failure_excerpt(branch)
 
     def rerun_failed(self, sha: str) -> bool:
-        """Rerun the failed jobs for ``sha``; False on any failure."""
+        """Rerun the failed jobs for ``sha``; False on failure (S1-era name)."""
         from .ci import _ci_rerun
 
         return _ci_rerun(sha)
 
     def has_ci_config(self, repo_root: str) -> bool:
-        """True when the repo declares CI workflows."""
+        """True when the repo declares CI workflows (S1-era name)."""
         from .ci import _repo_has_ci_configured
 
         return _repo_has_ci_configured()
+
+    # -- CI verbs: the implementations ------------------------------------
+    def ci_configured(self, repo_root: str) -> bool:
+        """True when ``repo_root`` declares GitHub Actions workflows.
+
+        ``is_dir()`` rather than "contains a workflow file": an empty
+        ``.github/workflows/`` still means CI is configured, so an unreadable
+        status must refuse the merge instead of reading as "no CI".
+        """
+        from pathlib import Path
+
+        return (Path(repo_root) / ".github" / "workflows").is_dir()
+
+    def checks_snapshot(self, branch: str, sha: str) -> CISnapshot:
+        """ONE CI snapshot for ``branch``/``sha``; never polls.
+
+        Classifies both GitHub vocabularies - the legacy commit-status
+        ``bucket`` values and the check-runs ``status``/``conclusion`` pair -
+        into the canonical states. Raises :class:`CIStatusUnreadable` when the
+        status cannot be read or a value is outside the known vocabulary.
+        """
+        from .ci import _scoped_repo_cwd
+
+        cwd = _scoped_repo_cwd()
+        try:
+            if sha:
+                proc = subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+                        "--jq",
+                        ".check_runs[] | {name, status, conclusion}",
+                    ],
+                    check=False, capture_output=True, cwd=cwd, text=True,
+                )
+            else:
+                proc = subprocess.run(
+                    ["gh", "pr", "checks", branch, "--json", "name,bucket"],
+                    check=False, capture_output=True, cwd=cwd, text=True,
+                )
+        except OSError as e:
+            raise CIStatusUnreadable(f"gh unavailable: {e}") from e
+
+        if proc.returncode != 0:
+            raise CIStatusUnreadable((proc.stderr or "").strip()[:200])
+
+        if sha:
+            return self._classify_check_runs(proc.stdout)
+        return self._classify_buckets(proc.stdout)
+
+    @staticmethod
+    def _classify_check_runs(stdout: str) -> CISnapshot:
+        """Map ``gh api .../check-runs`` output to canonical states."""
+        import json
+
+        try:
+            runs = [
+                json.loads(line) for line in (stdout or "").splitlines() if line.strip()
+            ]
+        except ValueError as e:
+            raise CIStatusUnreadable("unparseable gh api check-runs output") from e
+
+        snapshot = CISnapshot()
+        failing: list[str] = []
+        cancelled: list[str] = []
+        for index, run in enumerate(runs):
+            # A check with no name still counts: key it positionally so two
+            # unnamed checks cannot collapse into one and hide a state.
+            name = run.get("name") or f"check-{index}"
+            status = run.get("status")
+            conclusion = run.get("conclusion")
+            if conclusion in _CHECK_RUN_FAIL_CONCLUSIONS:
+                state = FAIL
+                failing.append(f"{name}: {conclusion}")
+            elif conclusion == "cancelled":
+                state = CANCELLED
+                cancelled.append(f"{name}: {conclusion}")
+            elif status != "completed":
+                state = PENDING
+            elif conclusion in _CHECK_RUN_PASS_CONCLUSIONS:
+                state = PASS
+            else:
+                # ``completed`` with no (or an unknown) conclusion: the status
+                # was read but cannot be classified. Never guess PASS.
+                raise CIStatusUnreadable(
+                    f"unrecognised check-run conclusion {conclusion!r} for {name!r}"
+                )
+            snapshot[name] = state
+
+        if failing:
+            snapshot.detail = "; ".join(failing)
+        elif cancelled:
+            snapshot.detail = "; ".join(cancelled)
+        return snapshot
+
+    @staticmethod
+    def _classify_buckets(stdout: str) -> CISnapshot:
+        """Map ``gh pr checks --json name,bucket`` output to canonical states."""
+        import json
+
+        try:
+            entries = json.loads(stdout or "[]")
+        except ValueError as e:
+            raise CIStatusUnreadable("unparseable gh pr checks output") from e
+
+        snapshot = CISnapshot()
+        failing: list[str] = []
+        cancelled: list[str] = []
+        for index, entry in enumerate(entries):
+            # A check with no name still counts: key it positionally so two
+            # unnamed checks cannot collapse into one and hide a state.
+            name = entry.get("name") or f"check-{index}"
+            bucket = entry.get("bucket")
+            if bucket in _BUCKET_FAIL:
+                state = FAIL
+                failing.append(f"{name}: {bucket}")
+            elif bucket in _BUCKET_CANCELLED:
+                state = CANCELLED
+                cancelled.append(f"{name}: {bucket}")
+            elif bucket in _BUCKET_PASS:
+                state = PASS
+            elif bucket in _BUCKET_PENDING:
+                state = PENDING
+            else:
+                raise CIStatusUnreadable(
+                    f"unrecognised check bucket {bucket!r} for {name!r}"
+                )
+            snapshot[name] = state
+
+        if failing:
+            snapshot.detail = "; ".join(failing)
+        elif cancelled:
+            snapshot.detail = "; ".join(cancelled)
+        return snapshot
+
+    def failure_log_excerpt(self, branch: str) -> str | None:
+        """Capture a bounded failing-test excerpt from the failed workflow run.
+
+        Resolves the most recent workflow run id for ``branch`` via
+        ``gh run list``, then pulls the failing job's log with
+        ``gh run view --log-failed`` (falling back to ``--log`` if that errors
+        or returns empty). Returns a bounded tail (~800 chars) of the log, or
+        ``None`` on any failure so callers can fall back to the
+        classification-only ``error``. Never raises.
+        """
+        import json
+
+        try:
+            run_list = subprocess.run(
+                [
+                    "gh", "run", "list", "--branch", branch, "--limit", "1",
+                    "--json", "databaseId", "--jq", ".[0].databaseId",
+                ],
+                check=False, capture_output=True, text=True, timeout=20,
+            )
+            if run_list.returncode != 0:
+                return None
+            try:
+                data = json.loads(run_list.stdout or "[]")
+            except ValueError:
+                return None
+            if isinstance(data, list):
+                if not data:
+                    return None
+                run_id = data[0].get("databaseId")
+            else:
+                run_id = data
+            if not run_id:
+                return None
+            run_id = str(run_id)
+            for flag in ("--log-failed", "--log"):
+                view = subprocess.run(
+                    ["gh", "run", "view", run_id, flag],
+                    check=False, capture_output=True, text=True, timeout=20,
+                )
+                if view.returncode == 0 and view.stdout.strip():
+                    return view.stdout[-800:]
+            return None
+        except (subprocess.SubprocessError, OSError, ValueError):
+            return None
+
+    def rerun_workflow(self, sha: str) -> bool:
+        """Rerun the failed/cancelled jobs of the workflow run for ``sha``.
+
+        Never raises; on any failure it returns ``False`` so callers can fall
+        back to the ordinary retry logic.
+        """
+        try:
+            proc = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
+                    "--jq",
+                    ".workflow_runs[0].id",
+                ],
+                check=False, capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+        if proc.returncode != 0:
+            return False
+        run_id = proc.stdout.strip()
+        if not run_id:
+            return False
+        try:
+            rerun = subprocess.run(
+                ["gh", "run", "rerun", run_id, "--failed"],
+                check=False, capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+        return rerun.returncode == 0
+
 
     # -- merge preparation ------------------------------------------------
     def prepare_merge(self, worktree: str, branch: str) -> None:

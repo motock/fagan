@@ -159,10 +159,10 @@ class GitHubForge(Forge):
         """One of MERGED | OPEN | CLOSED | UNKNOWN for the PR ``handle``."""
         try:
             proc = self._run(
-                ["gh", "pr", "view", handle, "--json", "state", "--jq", ".state"],
-                check=False, capture_output=True, text=True, timeout=30,
+                ["gh", "pr", "view", handle, "--json", "state", "-q", ".state"],
+                check=False, capture_output=True, text=True,
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             return "UNKNOWN"
         if proc is None or proc.returncode != 0:
             return "UNKNOWN"

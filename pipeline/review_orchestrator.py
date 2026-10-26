@@ -17,8 +17,11 @@ call site inside `review_story` goes through `pipeline.server` so tests that
 patch it land too.
 """
 
+import subprocess as _subprocess  # the real module; `subprocess` below is a _ServerRef
+from pathlib import Path as _Path  # likewise; `Path` below is a _ServerRef
 from typing import Any
 
+from . import git_ops
 from .branch_names import story_branch
 from .parsers import _is_transient_backend_exception
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
@@ -52,6 +55,24 @@ _escalate_review_to_claude = _ServerRef("_escalate_review_to_claude")
 _has_review_findings = _ServerRef("_has_review_findings")
 _is_test_file_path = _ServerRef("_is_test_file_path")
 _open_pr = _ServerRef("_open_pr")
+
+
+def _unaddressed_findings(findings, changed_files, worktree):
+    """Prior Blocking findings not addressed: untouched, non-test, still differing from base. Fails open on doubt (P0-MOOT-01)."""
+    base = git_ops._resolve_base_branch(_Path(worktree), "")
+    out = []
+    for f in findings:
+        if _is_test_file_path(f) or f in changed_files:
+            continue
+        if base and _Path(worktree, f).exists():
+            try:
+                r = _subprocess.run(["git", "diff", "--quiet", f"origin/{base}", "--", f], cwd=worktree, check=False, capture_output=True)
+                if r.returncode == 0:
+                    continue
+            except OSError:
+                pass
+        out.append(f)
+    return out
 
 
 def _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **kwargs):
@@ -693,11 +714,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 text=True,
             )
             changed_files = set(diff_res.stdout.splitlines())
-            untouched = [
-                p
-                for p in story["last_review_findings"]
-                if p not in changed_files and not _is_test_file_path(p)
-            ]
+            findings = story["last_review_findings"]
+            untouched = _unaddressed_findings(findings, changed_files, worktree)
+            for f in findings:
+                if not _is_test_file_path(f) and f not in changed_files and f not in untouched:
+                    logging.getLogger("pipeline").info(
+                        "Story %s: %s no longer differs from base branch", story_key, f)
             if untouched:
                 verdict = "REQUEST_CHANGES"
                 reviewer_output = (

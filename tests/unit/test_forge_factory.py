@@ -178,10 +178,23 @@ def test_cache_is_per_repo_root(monkeypatch):
     assert probed == ["/repo-a", "/repo-b"]
 
 
-def test_unregistered_forge_raises(monkeypatch):
-    """gitlab resolves but has no adapter registered in S1."""
+def test_gitlab_forge_is_registered(monkeypatch):
+    """S4 registers the gitlab adapter, so resolution yields an adapter."""
+    from pipeline.forge_gitlab import GitLabForge
+
     _set_forge_env(monkeypatch, "gitlab")
     _patch_remote(monkeypatch, "git@gitlab.com:o/r.git")
+
+    assert isinstance(forge_mod.get_forge("/repo"), GitLabForge)
+
+
+def test_unregistered_forge_raises(monkeypatch):
+    """A resolved name with no registered adapter still raises ValueError."""
+    _set_forge_env(monkeypatch, "gitlab")
+    _patch_remote(monkeypatch, "git@gitlab.com:o/r.git")
+    # Simulate a name that resolves but has no adapter: the registration
+    # table is non-empty, so _register_adapters() leaves it alone.
+    monkeypatch.setattr(forge_mod, "_ADAPTERS", {"github": object})
 
     with pytest.raises(ValueError) as excinfo:
         forge_mod.get_forge("/repo")

@@ -41,6 +41,7 @@ from .config_provenance import PIPELINE_ROLES
 from .parsers import _atomic_write_json
 from .paths import USAGE_STATE_PATH
 from .persona import _persona_requires_claude, _story_has_unwinnable_local_scope
+from .usage_transitions import announce
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +229,9 @@ def _check_usage_impl() -> dict[str, Any]:
                     file=sys.stderr,
                 )
         _write_usage_state(state)
+        # A frozen prev reading may predate the "paused" key; treat that as
+        # not-paused so a hand-edited state file can't break the poller.
+        announce(state.get("paused", False), state)
         return state
     state["measured_at"] = state["checked_at"]
     state["paused"] = _usage_gate(
@@ -240,6 +244,7 @@ def _check_usage_impl() -> dict[str, Any]:
     state["gate_blind"] = False
     state["stale"] = False
     _write_usage_state(state)
+    announce(state["paused"], state)
     return state
 
 

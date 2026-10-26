@@ -79,9 +79,11 @@ from urllib.parse import unquote
 
 __all__ = [
     "ALLOWED_CREATE_ROOTS",
+    "ALLOWED_REPO_ROOTS_ENV",
     "DENY_LIST_ROOTS",
     "REPO_ROOT",
     "WorkspaceSecurityError",
+    "check_repo_root_allowed",
     "create_workspace",
     "normalize_workspace_path",
     "sanitize_error_message",
@@ -619,3 +621,63 @@ def create_workspace(raw: str | None) -> dict:
             }
 
     return {"ok": True, "path": str(path), "error": None}
+
+
+# --- ENT-PREP-01: opt-in repo-root allowlist --------------------------------
+
+#: Environment variable holding an ``os.pathsep``-separated allowlist of
+#: directories a plan's ``repo_root`` may live in.  Unset or exactly empty
+#: means "no restriction" (today's behaviour); any non-empty value is an
+#: allowlist and every malformed entry fails the whole check closed.
+ALLOWED_REPO_ROOTS_ENV = "PIPELINE_ALLOWED_REPO_ROOTS"
+
+# One generic message for every rejection: it names the variable so operators
+# can act on it, and never echoes the candidate path or an entry (both are
+# caller-controlled and may leak filesystem structure).
+_ALLOWED_REPO_ROOTS_ERROR = f"repo_root is not permitted by {ALLOWED_REPO_ROOTS_ENV}"
+
+
+def check_repo_root_allowed(path: str) -> None:
+    """Raise :class:`WorkspaceSecurityError` unless *path* is allowlisted.
+
+    Returns ``None`` when :data:`ALLOWED_REPO_ROOTS_ENV` is unset or exactly
+    empty (no restriction).  Otherwise *path* must equal one of the
+    ``os.pathsep``-separated entries or live beneath it, compared on fully
+    resolved paths and path components (so ``/srv/repos-evil`` is not a
+    descendant of ``/srv/repos``).
+
+    Fail closed: an empty, relative, or unresolvable entry denies the whole
+    check even when another entry would match.  The environment is read on
+    every call so operators and tests can re-point it without a restart.
+    """
+    raw = os.environ.get(ALLOWED_REPO_ROOTS_ENV)
+    if raw is None or raw == "":
+        return
+
+    resolved_entries = []
+    for entry in raw.split(os.pathsep):
+        if entry == "":
+            raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR)
+        try:
+            expanded = Path(entry).expanduser()
+        except Exception:  # noqa: BLE001 (any expansion failure must deny)
+            raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
+        # Check absoluteness AFTER expanduser() (so "~/repos" is accepted) and
+        # BEFORE resolve() (so a relative entry is never silently anchored to
+        # the process cwd).
+        if not expanded.is_absolute():
+            raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR)
+        try:
+            resolved_entries.append(expanded.resolve())
+        except Exception:  # noqa: BLE001 (any resolution failure must deny)
+            raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
+
+    try:
+        candidate = Path(path).expanduser().resolve()
+    except Exception:  # noqa: BLE001 (any resolution failure must deny)
+        raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
+
+    for resolved_entry in resolved_entries:
+        if candidate == resolved_entry or resolved_entry in candidate.parents:
+            return
+    raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR)

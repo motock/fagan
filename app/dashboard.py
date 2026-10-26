@@ -78,6 +78,7 @@ from app.dashboard_routes_story import (
 from app.identity import IdentityError, SharedSecretProvider
 from app.story_replay import build_replay_events  # noqa: F401
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
+from pipeline.actor import ANONYMOUS, actor_id, bind_principal
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.live_ref import LiveRef
 from pipeline.server import PipelineService
@@ -164,7 +165,14 @@ async def _enforce_api_key(request: Request, call_next):
                 # gate; kept so a provider rejection can never turn a pass
                 # into a 500.
                 request.state.principal = None
-    return await call_next(request)
+    # Bind the actor for this request so every recording site downstream
+    # (decisions, approvals, later the audit stream) attributes the action to
+    # an authenticated principal. A request that reached this point with no
+    # principal is either a non-/api/ page or the chat-stream k- pass-through;
+    # ANONYMOUS keeps that distinct from the local operator.
+    principal = getattr(request.state, "principal", None) or ANONYMOUS
+    with bind_principal(principal):
+        return await call_next(request)
 
 logger = logging.getLogger(__name__)
 
@@ -486,6 +494,7 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
         "decision": body.answer,
         "rationale": body.context,
         "decided_by": body.decided_by,
+        "actor": actor_id(),
         "decided_at": decided_at,
     }
     _service.append_decision(plan_name, record)

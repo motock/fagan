@@ -384,6 +384,11 @@ class ClaudeCliDriver:
             )
         if paused:
             return {"ok": False, "reason": "Claude usage gate tripped"}
+
+        from pipeline import usage_cooldown  # local: avoids an import cycle
+
+        if usage_cooldown.active():
+            return {"ok": False, "reason": "Claude usage cooldown active"}
         if _claude_identity_status is not None and not _claude_identity_status.get("ok", True):
             return {"ok": False, "reason": _claude_identity_status.get("reason", "")}
         return {"ok": True, "reason": ""}

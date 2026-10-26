@@ -2033,6 +2033,46 @@ hours per process.
 A repo with no recorded audit is due as soon as either threshold is on, and a
 value that is not a non-negative integer disables that check.
 
+### Structured log format (`PIPELINE_LOG_FORMAT`)
+
+Unset — the default — logging is exactly as it was before: plain-text lines
+from whatever handlers the process already installed. Set `PIPELINE_LOG_FORMAT`
+to the exact value `json` to opt in to structured output. Case and surrounding
+whitespace are ignored, so `json`, `JSON`, and `" json "` all opt in, while
+`jsonl`, `yaml`, and an empty value do not. The check is exact equality after
+normalisation — not a `startswith("json")` prefix match and not a truthiness
+test.
+
+When it is on, the process installs a JSON formatter on the root logger and
+clears the existing plain-text handlers first, so each record is emitted once.
+A single call such as
+
+```python
+logger.info("paid", extra={"invoice_id": "inv-7"})
+```
+
+produces exactly one line — not one JSON line plus one plain line — carrying
+`timestamp`, `level`, `service`, `correlation_id`, `message`, and every key
+passed through `extra=`:
+
+```json
+{"timestamp": "2026-10-26T12:00:00.000Z", "level": "INFO", "service": "pipeline", "correlation_id": "", "message": "paid", "invoice_id": "inv-7"}
+```
+
+`correlation_id` is read from the request-scoped context (see
+`docs/specs/IDENTITY_AND_POLICY.md`), so it is populated inside a request and
+empty outside one.
+
+The root logger's level is deliberately left untouched: if it was `WARNING`
+(30) before the formatter was enabled it is still 30 afterwards, not reset to
+`INFO` (20). There is no log-level environment variable — set the level in code
+or through your own logging configuration.
+
+The formatter is wired into three entry points: the MCP launch shim
+`app/pipeline_mcp_server.py`, `run_daemon` in `pipeline/scheduler_daemon.py`,
+and the startup preflight in `app/dashboard.py`. Any other entry point keeps
+plain-text logging.
+
 ## End-to-end workflow
 
 1. **Plan.** Use the `product-analyst` persona to produce a plan, then

@@ -40,6 +40,7 @@ from .rebrief import (
     diagnose_failure,
 )
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
+from .stall_scan import run_stall_scan
 from .wedge_io import run_wedge_scan
 
 # MERGEATTR-1: ``_merge_mod``'s story-key adjudication context is bound around
@@ -203,23 +204,22 @@ _impl_ref = _ServerRef("_advance_pipeline_locked_impl")
 
 
 def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
-    """Run the advisory pre-tick sweeps (failure triage, wedge scan), then the
-    tick proper. Rename-and-delegate: the tick body moved verbatim to
-    _advance_pipeline_locked_impl; both sweeps are advisory and fail-open (C2):
-    anything that goes wrong inside them must leave the tick exactly as it was.
+    """Run the advisory pre-tick sweeps (triage, wedge, stall), then the tick
+    proper. Rename-and-delegate: the body moved verbatim to
+    _advance_pipeline_locked_impl; every sweep is advisory and fail-open (C2).
     """
     try:
         run_triage_sweep(plan_name)
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
-        logging.getLogger("pipeline").warning(
-            "triage sweep raised; continuing with the tick unchanged"
-        )
+        logging.getLogger("pipeline").warning("triage sweep raised; tick continues")
     try:
         run_wedge_scan(plan_name)
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
-        logging.getLogger("pipeline").warning(
-            "wedge scan raised; continuing with the tick unchanged"
-        )
+        logging.getLogger("pipeline").warning("wedge scan raised; tick continues")
+    try:
+        run_stall_scan(plan_name)
+    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+        logging.getLogger("pipeline").warning("stall scan raised; tick continues")
     return _impl_ref(plan_name)
 
 

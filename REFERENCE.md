@@ -653,6 +653,23 @@ than a call for a human. To route them, add a `deliver` entry to
 `{"events": ["usage_paused", "usage_resumed"], "to": ["team-a-mail"]}` — or add
 them to `PIPELINE_NOTIFY_OUTBOX_EVENTS` for the legacy outbox.
 
+A third event covers the case where the gate is not the whole story:
+`story_stalled` is emitted by the stall scan (`pipeline/stall_scan.py`, run
+from every tick) for a story in `interrupted`, `changes_requested` or `todo`
+whose dependencies are all done but which has sat undispatched for longer than
+`PIPELINE_STALL_SECONDS` (default `1800`). The message names the story's
+status, the measured age beside the threshold, and the reason when it is
+knowable: the dispatch gate's own reason (usage cooldown, usage gate, memory),
+otherwise `dispatch slots full`, otherwise `unknown`. The age is
+`interrupted_at` when the story carries one, else the newest of its journal and
+worktree `agent.log` mtimes; a story with no readable signal is skipped rather
+than guessed at. The scan is detection-only — it never changes a status,
+interrupts an agent or re-dispatches — and it announces each story at most once
+per `PIPELINE_STALL_SECONDS`. Set `PIPELINE_STALL_SCAN_ENABLED=0` to silence it
+entirely. Like the usage events it is not in the default e-mail allowlist; add
+it to a `deliver` entry's `events` list or to `PIPELINE_NOTIFY_OUTBOX_EVENTS`
+to route it.
+
 ## Plan-conflict rulings
 
 When the grade fails only in pre-existing untouched tests, the pipeline asks
@@ -722,7 +739,10 @@ Each record has the following keys:
   pass: `triage_ruling` (triage's note of the action it ruled, sent alongside
   the `story_parked` notice), `sizing_risk` (ingest's story-sizing warning), and
   `security_review_unenforced` (ingest's notice that a brief asks for a security
-  review on a story below `risk: high`). `pr_title_mismatch` is a warn-only,
+  review on a story below `risk: high`). `story_stalled` (the stall scan's
+  notice that a dispatch-eligible story has sat undispatched past
+  `PIPELINE_STALL_SECONDS`) is likewise advisory and never disqualifies a
+  first pass. `pr_title_mismatch` is a warn-only,
   heuristic notice (severity `warning`) emitted after a PR opens when its title
   shares no words with the story summary or the changed files; it never alters
   the PR or any gate outcome.

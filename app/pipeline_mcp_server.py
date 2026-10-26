@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Re-export private names too (from pipeline.server import * skips _-prefixed).
 # backend.py accesses _p._read_usage_state, tests access p._run_planner etc.
 import pipeline.server as _server
+from pipeline.log_format import configure_logging_from_env
 from pipeline.server import *
 
 for _name in dir(_server):
@@ -37,4 +38,5 @@ def _assert_interpreter() -> None:
 
 if __name__ == "__main__":
     _assert_interpreter()
+    configure_logging_from_env()
     mcp.run()

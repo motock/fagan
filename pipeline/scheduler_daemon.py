@@ -897,11 +897,15 @@ def run_daemon() -> int:
     """Production composition root: build real collaborators and run.
 
     Acquires an exclusive, non-blocking single-instance lock at
-    ``PLAN_DIR / ".scheduler_daemon.lock"`` before touching anything else, so
+    ``PLAN_DIR / ".scheduler_daemon.lock"`` before doing any work, so
     two daemons can never run two clocks. If another instance already holds
     the lock, this returns 1 immediately without calling ``scan_fn``,
     ``reconcile_fn``, or ``run_forever``.
     """
+    from .log_format import configure_logging_from_env
+
+    configure_logging_from_env()
+
     raw_interval = os.environ.get("PIPELINE_SCHEDULER_INTERVAL_S", "60")
     try:
         interval_s = int(raw_interval)

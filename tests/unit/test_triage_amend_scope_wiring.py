@@ -118,6 +118,16 @@ def test_policy_lists_amend_scope_once_in_action_list():
     assert action_list.count("- `amend_scope`") == 1
 
 
+def test_policy_action_count_sentence_matches_the_list():
+    section = _POLICY.read_text().partition("## Failure triage")[2]
+    action_list = section.partition("### Parked-story resolution")[0]
+    bullets = [line for line in action_list.splitlines() if line.startswith("- `")]
+
+    assert len(bullets) == 7
+    assert "All seven ACTION values are defined:" in action_list
+    assert "All four ACTION values are defined:" not in action_list
+
+
 def test_policy_output_contract_and_resolution_table_name_amend_scope():
     text = _POLICY.read_text()
 

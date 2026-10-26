@@ -99,7 +99,7 @@ effect with no described idempotency key or "did I already do this?" check:
 
 Once wired, the pipeline will ask the overlord what to do about it, supplying measured repo‑health findings and the story's attempt history in the prompt;
 
-All four ACTION values are defined:
+All seven ACTION values are defined:
 
 - `escalate_model` – the scope is right, the implementer is too weak; retry the same scope on a stronger rung of the existing ladder.
 - `split_story` – the scope is wrong for any implementer at this tier; the story needs to be broken up.
@@ -107,7 +107,7 @@ All four ACTION values are defined:
 - `park_for_human` – genuinely ambiguous; hold it.
 - `mark_done` – correct the story record to `done` only when live evidence corroborates that the work landed: `gh` reports the story's `pr_url` as MERGED. New commits, a green suite or an open PR never corroborate on their own, and branch ancestry proves nothing because the pipeline squash-merges; never act on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
 - `patch_acceptance` – the story's acceptance fixture is demonstrably broken at a clean baseline (a born-broken oracle: it cannot pass no matter what an implementer writes), so the fixture itself is the defect. The overlord returns a corrected fixture source between `===FIXTURE-START===` and `===FIXTURE-END===` markers plus a one-line `DIAGNOSIS:`. The executor validates BEFORE writing: the rewrite must pass the ingest lint/collection helper AND must still FAIL at a clean baseline (a rewrite that passes with no implementation is isolation-only and is rejected). Any failure to parse, lint, or stay born-broken parks the story loudly with the manifest's acceptance source untouched; on success the manifest is rewritten, the previous digests are snapshotted into the decisions log, and the story returns to `todo` for a fresh dispatch.
-- `amend_scope` – the story is parked on a reported scope conflict (`scope_conflict` recorded) and the path is directly required by the brief. The overlord only names the ruling; the executor, not the overlord, enforces the guardrails and refuses anything outside the same package as a declared file, under `scripts/`, `.github/`, `.claude/` or config files, new top-level directories, `risk: high` stories, or beyond 3 amendments. A refused amendment parks the story for a human.
+- `amend_scope` – the story is parked on a reported scope conflict (`scope_conflict` recorded) and the path is directly required by the brief. The overlord only names the ruling; the executor, not the overlord, enforces the guardrails and refuses anything outside the same package as a declared file, a protected safety-gate module (e.g. `pipeline/triage.py`, `pipeline/scope_gate.py`), a root-level file, under `scripts/`, `.github/`, `.claude/` or config files, new top-level directories, `risk: high` stories, or beyond 3 amendments. A refused amendment parks the story for a human.
 
 The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` executes by filing one follow-up story (`<key>-repo-issue`) while the original is left parked for a human with a reason naming it, `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
 

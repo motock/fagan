@@ -629,6 +629,30 @@ log naming the variable only, so fixing the environment recovers the queue.
 Redirects are never followed. Text escapes `&`, `<` and `>` and is capped at
 3000 characters with a `[... truncated ...]` marker.
 
+### Usage-gate events
+
+The usage poller emits two notification events when the spend gate changes
+state, so a pause is never silent:
+
+- `usage_paused` — the gate tripped: dispatch is paused and running agents are
+  interrupted. The message names the window that tripped (session or week),
+  both percentages, and the reset text when the probe reported one.
+- `usage_resumed` — usage fell back below the resume thresholds and dispatch is
+  running again. The message states both percentages.
+
+Each transition is announced exactly once: the last announced value is
+persisted in `usage_announced.json` next to the usage state file, so repeated
+polls in the same state stay quiet and a poller restart does not re-announce.
+A missing or corrupt announced-file reads as "not paused", so the first pause
+is always announced.
+
+Neither event is in the default e-mail allowlist (see "Which events are
+e-mailed by default" above), because a pause is routine back-pressure rather
+than a call for a human. To route them, add a `deliver` entry to
+`notifications.json` whose `events` list names them — for example
+`{"events": ["usage_paused", "usage_resumed"], "to": ["team-a-mail"]}` — or add
+them to `PIPELINE_NOTIFY_OUTBOX_EVENTS` for the legacy outbox.
+
 ## Plan-conflict rulings
 
 When the grade fails only in pre-existing untouched tests, the pipeline asks

@@ -78,7 +78,7 @@ def new_correlation_id() -> str:
 
 def request_correlation_id(candidate: str | None) -> str:
     """Return *candidate* when well formed, else a freshly minted id."""
-    if candidate and CORRELATION_ID_RE.match(candidate):
+    if candidate and CORRELATION_ID_RE.fullmatch(candidate):
         return candidate
     return new_correlation_id()
 

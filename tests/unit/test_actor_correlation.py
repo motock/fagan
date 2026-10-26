@@ -115,6 +115,13 @@ def test_request_correlation_id_replaces_a_forged_value() -> None:
     )
 
 
+def test_request_correlation_id_replaces_a_value_with_a_trailing_newline() -> None:
+    """``$`` also matches before a final newline, so the guard must fullmatch."""
+    assert (minted := request_correlation_id("abc\n")) and (
+        CORRELATION_ID_RE.fullmatch(minted) and minted != "abc\n"
+    )
+
+
 def test_request_correlation_id_replaces_an_over_long_value() -> None:
     """An unbounded header would bloat every log line, so it is replaced."""
     assert (minted := request_correlation_id("a" * 65)) and (

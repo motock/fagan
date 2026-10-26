@@ -238,8 +238,10 @@ def _register_adapters() -> None:
     if _ADAPTERS:
         return
     from .forge_github import GitHubForge
+    from .forge_gitlab import GitLabForge
 
     _ADAPTERS.setdefault("github", GitHubForge)
+    _ADAPTERS.setdefault("gitlab", GitLabForge)
 
 
 def get_forge(repo_root: str) -> Forge:

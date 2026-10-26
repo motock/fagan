@@ -1636,6 +1636,11 @@ plus the Claude Code CLI's own login before the first dispatch. Set these,
 and leave everything else at its default until you have a concrete reason to
 change it:
 
+A GitLab repo needs `glab` instead of `gh`: install the GitLab CLI, run
+`glab auth login` once, and set `PIPELINE_FORGE=gitlab` (or leave it at `auto`
+and let the origin remote's hostname resolve it). The pipeline then drives
+merge requests rather than pull requests; every other verb behaves the same.
+
 | Variable | Why you'd set it on day one |
 |---|---|
 | `PIPELINE_BACKEND_<ROLE>` | **Required setup, not a tuning knob**: the shipped `model_registry.json` ships no `roles` routing, so each role falls back to the `claude` backend unless you select a provider — via this var (e.g. `PIPELINE_BACKEND_DISPATCH=ollama`), a plan's `role_config`, or a `roles` block in a registry file pointed at by `PIPELINE_MODEL_REGISTRY_PATH` |
@@ -1674,6 +1679,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 |---|---|---|
 | `PIPELINE_TICKET_PROVIDER` | `auto` | `auto` \| `none` \| `plane` \| `jira` — see table above |
 | `PIPELINE_FORGE` | `auto` | `auto` \| `github` \| `gitlab` — the code host whose CLI the pipeline drives. `auto` resolves from the origin remote's hostname (falling back to `github` for an unrecognised host); an unknown value raises |
+| `PIPELINE_FORGE=gitlab` | — | Requires the `glab` CLI on `PATH` (install it, then run `glab auth login` once). The pipeline then drives GitLab merge requests instead of GitHub pull requests; CI status is read from the pipelines API, so a failed job's trace is available for rework feedback |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
 | `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
 | `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |

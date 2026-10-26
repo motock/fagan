@@ -128,7 +128,7 @@ def test_file_of_exactly_the_cap_is_fine(tmp_path):
 # ---------- backend gate ----------
 
 
-@pytest.mark.parametrize("backend", ["claude", None, "", "auto"])
+@pytest.mark.parametrize("backend", ["claude", None, ""])
 def test_claude_class_backends_are_never_flagged(tmp_path, backend):
     """Claude-class dispatch doesn't need this crutch, so the same oversized
     story must stay silent for it (mirrors the backend gate the

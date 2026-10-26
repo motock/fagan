@@ -217,12 +217,16 @@ radius of the latter is every thread in the worker, not the test.
 
 ### P1 — shape and record
 
-3. **Extend the sizing warning to `app/`.** The ingest-time `scope_headroom`
-   warning covers `pipeline/` only. `app/dashboard.py` is now 880 lines and
-   `app/chat.py` 710; `pipeline/service.py` went 958 → 971 this window while
-   gaining its plan-approval mixin and two reset call sites. The next plan that
-   adds a method to either will hit the 1000-line gate mid-story, which is the
-   CL-14 failure by a different file.
+3. **Size a story by its effective tier, not its own `backend` field.** The
+   ingest-time `_story_sizing_warning` gate read only `story["backend"]`, so
+   every story that inherits the process-wide tier (registry
+   `roles.dispatch`, `PIPELINE_BACKEND_DISPATCH`) skipped the check —
+   including all five stories of this retro's own P0 plan. The headroom half
+   of this item was wrong as written: `scope_headroom_warning` already covers
+   every declared `.py` path, `app/` included. What does need watching is that
+   `app/dashboard.py` is **908** lines, not 880, and `pipeline/service.py`
+   971; either will hit the 1000-line gate mid-story, the CL-14 failure by a
+   different file. Addressed in `harness-instrument-fixes` (HIF-01).
 4. **Record manual manifest surgery.** A human unblocking a parked story by
    clearing `rework_attempts` / `last_review_findings` (allowed, but invisible)
    currently corrupts the retro instrument (§2.6). An append-only sidecar event

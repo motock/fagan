@@ -111,7 +111,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     serving parallelism' warnings for the established pattern this
     mirrors)."""
     backend = (story.get("backend") or "").strip().lower()
-    if backend not in ("local", "ollama", "lmstudio", "mlx", "litellm"):
+    if backend not in ("local", "ollama", "lmstudio", "mlx", "litellm", "auto"):
         return None
     instructions = story.get("agent_instructions") or ""
     # Reuse the same backtick-quoted-repo-path convention every brief in
@@ -223,6 +223,17 @@ def _preflight_dispatch_provider(story: dict, plan_role_config: dict | None) -> 
     if provider:
         return str(provider).lower()
     return "claude"
+
+
+def _sizing_view(story: dict, plan_role_config: dict | None) -> dict:
+    """Return *story* with the effective dispatch tier stamped when it declares none.
+
+    `_story_sizing_warning` gates on ``story["backend"]``, so a story that
+    inherits the process-wide tier declared no provider and was never sized.
+    """
+    if story.get("backend"):
+        return story
+    return {**story, "backend": _preflight_dispatch_provider(story, plan_role_config)}
 
 
 _SECURITY_REVIEW_RE = re.compile(r"security[- ](?:engineer[- ])?review", re.IGNORECASE)
@@ -894,7 +905,9 @@ def _ingest_plan_impl(
                 # a second plain warning would double-notify the same story.
                 warning = None
             else:
-                warning = _story_sizing_warning(story, repo_root)
+                warning = _story_sizing_warning(
+                    _sizing_view(story, final_manifest.get("role_config")), repo_root
+                )
             if warning:
                 if not os.environ.get(
                     "PIPELINE_LOCAL_MODEL_DEFAULT", ""

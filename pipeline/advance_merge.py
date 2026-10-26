@@ -15,8 +15,17 @@ from pathlib import Path
 from typing import Any
 
 from .module_ref import _ModuleRef
+from .rebase_conflict_feedback import (
+    conflict_rework_feedback,
+    parse_conflict_files,
+)
 
 MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
+
+# RC-02: default cap on merge-gate rebase-conflict rework rounds. Overridable
+# with PIPELINE_CONFLICT_REWORK_MAX; an unparseable/negative value falls back
+# to this default rather than silently disabling the route.
+CONFLICT_REWORK_MAX_DEFAULT = 2
 _atomic_write_json = _ModuleRef("pipeline.advance", "_atomic_write_json")
 _ci_pending_expired = _ModuleRef("pipeline.advance", "_ci_pending_expired")
 _ci_rerun = _ModuleRef("pipeline.advance", "_ci_rerun")
@@ -51,6 +60,24 @@ _PRIOR_FEEDBACK_HEADER = (
 # First line of every _ci_rework_feedback string; used to drop a stale CI block
 # from the carried-forward text so repeat rounds do not stack.
 _CI_FEEDBACK_MARKER = "The merge-gate CI check failed on your submitted branch"
+
+
+def _conflict_rework_max() -> int:
+    """Return the merge-gate conflict-rework cap (default 2).
+
+    ``PIPELINE_CONFLICT_REWORK_MAX`` is read at call time so an operator can
+    change it without a restart. An unparseable or negative value falls back
+    to the default rather than silently disabling the route; ``0`` is a valid
+    explicit "never route" setting.
+    """
+    raw = os.environ.get("PIPELINE_CONFLICT_REWORK_MAX", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return CONFLICT_REWORK_MAX_DEFAULT
+    if value < 0:
+        return CONFLICT_REWORK_MAX_DEFAULT
+    return value
 
 
 def _merge_ci_rework_feedback(prior: str | None, ci_feedback: str) -> str:
@@ -351,6 +378,67 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 gate_error = f"build reverify fail: {build['error']}"
 
         if gate_error:
+            # RC-02: a merge-gate REBASE CONFLICT can never be fixed by
+            # retrying the identical merge - the branch still conflicts with
+            # the default branch, so the story retries until merge_attempts
+            # exhausts and parks (CL-12/CL-20). _try_auto_resolve_conflict only
+            # handles pure additive-import conflicts, so a real conflict needs
+            # the implementer told exactly what to do. Reuse the CI-rework
+            # machinery (ci_rework raises the agent's done-bar to
+            # full-suite-green; review_feedback carries the brief) but bound it
+            # with its own conflict_reworks counter so a conflict rework does
+            # NOT consume merge_attempts/rework_attempts: the agent commits new
+            # code and the story must be able to come back through
+            # tests -> review -> merge. Past the cap the ordinary
+            # retry-then-park path below applies unchanged.
+            conflict_max = _conflict_rework_max()
+            conflict_ok = (
+                gate_error.startswith("rebase:")
+                and "conflict" in gate_error.lower()
+                and os.environ.get("PIPELINE_REWORK_ON_CONFLICT", "1") != "0"
+                and story.get("conflict_reworks", 0) < conflict_max
+            )
+            if conflict_ok:
+                conflict_attempt = story.get("conflict_reworks", 0) + 1
+                story["conflict_reworks"] = conflict_attempt
+                story["ci_rework"] = True
+                # Strip the gate's own "rebase: " label: git's output starts
+                # with the first "CONFLICT (...)" line, and the brief's parser
+                # anchors on that line start - leaving the prefix on would drop
+                # the FIRST conflicted file from the brief and the notice.
+                conflict_text = gate_error
+                if conflict_text.startswith("rebase:"):
+                    conflict_text = conflict_text[len("rebase:"):].lstrip()
+                story["review_feedback"] = _merge_ci_rework_feedback(
+                    story.get("review_feedback"),
+                    conflict_rework_feedback(
+                        conflict_text,
+                        conflict_attempt,
+                        conflict_max,
+                        _default_branch(),
+                    ),
+                )
+                story["status"] = "changes_requested"
+                files = parse_conflict_files(conflict_text)
+                named = ", ".join(files) if files else "the conflicted files"
+                _notify_user(
+                    plan_name,
+                    f"{key} merge-gate rebase conflict ({named}); "
+                    f"routed to rework ({conflict_attempt}/{conflict_max}).",
+                    event="merge_conflict_rework",
+                    story_key=key,
+                    **(
+                        {
+                            "correlation_id": story["correlation_id"],
+                            "attempt": story.get("dispatch_attempts", 0),
+                        }
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+                summary["notify"].append(key)
+                continue
+
             # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
             # failure - not a transient rebase/push error, not
             # pending/cancelled - can be caused by the agent's own

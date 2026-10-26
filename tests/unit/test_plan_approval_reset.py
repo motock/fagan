@@ -65,7 +65,14 @@ def _approved(manifest):
 
 
 #: Decision metadata that must not survive a reset.
-_DECISION_FIELDS = ("decided_by", "at", "role", "self_approved", "reason")
+_DECISION_FIELDS = (
+    "decided_by",
+    "at",
+    "correlation_id",
+    "role",
+    "self_approved",
+    "reason",
+)
 
 
 @pytest.fixture

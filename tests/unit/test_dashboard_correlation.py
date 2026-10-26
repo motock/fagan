@@ -107,6 +107,25 @@ def _run_middleware(request):
     return asyncio.run(d._enforce_api_key(request, _call_next))
 
 
+def _drive_in_current_context(request):
+    """Run the middleware coroutine in *this* context, not a copy.
+
+    ``asyncio.run`` runs the coroutine in a copied context, so a binding the
+    middleware failed to reset would be invisible to the caller and a
+    ``current_correlation_id() == ""`` assertion after it could never fail.
+    Stepping the coroutine by hand keeps it in the caller's context, which
+    makes the leak assertions below genuinely grade the reset.
+    """
+    coro = d._enforce_api_key(request, _call_next)
+    try:
+        coro.send(None)
+    except StopIteration as stop:
+        return stop.value
+    finally:
+        coro.close()
+    raise AssertionError("middleware suspended; expected it to complete inline")
+
+
 # --------------------------------------------------------------------------- #
 # Minting and echoing
 # --------------------------------------------------------------------------- #
@@ -167,17 +186,17 @@ def test_probe_reports_the_minted_id_when_no_header_was_sent(
 
 
 def test_binding_does_not_leak_between_requests(key_file):
-    """Two requests in the same thread: the second must not inherit the
+    """Two requests in the same context: the second must not inherit the
     first's id, and nothing is bound once each returns."""
     api_key = auth.get_or_create_api_key()
 
     first = _request(_NON_CHAT_PATH, api_key=api_key, correlation="abc-123")
-    first_response = _run_middleware(first)
+    first_response = _drive_in_current_context(first)
     assert first_response.headers["x-correlation-id"] == "abc-123"
     assert current_correlation_id() == ""
 
     second = _request(_NON_CHAT_PATH, api_key=api_key)
-    second_response = _run_middleware(second)
+    second_response = _drive_in_current_context(second)
     fresh = second_response.headers["x-correlation-id"]
     assert fresh != "abc-123"
     assert len(fresh) == 12
@@ -185,9 +204,19 @@ def test_binding_does_not_leak_between_requests(key_file):
 
 
 def test_binding_does_not_leak_after_a_testclient_request(key_file, correlation_probe):
-    _client().get(_PROBE_PATH, headers={_CORRELATION_HEADER: "abc-123"})
+    """A real request must not leave an id bound for whatever runs next.
 
-    assert current_correlation_id() == ""
+    The follow-up request is the observable: it must get its own id rather than
+    inheriting the previous one. (A bare ``current_correlation_id() == ""`` here
+    would be vacuous -- TestClient runs the app in a copied context.)
+    """
+    client = _client()
+    client.get(_PROBE_PATH, headers={_CORRELATION_HEADER: "abc-123"})
+
+    follow_up = client.get(_PROBE_PATH)
+
+    assert follow_up.json()["correlation_id"] == follow_up.headers[_CORRELATION_HEADER]
+    assert follow_up.headers[_CORRELATION_HEADER] != "abc-123"
 
 
 # --------------------------------------------------------------------------- #
@@ -346,3 +375,50 @@ def test_approval_with_nothing_bound_records_an_empty_id(
 
     assert result["ok"] is True
     assert _read_manifest(pending_plan)["approval"]["correlation_id"] == ""
+
+
+# --------------------------------------------------------------------------- #
+# The id is decision metadata: preserved on re-ingest, cleared on reset
+# --------------------------------------------------------------------------- #
+
+def test_reingest_of_unchanged_content_preserves_the_correlation_id():
+    manifest = _manifest()
+    manifest["approval"] = {
+        "status": "approved",
+        "digest": canonical_digest(manifest),
+        "decided_by": "alice",
+        "at": "2026-01-01T00:00:00+00:00",
+        "correlation_id": "req-9",
+        "role": "local-operator",
+        "self_approved": False,
+        "warnings_seen": [],
+    }
+
+    record = plan_approval.on_ingest(manifest)
+
+    assert record["status"] == "approved"
+    assert record["correlation_id"] == "req-9"
+
+
+def test_reset_clears_the_correlation_id_of_an_invalidated_decision(
+    approval_enabled,
+):
+    manifest = _manifest()
+    manifest["approval"] = {
+        "status": "approved",
+        "digest": canonical_digest(manifest),
+        "decided_by": "alice",
+        "at": "2026-01-01T00:00:00+00:00",
+        "correlation_id": "req-9",
+        "role": "local-operator",
+        "self_approved": False,
+        "warnings_seen": [],
+    }
+    manifest["stories"]["S1"]["agent_instructions"] = "changed"
+
+    assert plan_approval.reset_if_changed(manifest) is True
+
+    approval = manifest["approval"]
+    assert approval["status"] == "pending_approval"
+    assert "correlation_id" not in approval
+    assert "decided_by" not in approval

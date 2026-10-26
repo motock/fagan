@@ -70,6 +70,7 @@ _PRESERVED_DECISION_FIELDS = (
     "decided_by",
     "at",
     "decided_at",
+    "correlation_id",
     "role",
     "self_approved",
 )

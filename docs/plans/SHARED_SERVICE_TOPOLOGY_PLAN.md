@@ -4,6 +4,14 @@ Status: **draft, not decided.** Written 2026-10-22 to capture the evidence for a
 later decision. No story in this document is scheduled; nothing here is
 ingested.
 
+> **Update 2026-10-25:** the direction for T3 is now recorded in
+> [ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md): a shared
+> control plane with per-repo (or generic) workers, federated per trust
+> boundary. The plan-approval gate that motivates the enterprise workflow is
+> [ADR 0007](../adr/0007-plan-approval-at-activation.md). Both are Proposed and
+> authorize no implementation; this document remains the evidence record and is
+> not superseded.
+
 ## Why this exists
 
 The pipeline has so far been used by one planner ingesting plans one at a time

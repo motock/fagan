@@ -11,13 +11,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from pipeline.authorization import (
-    DEFAULT_TEAM,
-    ENFORCE_ENV,
-    authorize,
-    enforcement_enabled,
-    resource_for,
-)
 
 # pipeline.server must load before pipeline.ingest: pipeline.ingest's module
 # body imports pipeline.build_detect, which imports pipeline.server, which
@@ -28,6 +21,13 @@ from app.identity import LOCAL_OPERATOR
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.actor import ANONYMOUS, bind_principal
+from pipeline.authorization import (
+    DEFAULT_TEAM,
+    ENFORCE_ENV,
+    authorize,
+    enforcement_enabled,
+    resource_for,
+)
 
 #: The credential-shaped sentinel ``tests/unit/test_policy_local.py`` uses; a
 #: refusal message must never carry it.

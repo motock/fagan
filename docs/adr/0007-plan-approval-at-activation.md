@@ -1,6 +1,9 @@
 # 0007. Plans are approved before activation, not before ingestion
 
-- **Status:** Proposed (direction agreed 2026-10-25; revisit before implementation)
+- **Status:** Accepted (direction agreed 2026-10-25; implemented 2026-10-26 in
+  `enterprise-plan-approval`, default off behind `PIPELINE_PLAN_APPROVAL`). The
+  identity and authorization prerequisites below are still outstanding — until
+  they exist this is a visibility/process control, not a security control.
 - **Date:** 2026-10-25
 
 ## Context

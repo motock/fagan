@@ -18,16 +18,15 @@ update this index in the same change.
 
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
-| 1 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
-| 2 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
+| 1 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
+| 2 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Enterprise platform readiness (assessed 2026-10-25):**
 [`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md) records
-the eventing, observability, auditability, and authn/authz findings. The only
-scheduled work from it is the behavior-preserving Tier 1 prep plan
-`enterprise-prep-tier1`; the remaining items are deferred and ranked in that
-document.
+the eventing, observability, auditability, and authn/authz findings. Two plans
+came out of it and both shipped 2026-10-26: the behavior-preserving
+`enterprise-prep-tier1` (3 stories) and `enterprise-plan-approval` (7 stories,
+ADR 0007). The remaining items are deferred and ranked in that document.
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -107,6 +106,17 @@ dispatch, checked merge fetch), `CHECK_STORY_STATUS_FIX_PLAN.md`
 the Claude dispatch cooldown, capacity waits, and the stall scan),
 `LOCAL_FLEET_BRANCH_SAFETY_PLAN.md` (branch safety for several agents on one
 host; ADR 0006).
+
+**Enterprise readiness**: `enterprise-prep-tier1` (repo-root allowlist,
+worktree namespace, topology in health; all opt-in and default-preserving) and
+`enterprise-plan-approval` (`enterprise-plan-approval`; the ADR 0007 gate —
+state and content digest at ingest, `approve_plan`/`reject_plan`, reset on
+authored change, enforcement in the tick and direct dispatch, spec
+`docs/specs/PLAN_APPROVAL.md`).
+
+**Code host and CI**: `FORGE_ABSTRACTION_PLAN.md` (`forge-abstraction`; a
+`Forge` protocol with GitHub and GitLab adapters behind `PIPELINE_FORGE`, so
+the PR/CI/merge loop no longer assumes GitHub).
 
 **Context sources**: `EXTERNAL_CONTEXT_SOURCES_PLAN.md`
 (`external-context-sources-phase1` and `-phase2`; governed reference material

@@ -2002,6 +2002,18 @@ request.
   held.
 - `PIPELINE_AUTO_MERGE=0` overrides every level above at the merge gate only — nothing else is gated.
 
+### Opt-in gates: repo roots, worktree namespace, and plan approval
+
+Three gates ship off by default. Unset, each leaves today's behavior
+byte-for-byte unchanged; set, each adds a constraint or a lifecycle state. The
+full contracts live in the specs each row links.
+
+| Variable | Default | Effect when set | Contract |
+| --- | --- | --- | --- |
+| `PIPELINE_ALLOWED_REPO_ROOTS` | *(unset → no restriction)* | Allowlist of directories a plan's `repo_root` must equal or live under, entries separated by `os.pathsep` (`:` on POSIX). Read on every check, so re-pointing it needs no restart. A set value fails closed, and the refusal never echoes the candidate path. | [docs/specs/REPO_ROOT_ALLOWLIST.md](docs/specs/REPO_ROOT_ALLOWLIST.md) |
+| `PIPELINE_WORKTREE_NAMESPACE` | *(unset → `WORKTREE_ROOT/<key>`)* | Inserts a namespace segment into worktree directory names (`WORKTREE_ROOT/<ns>/<key>`), mirroring `PIPELINE_BRANCH_NAMESPACE`. The value must match `^[a-z0-9][a-z0-9-]{0,31}$`; any other non-empty value raises. Set it before dispatching, and give two operators sharing one host distinct values. | [docs/specs/WORKTREE_NAMESPACE.md](docs/specs/WORKTREE_NAMESPACE.md) |
+| `PIPELINE_PLAN_APPROVAL` | *(unset → off)* | Enables the plan-approval lifecycle: ingest records an `approval` block plus a digest of the authored content, the scheduler tick and `dispatch_story` both refuse a plan that is not `approved`, and `approve_plan` / `reject_plan` move it through `pending_approval` → `approved` \| `changes_requested`. Any authored-content change (`patch_story`, `patch_plan`, re-ingest) resets the record. Unset writes manifests byte-identically to the pre-approval shape; an unrecognized value raises rather than silently enabling or disabling the gate. | [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) |
+
 ---
 
 ## Periodic security-audit reminder

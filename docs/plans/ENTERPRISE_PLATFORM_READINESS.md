@@ -1,8 +1,11 @@
 # Enterprise platform readiness — findings
 
-- **Status:** assessment only, written 2026-10-25. Nothing here is scheduled
-  except the Tier 1 prep plan `enterprise-prep-tier1`. Read this as a backlog
-  of known gaps, not as an implementation plan.
+- **Status:** assessment only, written 2026-10-25. Two plans came out of it and
+  both shipped 2026-10-26: `enterprise-prep-tier1` (the three Tier 1 prep
+  stories) and `enterprise-plan-approval` (the ADR 0007 gate, spec
+  [`docs/specs/PLAN_APPROVAL.md`](../specs/PLAN_APPROVAL.md)). Nothing else here
+  is scheduled. Read it as a backlog of known gaps, not as an implementation
+  plan.
 - **Companion records:** [ADR 0006](../adr/0006-decision-routing-on-a-shared-server.md),
   [ADR 0007](../adr/0007-plan-approval-at-activation.md),
   [ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md), and
@@ -207,9 +210,10 @@ implementation, not prep.
 
 These are mechanical facts that will bite the next plan author:
 
-- **Line-limit gate.** `pipeline/server.py` is exactly 1000 lines and
-  `pipeline/scheduler_daemon.py` is 999. Adding a wiring line to either trips
-  `tests/unit/test_check_line_limit.py`,
+- **Line-limit gate.** `pipeline/scheduler_daemon.py` is 999 lines and
+  `pipeline/server.py` was exactly 1000 until `ENT-LC-00` replaced the
+  lifecycle-tool registrations with a `TOOLS` loop (994 now). Adding a wiring
+  line to either trips `tests/unit/test_check_line_limit.py`,
   `tests/unit/test_dashboard_split.py`, and
   `tests/unit/test_scheduler_timeouts_extraction.py`. This is why the Tier 1
   topology story is scoped to `/api/health` only; the scheduler health-file

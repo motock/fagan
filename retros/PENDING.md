@@ -103,3 +103,15 @@ if a precise date is needed when writing one of these up.
 - cross-plan-awareness — completed 2026-10-23, 5 stories
 - topology-collision-guards — completed 2026-10-23, 4 stories
 - check-story-status-terminal — completed 2026-10-23, 1 story
+- local-fleet-branch-safety — completed 2026-10-23, 4 stories
+- local-fleet-branch-safety-verify — completed 2026-10-23, 1 story
+- external-context-sources-phase1 — completed 2026-10-24, 7 stories
+- notification-channels — completed 2026-10-24, 8 stories
+- notification-channels-registration — completed 2026-10-24, 1 story
+- notification-config-test-isolation — completed 2026-10-24, 1 story
+- external-context-sources-phase2 — completed 2026-10-24, 6 stories
+- parked-story-recovery — completed 2026-10-26, 7 stories
+- harness-resilience — completed 2026-10-26, 7 stories
+- enterprise-prep-tier1 — completed 2026-10-26, 3 stories
+- forge-abstraction — completed 2026-10-26, 6 stories
+- enterprise-plan-approval — completed 2026-10-26, 7 stories

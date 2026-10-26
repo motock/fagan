@@ -123,3 +123,19 @@ def test_installer_rejects_an_unknown_forge_value(monkeypatch, forge):
 
     with pytest.raises(ValueError, match="PIPELINE_FORGE"):
         _collect(_ALL_TOOLS)
+
+
+def test_main_reports_an_unknown_forge_without_a_traceback(monkeypatch, capsys):
+    """A bad PIPELINE_FORGE is a clean non-zero error, not a crash.
+
+    ``collect_checks`` raises ``ValueError`` for an unknown forge; ``main``
+    must surface it as a one-line error on stderr and exit non-zero rather
+    than letting a traceback escape the doctor script.
+    """
+    monkeypatch.setenv("PIPELINE_FORGE", "bitbucket")
+
+    assert ic.main([]) == 2
+    err = capsys.readouterr().err
+    assert "PIPELINE_FORGE" in err
+    assert "bitbucket" in err
+    assert "Traceback" not in err

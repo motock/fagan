@@ -358,7 +358,13 @@ def main(argv=None):
         help="print the check results as a JSON list instead of text",
     )
     args = parser.parse_args(argv)
-    checks = collect_checks()
+    try:
+        checks = collect_checks()
+    except ValueError as exc:
+        # An unknown PIPELINE_FORGE is a misconfiguration, not a crash: the
+        # doctor names it and exits non-zero instead of dumping a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     def missing_required_cli():
         """The resolved forge's CLI when it is absent, else None.

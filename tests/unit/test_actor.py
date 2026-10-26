@@ -11,9 +11,8 @@ from __future__ import annotations
 import inspect
 import threading
 
-from pipeline.actor import ANONYMOUS, actor_id, bind_principal, current_principal
-
 from app.identity import LOCAL_OPERATOR, Principal
+from pipeline.actor import ANONYMOUS, actor_id, bind_principal, current_principal
 
 
 def test_unbound_resolves_to_local_operator() -> None:

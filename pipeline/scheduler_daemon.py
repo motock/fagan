@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 
+from pipeline import config_provenance
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.paths import PLAN_DIR
@@ -883,41 +884,13 @@ _BENIGN_ONE_SIDED_DIFFS: frozenset[str] = frozenset()
 
 
 def _report_env_conflicts() -> None:
-    """Warn about env var conflicts between launchd plist and MCP server."""
-    try:
-        from .config_provenance import _is_secret, read_mcp_server_env, read_plist_env
+    """Warn about env var conflicts between launchd plist and MCP server.
 
-        plist = read_plist_env()
-        mcp = read_mcp_server_env()
-
-        def _render(name: str, value: str | None) -> str:
-            if value is None:
-                return "<unset>"
-            # Only non-secret PIPELINE_ names may echo a value; anything else
-            # is reported as differing but never printed.
-            if _is_secret(name) or not name.startswith("PIPELINE_"):
-                return "***"
-            return value
-
-        for name in sorted(set(plist) | set(mcp)):
-            if name in _BENIGN_ONE_SIDED_DIFFS:
-                continue
-            p_val = plist.get(name)
-            m_val = mcp.get(name)
-            if p_val is not None and m_val is not None and p_val == m_val:
-                continue
-            print(
-                f"scheduler_daemon: WARNING {name} differs between config layers: "
-                f"launchd_plist={_render(name, p_val)} "
-                f"mcp_server_env={_render(name, m_val)} "
-                f"(this scheduler uses launchd_plist)",
-                file=sys.stderr,
-            )
-    except Exception as exc:  # noqa: BLE001
-        print(
-            f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
-            file=sys.stderr,
-        )
+    The report itself lives in :mod:`pipeline.config_provenance` so the
+    effective-config view can reuse it; this delegate keeps the daemon's
+    benign-diff policy local.
+    """
+    config_provenance.report_env_conflicts(_BENIGN_ONE_SIDED_DIFFS)
 
 
 def run_daemon() -> int:
@@ -963,6 +936,18 @@ def run_daemon() -> int:
         return 1
 
     _report_env_conflicts()
+
+    # Fail loudly if this process is running from a deleted interpreter tree
+    # (e.g. Homebrew replaced python@3.14.9 with 3.14.10). Already-imported
+    # modules keep working, so the failure would otherwise surface later as a
+    # silent per-import ModuleNotFoundError. Exiting is the point: launchd's
+    # KeepAlive restarts the daemon on the current interpreter.
+    from pipeline.runtime_check import interpreter_problem
+
+    problem = interpreter_problem()
+    if problem is not None:
+        print(f"scheduler_daemon: ERROR {problem}", file=sys.stderr)
+        return 1
 
     health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or str(
         PLAN_DIR / ".scheduler_health.json"

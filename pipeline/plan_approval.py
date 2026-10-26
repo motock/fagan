@@ -33,6 +33,10 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from app.identity import Principal
+
+from .actor import current_principal
+
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 
 #: Authored, plan-level fields that participate in the content digest.
@@ -200,8 +204,19 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
     return True
 
 
-#: Actor recorded on every decision until real identity exists (ENT-LC-02b).
-_DECISION_ACTOR = "local-operator"
+#: Order in which a principal's ADR 0009 roles are reported on a decision
+#: record: the most privileged role held wins, so the record names the
+#: authority the decision was taken with rather than a member of an unordered set.
+_ROLE_PRECEDENCE = ("admin", "owner", "approver", "delegate", "author")
+
+
+def _primary_role(principal: Principal) -> str:
+    """Return the most privileged ADR 0009 role *principal* holds."""
+    for role in _ROLE_PRECEDENCE:
+        if role in principal.roles:
+            return role
+    return "operator"
+
 
 #: Refusal message when the authored content no longer matches the digest the
 #: approval record was made against.
@@ -266,14 +281,16 @@ class PlanApprovalMixin:
             warnings_seen = previous.get("warnings_seen")
             if not isinstance(warnings_seen, list):
                 warnings_seen = []
+            principal = current_principal()
+            ingested_by = manifest.get("ingested_by") or principal.subject
             record: dict[str, Any] = {
                 "plan": plan_name,
                 "status": status,
                 "digest": digest,
-                "decided_by": _DECISION_ACTOR,
+                "decided_by": principal.subject,
                 "at": datetime.now(UTC).isoformat(),
-                "role": _DECISION_ACTOR,
-                "self_approved": True,
+                "role": _primary_role(principal),
+                "self_approved": principal.subject == ingested_by,
                 "warnings_seen": list(warnings_seen),
             }
             if reason:

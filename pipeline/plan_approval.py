@@ -21,8 +21,11 @@ previous decision metadata for auditability.
 
 ``reset_if_changed`` applies the same digest rule to edits made through the
 patch tools (``patch_story`` / ``patch_plan``): an approval cannot outlive an
-authored change made through those tools. Other writers of authored fields
-(``save_plan``, ``set_plan_role_config``) are covered by their own guards.
+authored change made through those tools. It is not a blanket guard for every
+writer of authored fields: ``save_plan`` is covered by the source-digest guard
+at the next ingest, while ``set_plan_role_config`` writes ``role_config``
+directly and is *not* reset here — an approval can outlive such a change until
+the next ingest. Closing that window is tracked with the enforcement story.
 """
 import hashlib
 import json

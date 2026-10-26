@@ -181,6 +181,32 @@ _CHECKPOINT_DEPRECATED_ALIAS_LINE = (
     "  `checkpoint` remains available as a deprecated alias for the same tool.\n"
 )
 
+# P0-DOC-01 added an H3 "### Startup refusals" subsection at the end of the
+# "Unattended operation & logs" body, documenting the two launch paths'
+# sys.base_prefix startup check and the prior-findings guard's moot-finding
+# escape. The pre-split README at 2cca309~1 predates both behaviours, so the
+# verbatim guard for this section compares with the subsection normalized
+# away — and separately requires it to be present, so the normalization can
+# never mask its removal.
+_STARTUP_REFUSALS_SUBSECTION = (
+    "### Startup refusals\n"
+    "\n"
+    "Both launch paths — `python3 app/pipeline_mcp_server.py` and "
+    "`python -m pipeline.scheduler_daemon` — check at startup that the "
+    "interpreter tree they are running from still exists (`sys.base_prefix`). "
+    "If it does not, they log one ERROR naming the missing path and exit "
+    "non-zero, so the supervisor restarts them on the current interpreter. "
+    "This exists because a Homebrew upgrade deletes the previous Cellar tree: "
+    "a process that outlived it keeps working for already-imported modules, "
+    "while every later lazy import fails.\n"
+    "\n"
+    "The prior-findings review guard now clears a previously flagged file when "
+    "that file no longer differs from the base branch, logging one INFO line "
+    "naming the story and path. A finding whose plan scope was amended cannot "
+    "be addressed in a file that is already identical to the base, and used to "
+    "re-park the story forever."
+)
+
 
 def test_reference_md_exists():
     assert REFERENCE.is_file(), "REFERENCE.md must exist at the repo root"
@@ -671,6 +697,19 @@ def test_moved_section_body_is_verbatim(title):
                 f"renamed com.fagan.pipeline launchd label."
             )
             reference_body = reference_body.replace("com.fagan.pipeline", "com.claude.pipeline")
+            # P0-DOC-01 appended the "### Startup refusals" subsection to this
+            # section. Require it to be present, then normalize it (plus the
+            # blank line that separates it from the preceding code fence) away
+            # so the rest of the section still compares byte-for-byte against
+            # the pre-split README — the presence assertion means the
+            # normalization can never mask its removal.
+            assert _STARTUP_REFUSALS_SUBSECTION in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must document the "
+                f"startup refusals and the moot-finding escape."
+            )
+            reference_body = reference_body.replace(
+                "\n\n" + _STARTUP_REFUSALS_SUBSECTION, ""
+            )
         if title in ("MCP tools reference", "Usage gate & resumability"):
             # MCPHYG-4 renamed the checkpoint MCP tool to checkpoint_story and
             # kept `checkpoint` as a deprecated alias for the same code path.

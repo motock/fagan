@@ -2175,6 +2175,12 @@ the server (`advance-scheduler{,.err}.log`, `usage-poller{,.err}.log`).
   sudo newsyslog -nv   # dry-run: verify the rule parses and see what it'd do
   ```
 
+### Startup refusals
+
+Both launch paths — `python3 app/pipeline_mcp_server.py` and `python -m pipeline.scheduler_daemon` — check at startup that the interpreter tree they are running from still exists (`sys.base_prefix`). If it does not, they log one ERROR naming the missing path and exit non-zero, so the supervisor restarts them on the current interpreter. This exists because a Homebrew upgrade deletes the previous Cellar tree: a process that outlived it keeps working for already-imported modules, while every later lazy import fails.
+
+The prior-findings review guard now clears a previously flagged file when that file no longer differs from the base branch, logging one INFO line naming the story and path. A finding whose plan scope was amended cannot be addressed in a file that is already identical to the base, and used to re-park the story forever.
+
 ---
 
 ## Global rules bundle

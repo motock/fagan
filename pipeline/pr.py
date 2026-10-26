@@ -20,6 +20,20 @@ from logging import getLogger
 from typing import Any
 
 from .branch_names import story_branch
+from .forge import get_forge
+
+
+def _repo_root():
+    """The repo root the forge is resolved for, read at call time.
+
+    ``server.REPO_ROOT`` is a module-level global that tests patch via
+    ``p.REPO_ROOT``, so it must be read lazily rather than imported at module
+    scope. Returned unchanged (not ``str()``-ed) so callers that pass it as a
+    subprocess ``cwd`` keep the exact object the tests patched in.
+    """
+    from .server import REPO_ROOT
+
+    return REPO_ROOT
 
 
 def _convention_branch(story_key: str, recorded: str | None = None) -> str:
@@ -159,13 +173,7 @@ def _pr_title(story_key: str, summary: str) -> str:
 
 
 def _sync_pr_title(worktree: str, branch: str, title: str) -> None:
-    try:
-        subprocess.run(
-            ["gh", "pr", "edit", branch, "--title", title],
-            cwd=worktree, check=True, capture_output=True, text=True,
-        )
-    except (subprocess.CalledProcessError, OSError):
-        pass
+    get_forge(_repo_root()).update_pr_title(worktree, branch, title)
 
 
 _TITLE_NOISE_WORDS = frozenset({
@@ -227,13 +235,9 @@ def _pr_title_mismatch_message(worktree: str, branch: str, summary: str) -> str 
     Warn-only and heuristic; fails open to None on any error.
     """
     try:
-        proc = subprocess.run(
-            ["gh", "pr", "view", branch, "--json", "title", "-q", ".title"],
-            cwd=worktree, check=False, capture_output=True, text=True,
-        )
-        if proc.returncode != 0:
+        title = get_forge(_repo_root()).pr_title(worktree, branch)
+        if not title:
             return None
-        title = proc.stdout.strip()
         if _title_describes_change(title, summary, _changed_paths(worktree, branch)):
             return None
         return f"PR title {title!r} shares no words with the story summary {summary!r} or the changed files."
@@ -243,10 +247,10 @@ def _pr_title_mismatch_message(worktree: str, branch: str, summary: str) -> str 
 
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
-    """Push the story's branch and open a PR for it via the gh CLI.
+    """Push the story's branch and open a PR for it via the active forge.
 
-    External boundary: spawns `git`/`gh`. Tests mock this function (or
-    subprocess.run) rather than hitting a real remote.
+    External boundary: the forge spawns `git`/`gh`. Tests mock this function
+    (or subprocess.run) rather than hitting a real remote.
     """
     branch = _resolve_story_branch(worktree, story_key)
     title = _branch_commit_subject(worktree, branch) or _pr_title(
@@ -255,43 +259,14 @@ def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     body = story.get("pr_body") or (
         f"Automated PR for {story_key} produced by the agent pipeline."
     )
-
-    # --force-with-lease: this branch is rebased onto the default branch
-    # before every resumed dispatch (see _rebase_onto_master), which rewrites
-    # its commit SHAs. If review_story already pushed once (e.g. an earlier
-    # APPROVE opened a PR, then a later rework round rebased again), a plain
-    # push is rejected as non-fast-forward on every subsequent retry - the
-    # branch is exclusively owned by this pipeline's own dispatched agent, so
-    # there's no external pusher to race and a force-with-lease push is safe.
-    subprocess.run(
-        ["git", "push", "--force-with-lease", "-u", "origin", branch],
-        cwd=worktree, check=True, capture_output=True, text=True,
-    )
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "create", "--title", title, "--body", body, "--head", branch],
-            cwd=worktree, check=True, capture_output=True, text=True,
-        )
-        return proc.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        # A dispatched agent's own Bash access can include `gh pr create`,
-        # so a PR may already exist by the time review_story gets here.
-        # Recover its URL instead of failing the whole pipeline tick.
-        if "already exists" not in (e.stderr or ""):
-            raise
-        proc = subprocess.run(
-            ["gh", "pr", "view", branch, "--json", "url", "-q", ".url"],
-            cwd=worktree, check=True, capture_output=True, text=True,
-        )
-        _sync_pr_title(worktree, branch, title)
-        return proc.stdout.strip()
+    return get_forge(_repo_root()).open_pr(worktree, branch, title, body)
 
 
 def _merge_pr(worktree: str, story_key: str) -> str:
     """Squash-merge the story's PR, then remove its worktree and branches.
 
-    External boundary: spawns `git`/`gh`. Tests mock this function (or
-    subprocess.run) rather than hitting a real remote.
+    External boundary: the forge spawns `git`/`gh`. Tests mock this function
+    (or subprocess.run) rather than hitting a real remote.
 
     Deliberately does not pass --delete-branch to `gh pr merge`: that asks
     gh to switch the local checkout away from the branch being deleted,
@@ -300,9 +275,7 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     this pipeline's one-worktree-per-story model). Branch/worktree cleanup
     is done explicitly below, from REPO_ROOT, after the merge succeeds.
     """
-    # Lazy import: REPO_ROOT is a server module-level global patched by tests
-    # via p.REPO_ROOT; the lazy import at call time sees the patched value.
-    from .server import REPO_ROOT
+    repo_root = _repo_root()
     branch = _resolve_story_branch(worktree, story_key)
     # Recover the PR's own title (the same one _open_pr set via `gh pr
     # create --title`) and pass it explicitly as the squash commit's subject.
@@ -312,26 +285,15 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     # reached)" commit message became the PERMANENT squash-merge title on
     # master instead of the story's real summary. Fails open: a failed title
     # lookup must never block a merge that would otherwise have succeeded.
-    title_proc = subprocess.run(
-        ["gh", "pr", "view", branch, "--json", "title", "-q", ".title"],
-        cwd=worktree, check=False, capture_output=True, text=True,
-    )
-    subject = title_proc.stdout.strip() if title_proc.returncode == 0 else ""
-    merge_cmd = ["gh", "pr", "merge", branch, "--squash"]
-    if subject:
-        merge_cmd += ["--subject", subject]
-    proc = subprocess.run(
-        merge_cmd,
-        cwd=worktree, check=True, capture_output=True, text=True,
-    )
-    result = proc.stdout.strip()
+    forge = get_forge(repo_root)
+    result = forge.merge_pr(worktree, branch, forge.pr_title(worktree, branch))
 
     subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "push", "origin", "--delete", branch],
-                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True)
 
     return result
 
@@ -347,14 +309,12 @@ def _format_review_comment(findings: str, cycle: int) -> str:
 
 
 def _post_pr_comment(worktree: str, body: str) -> None:
-    """Posts `body` as a comment on the current branch's PR via the gh CLI.
+    """Posts `body` as a comment on the current branch's PR via the forge.
 
-    External boundary: spawns `gh`. Tests mock this function rather than hitting a real remote.
+    External boundary: the forge spawns `gh`. Tests mock this function rather
+    than hitting a real remote.
     """
-    subprocess.run(
-        ["gh", "pr", "comment", "--body", body],
-        cwd=worktree, check=True, capture_output=True, text=True,
-    )
+    get_forge(_repo_root()).comment_pr(worktree, body)
 
 
 __all__ = [

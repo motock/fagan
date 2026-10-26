@@ -190,9 +190,17 @@ def test_sync_pr_title_is_defined_above_open_pr():
 
 
 def test_sync_call_sits_between_pr_view_and_return_in_open_pr():
-    body = inspect.getsource(_open_pr)
+    """The title refresh must sit between the URL recovery and the return.
+
+    The recovery path moved to the forge adapter (S1: ``_open_pr`` is a
+    delegation and ``pipeline/pr.py`` holds no gh argv), so the structural
+    guarantee is asserted where the code now lives.
+    """
+    from pipeline.forge_github import GitHubForge
+
+    body = inspect.getsource(GitHubForge.open_pr)
     view = body.index('"gh", "pr", "view"')
-    sync = body.index("_sync_pr_title(worktree, branch, title)")
+    sync = body.index("self.update_pr_title(worktree, branch, title)")
     ret = body.index("return proc.stdout.strip()", sync)
     assert view < sync < ret
 

@@ -1,11 +1,13 @@
 # Enterprise platform readiness — findings
 
-- **Status:** assessment only, written 2026-10-25. Two plans came out of it and
-  both shipped 2026-10-26: `enterprise-prep-tier1` (the three Tier 1 prep
-  stories) and `enterprise-plan-approval` (the ADR 0007 gate, spec
-  [`docs/specs/PLAN_APPROVAL.md`](../specs/PLAN_APPROVAL.md)). Nothing else here
-  is scheduled. Read it as a backlog of known gaps, not as an implementation
-  plan.
+- **Status:** assessment only, written 2026-10-25. Three plans came out of it and
+  all shipped 2026-10-26: `enterprise-prep-tier1` (the three Tier 1 prep
+  stories), `enterprise-plan-approval` (the ADR 0007 gate, spec
+  [`docs/specs/PLAN_APPROVAL.md`](../specs/PLAN_APPROVAL.md)), and
+  `tenancy-seams` (the identity/policy seam only, spec
+  [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md)).
+  Nothing else here is scheduled. Read it as a backlog of known gaps, not as an
+  implementation plan.
 - **Companion records:** [ADR 0006](../adr/0006-decision-routing-on-a-shared-server.md),
   [ADR 0007](../adr/0007-plan-approval-at-activation.md),
   [ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md), and
@@ -18,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | JSON app logs, request correlation, metrics sink |
 | Auditability | Decisions, journals, notifications, agent logs | **Not audit-grade** | Actor identity + tamper-evidence |
-| AuthN / AuthZ | One shared secret; origin headers explicitly not auth | **Not abstracted** | `Principal` + `IdentityProvider` + service-layer policy |
+| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam exists but nothing enforces it | **Seam, not a control** | Service-layer enforcement + ownership records + audit |
 
 ---
 
@@ -150,17 +152,20 @@ and `timestamp`. The ADR 0007 approval record should be its first tenant.
   DNS-rebinding defense, and `X-Pipeline-Origin` for UI/chat origin. The module
   states plainly that the origin header is **not** an authentication decision.
 - The MCP path has no authentication at all (`mcp.run()` is stdio).
-- There is no `Principal`, `Role`, `Permission`, `Scope`, OIDC, or JWT type
-  anywhere. `app/role_registry.py` holds **model** roles, not user roles; keep
-  that naming separate.
+- A `Principal` / `IdentityProvider` / `Authorizer` seam now exists
+  (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware only)
+  and enforces nothing; see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
+  `app/role_registry.py` still holds **model** roles, not user roles; keep that
+  naming separate.
 - The chat tool registry excludes privileged tools (`approve_merge`,
   `set_story_status`, `risk`) as a hardcoded allowlist — a coarse authorization
   list, not a policy layer.
 
 ### The right abstraction is two layers
 
-**AuthN is an adapter concern.** Add an `IdentityProvider` Protocol (in
-`app/auth.py` or a new `app/identity.py`):
+**AuthN is an adapter concern.** An `IdentityProvider` Protocol exists in
+`app/identity.py` (`app/auth.py` cannot host it: it may import no other `app.*`
+module):
 
 - `SharedSecretProvider` — today's local single-operator behavior.
 - `OidcProvider` — JWKS-backed JWT verification with issuer, audience, and
@@ -186,8 +191,8 @@ selected by configuration and fails closed if misconfigured (ADR 0004). The
 
 ## 5. Deferred low-hanging fruit, ranked
 
-These are behavior-preserving candidates for a later Tier 1-style plan. None
-is registered today.
+These are behavior-preserving candidates for a later Tier 1-style plan. Item 5
+shipped in `tenancy-seams`; the rest are unregistered.
 
 | # | Item | Default-preserving shape | Value | Blocker |
 |---|---|---|---|---|

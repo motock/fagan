@@ -115,3 +115,4 @@ if a precise date is needed when writing one of these up.
 - enterprise-prep-tier1 — completed 2026-10-26, 3 stories
 - forge-abstraction — completed 2026-10-26, 6 stories
 - enterprise-plan-approval — completed 2026-10-26, 7 stories
+- tenancy-seams — completed 2026-10-26, 5 stories

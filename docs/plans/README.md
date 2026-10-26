@@ -23,10 +23,12 @@ update this index in the same change.
 
 **Enterprise platform readiness (assessed 2026-10-25):**
 [`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md) records
-the eventing, observability, auditability, and authn/authz findings. Two plans
-came out of it and both shipped 2026-10-26: the behavior-preserving
-`enterprise-prep-tier1` (3 stories) and `enterprise-plan-approval` (7 stories,
-ADR 0007). The remaining items are deferred and ranked in that document.
+the eventing, observability, auditability, and authn/authz findings. Three plans
+came out of it and all shipped 2026-10-26: the behavior-preserving
+`enterprise-prep-tier1` (3 stories), `enterprise-plan-approval` (7 stories, ADR
+0007), and `tenancy-seams` (5 stories — the ADR 0009 identity/authorization
+seam only, spec `docs/specs/IDENTITY_AND_POLICY.md`, enforcement still
+outstanding). The remaining items are deferred and ranked in that document.
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -108,11 +110,14 @@ the Claude dispatch cooldown, capacity waits, and the stall scan),
 host; ADR 0006).
 
 **Enterprise readiness**: `enterprise-prep-tier1` (repo-root allowlist,
-worktree namespace, topology in health; all opt-in and default-preserving) and
-`enterprise-plan-approval` (`enterprise-plan-approval`; the ADR 0007 gate —
-state and content digest at ingest, `approve_plan`/`reject_plan`, reset on
-authored change, enforcement in the tick and direct dispatch, spec
-`docs/specs/PLAN_APPROVAL.md`).
+worktree namespace, topology in health; all opt-in and default-preserving),
+`enterprise-plan-approval` (the ADR 0007 gate — state and content digest at
+ingest, `approve_plan`/`reject_plan`, reset on authored change, enforcement in
+the tick and direct dispatch, spec `docs/specs/PLAN_APPROVAL.md`), and
+`tenancy-seams` (the ADR 0009 `Principal` / `IdentityProvider` /
+`SharedSecretProvider` / deny-by-default `Authorizer` seam, attached to
+`request.state.principal` by the dashboard middleware but enforcing nothing yet
+— spec `docs/specs/IDENTITY_AND_POLICY.md`).
 
 **Code host and CI**: `FORGE_ABSTRACTION_PLAN.md` (`forge-abstraction`; a
 `Forge` protocol with GitHub and GitLab adapters behind `PIPELINE_FORGE`, so

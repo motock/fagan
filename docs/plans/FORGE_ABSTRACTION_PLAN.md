@@ -379,7 +379,8 @@ refactors across large files and should **not** run on the on-device tier.
 
 - **Files:** `pipeline/triage_story_actions.py`, `scripts/install_checks.py`,
   `README.md`, `REFERENCE.md` (and `pipeline/execution.py` for the secret
-  list).
+  list), `pipeline/forge_github.py` (the `pr_state` argv/timeout contract
+  restoration, ratified as in-scope for S3).
 - **Scope:** `_pr_is_merged` becomes `provider.pr_state(url) == "MERGED"`;
   the installer resolves the active forge and checks the right prerequisite;
   the secret scrub list grows; document `PIPELINE_FORGE` beside

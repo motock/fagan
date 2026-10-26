@@ -216,6 +216,10 @@ _AGENT_SECRET_ENV = frozenset({
     "PLANE_API_KEY",
     "GH_TOKEN",
     "GITHUB_TOKEN",
+    # GitLab forge credentials: the same leak risk as the GitHub tokens.
+    "GITLAB_TOKEN",
+    "GLAB_TOKEN",
+    "CI_JOB_TOKEN",
 })
 
 

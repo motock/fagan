@@ -4,13 +4,19 @@ Runs on a bare system python3 (before any venv exists), so this module
 imports stdlib only - no pipeline/, app/, or third-party imports. It is
 imported by tests/unit/test_install_checks.py and executed standalone via
 ``python3 scripts/install_checks.py [--json]``; scripts/install.sh (a later
-story) will consume its report and decide what to do, so ``main`` always
-returns 0: missing OPTIONAL tools are graceful degradation, not failure.
+story) will consume its report and decide what to do. ``main`` returns 0
+when the report is usable, 1 when the resolved forge's CLI is missing, and
+2 when ``PIPELINE_FORGE`` names an unknown forge: missing OPTIONAL tools
+are graceful degradation, not failure, but a missing required CLI is.
 
-Checks, in report order: python >= 3.11, git, gh, claude (required);
-ollama, docker (optional). Every check carries a static, actionable,
-host-independent hint; a discovered binary path goes in ``detail``, never
-in ``hint``.
+Checks, in report order: python >= 3.11, git, the resolved forge's CLI,
+claude (required); ollama, docker (optional). The forge CLI is the
+exception to a fixed list: the doctor resolves the active forge
+(``PIPELINE_FORGE``, else the origin remote's host) and requires exactly
+that forge's CLI - gh for github, glab for gitlab - so a GitLab repo is
+never asked for gh. Every check carries a
+static, actionable, host-independent hint; a discovered binary path goes in
+``detail``, never in ``hint``.
 
 Beyond presence, three authorizations are probed (PP-04): gh (the pipeline
 opens and merges PRs through it, so an unauthenticated gh fails at the
@@ -21,13 +27,19 @@ credential - the app's OllamaProvider sends none). Statuses: ``ok``,
 ``missing``, ``unauthorized`` (present but not signed in - the remedy is a
 login, not an install), and ``unknown`` (the probe could not decide). The
 ollama sign-in is optional: only ``:cloud`` tags need it, so it never
-fails the run.
+fails the run. glab has no auth probe yet (deferred to the GitLab adapter
+story), so a GitLab repo's glab check is presence-only.
 
 The auth probes are reachable only through the two module-level seams
 ``_RUNNER`` (subprocess) and ``_URLOPEN`` (daemon HTTP), both ``None`` by
-default: with the defaults, ``collect_checks`` stays presence-only - the
+default: with the defaults, ``collect_checks`` does no auth probing - the
 contract the base suite pins - while ``main`` installs the real
-implementations so the standalone doctor verifies authorization too. Every
+implementations so the standalone doctor verifies authorization too. Forge
+resolution reads the origin remote through a third seam, ``_REMOTE_URL``
+(also ``None`` by default), so an in-process ``collect_checks`` call never
+shells out to git and its report cannot depend on the host this checkout
+happens to have cloned from; with the default seam the forge is unresolved
+and the report keeps the base contract (gh required, report-only). Every
 probe is bounded by ``_PROBE_TIMEOUT_SECONDS`` and never raises: a
 timeout, a nonzero exit, a missing binary, or an OSError all resolve to an
 ``unknown``/``unauthorized`` status, never a crash and never a hang. The
@@ -37,6 +49,8 @@ exactly two top-level functions (a base-suite guarantee).
 
 import argparse
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +59,32 @@ import urllib.request
 
 _PY_MIN = (3, 11)
 _PYTHON_HINT = "Install Python 3.11+ (the mcp SDK needs it)"
+
+# The CLI each forge drives, and the env var that selects the forge. The
+# doctor requires exactly the resolved forge's CLI - never both: a GitLab
+# repo has no use for gh, and a GitHub repo has no use for glab.
+_FORGE_ENV = "PIPELINE_FORGE"
+_FORGE_CLI = {"github": "gh", "gitlab": "glab"}
+# The host of a git remote URL: an optional scheme, an optional ``user@``, then
+# the host up to the first ``:`` or ``/``. Mirrors ``pipeline.forge._HOST_RE``
+# without importing it (this script stays stdlib-only). Splitting on ``:``
+# alone is wrong: it yields "https" for an https remote.
+_HOST_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:[^@/]+@)?([^/:]+)")
+
+# The forge resolution the last ``collect_checks`` call performed. ``main``
+# reads it to tell a confidently resolved host from the unrecognised fallback
+# without probing the remote a second time; it clears the dict before
+# collecting, so a stubbed ``collect_checks`` leaves it empty (report-only).
+_RESOLUTION = {}
+_FORGE_HINTS = {
+    "github": (
+        "Install the GitHub CLI: https://cli.github.com ; then run: gh auth login"
+    ),
+    "gitlab": (
+        "Install the GitLab CLI: https://gitlab.com/gitlab-org/cli ; "
+        "then run: glab auth login"
+    ),
+}
 
 # Bound for every auth probe (CLI subprocess or daemon HTTP call). A probe
 # that hangs must degrade to ``unknown`` within this many seconds, never
@@ -104,11 +144,19 @@ _GH_AUTH_ARGV = ("gh", "auth", "status")
 _CLAUDE_AUTH_ARGV = ("claude", "auth", "status", "--json")
 _OLLAMA_ME_URL = "http://127.0.0.1:11434/api/me"
 
-# Injectable seams, both None by default so collect_checks stays
-# presence-only (the base suite's pinned contract) and no test touches the
-# live host. main() installs the real implementations below.
+# Injectable seams, both None by default so collect_checks does no auth
+# probing (the base suite's pinned contract) and no test touches the live
+# host. main() installs the real implementations below.
 _RUNNER = None
 _URLOPEN = None
+
+# The origin-remote probe that resolves the forge under ``auto``, also a seam
+# and also None by default: an in-process ``collect_checks`` call must not
+# shell out to git, or its report would depend on whichever remote this
+# checkout happens to have. With the default the forge is unresolved and the
+# report keeps the base contract (gh required, report-only). main() installs
+# the real git-backed implementation.
+_REMOTE_URL = None
 
 
 def collect_checks(which=shutil.which, py_version=None):
@@ -205,6 +253,62 @@ def collect_checks(which=shutil.which, py_version=None):
             return "unknown", "auth probe failed"
         return None
 
+    def resolve_forge():
+        """The active forge name and whether the host confidently named it.
+
+        Mirrors ``pipeline.forge.resolve_forge_name`` without importing it:
+        this module must stay stdlib-only so it runs on a bare interpreter
+        before any venv exists. An explicit ``github``/``gitlab`` wins and
+        never pays for a remote probe; ``auto`` maps the origin remote's
+        hostname and falls back to ``github`` when it is unrecognised. An
+        unknown value is a misconfiguration, so it raises rather than
+        silently picking a forge.
+
+        The second element is True only when the origin host itself named a
+        forge. An unrecognised host (or an unreadable remote) is a fallback,
+        not a resolution: the repo may simply not be the pipeline's, so the
+        doctor must stay a report rather than fail on the fallback's CLI.
+        """
+        choice = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+        if choice in _FORGE_CLI:
+            return choice, True
+        if choice != "auto":
+            raise ValueError(
+                f"Unknown {_FORGE_ENV}={choice!r}; expected one of 'auto', "
+                f"{sorted(_FORGE_CLI)}."
+            )
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _REMOTE_URL is None:
+            # No probe installed (an in-process collect_checks call): the
+            # forge is unresolved, so the report keeps the base contract.
+            return "github", False
+        try:
+            url = _REMOTE_URL(repo_root) or ""
+        except (OSError, subprocess.TimeoutExpired):
+            return "github", False
+        match = _HOST_RE.match(url.strip())
+        host = match.group(1).lower() if match else ""
+        if "gitlab" in host:
+            return "gitlab", True
+        if "github" in host:
+            return "github", True
+        return "github", False
+
+    # The forge's own CLI replaces the hardcoded gh entry, so a GitLab repo
+    # requires glab and a GitHub repo requires gh - never both.
+    forge, confident = resolve_forge()
+    # Recorded for main(), which must fail loudly on a confidently resolved
+    # forge's missing CLI without probing the remote a second time. main()
+    # clears this first, so a stubbed collect_checks (the base suite's
+    # determinism seam) leaves it empty and main() stays report-only.
+    _RESOLUTION.clear()
+    _RESOLUTION.update(forge=forge, confident=confident)
+    forge_cli = _FORGE_CLI[forge]
+    tool_specs = tuple(
+        (forge_cli, required, _FORGE_HINTS[forge]) if name == "gh" else (name, required, hint)
+        for name, required, hint in _TOOL_SPECS
+    )
+
     if py_version is None:
         py_version = (sys.version_info.major, sys.version_info.minor)
     checks = []
@@ -232,7 +336,7 @@ def collect_checks(which=shutil.which, py_version=None):
             "hint": _PYTHON_HINT,
         }
     )
-    for name, required, hint in _TOOL_SPECS:
+    for name, required, hint in tool_specs:
         found = which(name)
         status = "ok" if found else "missing"
         detail = found if found else "not found"
@@ -246,9 +350,9 @@ def collect_checks(which=shutil.which, py_version=None):
                 # tool is a login, not an install, so the hint is swapped for
                 # the static status-specific one - in both text and JSON mode.
                 if status == "unauthorized":
-                    hint = _UNAUTHORIZED_HINTS[name]
+                    hint = _UNAUTHORIZED_HINTS.get(name, hint)
                 elif status == "unknown":
-                    hint = _UNKNOWN_HINTS[name]
+                    hint = _UNKNOWN_HINTS.get(name, hint)
         checks.append(
             {
                 "name": name,
@@ -262,19 +366,40 @@ def collect_checks(which=shutil.which, py_version=None):
 
 
 def main(argv=None):
-    """Print one line per check (or a JSON list with --json); return 0.
+    """Print one line per check (or a JSON list with --json).
 
-    Installs the real subprocess/urllib probe seams before collecting, so
-    the standalone doctor verifies authorization, not just presence. The
-    exit code is always 0: a missing or unauthorized OPTIONAL tool is
-    graceful degradation, not failure.
+    Installs the real subprocess/urllib/remote probe seams before collecting,
+    so the standalone doctor verifies authorization and resolves the forge
+    from the actual origin remote, not just presence. Returns 0 when the
+    report is usable, 1 when the resolved forge's CLI is missing, and 2 when
+    ``PIPELINE_FORGE`` names an unknown forge. A missing or unauthorized
+    OPTIONAL tool is still graceful degradation, not failure.
     """
 
     def install_real_seams():
-        """Point the module seams at the real subprocess/urllib wrappers."""
-        global _RUNNER, _URLOPEN
-        _RUNNER = subprocess_runner
-        _URLOPEN = urllib_urlopen
+        """Point the unset module seams at the real subprocess/urllib/git wrappers.
+
+        A seam that is already set was injected (a test's stub), so it is left
+        alone: that is the injection point for the probe surfaces.
+        """
+        global _RUNNER, _URLOPEN, _REMOTE_URL
+        if _RUNNER is None:
+            _RUNNER = subprocess_runner
+        if _URLOPEN is None:
+            _URLOPEN = urllib_urlopen
+        if _REMOTE_URL is None:
+            _REMOTE_URL = git_origin_url
+
+    def git_origin_url(repo_root):
+        """Default remote seam: the origin remote's URL, or "" if unreadable."""
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "remote", "get-url", "origin"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+        return (proc.stdout or "").strip() if proc.returncode == 0 else ""
 
     def subprocess_runner(argv, timeout):
         """Default CLI runner: run argv, return (returncode, stdout, stderr)."""
@@ -293,7 +418,10 @@ def main(argv=None):
 
     install_real_seams()
     parser = argparse.ArgumentParser(
-        description="Report prerequisite tools for this repo (advisory only)."
+        description=(
+            "Report prerequisite tools for this repo and require the resolved "
+            "forge's CLI (gh for github, glab for gitlab)."
+        )
     )
     parser.add_argument(
         "--json",
@@ -301,22 +429,62 @@ def main(argv=None):
         help="print the check results as a JSON list instead of text",
     )
     args = parser.parse_args(argv)
-    checks = collect_checks()
+    _RESOLUTION.clear()
+    try:
+        checks = collect_checks()
+    except ValueError as exc:
+        # An unknown PIPELINE_FORGE is a misconfiguration, not a crash: the
+        # doctor names it and exits non-zero instead of dumping a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    def missing_required_cli():
+        """The resolved forge's CLI when it is absent, else None.
+
+        A missing forge CLI is not graceful degradation: the pipeline cannot
+        open or merge a PR without it, so the doctor names both the resolved
+        forge and the CLI it requires and exits non-zero. An explicitly
+        configured forge always fails the run; under ``auto`` only a host that
+        confidently named a forge does, because an unrecognised host may
+        simply not be the pipeline's (the base report-only contract).
+        """
+        configured = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+        if configured in _FORGE_CLI:
+            forge = configured
+        elif _RESOLUTION.get("confident"):
+            forge = _RESOLUTION["forge"]
+        else:
+            return None
+        required = _FORGE_CLI[forge]
+        for check in checks:
+            if check["name"] == required and check["status"] == "missing":
+                return forge, required
+        return None
+
+    missing = missing_required_cli()
     if args.json:
         print(json.dumps(checks, indent=2))
-        return 0
-    for check in checks:
-        if check["status"] == "ok":
-            marker = "ok"
-        elif check["status"] == "unauthorized":
-            marker = "AUTH"
-        elif check["status"] == "unknown":
-            marker = "UNKNOWN"
-        elif check["required"]:
-            marker = "MISS"
-        else:
-            marker = "optional"
-        print(f"[{marker}] {check['name']}: {check['detail']} - {check['hint']}")
+    else:
+        for check in checks:
+            if check["status"] == "ok":
+                marker = "ok"
+            elif check["status"] == "unauthorized":
+                marker = "AUTH"
+            elif check["status"] == "unknown":
+                marker = "UNKNOWN"
+            elif check["required"]:
+                marker = "MISS"
+            else:
+                marker = "optional"
+            print(f"[{marker}] {check['name']}: {check['detail']} - {check['hint']}")
+    if missing is not None:
+        forge, cli = missing
+        print(
+            f"error: resolved forge {forge!r} requires the {cli!r} CLI, "
+            f"which was not found on PATH",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

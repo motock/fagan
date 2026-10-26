@@ -108,9 +108,12 @@ def test_approve_merge_push_failure_returns_error(plan_dir, monkeypatch, tmp_pat
 def test_advance_pipeline_rebase_conflict_retries_within_budget(plan_dir, monkeypatch):
     # A rebase conflict blocks the merge before _merge_pr is ever called; it
     # counts against merge_attempts and leaves the story pr_open for retry.
+    # This is the legacy path: conflict rework ships on by default (RC-02), so
+    # pin it off here to keep exercising retry-then-park unchanged.
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CONFLICT", "0")
     _write_manifest(plan_dir, "rbconflict", {
         "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
                "risk": "low", "worktree": "/x"},

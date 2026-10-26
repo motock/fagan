@@ -160,6 +160,30 @@ def test_unknown_story_raises_key_error_and_writes_nothing(plan_dir, monkeypatch
     assert notices == []
 
 
+@pytest.mark.parametrize(
+    ("plan_name", "story_key"),
+    [
+        ("../escape", _STORY),
+        (_PLAN, "../../etc/passwd"),
+        (_PLAN, "FORGE/S1B"),
+        ("", _STORY),
+    ],
+)
+def test_traversal_shaped_key_raises_and_writes_nothing(
+    plan_dir, monkeypatch, plan_name, story_key
+):
+    """plan/story flow into PLAN_DIR paths, so the boundary check must refuse."""
+    _write_manifest(_populated_story())
+    notices = _capture_notices(monkeypatch)
+    before = _manifest_bytes()
+
+    with pytest.raises(ValueError, match="invalid plan/story key"):
+        unpark_mod.clear_story_fields(plan_name, story_key, ["rework_attempts"])
+
+    assert _manifest_bytes() == before
+    assert notices == []
+
+
 def test_status_is_written_and_echoed(plan_dir, monkeypatch):
     _write_manifest(_populated_story())
     _capture_notices(monkeypatch)

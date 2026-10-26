@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .parsers import _validate_key
 from .persistence import _notify_user
 from .store import FileStore
 
@@ -105,14 +106,20 @@ def clear_story_fields(
     sorted list of names actually removed.
 
     Raises:
-        ValueError: a name in ``fields`` is not in :data:`UNPARKABLE_FIELDS`, or
-            ``status`` is not one the pipeline assigns. Raised before the lock
-            is taken and before anything is read, so nothing is written.
+        ValueError: ``plan_name`` or ``story_key`` is not a safe path key (the
+            same boundary check every sibling entry point applies, since both
+            flow into ``PLAN_DIR / f"{plan_name}.manifest.json"``), a name in
+            ``fields`` is not in :data:`UNPARKABLE_FIELDS`, or ``status`` is not
+            one the pipeline assigns. Raised before the lock is taken and before
+            anything is read, so nothing is written.
         KeyError: the plan has no such story.
         RuntimeError: another dispatch/ingest/interrupt holds the plan lock.
         OSError: the manifest could not be written (no notice is emitted).
     """
-    # Fail closed: validate every name before the lock, before any read.
+    # Fail closed: validate the keys and every field name before the lock,
+    # before any read.
+    _validate_key(plan_name)
+    _validate_key(story_key)
     for field in fields:
         if field not in UNPARKABLE_FIELDS:
             raise ValueError(

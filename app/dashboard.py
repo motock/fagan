@@ -145,8 +145,9 @@ async def _enforce_api_key(request: Request, call_next):
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         # The gate passed. Attach the authenticated principal for the service
-        # layer (ADR 0009). This is identity, not enforcement: nothing reads
-        # request.state.principal yet.
+        # layer (ADR 0009). This is identity, not enforcement: the middleware
+        # binds the principal for the life of the request via pipeline.actor
+        # (see below), but nothing yet enforces a role on it.
         presented_key = request.headers.get("x-pipeline-api-key")
         if (
             request.url.path == auth.CHAT_STREAM_PATH

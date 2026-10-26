@@ -46,12 +46,25 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
 
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
+    """Make the story branch landable: rebase it and force-push the result.
+
+    The rebase + force-push themselves live behind the forge seam
+    (``Forge.prepare_merge``), so ``merge_pr`` means only "land it". This
+    function keeps its name, its home module and its ``(gate_error,
+    pushed_sha)`` return value: six tests patch it by that exact name on
+    ``pipeline.advance`` / ``pipeline.merge``, and ``advance_merge`` resolves
+    it through ``_ModuleRef("pipeline.advance", ...)``.
+
+    The forge is resolved lazily on every call - never bound at import time
+    and never memoized in a module global - so a monkeypatch of this name (or
+    of ``pipeline.forge.get_forge``) made after import is still observed.
+    """
+    from .forge import get_forge
     from .pr import _resolve_story_branch
     from .server import (
         REPO_ROOT,
         _default_branch,
         _notify_user,
-        _rebase_onto_master,
         _store,
     )
 
@@ -74,8 +87,8 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
     if worktree and Path(worktree).is_dir():
         resolved = _resolve_story_branch(worktree, key)
 
-    rb = _rebase_onto_master(worktree, resolved)
-    if rb.get("auto_resolved"):
+    prepared = get_forge(REPO_ROOT).prepare_merge(worktree, resolved)
+    if prepared.get("auto_resolved"):
         # W4L-04: stamp the story's correlation_id onto this merge-gate
         # notice. This helper receives only plan+story key (no story dict),
         # so the id is looked up from the manifest the same way neighboring
@@ -91,34 +104,12 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
             **({"correlation_id": _cid} if _cid else {}),
             event="rebase_auto_resolved",
         )
-    if not rb["ok"]:
-        return (
-            f"rebase: {rb['error']}",
-            "",
-        )
-    pushed_sha = ""
-    if Path(worktree).is_dir():
-        push = subprocess.run(
-            ["git", "push", "--force-with-lease", "origin", resolved],
-            check=False,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return (
-                f"push: {(push.stderr or push.stdout).strip()[:200]}",
-                "",
-            )
-        rev = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=False,
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-        )
-        pushed_sha = rev.stdout.strip()
-    return ("", pushed_sha)
+    if not prepared["ok"]:
+        # The forge returns the bare "rebase: ..." / "push: ..." text; the
+        # conflict-rework route matches startswith("rebase:") plus
+        # "conflict" in the text, so it must pass through unwrapped.
+        return (prepared["error"], "")
+    return ("", prepared["pushed_sha"])
 
 
 @contextmanager

@@ -20,7 +20,7 @@ import re
 import subprocess
 import threading
 from logging import getLogger
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = getLogger(__name__)
 
@@ -152,8 +152,12 @@ class Forge(Protocol):
         """Rerun the failed jobs for ``sha``; False on any failure."""
         ...
 
-    def prepare_merge(self, worktree: str, branch: str) -> None:
-        """Rebase ``branch`` onto the default branch and push it."""
+    def prepare_merge(self, worktree: str, branch: str) -> dict[str, Any]:
+        """Rebase ``branch`` onto the default branch and force-push it.
+
+        Returns ``{"ok", "error", "pushed_sha", "auto_resolved"}``; ``error``
+        is the bare ``rebase: ...`` / ``push: ...`` text, never wrapped.
+        """
         ...
 # ---------------------------------------------------------------------------
 # Remote probe

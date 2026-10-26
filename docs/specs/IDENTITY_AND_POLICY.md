@@ -22,7 +22,8 @@ control. `app/identity.py` defines a `Principal`, the ADR 0009 roles, an
 and the fail-closed `is_allowed()` wrapper.
 
 The dashboard authenticates each `/api/` request and attaches the resulting
-principal to `request.state.principal`. **Nothing reads it.** No service-layer
+principal to `request.state.principal`, then binds it as the request-scoped
+actor (§2, `pipeline/actor.py`). **Nothing enforces it.** No service-layer
 method consults `is_allowed`, so a denied principal changes nothing today. The
 seam is inert by construction: with no identity provider configured and no call
 site invoking the policy, the pipeline behaves exactly as it did before this
@@ -81,6 +82,79 @@ Imports `app.identity` only — never `app.auth` (an adapter concern) and never
 | `default_authorizer()` | Returns the authorizer for this deployment — `LocalPolicy()` today. |
 | `is_allowed(authorizer, principal, action, resource)` | The wrapper every future call site uses: asks the authorizer and **fails closed** on any error, logging a warning that names the action and the principal subject. A policy that raises lands denied, never propagates. |
 
+### Actor propagation (`pipeline/actor.py`)
+
+The process that runs a tool is not the caller. This module carries the caller
+across the layers that do not take one as an argument.
+
+Three states, in order of authority:
+
+1. **A principal a transport bound.** The dashboard middleware binds the
+   principal it authenticated for the request; the remote MCP HTTP transport
+   will bind the principal it verified from the token.
+2. **`ANONYMOUS`** — `Principal(subject="anonymous", auth_method="none")`, with
+   no roles and no scopes. A transport binds this when it went out of its way to
+   authenticate nobody (the chat-stream `k-` pass-through). It is deliberately
+   *not* the local operator: an unauthenticated remote caller must never be
+   recorded as the operator of this machine.
+3. **`LOCAL_OPERATOR`** — the fallback when nothing is bound at all. That is a
+   process that *is* the local operator: the stdio MCP server, the launchd
+   scheduler daemon, a CLI script.
+
+| Symbol | What it is |
+| --- | --- |
+| `ANONYMOUS` | The principal for a caller whose transport refused to identify them. No roles, no scopes, `auth_method="none"`. |
+| `bind_principal(principal)` | Context manager that binds *principal* for the duration of one request. |
+| `current_principal()` | The bound principal, or `LOCAL_OPERATOR` when nothing is bound. |
+| `actor_id()` | `current_principal().subject`, for stamping onto records. |
+
+The binding is a `ContextVar`, so it is scoped to one request: `bind_principal`
+restores the previous value on exit — including when the handler raises — and a
+binding never crosses threads. A `threading.Thread` started inside a request
+begins with an empty context and sees `LOCAL_OPERATOR`.
+
+Worked examples:
+
+- A remote MCP HTTP request whose token verifies as `alice` → `actor_id()` is
+  `"alice"`.
+- A remote request whose token is missing or invalid → the transport binds
+  `ANONYMOUS`, so `actor_id()` is `"anonymous"`, **not** `"local-operator"`.
+- A local stdio or CLI process with nothing bound → `actor_id()` is
+  `"local-operator"`.
+- Request 1 binds `alice`; inside the handler `current_principal()` is `alice`.
+  When the handler returns — or raises — the binding is restored, so the next
+  call on that thread or event loop sees `LOCAL_OPERATOR` again, not `alice`.
+
+**The rule: no tool takes an actor.** No tool may take an actor or principal
+parameter. Identity comes from the transport that received the request: a
+remote MCP HTTP transport binds the principal it verified from the token, and
+the recording sites do not change. A parameter named `actor` would be set by
+whoever holds the credential, which makes every record it stamps forgeable.
+`tests/unit/test_actor.py` enforces the rule by scanning the parameters of every
+registered MCP tool and failing on any named `actor`, `principal`, `decided_by`,
+`user` or `whoami`.
+
+**What records an actor today.**
+
+| Record | Field | Written by |
+| --- | --- | --- |
+| Plan manifest | top-level `ingested_by` | `pipeline/ingest.py` |
+| Plan-approval decision record | `decided_by` and `role` | `pipeline/plan_approval.py` |
+| Decisions log | `actor` | the dashboard route (`app/dashboard.py`) |
+
+- `ingested_by` is `actor_id()` at ingest time.
+- The approval record's `decided_by` is the deciding principal's subject, and
+  `role` is the most privileged ADR 0009 role that principal held (`admin` >
+  `owner` > `approver` > `delegate` > `author`), falling back to `operator` when
+  it holds none. A decider holding `["author", "approver"]` is recorded as
+  `"approver"` — not `"author"` (first in the list) and not `"author,approver"`.
+- The decisions log row written by the dashboard has `actor` = `actor_id()` and
+  keeps `decided_by` as the caller-declared channel from the request body. A
+  request bound to `alice` whose body declares `decided_by: "ops-channel"`
+  produces `actor: "alice"` and `decided_by: "ops-channel"`.
+
+Everything else still records no actor — see §4.
+
 ### The one consumer: `app/dashboard.py`
 
 The `/api/` middleware (`_enforce_api_key`) already gates every API request on
@@ -93,8 +167,11 @@ rather than a principal:
   validated upstream by the pipeline, so the dashboard has no identity for it;
 - any credential the provider rejects.
 
-That is the whole of the wiring. **Nothing reads `request.state.principal`.**
-No route, no service method, no tool consults it or `is_allowed()`.
+That is the whole of the wiring. The middleware then binds the principal — or
+`ANONYMOUS` when it attached `None` — as the request-scoped actor, so the
+recording sites in §2 read it through `actor_id()`. **Nothing enforces it.** No
+route, no service method, no tool consults it or `is_allowed()` to allow or deny
+anything.
 
 ## 3. The invariant that keeps local mode unchanged
 
@@ -106,10 +183,13 @@ the pipeline behaves exactly as it did before this plan:
   adds no new gate and rejects no request the old check accepted.
 - `LocalPolicy` is only reachable through `default_authorizer()`, which no
   production call site invokes.
-- No manifest, event, journal, notification or API response shape changes.
-- `pipeline/plan_approval.py` still records the constant actor
-  `local-operator` (`_DECISION_ACTOR`) on every approval decision; the seam does
-  not touch it.
+- No event, journal, notification or API response shape changes. The manifest
+  gains one additive field, `ingested_by` (§2), which no existing reader
+  requires.
+- `pipeline/plan_approval.py` records the deciding principal's subject as
+  `decided_by` and its most privileged role as `role`; with nothing bound that
+  principal is `LOCAL_OPERATOR`, so local mode records the same actor it always
+  did.
 
 This is ADR 0009 section 7 ("local mode is unchanged") and the first part of
 ADR 0008 staging step 1 ("verified caller identity at the gateway, RBAC and
@@ -131,7 +211,7 @@ Do not mistake any row of this table for a control that exists.
 | **OIDC provider** | There is no `OidcProvider`. `SharedSecretProvider` is the only `IdentityProvider`, so there is no JWT/JWKS verification, issuer/audience/expiry check, or group-to-role mapping. |
 | **Remote MCP transport** | MCP is stdio only. There is no HTTP transport layer to verify a token and yield a `Principal`. |
 | **Audit stream** | No allow/deny record is emitted. ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` stream does not exist. |
-| **Identity on approvals** | `pipeline/plan_approval.py` still stamps the constant `_DECISION_ACTOR = "local-operator"` as `decided_by` and `role`. An approval records no real principal. |
+| **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement is still outstanding. |
 
 ## 5. The `app/auth.py` import rule
 

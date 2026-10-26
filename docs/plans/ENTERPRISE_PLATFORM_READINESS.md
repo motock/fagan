@@ -125,9 +125,13 @@ test-only. The notification channel layer is the template for the rest.
 
 ### Gaps
 
-- **No actor identity.** Nothing stamps the human caller on ingest, dispatch,
-  pause, approve, or answer. `decided_by` exists only for overlord merge
-  rulings. This is the same prerequisite as ADR 0006 / 0007 / 0008.
+- **Actor identity is partial.** Ingest stamps `ingested_by`, plan approval
+  records `decided_by` and `role`, and dashboard decisions record `actor`; the
+  dashboard binds a principal per request (`pipeline/actor.py`, see
+  [the identity spec](../specs/IDENTITY_AND_POLICY.md#actor-propagation-pipelineactorpy)).
+  Dispatch, story status changes, pause/resume and decision answers still record
+  no actor, and no role is ever checked. This is the same prerequisite as
+  ADR 0006 / 0007 / 0008.
 - **Not tamper-evident.** `_append_decision` is a JSON-array
   read-modify-write in a user-writable directory; there is no hash chain,
   signature, WORM storage, or external shipping.

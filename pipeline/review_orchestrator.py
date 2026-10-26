@@ -698,8 +698,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # the bug in the implementation module, the suite went green and a real
     # reviewer said APPROVE, but this guard downgraded it anyway - burning
     # the story's entire rework budget on an already-resolved finding.
-    # Non-test findings (README prose, server.py logic) still require the
-    # flagged file to be touched; there's no equivalent objective proof.
+    # Non-test findings (README prose, server.py logic) still require the flagged
+    # file to be touched OR to no longer differ from the base branch - the same
+    # proof as the test-file exemption. Fails open on base, OSError, returncode.
     if (
         verdict == "APPROVE"
         and story.get("last_reviewed_sha")

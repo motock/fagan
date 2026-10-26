@@ -18,6 +18,14 @@ against. ``on_ingest`` recomputes the digest and keeps ``approved`` only when
 the previous record was approved *and* its digest still matches; any authored
 change therefore resets the record to ``pending_approval`` while preserving the
 previous decision metadata for auditability.
+
+``reset_if_changed`` applies the same digest rule to edits made through the
+patch tools (``patch_story`` / ``patch_plan``): an approval cannot outlive an
+authored change made through those tools. It is not a blanket guard for every
+writer of authored fields: ``save_plan`` is covered by the source-digest guard
+at the next ingest, while ``set_plan_role_config`` writes ``role_config``
+directly and is *not* reset here — an approval can outlive such a change until
+the next ingest. Closing that window is tracked with the enforcement story.
 """
 import hashlib
 import json
@@ -51,12 +59,20 @@ _TRUE_VALUES = frozenset({"on", "1", "true"})
 _FALSE_VALUES = frozenset({"", "off", "0", "false"})
 
 #: Previous decision metadata carried forward across re-ingests for audit.
+#: ``at`` is the decision timestamp written by ``PlanApprovalMixin._decide_plan``
+#: (``datetime.now(UTC).isoformat()``); ``decided_at`` is accepted as a legacy
+#: alias so records written by older builds keep their audit trail.
 _PRESERVED_DECISION_FIELDS = (
     "decided_by",
+    "at",
     "decided_at",
     "role",
     "self_approved",
 )
+
+#: Decision metadata cleared when the authored content changes. ``reason`` is
+#: written by a ``changes_requested`` decision and must not outlive it.
+_CLEARED_DECISION_FIELDS = _PRESERVED_DECISION_FIELDS + ("reason",)
 
 
 def approval_enabled() -> bool:
@@ -125,9 +141,8 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
     The digest is recomputed from the authored content and compared against the
     previous record *before* anything is assigned, so a content change always
     resets the status to ``pending_approval``. Previous decision metadata
-    (``decided_by``, ``decided_at``, ``role``, ``self_approved``,
-    ``warnings_seen``) is preserved for auditability. The input manifest is not
-    mutated.
+    (``decided_by``, ``at``, ``role``, ``self_approved``, ``warnings_seen``) is
+    preserved for auditability. The input manifest is not mutated.
     """
     previous = manifest.get("approval")
     if not isinstance(previous, dict):
@@ -151,6 +166,38 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
         if field in previous:
             record[field] = previous[field]
     return record
+
+
+def reset_if_changed(manifest: dict[str, Any]) -> bool:
+    """Reset ``manifest``'s approval record when its authored content changed.
+
+    Compares ``canonical_digest(manifest)`` with the digest stored on the
+    ``approval`` record. When they differ the record is reset to
+    ``pending_approval``, the decision metadata (``decided_by``, ``at``,
+    ``role``, ``self_approved``, plus a ``changes_requested`` ``reason``) is
+    cleared and the digest is updated; the function returns ``True``. A
+    matching digest returns ``False`` and changes nothing.
+
+    While the gate is disabled this is a no-op that returns ``False`` without
+    touching the manifest, so the default-off path stays byte-identical to
+    before this function existed. Non-decision metadata (``warnings_seen``) is
+    preserved for auditability, mirroring ``on_ingest``.
+    """
+    if not approval_enabled():
+        return False
+
+    digest = canonical_digest(manifest)
+    previous = manifest.get("approval")
+    if not isinstance(previous, dict):
+        previous = {}
+    if previous.get("digest") == digest:
+        return False
+
+    record = {**previous, "status": "pending_approval", "digest": digest}
+    for field in _CLEARED_DECISION_FIELDS:
+        record.pop(field, None)
+    manifest["approval"] = record
+    return True
 
 
 #: Actor recorded on every decision until real identity exists (ENT-LC-02b).

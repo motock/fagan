@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import cross_plan, worktree_diff
+from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -187,7 +188,7 @@ def _decompose_context_root(workspace: str | None) -> str | None:
     return path
 
 
-class PipelineService:
+class PipelineService(PlanApprovalMixin):
     """Transport-agnostic pipeline operations.
 
     The ``@mcp.tool()`` functions below are one-line delegations to these

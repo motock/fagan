@@ -22,6 +22,7 @@ previous decision metadata for auditability.
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
@@ -150,3 +151,88 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
         if field in previous:
             record[field] = previous[field]
     return record
+
+
+#: Actor recorded on every decision until real identity exists (ENT-LC-02b).
+_DECISION_ACTOR = "local-operator"
+
+#: Refusal message when the authored content no longer matches the digest the
+#: approval record was made against.
+_DIGEST_MISMATCH_ERROR = "plan content changed; re-ingest before approving"
+
+
+class PlanApprovalMixin:
+    """Approval transitions for ``PipelineService`` (ENT-LC-02a).
+
+    Mixed into ``pipeline.service.PipelineService`` so the transport-agnostic
+    seam owns the transitions while ``pipeline/server.py`` keeps its one-line
+    ``@mcp.tool()`` delegations. The mixin holds no state: every call reads the
+    live ``pipeline.server`` bindings, which is why ``_store`` and
+    ``_append_decision`` are imported *inside* the methods — ``pipeline.server``
+    imports ``pipeline.service``, so a module-level import would cycle.
+
+    Both transitions are no-ops while ``PIPELINE_PLAN_APPROVAL`` is off: they
+    return ``{"ok": True, "skipped": "approval_disabled"}`` without reading or
+    writing the manifest, so the default-off path is byte-identical to before
+    this mixin existed.
+    """
+
+    def approve_plan(self, plan_name: str) -> dict[str, Any]:
+        """Approve ``plan_name``'s authored content (``pending_approval`` ->
+        ``approved``)."""
+        return self._decide_plan(plan_name, status="approved", reason="")
+
+    def reject_plan(self, plan_name: str, reason: str = "") -> dict[str, Any]:
+        """Request changes on ``plan_name`` (``pending_approval`` ->
+        ``changes_requested``), recording ``reason`` when given."""
+        return self._decide_plan(plan_name, status="changes_requested", reason=reason)
+
+    def _decide_plan(
+        self, plan_name: str, *, status: str, reason: str
+    ) -> dict[str, Any]:
+        """Apply one approval decision and append it to the decisions log.
+
+        Refuses (``ok=False``) when the recomputed canonical digest differs
+        from the digest stored on the approval record: the operator would
+        otherwise be approving content they never saw.
+        """
+        from .parsers import _validate_key
+        from .server import _append_decision, _store
+
+        _validate_key(plan_name)
+        if not approval_enabled():
+            return {"ok": True, "skipped": "approval_disabled"}
+
+        with _store.transaction(plan_name) as acquired:
+            if not acquired:
+                return {"ok": True, "skipped": "locked"}
+            if not _store.manifest_path(plan_name).exists():
+                return {"ok": False, "error": f"No such plan {plan_name!r}"}
+            manifest = _store.get_manifest(plan_name)
+            digest = canonical_digest(manifest)
+            previous = manifest.get("approval")
+            if not isinstance(previous, dict):
+                previous = {}
+            if previous.get("digest") != digest:
+                return {"ok": False, "error": _DIGEST_MISMATCH_ERROR}
+
+            warnings_seen = previous.get("warnings_seen")
+            if not isinstance(warnings_seen, list):
+                warnings_seen = []
+            record: dict[str, Any] = {
+                "plan": plan_name,
+                "status": status,
+                "digest": digest,
+                "decided_by": _DECISION_ACTOR,
+                "at": datetime.now(UTC).isoformat(),
+                "role": _DECISION_ACTOR,
+                "self_approved": True,
+                "warnings_seen": list(warnings_seen),
+            }
+            if reason:
+                record["reason"] = reason
+
+            manifest["approval"] = {**previous, **record}
+            _store.save_manifest(plan_name, manifest)
+            _append_decision(plan_name, record)
+            return {"ok": True, **record}

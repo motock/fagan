@@ -234,6 +234,90 @@ the resolved forge's CLI as required (or, for Bitbucket, probe the API
 credential pair), and keep `gh` required only when the resolved forge is
 GitHub.
 
+### Designing for a backend we cannot see yet
+
+Reviewed 2026-10-25 against Anthropic's "Redesigning source control" (Scion,
+Oct 2026). Scion is an in-house, server-authoritative VCS for a monorepo
+merging 30,000 changes/day. Its lesson for this plan is about assumptions an
+adapter boundary can leak, **not** a plugin protocol to copy: it proposes no
+replacement for the PR or review object (its review tool, Antique, is
+explicitly left to another post), so nothing here argues for redesigning the
+story → review → merge flow.
+
+Five rules keep a fourth backend a new module instead of a refactor. None costs
+code today; each constrains S1 and S2.
+
+1. **`pr_url` is an opaque change handle, not a URL to parse.** An adapter
+   returns the host's own identifier for the change — today
+   `https://github.com/…/pull/123`, tomorrow `gitlab!42` or
+   `scion://changeset/<id>`. Nothing above the adapter may parse, construct or
+   normalize it: `plan_summary` prints it, triage hands it back to the provider
+   (`pr_state`). Scion sharpens the point by discouraging refs entirely
+   (branches and tags become global-consensus overhead), so a future backend may
+   have no branch to name and no web URL to show. The manifest field keeps its
+   name; its meaning is "whatever the host calls this change."
+2. **`branch: str` at the call sites is a local-worktree handle, not a host
+   primitive.** Every method takes the branch because that is what the
+   dispatched agent produces, and the adapter translates it into a PR or a
+   pipeline. A future adapter may need a change id instead: keep that mapping
+   inside the adapter and store the result in `pr_url` (rule 1), so the
+   pipeline never learns a second identifier.
+3. **Split "make it mergeable" from "land it".** `merge_pr` is reached today
+   only after a local `git rebase` + force-push in `advance_merge.py` /
+   `merge.py`. A server-authoritative backend has no push and no local rebase;
+   the server merges a changeset. Put a `prepare_merge` verb ahead of
+   `merge_pr` — rebase+push today, a no-op for a server-side backend — so the
+   *mechanism* stays out of the *contract*. Consequence to keep in view: RC-02's
+   conflict-rework route keys on the `rebase:` gate error, which only exists
+   while `prepare_merge` runs locally; a backend that cannot conflict has
+   nothing to rework, which is correct, but the route must stay behind the verb.
+4. **Pre-merge CI is a capability, not a given.** Scion abandons the global
+   merge queue and validates **post**-merge and pre-deploy ("we haven't been
+   able to effectively replicate… a global repository lock on the merge
+   queue"). Add one flag, `validates_pre_merge: bool`, and treat `False` as
+   *unreadable*, never as *none* — `none` is permission to merge without
+   checks, which invariant 1 already forbids arriving by accident. A backend
+   that cannot answer pre-merge must refuse auto-merge; adopting a post-merge
+   posture then becomes an explicit operator opt-in, not an adapter's quiet
+   choice.
+5. **The review verdict is pipeline state; the PR comment is a sink.**
+   `comment_pr` may be unsupported (`supports_comments: bool`), in which case
+   the adapter skips it and the verdict still lives in the manifest, the
+   decisions log and the PR body. All three target hosts support comments
+   today, so this is a documented rule, not new code.
+
+**Where the boundary does not save us.** This is a local-git harness well beyond
+the PR/CI surface: review diffs against `git merge-base`, checkpoint counts
+`rev-list`, the worktree diff finds a fork point, rebase checks ancestry. A
+Scion-style backend with virtual or API-only checkouts needs worktree
+materialization replaced as well as the forge adapter — a far larger change than
+adding GitLab. Say so plainly rather than implying portability we do not have:
+**this Protocol makes forge diversity cheap (GitLab, Bitbucket, Gitea,
+self-hosted, GitHub Enterprise), not VCS-architecture replacement.** The seam
+for the latter is `dispatch_worktree.py` + `git_ops.py`, and it is its own plan.
+
+**What not to build now**, per this repo's no-speculative-abstraction standard
+and the article's own warning that Scion is "by no means a suitable replacement
+for git for general use" and is "highly bespoke": no plugin entry points or
+dynamic loading (selection stays an env var over a closed set, like
+`PIPELINE_TICKET_PROVIDER`); no capability-negotiation framework (one boolean
+and one optional verb is the entire current need); no history/blame/merge-base
+API (local git answers those, and adding a verb later is cheap precisely because
+call sites already go through the Protocol).
+
+One forward-looking note: the article suggests git platforms could expose
+"comprehensive server-side RPCs… perhaps even in a standardized way across
+forges." If that happens, the adapter set shrinks toward one client. The shape
+chosen here is already RPC-like rather than argv-like (`checks_status` returns a
+snapshot; the poll loop stays host-neutral), so that convergence becomes a
+smaller adapter set, not a Protocol redesign.
+
+**Sequencing implication for the stories below.** Rule 3 makes `prepare_merge`
+part of S1's Protocol and moves the rebase+push out of `advance_merge.py` /
+`merge.py`. Keep that move out of S1 — S1 must stay a behavior-identical
+refactor — and insert it as **S1b** (`advance_merge.py`, `merge.py`) landing
+directly after S1.
+
 ## Stories
 
 Ordered so each lands green and independently reviewable. Each story keeps its

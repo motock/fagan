@@ -1,6 +1,9 @@
 # Plan — External Context Sources ("context lake")
 
-**Status:** Proposed, not yet ingested and **not yet preflighted** (2026-10-22).
+**Status:** Shipped as plans `external-context-sources-phase1` (7 stories, PRs
+#1210-#1227) and `external-context-sources-phase2` (6 stories, PRs
+#1230-#1237); the decision is recorded in
+`docs/adr/0005-external-context-sources.md`. Kept as design rationale.
 **One-line goal:** let a person or organization attach governed external
 reference material (legal, architectural, UX, engineering practice, security
 requirements) to a plan, and have it reach the right models in the right

@@ -670,6 +670,19 @@ entirely. Like the usage events it is not in the default e-mail allowlist; add
 it to a `deliver` entry's `events` list or to `PIPELINE_NOTIFY_OUTBOX_EVENTS`
 to route it.
 
+A fourth event comes from the dispatch side of the same wall:
+`usage_capacity_hit` is emitted by `classify_no_progress` when an agent dies on
+the cap banner before any tool step runs, once per wait. Such a death is
+classified before the transport check and charges none of `rework_attempts`,
+`transport_retries` or `dispatch_attempts` — the agent never got to work, and
+waiting for a reset is not exhaustion (charging it parked stories as "agent
+keeps parking/crashing"). Instead the story increments its own `capacity_waits`
+counter and returns to `changes_requested` for the next tick, tripping the
+cooldown latch and announcing the gate as it goes. The 20th wait parks the
+story with `usage cap kept interrupting this story: 20 waits`, so a
+mis-detection cannot loop forever. Like `story_stalled` it is advisory and not
+in the default e-mail allowlist.
+
 ## Plan-conflict rulings
 
 When the grade fails only in pre-existing untouched tests, the pipeline asks
@@ -743,7 +756,8 @@ Each record has the following keys:
   review on a story below `risk: high`). `story_stalled` (the stall scan's
   notice that a dispatch-eligible story has sat undispatched past
   `PIPELINE_STALL_SECONDS`) is likewise advisory and never disqualifies a
-  first pass. `pr_title_mismatch` is a warn-only,
+  first pass, as is `usage_capacity_hit` (a capacity wait, described under
+  "Usage-gate events"). `pr_title_mismatch` is a warn-only,
   heuristic notice (severity `warning`) emitted after a PR opens when its title
   shares no words with the story summary or the changed files; it never alters
   the PR or any gate outcome.
@@ -1687,6 +1701,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |
 | `PIPELINE_WEEK_RESUME_THRESHOLD` | `70` | `%` the **week** window must drop below to clear the gate |
+| `PIPELINE_USAGE_COOLDOWN_SECONDS` | `600` | Length in seconds of the Claude dispatch cooldown latch (`pipeline/usage_cooldown.py`). The usage gate reacts to a *polled* snapshot that lags the real cap, so an agent can die on "hit your session limit" before `check_usage` records it, leaving the scheduler to redispatch into the same wall every tick; when `classify_no_progress` sees that death it latches `usage_cooldown.json` beside `USAGE_STATE_PATH` and `ClaudeCliDriver.resource_status()` reports gated (reason `Claude usage cooldown active`) until the latch expires. Read at call time, never cached. A missing, non-integer or non-positive value falls back to `600` rather than latching a useless zero-length cooldown. Fail-open: a missing or corrupt latch file reads as not active, and neither `trip()` nor `active()` ever raises — a bad file must never block dispatch forever. See "Capacity waits and the dispatch cooldown" |
 | `PIPELINE_STATE_DIR` | *(unset → the pipeline-owned plans/manifests root, i.e. `PLAN_DIR`'s base)* | Override for the detached-grading state root. The detached grade's `result.json`/`grading.log` are written under `<state_root>/grading/<story_id>/` (mode `0o700`) and read back from exactly the path persisted in the story's manifest. Security rationale: the grade verdict and its log must live where the code under test cannot write — an agent-writable worktree would let a graded agent forge a passing verdict (`{"returncode": 0, ...}`) during its own build and bypass the acceptance gate at the collect tick. The default derives from the same root that owns the plans/manifests, so no operator setup is required; a *relative* `PIPELINE_STATE_DIR` value resolves against that fixed plans/manifests base (never the scheduler's CWD), so the spawn tick and the later collect tick resolve the same absolute path even if the daemon's working directory changes between them. |
 | `PIPELINE_CONTEXT_CONFIG` | *(unset → no org context sources)* | Absolute path to a JSON file `{"sources": [...]}` of org-level context sources, merged beneath repo and plan sources at `ingest_plan` (tagged `origin: "org"`; plan > repo > org on duplicate `name`). Set but relative, missing, or malformed → ingest is rejected (fail closed). See "Plan-level `context` block" |
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` \| `auto` (layered local-first with Claude fallback — see below). EMPTY-STATE-ONLY: ignored when `model_registry.json` pins this role's provider (a `roles` entry outranks the env var) |
@@ -2085,6 +2100,36 @@ safe to redo. **External side effects — API calls, DB writes, opening a
 PR — are not**, and need an idempotency key or a "did I already do this?"
 check written into the story's `agent_instructions`. This is a per-story
 concern, not something the pipeline can guarantee for you.
+
+---
+
+## Capacity waits and the dispatch cooldown
+
+Two mechanisms sit between an agent's own death and the scheduler's next
+dispatch. Both exist because the usage gate reacts to a *polled* snapshot that
+lags the real cap: an agent can die on "hit your session limit" while
+`check_usage` still reports the gate clear, and the scheduler then redispatches
+into the same wall every tick.
+
+**The cooldown latch.** When `classify_no_progress` sees a capacity death it
+latches `usage_cooldown.json` beside `USAGE_STATE_PATH` for
+`PIPELINE_USAGE_COOLDOWN_SECONDS` (default `600`). While the latch is live,
+`ClaudeCliDriver.resource_status()` reports gated with reason
+`Claude usage cooldown active`, so dispatch stops and the stall scan names that
+reason. Fail-open by design: a missing, corrupt or unparsable latch file reads
+as not active, and neither `trip()` nor `active()` ever raises — a bad file must
+never block dispatch forever.
+
+**The capacity wait.** A capacity death is classified before the
+transport-failure check and charges none of `rework_attempts`,
+`transport_retries` or `dispatch_attempts`: the agent never got to work, and
+waiting for a reset is not exhaustion. Instead the story's own `capacity_waits`
+counter increments and the story returns to `changes_requested` for the next
+tick. Each wait trips the cooldown latch, announces the gate, and emits one
+`usage_capacity_hit` notification; the 20th wait parks the story
+(`usage cap kept interrupting this story: 20 waits`), so a mis-detection cannot
+loop forever. A failing latch or announcement is logged at WARNING and never
+stops the status change.
 
 ---
 

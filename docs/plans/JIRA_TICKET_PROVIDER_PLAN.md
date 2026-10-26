@@ -10,6 +10,9 @@
 > `.claude/rules/local-dispatch-preflight.md` (impact run — see Pre-flight
 > notes below), then `save_plan`/`ingest_plan`.
 >
+> **Status (verified 2026-10-25):** still blocked, still accurate. The stub is
+> still at `pipeline/ticketing.py:300` (`class JiraTicketProvider`), and no plan
+> in the pipeline has touched it.
 > **Precondition that cannot be stubbed away:** an actual Jira Cloud instance
 > + API token to validate against. The contract tests (S4) run HTTP-mocked,
 > but the Definition of Done requires one live smoke against the real

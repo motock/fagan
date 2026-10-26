@@ -1,9 +1,9 @@
 # Notification channels plan — pluggable channel types, routed per team
 
-> Status: **decided design, not ingested** (2026-10-23). Supersedes the
-> 2026-10-21 draft and the first revision of this document. Stories
-> NC-01..NC-08 below are ingest-ready; the plan is not registered in the
-> pipeline.
+> Status: **shipped** as plan `notification-channels` (NC-01..NC-08, PRs
+> #1221-#1229, plus `notification-channels-registration`). Supersedes the
+> 2026-10-21 draft and the first revision of this document. Kept as design
+> rationale.
 
 ## 1. Goal
 

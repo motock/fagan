@@ -9,7 +9,7 @@ For what actually shipped and what broke along the way, see
 reference superseded designs or file layouts; read them as history, not
 instruction.
 
-**Status below was verified 2026-10-22** against the pipeline manifests and the
+**Status below was verified 2026-10-25** against the pipeline manifests and the
 code. A plan's own header can lag behind; where it did, a dated
 `Status (verified ...)` banner now sits under its title. When you finish a plan,
 update this index in the same change.
@@ -18,11 +18,9 @@ update this index in the same change.
 
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
-| 1 | [`EXTERNAL_CONTEXT_SOURCES_PLAN.md`](EXTERNAL_CONTEXT_SOURCES_PLAN.md) | Drafted, held | Largest unstarted feature, and the only Wave 1 hold still waiting. | Finish the preflight impact runs for CL-14/15/21/22/23/24 against current master, then ingest. |
-| 2 | [`NOTIFICATION_CHANNELS_PLAN.md`](NOTIFICATION_CHANNELS_PLAN.md) | Drafted, not decomposed | Slack/Teams delivery. The outbox and injected-sender seams already exist, so this is mostly new modules with low blast radius. | Settle the open questions (one generic webhook sender vs. one per channel), then decompose. |
-| 3 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
-| 4 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 5 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
+| 1 | [`FORGE_ABSTRACTION_PLAN.md`](FORGE_ABSTRACTION_PLAN.md) | Drafted, not started | GitLab/Bitbucket support for the PR/CI/merge loop. Large and touches the merge gate; worth it only once a non-GitHub user exists. | Re-verify file references, then decompose. |
+| 2 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
+| 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -76,7 +74,8 @@ and `.json`, `GUIDED_DECOMPOSITION_PLAN.md`, `RELIABILITY_PLAN.md`,
 **Overlord and scheduler**: `OVERLORD_FAILURE_TRIAGE_PLAN.md`,
 `OVERLORD_PARKED_STORY_AUTONOMY_PLAN.md`,
 `SCHEDULER_RECONCILE_RESILIENCE_PLAN.md`, `AUTO_MERGE_OFF_SWITCH_PLAN.md`
-(`pipeline-auto-merge-off`).
+(`pipeline-auto-merge-off`), `NOTIFICATION_CHANNELS_PLAN.md`
+(`notification-channels`; pluggable channel types routed per team).
 
 **Dashboard and workspace**: `DASHBOARD_STORY_PROGRESS_PLAN.md` (Tiers 0-1;
 Tier 2 parked), `DASHBOARD_SIDEBAR_SETTINGS_PLAN.md`,
@@ -90,7 +89,17 @@ merged; follow-ups in `wap-review-followups`).
 `PIPELINE_COLD_IMPORTS_PLAN.json`, `PIPELINE_COLD_IMPORTS_PHASE2_PLAN.json`,
 `TOPOLOGY_COLLISION_GUARDS_PLAN.md` (story-key uniqueness at ingest and
 dispatch, checked merge fetch), `CHECK_STORY_STATUS_FIX_PLAN.md`
-(`check_story_status` returns a result for finished stories and unknown plans).
+(`check_story_status` returns a result for finished stories and unknown plans),
+`PARKED_STORY_RECOVERY_PLAN.md` (`parked-story-recovery`: triage
+`amend_scope`, the rebase-conflict feedback brief, scope-aware re-review),
+`HARNESS_RESILIENCE_PLAN.md` (`harness-resilience`: usage-gate announcements,
+the Claude dispatch cooldown, capacity waits, and the stall scan),
+`LOCAL_FLEET_BRANCH_SAFETY_PLAN.md` (branch safety for several agents on one
+host; ADR 0006).
+
+**Context sources**: `EXTERNAL_CONTEXT_SOURCES_PLAN.md`
+(`external-context-sources-phase1` and `-phase2`; governed reference material
+pinned by digest, ADR 0005).
 
 **Reporting and metrics**: `POST_LD90_REPORTING_FIX_PLAN.json`,
 `REPORTING_LAYER_FOLLOWUPS_PLAN.json`.

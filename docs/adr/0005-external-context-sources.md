@@ -1,6 +1,7 @@
 # 0005. External context sources are reference data, pinned by digest
 
-- **Status:** Proposed
+- **Status:** Accepted (implemented 2026-10-23/24 as
+  `external-context-sources-phase1` and `-phase2`)
 - **Date:** 2026-10-22
 
 ## Context

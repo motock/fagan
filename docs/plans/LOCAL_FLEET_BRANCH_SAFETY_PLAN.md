@@ -1,6 +1,9 @@
 # Plan — Local-fleet branch safety (use case 1) and the shared-server ADR (use case 2)
 
-**Status:** Proposed, not yet ingested (2026-10-23). Follows
+**Status:** Shipped as plan `local-fleet-branch-safety` (4 stories, PRs
+#1214-#1218, plus `local-fleet-branch-safety-verify`); the shared-server
+decision records as `docs/adr/0006-decision-routing-on-a-shared-server.md`.
+Follows
 `SHARED_SERVICE_TOPOLOGY_PLAN.md`, which maps the two stated use cases to T1
 (many developers, each running the pipeline locally, sharing only `origin`) and
 T3 (one remote pipeline, engineers connected over MCP).

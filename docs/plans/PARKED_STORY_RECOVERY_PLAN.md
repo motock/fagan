@@ -1,7 +1,8 @@
 # Parked-story recovery plan
 
-Status: draft, not ingested. Tier: Claude-class dispatch (`claude/sonnet`, no
-`PIPELINE_BACKEND_DISPATCH`); each story is sized for that tier.
+Status: shipped as plan `parked-story-recovery` — 7/7 stories merged (PRs
+#1238-#1244). Tier: Claude-class dispatch at the time (`claude/sonnet`, no
+`PIPELINE_BACKEND_DISPATCH`); each story was sized for that tier.
 
 ## 1. Why
 

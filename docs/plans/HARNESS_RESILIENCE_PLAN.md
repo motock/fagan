@@ -1,8 +1,11 @@
 # Harness resilience plan
 
-Status: ingested 2026-10-25 as plan `harness-resilience` (all stories `todo`). Tier: whatever the live registry's `dispatch` role
-resolves to when the plan runs (planned: ollama, 2026-10-25 evening; no
-per-story pin). Ingest JSON:
+Status: shipped 2026-10-25 as plan `harness-resilience` — 7/7 stories merged
+(PRs #1245-#1251), 3 rework cycles, 0 escalations. Tier: the live registry's
+`dispatch` role, which resolved to `ollama` / `deepseek-v4.1-flash` for the
+whole run (no per-story pin). RC-02 was held for human review twice by the
+overlord (high risk, pending or pre-rebase CI) and merged on explicit operator
+approval — the human-in-the-loop merge gate behaving as designed. Ingest JSON:
 `~/.claude/plans/harness-resilience.json` (plan name `harness-resilience`).
 
 ## 1. Why

@@ -6,6 +6,20 @@
 > and line references below against the tree at that time — the assessment is
 > accurate as of 2026-10-22 but the surrounding modules move.
 
+> **Status (verified 2026-10-25):** still not started. Every referenced module
+> exists and the proposed `pipeline/forge*.py` modules do not, as expected. The
+> `ci.py` refs (`:65`, `:100`, `:144`, `:280`, `:396`) and
+> `triage_story_actions.py:130` still land on their symbols; several others have
+> drifted — prefer the symbol names over the numbers: `_sync_pr_title`
+> `pr.py:161`, `_open_pr` `:245` (called from
+> `review_orchestrator.py:733`), `_merge_pr` `:290`, `_post_pr_comment` `:349`,
+> `_AGENT_SECRET_ENV` `execution.py:214`, `_resolve_base_branch`
+> `git_ops.py:194`, `_default_branch` `server.py:453`.
+> One claim has changed in substance: "both merge paths refuse a story with no
+> `pr_url`" now describes a single path — `advance_merge.py:147`;
+> `pipeline/merge.py` no longer references `pr_url`. Re-derive the
+> "PR is load-bearing" section before decomposing.
+
 ## Goal
 
 Make "which forge hosts this repository" a resolved, swappable dependency

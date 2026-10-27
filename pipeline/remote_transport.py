@@ -39,6 +39,7 @@ from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provide
 
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 from .audit import append_host_audit
+from .remote_tool_policy import remote_tool_policy
 
 logger = logging.getLogger("pipeline.remote_transport")
 
@@ -266,6 +267,8 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     provider = build_identity_provider(lambda: "", env)
     if not isinstance(provider, OidcProvider):
         raise SystemExit("refusing to serve MCP over HTTP without an OIDC provider")
+
+    mcp.middleware.append(remote_tool_policy)
 
     app = (
         mcp.streamable_http_app(host=host)

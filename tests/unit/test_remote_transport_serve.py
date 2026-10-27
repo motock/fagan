@@ -23,6 +23,7 @@ class FakeMCP:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
+        self.middleware: list[object] = []
 
     def streamable_http_app(self, host: str | None = None) -> object:
         self.calls.append(("streamable_http_app", host))

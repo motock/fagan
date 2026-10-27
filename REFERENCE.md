@@ -2266,17 +2266,27 @@ all of it:
   requests). Nothing throttles or locks out a caller, and a valid token
   presented after several `401`s is served normally rather than answered `429`.
 
-**Authentication is not authorization for every tool.** The gate proves who
-the caller is. Only the tools whose service path calls `authorize` —
-`approve_merge`, `approve_plan`, `dispatch_story`, `ingest_plan`,
-`interrupt_story`, `mark_story_done`, `patch_story`, `pause_plan`,
-`reject_plan` and `resume_plan` — refuse a principal the policy denies. Every
-other tool, including `save_plan`, `patch_plan`, `set_story_status`,
+**The remote transport denies by default.** The gate proves who the caller is;
+it does not decide what they may call. So `serve()` installs a second
+middleware, `pipeline.remote_tool_policy.remote_tool_policy`, and a remote
+principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
+
+- the ten tools whose service path calls `authorize` itself, so the policy
+  decides — `approve_merge`, `approve_plan`, `dispatch_story`, `ingest_plan`,
+  `interrupt_story`, `mark_story_done`, `patch_story`, `pause_plan`,
+  `reject_plan` and `resume_plan`;
+- six read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
+  `list_decisions`, `list_plans` and `list_ready_stories`. These are **not
+  tenant-scoped**: any remote caller sees every plan they list.
+
+Every other tool — including `save_plan`, `patch_plan`, `set_story_status`,
 `record_security_audit`, `review_story`, `advance_all_plans` and
-`decompose_plan`, runs for **any** authenticated caller. Until the transport
-refuses those for remote principals, enable it only for callers you would trust
-with the operator's own MCP session. Reads are not tenant-scoped either: a
-remote caller can list and read every plan.
+`decompose_plan` — is refused before its handler runs: the caller gets an
+`isError` result saying the tool is not available over the remote transport,
+and `<PLAN_DIR>/.audit.host.jsonl` gains a `tool:call` record with outcome
+`denied` (naming the tool, truncated to 64 characters, and the subject). The
+local operator — stdio, or the shared secret — is unaffected: the stdio path
+never calls `serve()`, so this middleware is not installed there.
 
 **Behind a reverse proxy, the loopback default rejects the public host name.**
 With `PIPELINE_MCP_HOST=127.0.0.1` the MCP SDK turns on DNS-rebinding

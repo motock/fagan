@@ -830,6 +830,55 @@ alive (retrying once it has exited), so two drainers never race the outbox
 merge and drop a record. No
 Slack or generic webhook sink is implemented yet.
 
+### Audit stream (PIPELINE_PLAN_DIR/<plan>.audit.jsonl)
+
+`pipeline/audit.py` keeps one append-only JSON Lines stream per plan, written next
+to the plan's other files: `<plan>.audit.jsonl` in the plan directory (`PLAN_DIR`,
+default `~/.claude/plans`; `pipeline.audit.audit_path` resolves it through
+`pipeline.persistence.PLAN_DIR` at call time). Each line is one record with these
+keys:
+
+- `seq`: position in the chain, `0` for the first record.
+- `prev_hash`: the previous record's `hash`, `""` for the first record.
+- `hash`: SHA-256 over the canonical JSON of every other field in the record.
+- `ts`: ISO-8601 UTC timestamp of the append.
+- `actor`: the principal the tick was acting as (`pipeline/actor.py`).
+- `correlation_id`: the correlation id bound for that tick.
+- `action`: what was attempted, e.g. `story:merge`.
+- `outcome`: `allowed`, `denied`, or `refused`.
+- `target`: structural identifiers, usually `{"plan": ..., "story": ...}`.
+- `detail`: short structural extras — a branch, a base sha, a digest, a principal.
+
+`prev_hash` chains each record to the one before it, so rewriting, reordering, or
+deleting a record in the middle breaks the chain: `verify_audit_chain(plan_name)`
+returns the index of the first altered record, or `None` when the stream is intact.
+
+Actions recorded today:
+
+- `plan:approve` / `plan:reject` — the authorization check for a plan decision.
+- `plan:pause` — the authorization check for pause *and* resume.
+- `story:merge` / `story:mark_done` — the authorization checks for merging and for
+  the manual done transition.
+- `plan.approved` / `plan.changes_requested` — the decision itself, outcome
+  `allowed`, or `refused` when the canonical digest no longer matches.
+- `plan.paused` / `plan.resumed` — the pause and resume transition.
+- `story.merge` — a merge that completed.
+- `story.dispatch` — a dispatch, outcome `allowed` or `refused` (stale base).
+
+Three limits are worth stating plainly:
+
+- **Identifiers and outcomes only.** Records never carry file contents, prompts, or
+  secrets; `detail` is for short structural fields (a digest, a role, a sha).
+- **A failed append does not change the decision.** `record_audit` logs the failure
+  at `ERROR` (`audit append failed action=... plan=... - the action itself stands`)
+  and the merge, decision or refusal proceeds as it would have. A read-only or full
+  plan directory therefore degrades the trail, not the tick.
+- **Truncation of the tail is not detected.** The chain says nothing about records
+  removed from the end: the head hash is not shipped anywhere the pipeline cannot
+  rewrite, so cutting the last lines still leaves `verify_audit_chain` returning
+  `None`. Read a clean verification as "no record in the middle was altered" — not
+  as tamper-evidence.
+
 
 ### Runtime preflight
 

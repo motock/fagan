@@ -344,6 +344,23 @@ service path asks `authorize` for them, so `LocalPolicy` cannot block them
 today: `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
 `decision:answer`, `config:write`.
 
+**Audit stream.** Every decision this module makes is also appended to the plan's
+audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
+[REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label
+(`story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause`),
+`outcome` is `allowed` or `denied`, `target` carries the plan and story, and
+`detail` carries the principal subject. Records are written **only when
+enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function returns
+before it consults the policy — so an `allowed` record always corresponds to a real
+check of that action for that principal.
+
+The approval and merge transitions carry their own records rather than relying on
+the authorization record: the decision is written as `plan.approved` or
+`plan.changes_requested` (outcome `allowed`, or `refused` when the canonical digest
+no longer matches), and a completed merge as `story.merge`. With enforcement off,
+where `authorize` writes nothing, those transition records are the only trace of
+the action.
+
 ## 3. The invariant that keeps local mode unchanged
 
 With **no identity provider configured**, the pipeline behaves as it did

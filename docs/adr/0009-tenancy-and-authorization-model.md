@@ -1,19 +1,19 @@
 # 0009. Tenancy and authorization are a service-layer policy over a verified principal
 
-- **Status:** Accepted direction (2026-10-26). The identity/authorization seam
-  and service-layer enforcement for four actions — plus `plan:pause` for both
-  pause and resume, five action names in all — are implemented; OIDC, tenant
-  scoping beyond the plan `team`, the audit stream and the remote MCP transport
-  are still unimplemented.
+- **Status:** Accepted direction (2026-10-26). The identity/authorization seam,
+  service-layer enforcement for four actions — plus `plan:pause` for both pause
+  and resume, five action names in all — and the append-only, hash-chained audit
+  stream are implemented; OIDC, tenant scoping beyond the plan `team`, and the
+  remote MCP transport are still unimplemented.
 - **Date:** 2026-10-26
 
 **Implementation status.** `pipeline/authorization.py` enforces the policy in
 the service for `story:merge`, `story:mark_done`, `plan:approve`,
 `plan:reject` and `plan:pause` (both pause and resume), deny-by-default, with
 `PIPELINE_POLICY_ENFORCE` as the kill switch. Everything else this record
-describes — OIDC verification, the full tenant chain, the audit stream and the
-remote transport — is unimplemented, and the remaining actions are still
-unenforced. See the "Enforcement (pipeline/authorization.py)" section of
+describes — OIDC verification, the full tenant chain and the remote transport —
+is unimplemented, and the remaining actions are still unenforced. See the
+"Enforcement (pipeline/authorization.py)" section of
 [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
 
 ## Context
@@ -98,9 +98,10 @@ policy; both operate on a verified `Principal`.**
 8. **Audit.** Every allow and deny records `{actor, action, target, outcome,
    correlation_id, at}`. Mutations record the same, plus their domain fields;
    plan approvals additionally record the content digest and `self_approved`
-   (ADR 0007). The audit stream is append-only and, for the shared server,
-   hash-chained or externally shipped (the readiness findings record this as a
-   separate gap).
+   (ADR 0007). The audit stream is append-only and hash-chained
+   (`pipeline/audit.py`, one file per plan). Off-box shipment of the head hash —
+   what a shared server needs before a truncated tail becomes detectable — is not
+   implemented; the readiness findings record it as a separate gap.
 
 ## Consequences
 

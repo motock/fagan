@@ -138,19 +138,28 @@ test-only. The notification channel layer is the template for the rest.
   Dispatch, story status changes, pause/resume and decision answers still record
   no actor, and no role is ever checked. This is the same prerequisite as
   ADR 0006 / 0007 / 0008.
-- **Not tamper-evident.** `_append_decision` is a JSON-array
-  read-modify-write in a user-writable directory; there is no hash chain,
-  signature, WORM storage, or external shipping.
-- **No unified audit stream.** Decisions, journals, notifications, events, and
-  security-audit state are separate files with different shapes.
+- **One hash-chained stream per plan.** `<plan>.audit.jsonl` in the plan directory
+  is append-only and chains each record to its predecessor through `prev_hash`;
+  every record carries `actor`, `action`, `target`, `outcome`, `correlation_id`
+  and a timestamp, and `verify_audit_chain` names the first altered record. The
+  ADR 0007 approval record is its first tenant, joined by the authorization
+  decisions, plan pause/resume, `story.dispatch` and `story.merge`.
+- **Still open: no external anchor.** The stream is appended to a user-writable
+  directory, nothing is stored write-once, and the head hash is not shipped anywhere
+  the pipeline cannot rewrite, so truncation of the tail is undetectable — a clean
+  verification only means that no record in the middle was altered. Decisions
+  (`<plan>.decisions.json`) and per-story journals
+  (`<plan>.<story>.journal.json`) also keep their own files for now.
 - `record_security_audit` records *that* an audit happened and at which SHA,
   not a detailed action trail. Authentication success/failure and
   authorization-denial events do not exist yet; they must be added when authn
   lands.
 
-For enterprise use: one append-only, hash-chained (or externally shipped)
-audit stream with `actor`, `action`, `target`, `outcome`, `correlation_id`,
-and `timestamp`. The ADR 0007 approval record should be its first tenant.
+For enterprise use, this is the append-only, hash-chained stream with `actor`,
+`action`, `target`, `outcome`, `correlation_id`, and `timestamp` this section
+called for, and the ADR 0007 approval record is its first tenant. What a shared
+server still needs is the external anchor that does not exist yet: shipping the
+head hash somewhere the pipeline cannot rewrite it.
 
 ---
 

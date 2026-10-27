@@ -25,18 +25,25 @@ import ipaddress
 import json
 import logging
 import math
+import os
 import socket
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import jwt
 
-from .identity import ROLES, IdentityError, Principal
+from .identity import (
+    ROLES,
+    IdentityError,
+    IdentityProvider,
+    Principal,
+    SharedSecretProvider,
+)
 
 logger = logging.getLogger("pipeline.identity")
 
@@ -52,6 +59,24 @@ MAX_CLOCK_SKEW_S = 300
 
 JWKS_TIMEOUT_S = 10.0
 JWKS_CACHE_SECONDS = 300
+
+#: Operator configuration for the identity provider. Read once at build time
+#: by :func:`build_identity_provider`, never per request.
+IDENTITY_PROVIDER_ENV = "PIPELINE_IDENTITY_PROVIDER"
+OIDC_ISSUER_ENV = "PIPELINE_OIDC_ISSUER"
+OIDC_AUDIENCE_ENV = "PIPELINE_OIDC_AUDIENCE"
+OIDC_JWKS_URL_ENV = "PIPELINE_OIDC_JWKS_URL"
+OIDC_CLOCK_SKEW_ENV = "PIPELINE_OIDC_CLOCK_SKEW_S"
+
+#: Opt-in for a JWKS hosted on a private network (a self-hosted Keycloak, Dex
+#: or ADFS inside a VPC). Off by default; only ``1``/``true`` enable it.
+OIDC_ALLOW_PRIVATE_JWKS_ENV = "PIPELINE_OIDC_ALLOW_PRIVATE_JWKS"
+
+#: The accepted ``PIPELINE_IDENTITY_PROVIDER`` values. ``shared-secret`` is the
+#: default and there is deliberately no "off": disabling authentication is not
+#: a configuration option (ADR 0004).
+_SHARED_SECRET = "shared-secret"
+_OIDC = "oidc"
 
 #: Bound on name resolution. ``socket.getaddrinfo`` has no timeout of its own and
 #: runs while a fetch is in flight, so a slow or black-holed resolver would
@@ -106,6 +131,10 @@ class OidcSettings:
     audience: str
     jwks_url: str
     clock_skew_s: int = DEFAULT_CLOCK_SKEW_S
+    #: Accept a JWKS hosted on a private network. Opt-in only: the default is
+    #: what keeps a misconfigured ``jwks_url`` from probing loopback or a cloud
+    #: metadata endpoint (see :func:`_is_internal_target`).
+    allow_private_jwks: bool = False
 
     def __post_init__(self) -> None:
         for name in ("issuer", "audience", "jwks_url"):
@@ -118,7 +147,9 @@ class OidcSettings:
             # ``#`` joins issuer and subject into one identifier; a value that
             # can carry it could be used to forge a different principal's id.
             raise IdentityError("invalid issuer: must not contain '#'")
-        if _is_internal_target(self.jwks_url):
+        # Only this check is optional: the private-network opt-in exists for an
+        # IdP inside a VPC, and must not relax the https, issuer or skew rules.
+        if not self.allow_private_jwks and _is_internal_target(self.jwks_url):
             raise IdentityError("invalid jwks_url: must not target an internal host")
         if (
             isinstance(self.clock_skew_s, bool)
@@ -197,7 +228,7 @@ def _is_internal_target(url: str) -> bool:
         return host == "localhost" or host.endswith(".localhost")
 
 
-def _resolve(url: str) -> str | None:
+def _resolve(url: str, *, allow_private: bool = False) -> str | None:
     """Return the public address ``url``'s host resolves to, or None.
 
     None means "do not fetch": either the name does not resolve at all, or any
@@ -207,20 +238,27 @@ def _resolve(url: str) -> str | None:
     cloud metadata service. Resolving again on every fetch also means a name
     that starts resolving inward after a cached document expires is refused
     instead of trusted on the strength of its first answer.
+
+    ``allow_private`` is the operator's opt-in for a self-hosted IdP on a
+    private network: the name is still resolved and the resulting address is
+    still returned for pinning, but the internal-address rejection is skipped.
     """
     host = urllib.parse.urlsplit(url).hostname
     if not host:
         return None
-    return _resolve_host(host)
+    return _resolve_host(host, allow_private=allow_private)
 
 
-def _resolve_host(host: str) -> str | None:
+def _resolve_host(host: str, *, allow_private: bool = False) -> str | None:
     """Resolve ``host`` with a bounded deadline, returning a public address.
 
     ``getaddrinfo`` blocks with no timeout of its own. The lookup therefore runs
     on a short-lived daemon thread and the caller gives up after
     ``JWKS_DNS_TIMEOUT_S``; a resolver that never answers fails closed instead of
     pinning a dashboard worker until it does.
+
+    With ``allow_private`` the name is still resolved - the address is pinned
+    for the connection - but an internal result is accepted instead of refused.
     """
     infos: list[Any] = []
 
@@ -240,7 +278,7 @@ def _resolve_host(host: str) -> str | None:
             address = ipaddress.ip_address(info[4][0])
         except (IndexError, TypeError, ValueError):
             return None
-        if _is_internal_address(address):
+        if not allow_private and _is_internal_address(address):
             return None
     return str(infos[0][4][0])
 
@@ -287,7 +325,9 @@ def _stream_response(url: str, address: str) -> Iterator[httpx.Response]:
 
 def _fetch_jwks(settings: OidcSettings) -> dict[str, Any]:
     """Fetch and parse the JWKS document. Raises ``IdentityError`` on failure."""
-    address = _resolve(settings.jwks_url)
+    address = _resolve(
+        settings.jwks_url, allow_private=settings.allow_private_jwks
+    )
     if address is None:
         raise IdentityError("invalid token: keys unavailable")
     try:
@@ -548,6 +588,81 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
         email=_email_from_claims(claims),
         auth_method="oidc",
     )
+
+
+class OidcProvider:
+    """``IdentityProvider`` that verifies a bearer token against a JWKS."""
+
+    def __init__(self, settings: OidcSettings) -> None:
+        self._settings = settings
+
+    def authenticate(self, credential: str | None) -> Principal:
+        """Return the token's principal or raise ``IdentityError``."""
+        return verify_token(credential, self._settings)
+
+
+def _oidc_settings_from_env(env: dict[str, str]) -> OidcSettings:
+    """Build ``OidcSettings`` from ``env``, rejecting missing or malformed values.
+
+    Only names are echoed on failure, never values: ``jwks_url`` can carry
+    credentials in its userinfo and the issuer is compared against the token,
+    so neither belongs in an error message that may reach a log.
+
+    ``PIPELINE_OIDC_ALLOW_PRIVATE_JWKS`` is the one loosening knob, and only
+    ``1``/``true`` (case-insensitive) enable it: a typo such as ``yes`` or
+    ``on`` leaves the restrictive default in place rather than opening the
+    gate. Enabling it also pins the fetch to the resolved address, so the
+    request cannot traverse an HTTP egress proxy - an operator behind one needs
+    direct egress to the IdP.
+    """
+    missing = [
+        name
+        for name in (OIDC_ISSUER_ENV, OIDC_AUDIENCE_ENV, OIDC_JWKS_URL_ENV)
+        if not str(env.get(name, "")).strip()
+    ]
+    if missing:
+        raise IdentityError("invalid oidc configuration: " + ", ".join(missing))
+    raw_skew = str(env.get(OIDC_CLOCK_SKEW_ENV, DEFAULT_CLOCK_SKEW_S)).strip()
+    try:
+        skew = int(raw_skew)
+    except ValueError:
+        raise IdentityError(
+            "invalid oidc configuration: " + OIDC_CLOCK_SKEW_ENV
+        ) from None
+    if skew < 0:
+        raise IdentityError("invalid oidc configuration: " + OIDC_CLOCK_SKEW_ENV)
+    allow_private = str(env.get(OIDC_ALLOW_PRIVATE_JWKS_ENV, "")).strip().lower() in (
+        "1",
+        "true",
+    )
+    return OidcSettings(
+        issuer=str(env[OIDC_ISSUER_ENV]).strip(),
+        audience=str(env[OIDC_AUDIENCE_ENV]).strip(),
+        jwks_url=str(env[OIDC_JWKS_URL_ENV]).strip(),
+        clock_skew_s=skew,
+        allow_private_jwks=allow_private,
+    )
+
+
+def build_identity_provider(
+    secret_reader: Callable[[], str],
+    environ: dict[str, str] | None = None,
+) -> IdentityProvider:
+    """Return the configured provider, or raise on an unknown configuration.
+
+    ``shared-secret`` (the default) resolves the operator's key lazily through
+    ``secret_reader``, so rotation still takes effect per request. Any value
+    other than ``shared-secret`` or ``oidc`` raises rather than falling back to
+    the permissive local principal - an unknown setting must not silently
+    downgrade authentication (ADR 0004).
+    """
+    env = os.environ if environ is None else environ
+    raw = str(env.get(IDENTITY_PROVIDER_ENV, _SHARED_SECRET)).strip()
+    if raw in ("", _SHARED_SECRET):
+        return SharedSecretProvider(secret_reader)
+    if raw == _OIDC:
+        return OidcProvider(_oidc_settings_from_env(env))
+    raise IdentityError("invalid oidc configuration: unknown identity provider")
 
 
 #: Bound on the ``kid`` echoed to the security log. The value is attacker-chosen

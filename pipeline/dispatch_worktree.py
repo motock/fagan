@@ -54,14 +54,31 @@ def _create_fresh_worktree(
                         "to set up a worktree for a missing repository"
                     ),
                 }
+            default_branch = _default_branch()
             with _try_acquire_git_lock(repo_root) as acquired:
                 if acquired:
                     subprocess.run(
-                        ["git", "fetch", "origin", _default_branch()],
+                        ["git", "fetch", "origin", default_branch],
                         cwd=repo_root,
                         check=True,
                         capture_output=True,
                         text=True,
+                    )
+                else:
+                    # The fetch is deliberately best-effort (see
+                    # tests/unit/test_dispatch_git_fetch_lock.py), but a
+                    # silent skip is how a story ends up branched from an
+                    # origin tip that predates its own dependency: AUTH-03
+                    # (2026-10-27) branched 32 minutes stale and re-added a
+                    # module that had already merged. Record it instead.
+                    _notify_user(
+                        plan_name,
+                        f"{branch}: dispatched from a possibly stale "
+                        f"origin/{default_branch} - the git lock was held, so "
+                        "the fetch was skipped",
+                        story_key=None,
+                        severity="warning",
+                        event="stale_base_dispatch",
                     )
             subprocess.run(
                 [
@@ -71,7 +88,7 @@ def _create_fresh_worktree(
                     "-b",
                     branch,
                     str(worktree_path),
-                    f"origin/{_default_branch()}",
+                    f"origin/{default_branch}",
                 ],
                 cwd=repo_root,
                 check=True,

@@ -9,6 +9,7 @@ the autouse fixture clears it before and after each one.
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import socket
@@ -16,6 +17,7 @@ import time
 from collections.abc import Callable
 from typing import Self
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -109,7 +111,7 @@ class _StubStream:
 
 
 def _stub_stream(status_code: int, body: bytes = b"") -> Callable[..., _StubStream]:
-    """Return a stand-in for ``httpx.stream`` that yields a fixed response."""
+    """Return a stand-in for ``_stream_response`` that yields a fixed response."""
     return lambda *args, **kwargs: _StubStream(status_code, body)
 
 
@@ -118,9 +120,11 @@ def _forbidden_stream(*args: object, **kwargs: object) -> None:
     raise AssertionError("a rejected JWKS host must never be contacted")
 
 
-#: A public (TEST-NET-3) address: the resolver is stubbed to it so no test
-#: performs a real lookup or reaches the network.
-PUBLIC_ADDRESS = "203.0.113.10"
+#: A genuinely global (``is_global``) address: the resolver is stubbed to it so
+#: no test performs a real lookup. TEST-NET addresses will not do - CPython
+#: reports 192.0.2.0/24 and 203.0.113.0/24 as non-global, so they are now
+#: (correctly) refused as internal and would make a fetch-path test vacuous.
+PUBLIC_ADDRESS = "93.184.216.34"
 
 
 @pytest.fixture
@@ -330,7 +334,7 @@ def test_jwks_non_200_raises_keys_unavailable(
     monkeypatch, public_dns, rsa_key, settings
 ):
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(503))
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(503))
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
@@ -341,7 +345,7 @@ def test_jwks_without_keys_raises_keys_unavailable(
     monkeypatch, public_dns, rsa_key, settings
 ):
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(200, b"{}"))
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, b"{}"))
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
@@ -454,8 +458,7 @@ def test_jwks_host_resolving_inward_is_never_fetched(monkeypatch, rsa_key, setti
     )
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
     monkeypatch.setattr(oidc.socket, "getaddrinfo", lambda *args, **kwargs: [loopback])
-    monkeypatch.setattr(oidc.httpx, "stream", _forbidden_stream)
-    monkeypatch.setattr(oidc.httpx, "get", _forbidden_stream)
+    monkeypatch.setattr(oidc, "_stream_response", _forbidden_stream)
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
@@ -467,8 +470,7 @@ def test_jwks_body_over_the_cap_raises_keys_unavailable(
 ):
     oversize = b"{" + b" " * oidc.JWKS_MAX_BYTES
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(200, oversize))
-    monkeypatch.setattr(oidc.httpx, "get", _forbidden_stream)
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, oversize))
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
@@ -488,3 +490,158 @@ def test_issuer_containing_the_separator_is_rejected():
             issuer="https://a.example#x", audience=AUDIENCE, jwks_url=JWKS_URL
         )
     assert str(excinfo.value) == "invalid issuer: must not contain '#'"
+
+
+# --- review round 4: SSRF allowlist, CGNAT/metadata, connection pinning ---
+
+
+def test_carrier_grade_nat_address_is_internal():
+    assert oidc._is_internal_address(ipaddress.ip_address("100.64.0.1")) is True
+
+
+def test_alibaba_metadata_address_is_internal():
+    assert oidc._is_internal_address(ipaddress.ip_address("100.100.100.200")) is True
+
+
+def test_ipv4_mapped_carrier_grade_nat_address_is_internal():
+    assert oidc._is_internal_address(ipaddress.ip_address("::ffff:100.64.0.1")) is True
+
+
+def test_nat64_wrapped_loopback_is_internal():
+    assert oidc._is_internal_address(ipaddress.ip_address("64:ff9b::7f00:1")) is True
+
+
+def test_globally_routable_address_is_not_internal():
+    assert oidc._is_internal_address(ipaddress.ip_address(PUBLIC_ADDRESS)) is False
+
+
+def test_jwks_url_at_alibaba_metadata_address_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            jwks_url="https://100.100.100.200/latest/meta-data/",
+        )
+    assert str(excinfo.value) == "invalid jwks_url: must not target an internal host"
+
+
+def test_jwks_url_inside_carrier_grade_nat_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer=ISSUER, audience=AUDIENCE, jwks_url="https://100.64.0.1/jwks"
+        )
+    assert str(excinfo.value) == "invalid jwks_url: must not target an internal host"
+
+
+def test_jwks_host_resolving_to_metadata_is_never_fetched(
+    monkeypatch, rsa_key, settings
+):
+    metadata = (
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+        socket.IPPROTO_TCP,
+        "",
+        ("100.100.100.200", 0),
+    )
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc.socket, "getaddrinfo", lambda *args, **kwargs: [metadata])
+    monkeypatch.setattr(oidc, "_stream_response", _forbidden_stream)
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+def test_fetch_connects_to_the_validated_address(monkeypatch, public_dns, settings):
+    captured = {}
+
+    def capture(self, request):
+        captured["url_host"] = request.url.host
+        captured["host_header"] = request.headers["Host"]
+        captured["sni_hostname"] = request.extensions["sni_hostname"]
+        raise httpx.ConnectError("stop before any connection is opened")
+
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc.httpx.HTTPTransport, "handle_request", capture)
+    with pytest.raises(IdentityError):
+        oidc._fetch_jwks(settings)
+    assert (
+        captured["url_host"],
+        captured["host_header"],
+        captured["sni_hostname"],
+    ) == (PUBLIC_ADDRESS, "issuer.example", "issuer.example")
+
+
+def test_jwk_published_for_another_algorithm_is_not_used(fake_fetch, rsa_key, settings):
+    fake_fetch.document["keys"][0]["alg"] = "RS512"
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: unknown key"
+
+
+def test_jwk_of_the_wrong_key_type_is_not_used(fake_fetch, ec_key, rsa_key, settings):
+    fake_fetch.document["keys"] = [_ec_jwk(ec_key[0].public_key())]
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: unknown key"
+
+
+def test_deeply_nested_jwks_document_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
+    nested = b"[" * 200000 + b"]" * 200000
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, nested))
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+def test_hanging_resolver_returns_within_the_deadline(monkeypatch):
+    def hang(*args, **kwargs):
+        time.sleep(0.5)
+        return []
+
+    monkeypatch.setattr(oidc.socket, "getaddrinfo", hang)
+    monkeypatch.setattr(oidc, "JWKS_DNS_TIMEOUT_S", 0.05)
+    started = time.monotonic()
+    resolved = oidc._resolve(JWKS_URL)
+    assert (resolved, time.monotonic() - started < 0.5) == (None, True)
+
+
+def test_token_lifetime_above_the_bound_raises_verification_failed(rsa_key, settings):
+    token = mint(rsa_key[1], iat=int(time.time()) - 4000, exp=int(time.time()) + 300)
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: verification failed"
+
+
+def test_token_lifetime_within_the_bound_is_accepted(rsa_key, settings):
+    token = mint(
+        rsa_key[1],
+        iat=int(time.time()) - oidc.MAX_TOKEN_LIFETIME_S + 300,
+        exp=int(time.time()) + 300,
+    )
+    assert oidc.verify_token(token, settings).subject == f"{ISSUER}#user-1"
+
+
+def test_slow_stream_past_the_total_deadline_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
+    class _TricklingStream(_StubStream):
+        def iter_bytes(self, chunk_size=None):
+            time.sleep(0.2)
+            yield b'{"keys": []}'
+
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc, "JWKS_TOTAL_TIMEOUT_S", 0.0)
+    monkeypatch.setattr(
+        oidc, "_stream_response", lambda *args, **kwargs: _TricklingStream(200, b"")
+    )
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"

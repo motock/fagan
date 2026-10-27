@@ -19,6 +19,7 @@ Verification rules, each load-bearing:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import ipaddress
 import json
@@ -27,6 +28,7 @@ import socket
 import threading
 import time
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +52,16 @@ MAX_CLOCK_SKEW_S = 300
 JWKS_TIMEOUT_S = 10.0
 JWKS_CACHE_SECONDS = 300
 
+#: Bound on name resolution. ``socket.getaddrinfo`` has no timeout of its own and
+#: runs while a fetch is in flight, so a slow or black-holed resolver would
+#: otherwise stall every token verification behind one lookup.
+JWKS_DNS_TIMEOUT_S = 5.0
+
+#: Overall bound on one fetch. ``JWKS_TIMEOUT_S`` applies per socket operation,
+#: so a trickling server could otherwise hold a worker (and the fetch lock) for
+#: as long as it kept sending one byte at a time.
+JWKS_TOTAL_TIMEOUT_S = 30.0
+
 #: Responses larger than this are refused unparsed: the JWKS document is a few
 #: KiB in practice, and an unbounded body is a memory-exhaustion lever.
 JWKS_MAX_BYTES = 256 * 1024
@@ -61,6 +73,12 @@ JWKS_MIN_REFRESH_S = 10.0
 #: Bound on the credential itself. A JWT is a few KiB; anything much larger is
 #: not a token we should spend parsing effort on.
 MAX_TOKEN_LENGTH = 16 * 1024
+
+#: Longest token lifetime accepted, measured as ``exp - iat``. The skew
+#: allowance exists to absorb clock differences, not to admit credentials that
+#: stay valid for years: once stolen, such a token is indistinguishable from a
+#: permanent one, and no revocation path exists here.
+MAX_TOKEN_LIFETIME_S = 3600
 
 #: One cached JWKS document per URL, guarded because the dashboard is threaded
 #: and an unguarded dict write during a refresh is a data race.
@@ -116,25 +134,43 @@ class OidcSettings:
 #: Fixed reason token for a ``kid`` that is not published in the JWKS.
 _UNKNOWN_KEY = "invalid token: unknown key"
 
+#: The JWK key type each accepted algorithm must be published under, so a key
+#: of the wrong family is never handed to the verifier.
+_KEY_TYPES = {"RS256": "RSA", "ES256": "EC"}
+
+
+def _embedded_ipv4(address: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """Return the IPv4 address tunnelled inside ``address``, if any.
+
+    Covers IPv4-mapped (``::ffff:127.0.0.1``), 6to4 (``2002:7f00:1::``) and the
+    NAT64 well-known prefix (``64:ff9b::7f00:1``). Judging the wrapper alone
+    would let a loopback or metadata target through in a form the outer address
+    makes look public.
+    """
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    if address.sixtofour is not None:
+        return address.sixtofour
+    if address in ipaddress.IPv6Network("64:ff9b::/96"):
+        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return None
+
 
 def _is_internal_address(address: Any) -> bool:
     """Return True for any IP a JWKS request must never be sent to.
 
-    IPv4 addresses wrapped in IPv6 (``::ffff:127.0.0.1``, 6to4) are unwrapped
-    first: judging the wrapper alone would let a loopback target through.
+    This is an allowlist, not a denylist: an address is acceptable only when
+    :attr:`is_global` is true. Enumerating "bad" ranges instead is how the
+    carrier-grade NAT block ``100.64.0.0/10`` slipped through - CPython reports
+    it as neither private nor global, so a metadata endpoint that lives there
+    (``100.100.100.200``) read as public. IPv4 addresses tunnelled inside IPv6
+    are unwrapped first, for the same reason.
     """
     if isinstance(address, ipaddress.IPv6Address):
-        wrapped = address.ipv4_mapped or address.sixtofour
-        if wrapped is not None:
-            return _is_internal_address(wrapped)
-    return (
-        address.is_loopback
-        or address.is_private
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+        embedded = _embedded_ipv4(address)
+        if embedded is not None:
+            return _is_internal_address(embedded)
+    return not address.is_global
 
 
 def _is_internal_target(url: str) -> bool:
@@ -174,10 +210,28 @@ def _resolve(url: str) -> str | None:
     host = urllib.parse.urlsplit(url).hostname
     if not host:
         return None
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except (OSError, UnicodeError):
-        return None
+    return _resolve_host(host)
+
+
+def _resolve_host(host: str) -> str | None:
+    """Resolve ``host`` with a bounded deadline, returning a public address.
+
+    ``getaddrinfo`` blocks with no timeout of its own. The lookup therefore runs
+    on a short-lived daemon thread and the caller gives up after
+    ``JWKS_DNS_TIMEOUT_S``; a resolver that never answers fails closed instead of
+    pinning a dashboard worker until it does.
+    """
+    infos: list[Any] = []
+
+    def lookup() -> None:
+        try:
+            infos.extend(socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP))
+        except (OSError, UnicodeError):
+            return
+
+    worker = threading.Thread(target=lookup, name="oidc-jwks-resolve", daemon=True)
+    worker.start()
+    worker.join(JWKS_DNS_TIMEOUT_S)
     if not infos:
         return None
     for info in infos:
@@ -190,24 +244,63 @@ def _resolve(url: str) -> str | None:
     return str(infos[0][4][0])
 
 
+class _PinnedTransport(httpx.HTTPTransport):
+    """HTTPS transport that connects to one already-validated address.
+
+    :func:`_resolve` validates every address a name resolves to, but ``httpx``
+    would then resolve that name a second time at connect time. A name that
+    answers publicly for the check and ``127.0.0.1`` for the fetch (DNS
+    rebinding) would still be fetched, so the validated address is pinned here
+    rather than re-derived: the request goes to that IP, while the configured
+    hostname is kept for the ``Host`` header and for TLS SNI. httpcore uses the
+    ``sni_hostname`` extension as ``server_hostname``, so the certificate is
+    still verified against the name and never against the IP.
+    """
+
+    def __init__(self, address: str, hostname: str) -> None:
+        super().__init__()
+        self._address = address
+        self._hostname = hostname
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        request.headers["Host"] = self._hostname
+        request.extensions = {**request.extensions, "sni_hostname": self._hostname}
+        request.url = request.url.copy_with(host=self._address)
+        return super().handle_request(request)
+
+
+@contextlib.contextmanager
+def _stream_response(url: str, address: str) -> Iterator[httpx.Response]:
+    """Stream a ``GET`` for ``url`` against the already-validated ``address``."""
+    hostname = urllib.parse.urlsplit(url).hostname or ""
+    with (
+        httpx.Client(
+            transport=_PinnedTransport(address, hostname),
+            timeout=httpx.Timeout(JWKS_TIMEOUT_S),
+            follow_redirects=False,
+        ) as client,
+        client.stream("GET", url) as response,
+    ):
+        yield response
+
+
 def _fetch_jwks(settings: OidcSettings) -> dict[str, Any]:
     """Fetch and parse the JWKS document. Raises ``IdentityError`` on failure."""
-    if _resolve(settings.jwks_url) is None:
+    address = _resolve(settings.jwks_url)
+    if address is None:
         raise IdentityError("invalid token: keys unavailable")
     try:
-        with httpx.stream(
-            "GET",
-            settings.jwks_url,
-            timeout=JWKS_TIMEOUT_S,
-            follow_redirects=False,
-        ) as response:
+        with _stream_response(settings.jwks_url, address) as response:
             if response.status_code != 200:
                 raise IdentityError("invalid token: keys unavailable")
             # The cap is enforced while the body is read, not after: testing a
             # fully buffered response would let a compromised IdP stream
             # gigabytes into memory before the length check ever ran.
             body = bytearray()
+            deadline = time.monotonic() + JWKS_TOTAL_TIMEOUT_S
             for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise IdentityError("invalid token: keys unavailable")
                 body.extend(chunk)
                 if len(body) > JWKS_MAX_BYTES:
                     raise IdentityError("invalid token: keys unavailable")
@@ -215,7 +308,9 @@ def _fetch_jwks(settings: OidcSettings) -> dict[str, Any]:
         raise IdentityError("invalid token: keys unavailable") from None
     try:
         document = json.loads(bytes(body))
-    except ValueError:
+    except (ValueError, RecursionError):
+        # ``json.loads`` raises RecursionError, not ValueError, on a deeply
+        # nested document: uncaught it would surface as a 500 from a rejection.
         raise IdentityError("invalid token: keys unavailable") from None
     if not isinstance(document, dict) or not isinstance(document.get("keys"), list):
         raise IdentityError("invalid token: keys unavailable")
@@ -268,8 +363,16 @@ def _jwks(settings: OidcSettings, force_refresh: bool = False) -> dict[str, Any]
     return copy.deepcopy(document)
 
 
-def _signing_key(settings: OidcSettings, kid: str | None, refresh: bool = False) -> Any:
-    """Return the public key for ``kid``; an unknown kid is a rejection."""
+def _signing_key(
+    settings: OidcSettings, kid: str | None, algorithm: str, refresh: bool = False
+) -> Any:
+    """Return the public key for ``kid``; an unknown kid is a rejection.
+
+    ``algorithm`` is the header algorithm already vetted against the allowlist,
+    and the JWK must agree with it: a key published for ES256 must not verify an
+    RS256 token (and vice versa) even when both carry the same ``kid``, so key
+    selection stays unambiguous when a JWKS publishes several keys under one id.
+    """
     for jwk in _jwks(settings, force_refresh=refresh)["keys"]:
         if not isinstance(jwk, dict):
             continue
@@ -281,6 +384,12 @@ def _signing_key(settings: OidcSettings, kid: str | None, refresh: bool = False)
             continue
         key_ops = jwk.get("key_ops")
         if isinstance(key_ops, list) and "verify" not in key_ops:
+            continue
+        # An advertised algorithm or key type that disagrees with the header is
+        # a different key, not a key to try anyway.
+        if jwk.get("alg", algorithm) != algorithm:
+            continue
+        if jwk.get("kty", _KEY_TYPES[algorithm]) != _KEY_TYPES[algorithm]:
             continue
         try:
             return jwt.PyJWK(jwk).key
@@ -354,14 +463,14 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     if not isinstance(kid, str):
         kid = None
     try:
-        key = _signing_key(settings, kid)
+        key = _signing_key(settings, kid, algorithm)
     except IdentityError as exc:
         # A kid miss usually means the issuer rotated keys: refetch once
         # (rate-limited) before rejecting, so rotation is not a 300 s outage.
         if str(exc) != _UNKNOWN_KEY:
             raise
         try:
-            key = _signing_key(settings, kid, refresh=True)
+            key = _signing_key(settings, kid, algorithm, refresh=True)
         except IdentityError as refresh_exc:
             _log_rejection(settings, kid, str(refresh_exc))
             raise IdentityError(str(refresh_exc)) from None
@@ -383,6 +492,14 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     if not isinstance(subject, str) or not subject.strip():
         _log_rejection(settings, kid, "invalid token: missing subject")
         raise IdentityError("invalid token: missing subject")
+    issued_at = claims.get("iat")
+    if (
+        isinstance(issued_at, int)
+        and not isinstance(issued_at, bool)
+        and claims["exp"] - issued_at > MAX_TOKEN_LIFETIME_S
+    ):
+        _log_rejection(settings, kid, "invalid token: verification failed")
+        raise IdentityError("invalid token: verification failed")
     if "#" in subject:
         # ``#`` is the issuer/subject separator below. Refusing it here makes the
         # collision guarantee a checked invariant instead of an assumption about

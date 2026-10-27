@@ -73,14 +73,13 @@ def remote_tool_allowed(name: object) -> bool:
 
 
 def _is_local_identity(principal: Principal) -> bool:
-    """Return whether *principal* is the identity the local transport authenticates.
+    """Return whether *principal* claims the identity the local transport uses.
 
-    Two checks, because either alone is brittle. Identity alone fails if a future
-    refactor ever hands back a fresh ``Principal`` carrying the local operator's
-    values instead of the singleton; the authentication method alone would also
-    catch an unrelated credential of the same kind. Together, a call is refused
-    unless its principal is neither the shared-secret identity's method nor the
-    local operator's subject.
+    Two checks, because either alone is brittle. The singleton identity check
+    alone fails if a future refactor ever hands back a fresh ``Principal``
+    carrying the local operator's values; the authentication method alone would
+    not catch a caller who minted the local operator's subject. A call is
+    refused when either matches.
     """
     return (
         principal.auth_method == LOCAL_OPERATOR.auth_method
@@ -90,21 +89,24 @@ def _is_local_identity(principal: Principal) -> bool:
 
 def _audit_denial(name: object, principal: Principal) -> None:
     """Record a denied ``tools/call``; a failure here must not change the decision."""
-    # ``current_principal`` falls back to the LOCAL_OPERATOR singleton when
-    # nothing is bound to the request, and ``_append_at`` stamps ``actor`` from
-    # ``actor_id()`` -- the same fallback. Recording the refusal as-is would
-    # therefore attribute a remote authorization failure to the most privileged
-    # identity in the system, permanently and indistinguishably from a genuine
-    # local action. Rebinding here makes the chain say ``anonymous``, the
-    # transport's word for "authenticated nobody".
+    # ``_append_at`` stamps ``actor`` from ``actor_id()``, which falls back to the
+    # LOCAL_OPERATOR singleton when nothing is bound to the request. Recording a
+    # denial as-is would therefore attribute a remote authorization failure to the
+    # most privileged identity in the system -- permanently, in a tamper-evident
+    # chain, and indistinguishably from a genuine local action. A principal that
+    # claims the local identity is in the same position: the subject string is
+    # caller-controlled, so it must not become the record's actor either. Such
+    # denials are recorded as ``anonymous`` -- the transport's word for
+    # "authenticated nobody" -- and the claimed subject is kept in the detail.
     unbound = principal is LOCAL_OPERATOR
     subject = "unbound" if unbound else principal.subject
     fields = {
         "tool": str(name)[:_AUDIT_FIELD_MAX],
         "subject": subject[:_AUDIT_FIELD_MAX],
     }
+    attributed = not _is_local_identity(principal)
     try:
-        with bind_principal(ANONYMOUS) if unbound else nullcontext():
+        with nullcontext() if attributed else bind_principal(ANONYMOUS):
             append_host_audit(action="tool:call", outcome="denied", detail=fields)
     except (OSError, TypeError, ValueError):
         # Auditing is best effort: the append can fail on the filesystem

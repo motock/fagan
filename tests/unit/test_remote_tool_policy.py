@@ -180,6 +180,16 @@ def test_shared_secret_identity_cannot_reach_an_enforced_tool() -> None:
     assert recorder.calls == 0
 
 
+def test_denial_is_not_attributed_to_a_claimed_local_identity(tmp_path: Path) -> None:
+    # An OIDC ``sub`` is caller-controlled, so a caller who mints
+    # ``local-operator`` must not become the actor on the chain either.
+    impostor = Principal(subject=LOCAL_OPERATOR.subject, auth_method="oidc")
+    _call({"name": "save_plan"}, principal=impostor)
+    assert [(r["actor"], r["detail"]["subject"]) for r in _audit_records(tmp_path)] == [
+        ("anonymous", "local-operator")
+    ]
+
+
 def test_denial_audits_the_calling_principal(tmp_path: Path) -> None:
     _call({"name": "save_plan"})
     assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [

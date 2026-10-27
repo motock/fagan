@@ -2284,9 +2284,17 @@ Every other tool — including `save_plan`, `patch_plan`, `set_story_status`,
 `decompose_plan` — is refused before its handler runs: the caller gets an
 `isError` result saying the tool is not available over the remote transport,
 and `<PLAN_DIR>/.audit.host.jsonl` gains a `tool:call` record with outcome
-`denied` (naming the tool, truncated to 64 characters, and the subject). The
-local operator — stdio, or the shared secret — is unaffected: the stdio path
-never calls `serve()`, so this middleware is not installed there.
+`denied` (naming the tool, truncated to 64 characters, and the subject). A
+failed audit append never changes the decision: the refusal is returned anyway.
+
+There is no subject-based exemption. Because `serve()` only installs this
+middleware behind the OIDC gate, every `tools/call` that reaches it came from
+the network, so authorization is decided on the tool name alone — a token whose
+`sub` reads `local-operator` is still a remote principal. A call that arrives
+with no principal bound to the request context is refused rather than treated
+as the local operator, so a lost binding fails closed. The local operator is
+unaffected for a different reason: the stdio path never calls `serve()`, so
+this middleware is not installed there at all.
 
 **Behind a reverse proxy, the loopback default rejects the public host name.**
 With `PIPELINE_MCP_HOST=127.0.0.1` the MCP SDK turns on DNS-rebinding

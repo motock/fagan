@@ -16,7 +16,6 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from pipeline.remote_tool_policy import remote_tool_policy
 
 import pipeline.persistence
 from app.identity import LOCAL_OPERATOR, Principal
@@ -24,6 +23,7 @@ from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider
 from pipeline import remote_transport as rt
 from pipeline.actor import bind_principal
 from pipeline.audit import HOST_AUDIT_FILE
+from pipeline.remote_tool_policy import REMOTE_ENFORCED, REMOTE_READ, remote_tool_policy
 
 #: A caller the bearer gate authenticated: not the local operator.
 ALICE = Principal(subject="https://idp#alice", auth_method="oidc")
@@ -133,15 +133,25 @@ def test_read_tool_reaches_the_handler() -> None:
     assert recorder.calls == 1
 
 
-def test_local_operator_is_unaffected() -> None:
-    # Nothing bound at all is the stdio / CLI case: it must not hit the policy.
+def test_no_bound_principal_is_refused() -> None:
+    # This middleware is installed only by serve(), behind the OIDC gate, so a
+    # request that reaches it with nothing bound has lost its principal: fail
+    # closed rather than treating it as the local operator.
     _, recorder = _call({"name": "save_plan"}, principal=None)
-    assert recorder.calls == 1
+    assert recorder.calls == 0
 
 
-def test_bound_local_operator_is_unaffected() -> None:
+def test_local_operator_principal_is_not_exempt() -> None:
     _, recorder = _call({"name": "save_plan"}, principal=LOCAL_OPERATOR)
-    assert recorder.calls == 1
+    assert recorder.calls == 0
+
+
+def test_oidc_subject_named_local_operator_is_not_exempt() -> None:
+    # An OIDC ``sub`` is caller-mintable, so the literal subject string must
+    # carry no authority at all.
+    impostor = Principal(subject=LOCAL_OPERATOR.subject, auth_method="oidc")
+    _, recorder = _call({"name": "save_plan"}, principal=impostor)
+    assert recorder.calls == 0
 
 
 @pytest.mark.parametrize("method", ["tools/list", "initialize"])
@@ -183,6 +193,18 @@ def test_audit_failure_still_refuses(
     monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
     result, recorder = _call({"name": "save_plan"})
     assert recorder.calls == 0 and result["isError"] is True
+
+
+@pytest.mark.parametrize("error", [TypeError("unserialisable"), ValueError("bad chain")])
+def test_non_os_audit_failure_still_refuses(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def _boom(**kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
+    result, recorder = _call({"name": "save_plan"})
+    assert result["isError"] is True and recorder.calls == 0
 
 
 # --- consecutive calls ----------------------------------------------------
@@ -232,3 +254,24 @@ def test_serve_installs_the_remote_tool_policy(monkeypatch: pytest.MonkeyPatch) 
     )
     rt.serve(mcp, environ=dict(REMOTE_ENV))
     assert remote_tool_policy in mcp.middleware
+
+
+
+# --- allowlist drift ------------------------------------------------------
+
+
+def _registered_tool_names() -> set[str]:
+    """Return every tool name registered on the real MCP server."""
+    from pipeline.server import mcp
+
+    return set(mcp._tool_manager._tools)
+
+
+@pytest.mark.parametrize("name", sorted(REMOTE_ENFORCED | REMOTE_READ))
+def test_every_allowed_name_is_a_registered_tool(name: str) -> None:
+    # A stale or misspelled name would silently narrow or widen what a remote
+    # caller may reach; drift fails this test instead of the live gate. The
+    # other half of the invariant -- that each enforced tool's service path
+    # still calls ``authorize`` -- is asserted action by action in
+    # tests/unit/test_service_enforcement.py and tests/unit/test_policy_local.py.
+    assert name in _registered_tool_names()

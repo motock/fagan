@@ -5,16 +5,22 @@ does not decide what they may call. Only some tools reach a service path that
 asks ``authorize`` -- the rest (``save_plan``, ``set_story_status``,
 ``record_security_audit`` ...) would run for any authenticated caller. So a
 remote principal may call exactly the tools listed here, and every other tool
-is refused before its handler runs. The local operator (stdio, or the shared
-secret) is unaffected: this middleware is installed only by ``serve``.
+is refused before its handler runs.
+
+There is deliberately no local-operator exemption. This middleware is
+installed only by ``serve``, and ``serve`` refuses to serve with anything but
+an ``OidcProvider``, so every ``tools/call`` that reaches it came from the
+network. A caller whose ``subject`` happens to read ``local-operator`` is
+still a remote principal -- an OIDC ``sub`` claim is not a trusted identity
+here -- and a call that arrives with no principal bound to the request
+context is a denial, not a local operator. stdio and the local CLI never
+install the middleware, so their behaviour is unchanged.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any
-
-from app.identity import LOCAL_OPERATOR
 
 from .actor import current_principal
 from .audit import append_host_audit
@@ -44,20 +50,32 @@ def remote_tool_allowed(name: object) -> bool:
 
 
 async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
-    """MCP server middleware: refuse a remote ``tools/call`` outside the allowlist."""
+    """MCP server middleware: refuse a remote ``tools/call`` outside the allowlist.
+
+    Authorization is decided on the tool name only. It is never decided on the
+    principal's ``subject``: the policy runs behind the OIDC gate, so every
+    caller here is remote, and a subject string is caller-mintable.
+    """
     if ctx.method != "tools/call":
         return await call_next(ctx)
-    principal = current_principal()
     params = ctx.params if isinstance(ctx.params, dict) else {}
     name = params.get("name")
-    if principal.subject == LOCAL_OPERATOR.subject or remote_tool_allowed(name):
+    if remote_tool_allowed(name):
         return await call_next(ctx)
     try:
         append_host_audit(
             action="tool:call",
             outcome="denied",
-            detail={"tool": str(name)[:64], "subject": principal.subject},
+            detail={"tool": str(name)[:64], "subject": current_principal().subject},
         )
-    except OSError:
+    except (OSError, TypeError, ValueError):
+        # Auditing is best effort: the append can fail on the filesystem
+        # (``OSError``) or on serialisation and chain parsing
+        # (``TypeError``/``ValueError``), and a failed append must never turn a
+        # clean denial into an internal error raised from a security
+        # middleware, so the refusal below is returned regardless.
         logger.warning("host audit append failed for a denied remote tool call")
+    # The SDK's ``CallToolResult`` shape, returned before request validation
+    # runs; a protocol-level error would let some clients render the refusal
+    # as a success.
     return {"content": [{"type": "text", "text": _REFUSAL}], "isError": True}

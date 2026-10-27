@@ -34,11 +34,14 @@ import logging
 import os
 from typing import Any
 
+from mcp.server.transport_security import TransportSecuritySettings
+
 from app.identity import IdentityError
 from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provider
 
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 from .audit import append_host_audit
+from .authorization import enforcement_enabled
 from .remote_tool_policy import remote_tool_policy
 
 logger = logging.getLogger("pipeline.remote_transport")
@@ -221,6 +224,7 @@ class BearerAuthMiddleware:
 TRANSPORT_ENV = "PIPELINE_MCP_TRANSPORT"
 HOST_ENV = "PIPELINE_MCP_HOST"
 PORT_ENV = "PIPELINE_MCP_PORT"
+ALLOWED_HOSTS_ENV = "PIPELINE_MCP_ALLOWED_HOSTS"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -255,6 +259,18 @@ def _settings_from_env(env: dict[str, str]) -> tuple[str, str, int]:
     return transport, host, port
 
 
+def _transport_security(env: dict[str, str]) -> TransportSecuritySettings | None:
+    """Host allowlist for a proxied deployment, or ``None`` for the SDK default."""
+    hosts = [
+        h.strip() for h in str(env.get(ALLOWED_HOSTS_ENV, "")).split(",") if h.strip()
+    ]
+    if not hosts:
+        return None
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=[]
+    )
+
+
 def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     """Serve ``mcp`` over the configured HTTP transport, or refuse to start.
 
@@ -267,13 +283,18 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     provider = build_identity_provider(lambda: "", env)
     if not isinstance(provider, OidcProvider):
         raise SystemExit("refusing to serve MCP over HTTP without an OIDC provider")
+    if not enforcement_enabled(env):
+        raise SystemExit(
+            "refusing to serve MCP over HTTP with PIPELINE_POLICY_ENFORCE off"
+        )
+    security = _transport_security(env)
 
     mcp.middleware.append(remote_tool_policy)
 
     app = (
-        mcp.streamable_http_app(host=host)
+        mcp.streamable_http_app(host=host, transport_security=security)
         if transport == "streamable-http"
-        else mcp.sse_app(host=host)
+        else mcp.sse_app(host=host, transport_security=security)
     )
     gated = BearerAuthMiddleware(app, provider)
 

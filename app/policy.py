@@ -99,9 +99,13 @@ def _is_owner_or_delegate(
     """
     if resource is None or action not in _OWNER_GATED_ACTIONS:
         return False
-    if resource.owner and principal.subject == resource.owner:
-        return True
-    return principal.subject in resource.delegates
+    if not resource.owner:
+        # An ownerless resource (every plan written before OWN-01) grants
+        # nothing by ownership. Checking the owner first means a stray
+        # ``delegates`` list cannot outrank the missing owner and quietly hand
+        # approve/reject/merge to a name in the manifest.
+        return False
+    return principal.subject == resource.owner or principal.subject in resource.delegates
 
 
 class LocalPolicy:

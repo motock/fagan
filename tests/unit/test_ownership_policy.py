@@ -44,6 +44,18 @@ def test_stranger_without_any_role_is_denied_merge() -> None:
     )
 
 
+def test_delegate_on_an_ownerless_resource_is_denied_merge() -> None:
+    # A manifest with delegates but no owner must grant nothing: otherwise a
+    # stray ``delegates`` list outranks the missing owner and hands out
+    # approve/reject/merge on a plan nobody owns.
+    assert (
+        LocalPolicy().allow(
+            Principal(subject="bob"), Action.STORY_MERGE, Resource(delegates=("bob",))
+        )
+        is False
+    )
+
+
 def test_local_operator_is_still_allowed_every_action_on_a_plan_it_does_not_own() -> None:
     policy = LocalPolicy()
 

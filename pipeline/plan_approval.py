@@ -36,6 +36,7 @@ from typing import Any
 from app.identity import Principal
 
 from .actor import current_correlation_id, current_principal
+from .audit import record_audit
 
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 
@@ -288,6 +289,13 @@ class PlanApprovalMixin:
             if not isinstance(previous, dict):
                 previous = {}
             if previous.get("digest") != digest:
+                record_audit(
+                    plan_name,
+                    action=f"plan.{status}",
+                    outcome="refused",
+                    target={"plan": plan_name},
+                    detail={"reason": "digest_mismatch"},
+                )
                 return {"ok": False, "error": _DIGEST_MISMATCH_ERROR}
 
             warnings_seen = previous.get("warnings_seen")
@@ -312,4 +320,16 @@ class PlanApprovalMixin:
             manifest["approval"] = {**previous, **record}
             _store.save_manifest(plan_name, manifest)
             _append_decision(plan_name, record)
+            record_audit(
+                plan_name,
+                action=f"plan.{status}",
+                outcome="allowed",
+                target={"plan": plan_name},
+                detail={
+                    "digest": digest,
+                    "decided_by": record["decided_by"],
+                    "role": record["role"],
+                    "self_approved": record["self_approved"],
+                },
+            )
             return {"ok": True, **record}

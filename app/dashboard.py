@@ -521,6 +521,17 @@ def resume_plan(plan_name: str) -> dict[str, Any]:
 def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
     if plan_name not in _store.list_manifests() and plan_name != "someplan":
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    from pipeline.authorization import authorize
+
+    refusal = authorize("decision:answer", plan_name=plan_name)
+    if refusal is not None:
+        # ``authorize`` refuses with ``{"ok": False, "error": ...}``; its own
+        # message also names the principal, which does not belong in a
+        # response body. Answer with the action and the plan only.
+        raise HTTPException(
+            status_code=403,
+            detail=f"not authorized: decision:answer on plan {plan_name!r}",
+        )
     decided_at = datetime.now(UTC).isoformat()
     record = {
         "story_key": body.story_key,

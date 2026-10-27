@@ -57,14 +57,20 @@ def resolve_ownership(
     refusal. Every attempted change is audited, allowed or denied.
     """
     requested = ownership_from_plan(plan, actor)
+    # Normalise the owner: a whitespace variant would produce a manifest no
+    # principal can match, and once an ownership is set only the owner or the
+    # local operator can repair it. ``ownership_from_plan`` keeps validating
+    # the shape; normalisation belongs here, on the way to the manifest.
+    requested["owner"] = requested["owner"].strip()
     if not prior:
         return requested
     current = {
         "owner": str(prior.get("owner") or ""),
         "delegates": list(prior.get("delegates") or []),
     }
+    plan_owner = plan.get("owner")
     proposed = {
-        "owner": plan.get("owner") or current["owner"],
+        "owner": str(plan_owner).strip() if plan_owner else current["owner"],
         "delegates": requested["delegates"]
         if "delegates" in plan
         else current["delegates"],

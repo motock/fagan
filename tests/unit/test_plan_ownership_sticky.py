@@ -240,3 +240,81 @@ def test_ingest_owner_reassignment_succeeds(
     _write_plan(plan_dir, "sticky-plan", repo, owner="carol")
     _ingest("sticky-plan", "alice")
     assert _manifest(plan_dir, "sticky-plan")["owner"] == "carol"
+
+
+# --- review regression: overwrite=True must not reset ownership -----------
+
+
+def _ingest_overwrite(name: str, subject: str) -> dict:
+    """Re-ingest with the wholesale-replace flag under *subject*."""
+    with bind_principal(
+        Principal(subject=subject, roles=frozenset({"author"}), auth_method="test")
+    ):
+        return ingest_mod._ingest_plan_impl(name, overwrite=True)
+
+
+def _owned_plan_then_rewrite_to_bob(
+    plan_dir: Path, tmp_path: Path, overwrite: bool
+) -> dict:
+    """Plant owner alice as the operator, then rewrite the plan to name bob."""
+    repo = _repo_root(tmp_path)
+    _write_plan(plan_dir, _PLAN, repo, owner="alice")
+    _ingest(_PLAN, LOCAL_OPERATOR.subject)
+    _write_plan(plan_dir, _PLAN, repo, owner="bob")
+    return _ingest_overwrite(_PLAN, "bob") if overwrite else _ingest(_PLAN, "bob")
+
+
+def test_ingest_overwrite_stranger_refused(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    assert _owned_plan_then_rewrite_to_bob(plan_dir, tmp_path, overwrite=True)[
+        "ok"
+    ] is False
+
+
+def test_ingest_overwrite_refusal_leaves_owner_intact(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    _owned_plan_then_rewrite_to_bob(plan_dir, tmp_path, overwrite=True)
+    assert _manifest(plan_dir, _PLAN)["owner"] == "alice"
+
+
+def test_ingest_overwrite_refusal_audited_once(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    _owned_plan_then_rewrite_to_bob(plan_dir, tmp_path, overwrite=True)
+    records = [
+        json.loads(line)
+        for line in (plan_dir / f"{_PLAN}.audit.jsonl").read_text().splitlines()
+        if line.strip() and json.loads(line)["action"] == "plan:ownership_change"
+    ]
+    assert [(r["outcome"], r["detail"]["from_owner"], r["detail"]["to_owner"]) for r in records] == [
+        ("denied", "alice", "bob")
+    ]
+
+
+def test_ingest_refusal_creates_no_plane_issues(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    repo = _repo_root(tmp_path)
+    _write_plan(plan_dir, _PLAN, repo, owner="alice")
+    _ingest(_PLAN, LOCAL_OPERATOR.subject)
+    provider.calls.clear()
+    _write_plan(plan_dir, _PLAN, repo, owner="bob")
+    _ingest(_PLAN, "bob")
+    assert provider.calls == []
+
+
+def test_resolve_strips_owner_whitespace(plan_dir: Path) -> None:
+    assert resolve_ownership("p", {"owner": " alice "}, {}, "bob")["owner"] == "alice"
+
+
+def test_ingest_overwrite_by_owner_still_reassigns(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    repo = _repo_root(tmp_path)
+    _write_plan(plan_dir, _PLAN, repo, owner="alice")
+    _ingest(_PLAN, LOCAL_OPERATOR.subject)
+    _write_plan(plan_dir, _PLAN, repo, owner="carol")
+    _ingest_overwrite(_PLAN, "alice")
+    assert _manifest(plan_dir, _PLAN)["owner"] == "carol"

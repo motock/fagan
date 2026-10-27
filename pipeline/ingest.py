@@ -745,6 +745,16 @@ def _ingest_plan_impl(
                 "reason": "another ingest/dispatch/interrupt is in progress for this plan",
             }
 
+        # Any caller can rewrite a plan file, so resolve ownership against the
+        # manifest on disk even when overwriting, before any provider call.
+        saved_manifest: dict[str, Any] = (
+            json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        )
+        try:
+            ownership = resolve_ownership(plan_name, plan, saved_manifest, actor_id())
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
         manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
 
         # When no ticketing backend is configured (NullTicketProvider) the
@@ -817,9 +827,7 @@ def _ingest_plan_impl(
         # the manifest's runtime state for stories re-ingested this round -
         # must survive. overwrite=True restores the old wholesale-replace
         # behavior for callers that genuinely want a clean slate.
-        prior: dict[str, Any] = {}
-        if not overwrite and manifest_path.exists():
-            prior = json.loads(manifest_path.read_text())
+        prior: dict[str, Any] = {} if overwrite else saved_manifest
 
         merged_epics = dict(prior.get("epics", {}))
         merged_epics.update(manifest["epics"])
@@ -854,16 +862,8 @@ def _ingest_plan_impl(
             "role_config", prior.get("role_config", {})
         )
         final_manifest["ingested_by"] = actor_id()
-        # OWN-01: store plan ownership (ADR 0006/0009) beside the actor stamp
-        # and before any manifest write, so a malformed value becomes the
-        # ingest's structured refusal rather than a half-written manifest or a
-        # 500. An existing manifest's ownership stands: only its owner or the
-        # local operator may change it (resolve_ownership). It is not authored
-        # content: it stays outside canonical_digest.
-        try:
-            ownership = resolve_ownership(plan_name, plan, prior, final_manifest.get("ingested_by") or "")
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+        # OWN-03: ownership was resolved before the provider loop, so a refusal
+        # never reaches this write. Not authored: outside canonical_digest.
         final_manifest["owner"] = ownership["owner"]
         final_manifest["delegates"] = ownership["delegates"]
         final_manifest["team"] = plan.get("team") or prior.get("team") or DEFAULT_TEAM

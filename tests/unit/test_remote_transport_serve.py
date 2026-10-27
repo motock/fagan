@@ -28,8 +28,8 @@ class FakeMCP:
         self.calls.append(("streamable_http_app", host))
         return object()
 
-    def sse_app(self) -> object:
-        self.calls.append(("sse_app", None))
+    def sse_app(self, host: str | None = None) -> object:
+        self.calls.append(("sse_app", host))
         return object()
 
 
@@ -39,7 +39,7 @@ class GuardedMCP:
     def streamable_http_app(self, host: str | None = None) -> object:
         raise AssertionError("app built before OIDC guard")
 
-    def sse_app(self) -> object:
+    def sse_app(self, host: str | None = None) -> object:
         raise AssertionError("app built before OIDC guard")
 
 
@@ -125,8 +125,13 @@ def test_serve_wraps_app_in_bearer_middleware(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_serve_uses_sse_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    mcp, _ = _serve_with_fakes(monkeypatch, {**REMOTE_ENV, TRANSPORT_ENV: "sse"})
-    assert mcp.calls[0][0] == "sse_app"
+    # The SSE app must also receive the configured host: mcp 2.3.0 defaults
+    # sse_app's host to 127.0.0.1 and enables its loopback-only DNS-rebinding
+    # protection, which 400s every request that arrives via the operator's
+    # reverse proxy on a wildcard bind.
+    env = {**REMOTE_ENV, TRANSPORT_ENV: "sse", HOST_ENV: "0.0.0.0"}
+    mcp, _ = _serve_with_fakes(monkeypatch, env)
+    assert mcp.calls[0] == ("sse_app", "0.0.0.0")
 
 
 def test_serve_passes_host_and_port_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:

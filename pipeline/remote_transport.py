@@ -265,7 +265,7 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     app = (
         mcp.streamable_http_app(host=host)
         if transport == "streamable-http"
-        else mcp.sse_app()
+        else mcp.sse_app(host=host)
     )
     gated = BearerAuthMiddleware(app, provider)
 

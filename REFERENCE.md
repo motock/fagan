@@ -2284,8 +2284,10 @@ Every other tool — including `save_plan`, `patch_plan`, `set_story_status`,
 `decompose_plan` — is refused before its handler runs: the caller gets an
 `isError` result saying the tool is not available over the remote transport,
 and `<PLAN_DIR>/.audit.host.jsonl` gains a `tool:call` record with outcome
-`denied` (naming the tool, truncated to 64 characters, and the subject). A
+`denied` (naming the tool and the subject, each truncated to 64 characters). A
 failed audit append never changes the decision: the refusal is returned anyway.
+A refusal from a call that arrives with no principal bound to its context is
+recorded with the subject `unbound`.
 
 There is no subject-based exemption. Because `serve()` only installs this
 middleware behind the OIDC gate, every `tools/call` that reaches it came from

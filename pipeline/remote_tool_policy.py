@@ -22,26 +22,46 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .actor import current_principal
+from app.identity import Principal
+
+from .actor import bound_principal
 from .audit import append_host_audit
 
 logger = logging.getLogger("pipeline.remote_tool_policy")
 
 #: Tools whose service path calls ``authorize`` itself, so the policy decides.
-REMOTE_ENFORCED = frozenset({
-    "approve_merge", "approve_plan", "dispatch_story", "ingest_plan",
-    "interrupt_story", "mark_story_done", "patch_story", "pause_plan",
-    "reject_plan", "resume_plan",
-})
+REMOTE_ENFORCED = frozenset(
+    {
+        "approve_merge",
+        "approve_plan",
+        "dispatch_story",
+        "ingest_plan",
+        "interrupt_story",
+        "mark_story_done",
+        "patch_story",
+        "pause_plan",
+        "reject_plan",
+        "resume_plan",
+    }
+)
 
 #: Read-only tools. They are not tenant-scoped yet, so any remote caller sees
 #: every plan they list.
-REMOTE_READ = frozenset({
-    "check_story_status", "check_usage", "get_story_diff", "list_decisions",
-    "list_plans", "list_ready_stories",
-})
+REMOTE_READ = frozenset(
+    {
+        "check_story_status",
+        "check_usage",
+        "get_story_diff",
+        "list_decisions",
+        "list_plans",
+        "list_ready_stories",
+    }
+)
 
 _REFUSAL = "This tool is not available over the remote transport."
+
+#: Longest value written for the caller-influenced audit fields.
+_AUDIT_FIELD_MAX = 64
 
 
 def remote_tool_allowed(name: object) -> bool:
@@ -49,24 +69,20 @@ def remote_tool_allowed(name: object) -> bool:
     return isinstance(name, str) and (name in REMOTE_ENFORCED or name in REMOTE_READ)
 
 
-async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
-    """MCP server middleware: refuse a remote ``tools/call`` outside the allowlist.
-
-    Authorization is decided on the tool name only. It is never decided on the
-    principal's ``subject``: the policy runs behind the OIDC gate, so every
-    caller here is remote, and a subject string is caller-mintable.
-    """
-    if ctx.method != "tools/call":
-        return await call_next(ctx)
-    params = ctx.params if isinstance(ctx.params, dict) else {}
-    name = params.get("name")
-    if remote_tool_allowed(name):
-        return await call_next(ctx)
+def _audit_denial(name: object, principal: Principal | None) -> None:
+    """Record a denied ``tools/call``; a failure here must not change the decision."""
     try:
         append_host_audit(
             action="tool:call",
             outcome="denied",
-            detail={"tool": str(name)[:64], "subject": current_principal().subject},
+            detail={
+                "tool": str(name)[:_AUDIT_FIELD_MAX],
+                "subject": (
+                    "unbound"
+                    if principal is None
+                    else principal.subject[:_AUDIT_FIELD_MAX]
+                ),
+            },
         )
     except (OSError, TypeError, ValueError):
         # Auditing is best effort: the append can fail on the filesystem
@@ -75,6 +91,26 @@ async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
         # clean denial into an internal error raised from a security
         # middleware, so the refusal below is returned regardless.
         logger.warning("host audit append failed for a denied remote tool call")
+
+
+async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
+    """MCP server middleware: refuse a remote ``tools/call`` outside the allowlist.
+
+    Authorization is decided on the tool name only. It is never decided on the
+    principal's ``subject``: the policy runs behind the OIDC gate, so every
+    caller here is remote, and a subject string is caller-mintable. A request
+    with no principal bound to its context is a denial too: authorizing on the
+    name alone would let it reach a service path where ``current_principal``
+    defaults it to the local operator.
+    """
+    if ctx.method != "tools/call":
+        return await call_next(ctx)
+    principal = bound_principal()
+    params = ctx.params if isinstance(ctx.params, dict) else {}
+    name = params.get("name")
+    if principal is not None and remote_tool_allowed(name):
+        return await call_next(ctx)
+    _audit_denial(name, principal)
     # The SDK's ``CallToolResult`` shape, returned before request validation
     # runs; a protocol-level error would let some clients render the refusal
     # as a success.

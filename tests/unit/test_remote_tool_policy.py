@@ -51,7 +51,9 @@ class _Recorder:
         return SENTINEL
 
 
-def _call(params: object, method: str = "tools/call", principal: Principal | None = ALICE):
+def _call(
+    params: object, method: str = "tools/call", principal: Principal | None = ALICE
+):
     """Drive the middleware once, returning ``(result, recorder)``."""
 
     recorder = _Recorder()
@@ -133,12 +135,41 @@ def test_read_tool_reaches_the_handler() -> None:
     assert recorder.calls == 1
 
 
-def test_no_bound_principal_is_refused() -> None:
+def test_no_bound_principal_cannot_call_save_plan() -> None:
     # This middleware is installed only by serve(), behind the OIDC gate, so a
     # request that reaches it with nothing bound has lost its principal: fail
     # closed rather than treating it as the local operator.
     _, recorder = _call({"name": "save_plan"}, principal=None)
     assert recorder.calls == 0
+
+
+def test_no_bound_principal_cannot_call_an_enforced_tool() -> None:
+    # The allowlist alone would let this through, and the service path's
+    # ``authorize`` would then see the defaulted local operator and grant it.
+    result, recorder = _call({"name": "approve_merge"}, principal=None)
+    assert (result["isError"], recorder.calls) == (True, 0)
+
+
+def test_unbound_refusal_is_audited_as_unbound(tmp_path: Path) -> None:
+    _call({"name": "approve_plan"}, principal=None)
+    assert [r["detail"] for r in _audit_records(tmp_path)] == [
+        {"tool": "approve_plan", "subject": "unbound"}
+    ]
+
+
+def test_denial_audits_the_calling_principal(tmp_path: Path) -> None:
+    _call({"name": "save_plan"})
+    assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [
+        "https://idp#alice"
+    ]
+
+
+def test_audit_detail_truncates_a_long_subject(tmp_path: Path) -> None:
+    long_subject = "https://idp#" + "a" * 70
+    _call({"name": "save_plan"}, principal=Principal(subject=long_subject))
+    assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [
+        long_subject[:64]
+    ]
 
 
 def test_local_operator_principal_is_not_exempt() -> None:
@@ -195,7 +226,9 @@ def test_audit_failure_still_refuses(
     assert recorder.calls == 0 and result["isError"] is True
 
 
-@pytest.mark.parametrize("error", [TypeError("unserialisable"), ValueError("bad chain")])
+@pytest.mark.parametrize(
+    "error", [TypeError("unserialisable"), ValueError("bad chain")]
+)
 def test_non_os_audit_failure_still_refuses(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
@@ -254,7 +287,6 @@ def test_serve_installs_the_remote_tool_policy(monkeypatch: pytest.MonkeyPatch) 
     )
     rt.serve(mcp, environ=dict(REMOTE_ENV))
     assert remote_tool_policy in mcp.middleware
-
 
 
 # --- allowlist drift ------------------------------------------------------

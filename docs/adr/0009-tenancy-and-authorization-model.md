@@ -1,7 +1,8 @@
 # 0009. Tenancy and authorization are a service-layer policy over a verified principal
 
 - **Status:** Accepted direction (2026-10-26). The identity/authorization seam
-  and service-layer enforcement for four actions are implemented; OIDC, tenant
+  and service-layer enforcement for four actions — plus `plan:pause` for both
+  pause and resume, five action names in all — are implemented; OIDC, tenant
   scoping beyond the plan `team`, the audit stream and the remote MCP transport
   are still unimplemented.
 - **Date:** 2026-10-26

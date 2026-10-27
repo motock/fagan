@@ -293,8 +293,11 @@ needs no special handling at the call site. The steps are:
 1. If enforcement is disabled, return `None` (allow) — and log exactly one
    `WARNING` at first use, so an operator who set the kill switch sees it in the
    log without a line per call.
-2. Resolve the principal from the bound actor context (`current_principal()`;
-   `ANONYMOUS` when nothing is bound) and the resource from `resource_for`.
+2. Resolve the principal from the bound actor context (`current_principal()`)
+   and the resource from `resource_for`. `current_principal()` yields
+   `LOCAL_OPERATOR` when the process itself is the caller — the local default —
+   and `ANONYMOUS` only when a transport bound it for an unidentified caller
+   (the dashboard's chat-stream `k-` pass-through), which is then denied.
 3. Call `is_allowed(default_authorizer(), principal, action, resource)`.
 4. On denial, record it and return the refusal.
 
@@ -307,17 +310,17 @@ when there is none). Missing fields become empty strings rather than raising.
 declares none. One implicit team keeps local mode a single-operator deployment;
 the real tenant chain is only populated once a shared control plane exists.
 
-**Fail-closed rules.** Two paths could quietly become an allow, and neither
+**Fail-closed rules.** Three paths could quietly become an allow, and none
 does:
 
 - **A policy that raises is a denial.** `is_allowed` is the fail-closed wrapper
   around the `Authorizer`; an exception from the policy lands as `False`, not as
   `True`.
-- **An unreadable manifest yields an empty resource, never an allow.** When the
-  manifest cannot be read, `_load_manifest` returns `{}` and `resource_for`
-  produces a `Resource` with an empty `team`/`repo` — which is what
-  `LocalPolicy` will not match. It never short-circuits to "allowed because we
-  could not check".
+- **An unreadable manifest never becomes an allow.** When the manifest cannot be
+  read, `_load_manifest` returns `{}`, so `resource_for` falls back to
+  `DEFAULT_TEAM` for `team` and to `""` for `repo` (it never raises). The
+  failure can never short-circuit to "allowed because we could not check": the
+  policy is consulted and returns its normal answer.
 - **Recording the denial is best effort.** If appending the sidecar record
   fails, the denial is still returned; the failure only logs a warning.
 

@@ -69,7 +69,15 @@ def plan(tmp_path, monkeypatch):
 
 @pytest.fixture
 def enabled(monkeypatch):
+    """Approval gate on, policy enforcement off via its kill switch.
+
+    These tests grade what a decision *records* about its actor, using
+    principals the local policy denies on purpose, so enforcement would turn
+    every case into a refusal; enforcement itself is graded in
+    tests/unit/test_authorization.py.
+    """
     monkeypatch.setenv(plan_approval.APPROVAL_ENV, "on")
+    monkeypatch.setenv("PIPELINE_POLICY_ENFORCE", "0")
 
 
 def _read_manifest(tmp_path):

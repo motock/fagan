@@ -268,6 +268,15 @@ class PlanApprovalMixin:
         if not approval_enabled():
             return {"ok": True, "skipped": "approval_disabled"}
 
+        from .authorization import authorize
+
+        refusal = authorize(
+            "plan:approve" if status == "approved" else "plan:reject",
+            plan_name=plan_name,
+        )
+        if refusal is not None:
+            return refusal
+
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {"ok": True, "skipped": "locked"}

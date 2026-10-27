@@ -69,6 +69,15 @@ def _tail(path: Path) -> dict[str, Any] | None:
     return None
 
 
+#: The host-scoped stream: events that have no plan to belong to.
+HOST_AUDIT_FILE = ".audit.host.jsonl"
+
+
+def host_audit_path() -> Path:
+    """Return the host-scoped audit stream, for events that have no plan."""
+    return persistence.PLAN_DIR / HOST_AUDIT_FILE
+
+
 def append_audit(
     plan_name: str,
     *,
@@ -85,7 +94,37 @@ def append_audit(
     head is then derived from the bytes on disk rather than from a second
     "last hash" file that could drift out of step with them.
     """
-    path = audit_path(plan_name)
+    return _append_at(
+        audit_path(plan_name),
+        action=action,
+        outcome=outcome,
+        target=target,
+        detail=detail,
+    )
+
+
+def append_host_audit(
+    *,
+    action: str,
+    outcome: str,
+    target: dict[str, Any] | None = None,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one record to the host-scoped chain (no plan exists to scope it)."""
+    return _append_at(
+        host_audit_path(), action=action, outcome=outcome, target=target, detail=detail
+    )
+
+
+def _append_at(
+    path: Path,
+    *,
+    action: str,
+    outcome: str,
+    target: dict[str, Any] | None = None,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The one append implementation, for a chain at *path*."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o600)
     try:

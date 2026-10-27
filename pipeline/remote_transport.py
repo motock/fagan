@@ -38,6 +38,7 @@ from app.identity import IdentityError
 from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provider
 
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
+from .audit import append_host_audit
 
 logger = logging.getLogger("pipeline.remote_transport")
 
@@ -201,6 +202,10 @@ class BearerAuthMiddleware:
             extra["detail"] = detail
         level = logging.INFO if outcome == "authenticated" else logging.WARNING
         logger.log(level, "remote mcp authentication", extra=extra)
+        try:
+            append_host_audit(action="auth.remote_mcp", outcome=outcome, detail=extra)
+        except OSError:
+            logger.warning("host audit append failed for %s", outcome)
 
     async def _deny_non_http(self, scope: dict[str, Any], send: Any) -> None:
         """Close a non-HTTP, non-lifespan scope without reaching the app."""

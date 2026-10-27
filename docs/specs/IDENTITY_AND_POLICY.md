@@ -136,9 +136,9 @@ Imports `app.identity` only — never `app.auth` (an adapter concern) and never
 | Symbol | What it is |
 | --- | --- |
 | `Action` | `str` enum of the eleven mutating actions ADR 0009 authorizes: `plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`. |
-| `Resource` | Frozen dataclass for the ADR 0009 scope chain: `tenant`, `team`, `repo`, `plan`, `story`. |
+| `Resource` | Frozen dataclass for the ADR 0009 scope chain: `tenant`, `team`, `repo`, `plan`, `story`, plus the plan's ownership — `owner` (a subject, `""` when the plan has none) and `delegates` (a tuple of subjects, empty by default). Ownership is empty for every plan written before OWN-01. |
 | `Authorizer` | Protocol for `allow(principal, action, resource) -> bool`. |
-| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything; every other principal — including any future system principal — is denied every action. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
+| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything. A plan's ownership is an **additional** authority for exactly the three actions its owner governs — `plan:approve`, `plan:reject`, `story:merge` — where `resource.owner` and any subject in `resource.delegates` are allowed those three actions even with no role at all. Ownership is never a subtraction: every principal the role rules already allow stays allowed, a plan with no owner (`owner == ""`) and no delegates falls through to the role rule unchanged, and the ownership grant is scoped to those three actions only. Every other principal — including any future system principal — is denied every other action. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
 | `default_authorizer()` | Returns the authorizer for this deployment — `LocalPolicy()` today. |
 | `is_allowed(authorizer, principal, action, resource)` | The wrapper every future call site uses: asks the authorizer and **fails closed** on any error, logging a warning that names the action and the principal subject. A policy that raises lands denied, never propagates. |
 

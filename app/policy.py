@@ -49,6 +49,8 @@ class Resource:
     repo: str = ""
     plan: str = ""
     story: str = ""
+    owner: str = ""
+    delegates: tuple[str, ...] = ()
 
 
 class Authorizer(Protocol):
@@ -83,8 +85,13 @@ class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
     Every other principal — including any future system principal — is denied
-    every action. ADR 0009 requires that a system principal never approve its
-    own plan, so the deny is not special-cased per action.
+    every action, with one exception: a plan's ``owner`` and its ``delegates``
+    are additionally allowed ``plan:approve``, ``plan:reject`` and
+    ``story:merge``. Ownership is additive only — it can allow a principal the
+    role rule denies, never deny one it allows — and a plan with no owner (every
+    plan written before OWN-01) falls through to the role rule unchanged. ADR
+    0009 requires that a system principal never approve its own plan; ownership
+    is scoped to those three actions and grants nothing else.
     """
 
     def allow(
@@ -98,6 +105,23 @@ class LocalPolicy:
 
         if _coerce_action(action) is None:
             return False
+
+        # Ownership is an ADDITIONAL authority for exactly the three actions a
+        # plan's owner governs: it can only allow a principal the role rules
+        # below would deny, never deny one they would allow. The `resource.owner
+        # and` guard keeps a pre-OWN-01 plan (no owner) behaving as it does
+        # today, rather than matching a principal whose subject is empty.
+        if (
+            resource is not None
+            and isinstance(principal, Principal)
+            and action
+            in (Action.PLAN_APPROVE, Action.PLAN_REJECT, Action.STORY_MERGE)
+            and (
+                (resource.owner and principal.subject == resource.owner)
+                or principal.subject in resource.delegates
+            )
+        ):
+            return True
 
         return (
             isinstance(principal, Principal)

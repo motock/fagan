@@ -3,8 +3,9 @@
 - **Status:** Accepted direction (2026-10-26). The identity/authorization seam,
   service-layer enforcement for every action in the `Action` enum, OIDC token
   verification, the OIDC-gated remote MCP transport and the append-only,
-  hash-chained audit stream are implemented; plan ownership is stored but not
-  enforced. Tenant scoping beyond the plan `team`, tenant-scoped reads, and
+  hash-chained audit stream are implemented; plan ownership is stored and
+  enforced for `plan:approve`, `plan:reject` and `story:merge` only. Tenant
+  scoping beyond the plan `team`, tenant-scoped reads, and
   authorization of the MCP tools outside the enum are still unimplemented.
 - **Date:** 2026-10-26
 
@@ -16,9 +17,10 @@ tokens against the issuer's JWKS — issuer, audience, expiry and the claims-to-
 `Principal` mapping — when `PIPELINE_IDENTITY_PROVIDER=oidc`; it authenticates
 API clients only, since the bundled dashboard has no login flow. The remote MCP
 transport (`pipeline/remote_transport.py`) serves the same tools over HTTP
-behind the same `OidcProvider`, refusing to start without it. What remains
-unimplemented is the full tenant chain and ownership records beyond the plan
-`team`, and the remaining actions are still unenforced. See the
+behind the same `OidcProvider`, refusing to start without it. Every action in
+the `Action` enum is enforced in the service; what remains unimplemented is
+the full tenant chain, ownership records beyond the plan `team`, and the
+mutating MCP tools outside the enum. See the
 "Enforcement (pipeline/authorization.py)" and "OIDC provider" sections of
 [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
 

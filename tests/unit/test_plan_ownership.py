@@ -23,7 +23,7 @@ import pytest
 # pipeline.server must load before pipeline.ingest (see
 # tests/unit/test_ingest_keyless_reingest.py for the import-cycle note).
 import pipeline.server as p
-from app.identity import Principal
+from app.identity import LOCAL_OPERATOR, Principal
 from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
@@ -140,10 +140,10 @@ def test_reingest_keeps_plan_named_owner(
 ) -> None:
     _write_plan(plan_dir, "owned-plan", _repo_root(tmp_path), owner="alice")
 
-    # The plan file is the authority, not the principal who re-ingested it,
-    # so assert on the manifest read back after the *second* ingest.
+    # Only the local operator may name an owner on the first ingest, so the
+    # plan file's owner lands then; the later re-ingests must not displace it.
     assert (
-        _ingest(plan_dir, "owned-plan", "bob")["ok"],
+        _ingest(plan_dir, "owned-plan", LOCAL_OPERATOR.subject)["ok"],
         _ingest(plan_dir, "owned-plan", "carol")["ok"],
         _manifest(plan_dir, "owned-plan")["owner"],
     ) == (True, True, "alice")

@@ -124,7 +124,8 @@ def test_resolve_first_ingest_defaults_to_actor(plan_dir: Path) -> None:
 
 
 def test_resolve_first_ingest_honours_plan_owner(plan_dir: Path) -> None:
-    assert resolve_ownership("p", {"owner": "alice"}, {}, "bob")["owner"] == "alice"
+    actor = LOCAL_OPERATOR.subject
+    assert resolve_ownership("p", {"owner": "alice"}, {}, actor)["owner"] == "alice"
 
 
 def test_resolve_later_ingest_keeps_owner_without_plan_owner(plan_dir: Path) -> None:
@@ -306,7 +307,8 @@ def test_ingest_refusal_creates_no_plane_issues(
 
 
 def test_resolve_strips_owner_whitespace(plan_dir: Path) -> None:
-    assert resolve_ownership("p", {"owner": " alice "}, {}, "bob")["owner"] == "alice"
+    actor = LOCAL_OPERATOR.subject
+    assert resolve_ownership("p", {"owner": " alice "}, {}, actor)["owner"] == "alice"
 
 
 def test_ingest_overwrite_by_owner_still_reassigns(

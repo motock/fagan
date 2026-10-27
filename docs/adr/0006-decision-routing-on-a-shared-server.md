@@ -25,7 +25,11 @@ We route decisions on a shared server by plan ownership:
 
 1. **One owner per plan.** A plan has a single `owner`, taken from the
    authenticated MCP caller at ingest. It is never supplied in the plan file,
-   so an author cannot assign a plan to someone else.
+   so an author cannot assign a plan to someone else. Only the local operator
+   may name a different owner or a delegate list on the first ingest; any
+   other first-ingest caller owns the plan they created and delegates
+   nothing, and that ignored naming is recorded in the plan's audit stream as
+   `plan:ownership_change` with outcome `ignored`.
 2. **Overlord first.** `request_decision` goes to the overlord, as today.
 3. **Escalation to the owner.** Anything the overlord escalates goes to the
    plan owner. The plan may carry an optional `delegates` list of identities

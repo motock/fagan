@@ -11,10 +11,12 @@ import logging
 import re
 from typing import Any
 
-from pipeline.remote_transport import BearerAuthMiddleware
+import pytest
 
-from app.identity import IdentityError, Principal
+from app.identity import IdentityError, Principal, SharedSecretProvider
+from app.oidc import OidcProvider
 from pipeline.actor import actor_id
+from pipeline.remote_transport import BearerAuthMiddleware
 
 #: The shape ``pipeline.actor.request_correlation_id`` accepts and mints.
 CORRELATION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -28,8 +30,16 @@ _PRINCIPALS = {
 }
 
 
-class _StubProvider:
-    """Identity provider that accepts two known tokens and rejects the rest."""
+class _StubProvider(OidcProvider):
+    """Identity provider double: accepts two known tokens, rejects the rest.
+
+    Subclasses ``OidcProvider`` because the gate refuses every other provider
+    type at construction; ``authenticate`` is overridden so no settings or
+    network access are needed.
+    """
+
+    def __init__(self) -> None:
+        self._settings = None
 
     def authenticate(self, credential: str | None) -> Principal:
         principal = _PRINCIPALS.get(credential or "")
@@ -184,3 +194,73 @@ def test_rejection_log_does_not_contain_the_credential(
         if TOKEN in record.getMessage() or TOKEN in repr(record.__dict__)
     ]
     assert leaked == []
+
+
+def _websocket_scope(*headers: tuple[bytes, bytes]) -> dict[str, Any]:
+    return {"type": "websocket", "path": "/mcp", "headers": list(headers)}
+
+
+def test_websocket_scope_never_reaches_the_app() -> None:
+    seen, _sent, _after = _call(_websocket_scope(_auth("Bearer alice-token")))
+    assert seen == []
+
+
+def test_websocket_scope_is_closed_not_answered() -> None:
+    _seen, sent, _after = _call(_websocket_scope())
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+def test_duplicate_authorization_headers_are_rejected() -> None:
+    seen, sent, _after = _call(
+        _http_scope(_auth("Bearer alice-token"), _auth("Bearer bob-token"))
+    )
+    assert (seen, _status(sent)) == ([], 401)
+
+
+def test_inbound_malformed_correlation_id_is_replaced() -> None:
+    _seen, sent, _after = _call(_http_scope(_correlation("abc\r\nx-evil: 1")))
+    assert CORRELATION_RE.fullmatch(_header(sent, "x-correlation-id") or "") is not None
+
+
+def test_401_challenges_with_the_bearer_scheme() -> None:
+    _seen, sent, _after = _call(_http_scope())
+    assert _header(sent, "www-authenticate") == "Bearer"
+
+
+def test_non_oidc_provider_is_refused_at_construction() -> None:
+    with pytest.raises(TypeError):
+        BearerAuthMiddleware(_RecordingApp(), SharedSecretProvider("secret"))
+
+
+def test_successful_authentication_is_audited_with_the_subject(caplog: Any) -> None:
+    caplog.set_level(logging.INFO, logger="pipeline.remote_transport")
+    _call(_http_scope(_auth("Bearer alice-token")))
+    assert [(r.outcome, r.subject) for r in caplog.records] == [("authenticated", "alice")]
+
+
+def test_authentication_failure_is_audited_without_a_subject(caplog: Any) -> None:
+    caplog.set_level(logging.INFO, logger="pipeline.remote_transport")
+    _call(_http_scope(_auth(f"Bearer {TOKEN}")))
+    assert [(r.outcome, getattr(r, "subject", None)) for r in caplog.records] == [
+        ("denied", None)
+    ]
+
+
+def test_success_log_does_not_contain_the_credential(caplog: Any) -> None:
+    caplog.set_level(logging.INFO, logger="pipeline.remote_transport")
+    _call(_http_scope(_auth("Bearer alice-token")))
+    leaked = [
+        record.getMessage() + repr(record.__dict__)
+        for record in caplog.records
+        if "alice-token" in record.getMessage() or "alice-token" in repr(record.__dict__)
+    ]
+    assert leaked == []
+
+
+def test_audit_record_carries_the_client_address(caplog: Any) -> None:
+    caplog.set_level(logging.INFO, logger="pipeline.remote_transport")
+    scope = _http_scope(_auth("Bearer alice-token"))
+    scope["client"] = ("203.0.113.7", 443)
+    app = _RecordingApp()
+    asyncio.run(_drive(BearerAuthMiddleware(app, _StubProvider()), scope, []))
+    assert [record.client_ip for record in caplog.records] == ["203.0.113.7"]

@@ -8,10 +8,24 @@ one is a deliberate two-part act, and the second part is non-negotiable:
 * the identity provider must be OIDC, because a remote MCP endpoint that
   authenticates nobody is an unauthenticated control plane over the network.
   A missing or different provider refuses to start rather than serving.
+  ``BearerAuthMiddleware`` enforces this at construction time: anything that is
+  not an ``OidcProvider`` raises ``TypeError``, so the default
+  ``SharedSecretProvider`` cannot be wired in by accident.
 
 The gate is raw ASGI on purpose. ``streamable_http_app()`` returns a Starlette
 app, and wrapping it here without importing Starlette keeps this module
 runnable from a minimal install (stdio users never import it at all).
+
+Deny by default: only ``lifespan`` scopes bypass authentication (uvicorn sends
+one during startup, and 401-ing it would prevent the app from booting). An
+``http`` scope must carry a bearer token; any other scope type, including
+``websocket``, is closed without reaching the wrapped app -- a WebSocket route
+on the mounted app would otherwise be reachable unauthenticated.
+
+Rate limiting is not implemented here. The gate is the mount point for it, and
+``app.oidc.verify_token`` bounds JWKS refetches, so a future implementer should
+keep that bound in place rather than dropping it: an unauthenticated endpoint
+that refetches keys per request is a denial-of-service amplifier.
 """
 
 from __future__ import annotations
@@ -26,14 +40,38 @@ from .actor import bind_correlation_id, bind_principal, request_correlation_id
 
 logger = logging.getLogger("pipeline.remote_transport")
 
+#: Longest request path copied into a log record; paths are attacker-controlled.
+_MAX_LOGGED_PATH = 256
+
+
+def _header_values(scope: dict[str, Any], name: str) -> list[str]:
+    """Return every value of header *name* in a raw ASGI scope, case-insensitively."""
+    wanted = name.lower().encode("latin-1")
+    return [
+        value.decode("latin-1")
+        for key, value in scope.get("headers") or ()
+        if key.lower() == wanted
+    ]
+
 
 def _header(scope: dict[str, Any], name: str) -> str | None:
     """Return a request header from a raw ASGI scope, case-insensitively."""
-    wanted = name.lower().encode("latin-1")
-    for key, value in scope.get("headers") or ():
-        if key.lower() == wanted:
-            return value.decode("latin-1")
-    return None
+    values = _header_values(scope, name)
+    return values[0] if values else None
+
+
+def _client_ip(scope: dict[str, Any]) -> str:
+    """Return the peer address from the ASGI scope, or an empty string."""
+    client = scope.get("client")
+    if isinstance(client, (tuple, list)) and client:
+        return str(client[0])
+    return ""
+
+
+def _logged_path(scope: dict[str, Any]) -> str:
+    """Return a bounded, log-safe copy of the request path."""
+    path = scope.get("path") or ""
+    return str(path)[:_MAX_LOGGED_PATH]
 
 
 async def _send_unauthorized(send: Any, correlation: str) -> None:
@@ -47,6 +85,11 @@ async def _send_unauthorized(send: Any, correlation: str) -> None:
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
                 (b"x-correlation-id", correlation.encode("latin-1")),
+                # RFC 6750 3: a bearer-protected resource must challenge, and
+                # MCP clients use this header to discover the authorization
+                # server, so omitting it blocks a conformant client's bootstrap.
+                (b"www-authenticate", b"Bearer"),
+                (b"cache-control", b"no-store"),
             ],
         }
     )
@@ -56,33 +99,45 @@ async def _send_unauthorized(send: Any, correlation: str) -> None:
 class BearerAuthMiddleware:
     """Pure-ASGI gate: verify a bearer token, bind the principal, tag the response.
 
-    Every HTTP request to the mounted app must carry ``Authorization: Bearer
-    <token>``. A rejected request gets the same 401 body the dashboard uses, so
-    a client cannot tell which process it spoke to. Lifespan and websocket
-    scopes pass through untouched.
+    Every HTTP request to the mounted app must carry exactly one
+    ``Authorization: Bearer <token>`` header. A rejected request gets the same
+    401 body the dashboard uses, so a client cannot tell which process it spoke
+    to, plus a ``WWW-Authenticate: Bearer`` challenge. ``lifespan`` scopes pass
+    through untouched; every other scope type is closed without reaching the app.
     """
 
     def __init__(self, app: Any, provider: OidcProvider) -> None:
+        if not isinstance(provider, OidcProvider):
+            raise TypeError(
+                "remote mcp transport requires an OidcProvider; refusing to serve "
+                f"with {type(provider).__name__}"
+            )
         self._app = app
         self._provider = provider
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http":
+        scope_type = scope.get("type")
+        if scope_type == "lifespan":
             await self._app(scope, receive, send)
             return
-        authorization = _header(scope, "authorization") or ""
-        scheme, _, token = authorization.partition(" ")
-        credential = token.strip() if scheme.lower() == "bearer" else None
+        if scope_type != "http":
+            await self._deny_non_http(scope, send)
+            return
+
         correlation = request_correlation_id(_header(scope, "x-correlation-id"))
-        try:
-            principal = self._provider.authenticate(credential)
-        except IdentityError:
-            logger.warning(
-                "remote mcp request rejected",
-                extra={"correlation_id": correlation, "path": scope.get("path", "")},
+        credential, reason = self._credential(scope)
+        principal = self._authenticate(credential, reason)
+        if principal is None:
+            self._audit(
+                scope,
+                correlation,
+                outcome="denied",
+                detail=reason or "credential rejected",
             )
             await _send_unauthorized(send, correlation)
             return
+
+        self._audit(scope, correlation, outcome="authenticated", subject=principal.subject)
 
         async def _tagged(message: dict[str, Any]) -> None:
             if message["type"] == "http.response.start":
@@ -93,3 +148,64 @@ class BearerAuthMiddleware:
 
         with bind_principal(principal), bind_correlation_id(correlation):
             await self._app(scope, receive, _tagged)
+
+    def _authenticate(self, credential: str | None, reason: str | None) -> Any:
+        """Return the authenticated principal, or ``None`` when the request fails."""
+        if reason is not None:
+            return None
+        try:
+            return self._provider.authenticate(credential)
+        except IdentityError:
+            return None
+
+    def _credential(self, scope: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Return ``(credential, deny_reason)`` for an HTTP scope.
+
+        A repeated ``Authorization`` header is denied rather than resolved to
+        one value: a reverse proxy that appends instead of replacing lets the
+        proxy validate one token while this gate validates another.
+        """
+        values = _header_values(scope, "authorization")
+        if len(values) > 1:
+            return None, "duplicate authorization header"
+        scheme, _, token = (values[0] if values else "").partition(" ")
+        if scheme.lower() != "bearer":
+            return None, "not a bearer credential"
+        return token.strip(), None
+
+    def _audit(
+        self,
+        scope: dict[str, Any],
+        correlation: str,
+        *,
+        outcome: str,
+        subject: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Record one authentication attempt: outcome, caller, correlation, path.
+
+        Rejections log at ``WARNING`` and successes at ``INFO``. The credential
+        never appears here, and neither does the provider's exception text, which
+        could quote the token; ``detail`` is always a fixed reason string.
+        """
+        extra: dict[str, Any] = {
+            "outcome": outcome,
+            "correlation_id": correlation,
+            "client_ip": _client_ip(scope),
+            "path": _logged_path(scope),
+        }
+        if subject is not None:
+            extra["subject"] = subject
+        if detail is not None:
+            extra["detail"] = detail
+        level = logging.INFO if outcome == "authenticated" else logging.WARNING
+        logger.log(level, "remote mcp authentication", extra=extra)
+
+    async def _deny_non_http(self, scope: dict[str, Any], send: Any) -> None:
+        """Close a non-HTTP, non-lifespan scope without reaching the app."""
+        correlation = request_correlation_id(_header(scope, "x-correlation-id"))
+        self._audit(scope, correlation, outcome="denied_scope")
+        if scope.get("type") == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        await _send_unauthorized(send, correlation)

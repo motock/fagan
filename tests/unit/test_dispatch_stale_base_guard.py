@@ -102,7 +102,11 @@ def test_stale_base_skips_fetch_and_emits_warning(monkeypatch, tmp_path):
         str(tmp_path / "S1"),
         "origin/master",
     ]
-    assert commands == [worktree_add]
+    # The staleness probe issues two read-only git reads before the worktree
+    # add (git ls-remote, then git rev-parse). This test's subject is that no
+    # fetch ran and the worktree was still created, so assert that rather than
+    # pinning the full command list.
+    assert commands[-1] == worktree_add
     assert [cmd for cmd in commands if cmd[:2] == ["git", "fetch"]] == []
 
     records = _records("p")

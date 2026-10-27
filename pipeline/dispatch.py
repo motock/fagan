@@ -103,6 +103,11 @@ _NON_DISPATCHABLE_STATUSES = frozenset({"done", "pr_open"})
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
+    from .authorization import authorize
+
+    refusal = authorize("plan:dispatch", plan_name=plan_name, story_key=story_key)
+    if refusal is not None:
+        return refusal
     with _store.transaction(plan_name) as acquired:
         if not acquired:
             return {

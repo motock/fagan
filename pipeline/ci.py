@@ -612,6 +612,13 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)  # noqa: F821
     _validate_key(story_key)  # noqa: F821
+    from .authorization import authorize
+
+    refusal = authorize(
+        "story:mark_done", plan_name=plan_name, story_key=story_key
+    )
+    if refusal is not None:
+        return refusal
     with _store.transaction(plan_name) as acquired:  # noqa: F821
         if not acquired:
             return {

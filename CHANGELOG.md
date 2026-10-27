@@ -37,6 +37,31 @@ in practice.
   plan's in-flight story, at ingest and when the story becomes ready. It
   never blocks.
 
+**Enterprise readiness**
+
+- `PIPELINE_POLICY_ENFORCE` (on by default) makes the service layer deny by
+  default for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`
+  and `plan:pause`. Only `0`, `false`, `no`, `off` or `disabled` turns it off;
+  a blank or unrecognised value keeps enforcement on.
+- A plan's manifest records its `team` (default `local`) and `ingested_by`, and
+  each approval records the deciding principal, its primary role, whether it
+  was self-approved, and the request's correlation id.
+- The dashboard mints or preserves one correlation id per request, returns it
+  as `X-Correlation-ID` on every response including the 401/403 refusals, and
+  stamps it onto decision and approval records.
+- `PIPELINE_LOG_FORMAT=json` renders application logs as one JSON object per
+  line carrying `timestamp`, `level`, `service`, `correlation_id`, `message`
+  and every `extra=` field. Off by default.
+- Each plan gets an append-only, hash-chained audit stream at
+  `<PLAN_DIR>/<plan>.audit.jsonl`, with `actor`, `action`, `target`, `outcome`,
+  `correlation_id` and a timestamp on every record; `verify_audit_chain`
+  reports the first altered record. Truncation of the tail is not detected —
+  the head hash is not shipped anywhere external yet.
+- A dispatch that loses the advisory git lock records `stale_base_dispatch`,
+  and one whose base is provably stale (checked with `git ls-remote`) is
+  refused instead of being cut from the old ref; the story retries on a later
+  tick.
+
 **Dashboard**
 
 - The story modal has a read-only **Diff** section showing the worktree's

@@ -9,7 +9,7 @@ For what actually shipped and what broke along the way, see
 reference superseded designs or file layouts; read them as history, not
 instruction.
 
-**Status below was verified 2026-10-25** against the pipeline manifests and the
+**Status below was verified 2026-10-27** against the pipeline manifests and the
 code. A plan's own header can lag behind; where it did, a dated
 `Status (verified ...)` banner now sits under its title. When you finish a plan,
 update this index in the same change.
@@ -27,8 +27,12 @@ the eventing, observability, auditability, and authn/authz findings. Three plans
 came out of it and all shipped 2026-10-26: the behavior-preserving
 `enterprise-prep-tier1` (3 stories), `enterprise-plan-approval` (7 stories, ADR
 0007), and `tenancy-seams` (5 stories — the ADR 0009 identity/authorization
-seam only, spec `docs/specs/IDENTITY_AND_POLICY.md`, enforcement still
-outstanding). The remaining items are deferred and ranked in that document.
+seam only, spec `docs/specs/IDENTITY_AND_POLICY.md`). The findings are now being
+worked in dependency order: actor identity, request correlation, structured
+logs and policy enforcement shipped 2026-10-26/27, and the tamper-evident audit
+stream shipped 2026-10-27. What remains is Phase 6 (OIDC verification and the
+remote MCP transport) and Phase 7 (the shared control plane, ADR 0008) — both
+still deferred and ranked in that document.
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -118,6 +122,22 @@ the tick and direct dispatch, spec `docs/specs/PLAN_APPROVAL.md`), and
 `SharedSecretProvider` / deny-by-default `Authorizer` seam, attached to
 `request.state.principal` by the dashboard middleware but enforcing nothing yet
 — spec `docs/specs/IDENTITY_AND_POLICY.md`).
+
+The readiness phases that followed, in dependency order: `actor-identity`
+(request-scoped `Principal` propagation, a `team` on the manifest, and a guard
+test that no MCP tool may take an actor parameter), `request-correlation` (one
+id per dashboard request, minted or preserved, returned on every response
+including 401/403 and stamped on decision and approval records),
+`structured-logs` (opt-in `PIPELINE_LOG_FORMAT=json` rendering the standard
+fields plus every `extra=` key), `policy-enforcement` (deny-by-default
+enforcement for `story:merge`, `story:mark_done`, `plan:approve`,
+`plan:reject` and `plan:pause`, on by default with
+`PIPELINE_POLICY_ENFORCE` as the kill switch), and `audit-stream` (the
+append-only hash-chained `<plan>.audit.jsonl`, its `verify_audit_chain` check,
+and eight call sites from authorization through merge and pause/resume).
+`dispatch-stale-base` and `stale-base-probe` belong to the same push: a skipped
+fetch is recorded as `stale_base_dispatch`, and a base proven stale by
+`git ls-remote` now refuses the dispatch instead of branching from it.
 
 **Code host and CI**: `FORGE_ABSTRACTION_PLAN.md` (`forge-abstraction`; a
 `Forge` protocol with GitHub and GitLab adapters behind `PIPELINE_FORGE`, so

@@ -19,8 +19,8 @@
 |---|---|---|---|
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
-| Auditability | Decisions, journals, notifications, agent logs | **Not audit-grade** | Actor identity + tamper-evidence |
-| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions | **Seam, not a control** | Ownership records + audit + OIDC |
+| Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
+| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC |
 
 ---
 

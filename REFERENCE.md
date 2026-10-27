@@ -771,10 +771,20 @@ Each record has the following keys:
   rebrief in `pipeline/advance.py`. Patching a never-dispatched story, patching any other
   field, re-setting identical text, or rebriefing with a no-op diagnosis emits
   nothing.
+  A fresh dispatch that loses the advisory git lock to another process skips
+  its `git fetch` and records `stale_base_dispatch` (advisory). It then reads
+  the remote tip with `git ls-remote` and compares it with the cached
+  `origin/<default>` the worktree would be cut from: a **provable** mismatch
+  emits `stale_base_refused` and refuses the dispatch — the story stays `todo`
+  with no worktree, so the next tick retries with the lock free. An
+  unanswerable probe (network outage, no `origin`, remote branch missing) is
+  treated as unknown and the dispatch proceeds on the stale-warn path, because
+  refusing on an outage would block work that has done nothing wrong. Both
+  records carry `story_key: null` (they describe a branch, not a story) and
+  never disqualify a first pass.
   One notification is intentionally excluded from this vocabulary: the
   dispatch‑retry notice (`"<key> dispatch attempt n/max failed …; will
-  retry."`), a transient scheduling state rather than a terminal story
-  outcome.  The parked notice (`"<key> parked: <reason>"`) carries
+  retry."`), a transient scheduling state rather than a terminal storyoutcome.  The parked notice (`"<key> parked: <reason>"`) carries
   `story_parked` so operators can allowlist the park alert for e-mail:
   `notification_outbox` selects records for e-mail using only
   `payload["event"]`, so an unstamped park notice is unreachable by e-mail.

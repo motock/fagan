@@ -24,6 +24,7 @@ import os
 from app.policy import Action, Resource, default_authorizer, is_allowed
 
 from .actor import current_principal
+from .audit import record_audit
 
 logger = logging.getLogger("pipeline")
 
@@ -122,8 +123,22 @@ def authorize(
         resource_for(manifest, plan_name, story_key),
     )
     if allowed:
+        record_audit(
+            plan_name,
+            action=action_label,
+            outcome="allowed",
+            target={"plan": plan_name, "story": story_key or ""},
+            detail={"principal": principal.subject},
+        )
         return None
     _record_denial(action_label, principal.subject, plan_name, story_key)
+    record_audit(
+        plan_name,
+        action=action_label,
+        outcome="denied",
+        target={"plan": plan_name, "story": story_key or ""},
+        detail={"principal": principal.subject},
+    )
     logger.warning(
         "authorization denied action=%s principal=%s plan=%s story=%s",
         action_label,

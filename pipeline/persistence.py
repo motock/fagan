@@ -310,3 +310,34 @@ __all__ = [
     "_read_journal",
     "_write_notification_record",
 ]
+
+
+def read_plan_file(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return ``(plan, refusal)`` for the plan JSON at *path*.
+
+    A missing file, an unreadable one, malformed JSON, or a top-level value that
+    is not an object are each a structured refusal rather than an exception.
+    Ingest calls this on a file any caller can write, so a truncated manifest --
+    a disk-full write, an interrupted atomic replace -- must become ingest's
+    usual ``{"ok": False}`` instead of aborting with a traceback.
+    """
+    name = path.stem
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}, {"ok": False, "error": f"No plan named {name}"}
+    except OSError as exc:
+        return {}, {
+            "ok": False,
+            "error": f"plan {name!r} is unreadable: {exc.strerror or exc}",
+        }
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {}, {"ok": False, "error": f"plan {name!r} is unreadable: {exc}"}
+    if not isinstance(data, dict):
+        return {}, {
+            "ok": False,
+            "error": f"plan {name!r} is unreadable: not a JSON object",
+        }
+    return data, None

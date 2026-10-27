@@ -1,12 +1,14 @@
 # 0009. Tenancy and authorization are a service-layer policy over a verified principal
 
 - **Status:** Accepted direction (2026-10-26). The identity/authorization seam,
-  service-layer enforcement for every action in the `Action` enum, OIDC token
-  verification, the OIDC-gated remote MCP transport and the append-only,
+  service-layer enforcement for the actions in §2 of
+  [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md), OIDC
+  token verification, the OIDC-gated remote MCP transport and the append-only,
   hash-chained audit stream are implemented; plan ownership is stored and
   enforced for `plan:approve`, `plan:reject` and `story:merge` only. Tenant
-  scoping beyond the plan `team`, tenant-scoped reads, and
-  authorization of the MCP tools outside the enum are still unimplemented.
+  scoping beyond the plan `team`, tenant-scoped reads, authorization of the MCP
+  tools outside the enum, and the enum actions §2 lists as unenforced are still
+  unimplemented.
 - **Date:** 2026-10-26
 
 **Implementation status.** `pipeline/authorization.py` enforces the policy in
@@ -17,10 +19,12 @@ tokens against the issuer's JWKS — issuer, audience, expiry and the claims-to-
 `Principal` mapping — when `PIPELINE_IDENTITY_PROVIDER=oidc`; it authenticates
 API clients only, since the bundled dashboard has no login flow. The remote MCP
 transport (`pipeline/remote_transport.py`) serves the same tools over HTTP
-behind the same `OidcProvider`, refusing to start without it. Every action in
-the `Action` enum is enforced in the service; what remains unimplemented is
-the full tenant chain, ownership records beyond the plan `team`, and the
-mutating MCP tools outside the enum. See the
+behind the same `OidcProvider`, refusing to start without it. The service
+enforces the actions §2 of the spec lists, and not every member of the `Action`
+enum: `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
+`decision:answer` and `config:write` are still unenforced. What also remains
+unimplemented is the full tenant chain, ownership records beyond the plan
+`team`, and the mutating MCP tools outside the enum. See the
 "Enforcement (pipeline/authorization.py)" and "OIDC provider" sections of
 [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
 

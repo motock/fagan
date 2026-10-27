@@ -2291,10 +2291,12 @@ recorded with the subject `unbound`.
 
 There is no subject-based exemption. Because `serve()` only installs this
 middleware behind the OIDC gate, every `tools/call` that reaches it came from
-the network, so authorization is decided on the tool name alone — a token whose
-`sub` reads `local-operator` is still a remote principal. A call that arrives
-with no principal bound to the request context is refused rather than treated
-as the local operator, so a lost binding fails closed. The local operator is
+the network, so the tool name decides — but an identity that claims the local
+operator's can only narrow access, never widen it. A token whose `sub` reads
+`local-operator` is refused every tool, the read-only ones included, and so is
+one authenticated with the local operator's authentication method. A call that
+arrives with no principal bound to the request context is refused rather than
+treated as the local operator, so a lost binding fails closed. The local operator is
 unaffected for a different reason: the stdio path never calls `serve()`, so
 this middleware is not installed there at all.
 

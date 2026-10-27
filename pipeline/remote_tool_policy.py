@@ -7,16 +7,18 @@ asks ``authorize`` -- the rest (``save_plan``, ``set_story_status``,
 remote principal may call exactly the tools listed here, and every other tool
 is refused before its handler runs.
 
-Authorization is decided on the tool name and nothing else. This middleware is
-installed only by ``serve``, and ``serve`` refuses to serve with anything but
-an ``OidcProvider``, so every ``tools/call`` that reaches it came from the
-network. A ``subject`` string is caller-mintable -- an OIDC ``sub`` claim can
-literally read ``local-operator`` -- so it carries no authority. The
-``LOCAL_OPERATOR`` identity itself is not a remote principal either: it is what
-``current_principal`` hands back when nothing is bound to the request, and it is
-the only identity the local transport authenticates, so a call that resolves to
-it is a denial rather than an unrestricted local call. stdio and the local CLI
-never install the middleware, so their behaviour is unchanged.
+The tool name decides, with one exception: a caller whose identity claims the
+local operator's -- by singleton, authentication method or subject -- is refused
+every tool, including the read-only ones. Identity can therefore only narrow
+access, never widen it. A ``subject`` string is caller-mintable -- an OIDC
+``sub`` claim can literally read ``local-operator`` -- so claiming that
+identity costs a caller everything instead of exempting them, and a call that
+resolves to the ``LOCAL_OPERATOR`` singleton (what ``current_principal`` hands
+back when nothing is bound to the request) fails closed the same way. This
+middleware is installed only by ``serve``, and ``serve`` refuses to serve with
+anything but an ``OidcProvider``, so every ``tools/call`` that reaches it came
+from the network. stdio and the local CLI never install the middleware, so their
+behaviour is unchanged.
 """
 
 from __future__ import annotations
@@ -125,11 +127,14 @@ def _audit_denial(name: object, principal: Principal) -> None:
 async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
     """MCP server middleware: refuse a remote ``tools/call`` outside the allowlist.
 
-    Authorization is decided on the tool name only. It is never decided on the
-    principal's ``subject``: the policy runs behind the OIDC gate, so every
-    caller here is remote, and a subject string is caller-mintable. A call that
-    resolves to the local operator's identity is a denial as well -- that is
-    what ``current_principal`` returns when nothing is bound to the request, and
+    The tool name decides, with one exception: a caller whose identity claims
+    the local operator's -- by singleton, authentication method or subject -- is
+    refused outright, every tool included. The identity check can therefore only
+    remove access, never grant it. It is never an exemption: the policy runs
+    behind the OIDC gate, so every caller here is remote, and a subject string is
+    caller-mintable. A call that resolves to the local operator's identity is a
+    denial for the same reason on a second axis -- that is what
+    ``current_principal`` returns when nothing is bound to the request, and
     authorizing on the name alone would then let such a call reach a service
     path where the defaulted local operator is granted.
     """

@@ -218,6 +218,16 @@ def test_oidc_subject_named_local_operator_is_not_exempt() -> None:
     assert recorder.calls == 0
 
 
+def test_oidc_subject_named_local_operator_cannot_reach_an_allowed_tool() -> None:
+    # Graded on an allowlisted read tool, so this fails if the subject branch of
+    # ``_is_local_identity`` is dropped -- and passes only while that branch is
+    # there. Claiming the local operator's identity may narrow access, never
+    # widen it.
+    impostor = Principal(subject=LOCAL_OPERATOR.subject, auth_method="oidc")
+    _, recorder = _call({"name": "list_plans"}, principal=impostor)
+    assert recorder.calls == 0
+
+
 @pytest.mark.parametrize("method", ["tools/list", "initialize"])
 def test_non_tools_call_method_passes_through(method: str) -> None:
     _, recorder = _call({"name": "save_plan"}, method=method)

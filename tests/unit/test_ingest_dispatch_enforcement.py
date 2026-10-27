@@ -270,6 +270,46 @@ def test_traversal_plan_name_records_no_authorization_denial(
     assert notified == []
 
 
+def test_traversal_plan_name_is_refused_by_key_validation_on_ingest(
+    plan_dir: Path,
+) -> None:
+    """Ingest validates the key before ``authorize`` reads the manifest.
+
+    ``authorize`` builds paths as ``PLAN_DIR / f"{plan_name}.<suffix>"``; a
+    traversal name must die in ``_validate_key`` first, so the refusal has to be
+    the key-validation one and not an authorization refusal.
+    """
+    with pytest.raises(ValueError) as refusal:
+        p.ingest_plan("../../etc/passwd")
+    with pytest.raises(ValueError) as expected:
+        parsers._validate_key("../../etc/passwd")
+
+    assert str(refusal.value) == str(expected.value)
+
+
+def test_ingest_traversal_plan_name_records_no_authorization_denial(
+    plan_dir: Path, provider: _RecordingProvider, monkeypatch
+) -> None:
+    notified: list[tuple] = []
+    monkeypatch.setattr(
+        ppers, "_notify_user", lambda *a, **k: notified.append((a, k))
+    )
+
+    with bind_principal(DENIED), pytest.raises(ValueError):
+        p.ingest_plan("../../etc/passwd")
+
+    assert notified == []
+
+
+def test_ingest_traversal_plan_name_writes_nothing_into_the_registry(
+    plan_dir: Path, provider: _RecordingProvider
+) -> None:
+    with bind_principal(DENIED), pytest.raises(ValueError):
+        p.ingest_plan("../../etc/passwd")
+
+    assert list(plan_dir.iterdir()) == []
+
+
 def test_denied_principal_is_denied_the_ingest_action(plan_dir: Path) -> None:
     """Guard: the fixture's denied principal really is denied ``plan:ingest``."""
     with bind_principal(DENIED):

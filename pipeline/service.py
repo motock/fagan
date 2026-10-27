@@ -546,6 +546,11 @@ class PipelineService(PlanApprovalMixin):
         return _approve_merge_impl(plan_name, story_key)
 
     def ingest_plan(self, plan_name: str, only_epics: list[str] | None = None, overwrite: bool = False) -> dict[str, Any]:
+        # Validate before authorizing: authorize() reads the manifest by name and
+        # appends to the notification sidecar on denial, so a traversal must be
+        # rejected before it can reach either (same ordering as _approve_merge_impl).
+        _validate_key(plan_name)
+
         from .authorization import authorize
 
         refusal = authorize("plan:ingest", plan_name=plan_name)

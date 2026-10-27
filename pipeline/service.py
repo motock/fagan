@@ -236,6 +236,13 @@ class PipelineService(PlanApprovalMixin):
         undeclared model must never reach disk. Writes atomically via
         _store.transaction so it's atomic w.r.t. the scheduler's 60s tick.
         """
+        # Role config decides who may later do things: an operator who can
+        # write it could grant themselves any role the policy grants.
+        from .authorization import authorize
+        refusal = authorize("config:write", plan_name=plan_name)
+        if refusal is not None:
+            return refusal
+
         return _set_plan_role_config_impl(self, plan_name, role, provider, model)
 
     def pause_plan(self, plan_name: str) -> dict[str, Any]:
@@ -614,6 +621,11 @@ class PipelineService(PlanApprovalMixin):
     def interrupt_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
+        from .authorization import authorize
+        refusal = authorize("story:interrupt", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
+
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
@@ -829,6 +841,11 @@ class PipelineService(PlanApprovalMixin):
         """
         _validate_key(plan_name)
         _validate_key(story_key)
+        from .authorization import authorize
+        refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
+
         unknown = set(fields) - _PATCHABLE_STORY_FIELDS
         if unknown:
             return {

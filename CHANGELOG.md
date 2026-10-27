@@ -62,6 +62,32 @@ in practice.
   refused instead of being cut from the old ref; the story retries on a later
   tick.
 
+**Authentication and remote transport**
+
+- `PIPELINE_IDENTITY_PROVIDER=oidc` makes the dashboard verify an
+  `Authorization: Bearer <jwt>` credential instead of the shared secret, using
+  `app/oidc.py`: only RS256 and ES256 are accepted (the token header never
+  chooses its own algorithm), `exp`/`iss`/`aud`/`sub` are required, issuer and
+  audience come from configuration, the JWKS is cached for 300s, and the
+  `Principal.subject` is issuer-qualified as `<issuer>#<sub>` so one issuer's
+  user cannot collide with this deployment's `local-operator`. Unset keeps the
+  shared secret. A misconfiguration raises at startup rather than falling back.
+- `PIPELINE_OIDC_ISSUER`, `PIPELINE_OIDC_AUDIENCE`, `PIPELINE_OIDC_JWKS_URL`
+  (https only) and `PIPELINE_OIDC_CLOCK_SKEW_S` (default 60, capped at 300)
+  configure the verifier. `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` — enabled only by
+  `1` or `true` — permits a JWKS host on a private network, which a self-hosted
+  IdP inside a VPC needs.
+- OIDC mode authenticates **API clients only**. The bundled browser dashboard
+  mints no token, so under it the pages load but every `/api/` call is a 401,
+  and the chat-stream `k-` pass-through does not exist.
+- `PIPELINE_MCP_TRANSPORT=streamable-http` (or `sse`) serves the MCP server
+  over HTTP at `PIPELINE_MCP_HOST`/`PIPELINE_MCP_PORT` behind an
+  `Authorization: Bearer` gate; stdio stays the default and is unchanged. The
+  HTTP transports refuse to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`,
+  and a rejection is a 401 with `{"detail":"Unauthorized"}`, an
+  `X-Correlation-ID` header and a `WWW-Authenticate: Bearer` challenge. TLS is
+  not terminated here — put a reverse proxy in front.
+
 **Dashboard**
 
 - The story modal has a read-only **Diff** section showing the worktree's

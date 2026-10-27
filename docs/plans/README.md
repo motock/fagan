@@ -138,6 +138,20 @@ and eight call sites from authorization through merge and pause/resume).
 `dispatch-stale-base` and `stale-base-probe` belong to the same push: a skipped
 fetch is recorded as `stale_base_dispatch`, and a base proven stale by
 `git ls-remote` now refuses the dispatch instead of branching from it.
+`stale-probe-robustness` followed once CI caught the probe crashing on a
+recorder-stubbed `subprocess.run`.
+
+Phase 6 shipped in two parts. `oidc-identity` adds JWKS-backed token
+verification (`app/oidc.py`): a fixed RS256/ES256 allowlist, required
+`exp`/`iss`/`aud`/`sub`, configured issuer and audience, a cached and
+address-checked JWKS fetch, and an issuer-qualified `<issuer>#<sub>` subject;
+`PIPELINE_IDENTITY_PROVIDER` selects it and raises rather than falling back,
+`PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is the opt-in for a self-hosted IdP, and the
+dashboard authenticates bearer tokens only when that provider is OIDC.
+`remote-mcp` adds the network transport: a pure-ASGI bearer gate and transport
+selection that refuses to start an HTTP transport without OIDC. Both carry the
+same documented boundary — OIDC authenticates API clients, not the bundled
+browser UI.
 
 **Code host and CI**: `FORGE_ABSTRACTION_PLAN.md` (`forge-abstraction`; a
 `Forge` protocol with GitHub and GitLab adapters behind `PIPELINE_FORGE`, so

@@ -37,6 +37,7 @@ from .ecosystem_detect import (
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
 )
+from .ownership import ownership_from_plan
 from .plan_approval import approval_enabled, on_ingest
 from .repo_config import load_repo_config
 from .scope_headroom import scope_headroom_warning
@@ -853,6 +854,18 @@ def _ingest_plan_impl(
             "role_config", prior.get("role_config", {})
         )
         final_manifest["ingested_by"] = actor_id()
+        # OWN-01: store plan ownership (ADR 0006/0009) beside the actor stamp
+        # and before any manifest write, so a malformed value becomes the
+        # ingest's structured refusal rather than a half-written manifest or a
+        # 500. The incoming plan file is the authority, so a plan-named owner
+        # survives a re-ingest by another principal. Ownership is not authored
+        # content: it stays outside canonical_digest.
+        try:
+            ownership = ownership_from_plan(plan, final_manifest.get("ingested_by") or "")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        final_manifest["owner"] = ownership["owner"]
+        final_manifest["delegates"] = ownership["delegates"]
         final_manifest["team"] = plan.get("team") or prior.get("team") or DEFAULT_TEAM
         if plan_context is not None:
             final_manifest["context"] = plan_context

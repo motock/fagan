@@ -2,8 +2,8 @@
 
 - **Status:** Seam plus partial enforcement — types, two providers (the shared
   secret and an OIDC bearer-token verifier) and a deny-by-default policy exist,
-  and they are enforced for six actions (§3, `pipeline/authorization.py`);
-  everything else in §4 is still unenforced.
+  and the service layer enforces them for five actions (§3,
+  `pipeline/authorization.py`); everything else in §4 is still unenforced.
   Written 2026-10-26.
 - **Stories:** TEN-ID-01 (`Principal`/roles/scopes), TEN-ID-02
   (`SharedSecretProvider` and `LOCAL_OPERATOR`), TEN-POL-01 (`LocalPolicy`),
@@ -26,17 +26,16 @@ and the fail-closed `is_allowed()` wrapper.
 
 The dashboard authenticates each `/api/` request and attaches the resulting
 principal to `request.state.principal`, then binds it as the request-scoped
-actor (§2, `pipeline/actor.py`). The policy is enforced for the actions that
-matter most — `story:merge`, `story:mark_done`, `plan:approve`,
-`plan:reject`, `plan:pause` in the service layer and `decision:answer` at the
-dashboard's decision route — through `pipeline/authorization.py` (§2,
+actor (§2, `pipeline/actor.py`). The service layer enforces the policy for the
+actions that matter most — `story:merge`, `story:mark_done`, `plan:approve`,
+`plan:reject` and `plan:pause` — through `pipeline/authorization.py` (§2,
 "Enforcement"). Enforcement is **on by default** and
 `PIPELINE_POLICY_ENFORCE` is the operator's kill switch.
 
 It is still a partial boundary. Every other action in §4 is unenforced: a
 principal denied by `LocalPolicy` for `plan:ingest`, `plan:dispatch`,
-`story:patch`, `story:interrupt` or `config:write` changes nothing, and the
-mutation still runs. With no identity provider configured the
+`story:patch`, `story:interrupt`, `decision:answer` or `config:write` changes
+nothing, and the mutation still runs. With no identity provider configured the
 bound principal is `LOCAL_OPERATOR`, which `LocalPolicy` allows, so local mode
 behaves as it did before this plan.
 
@@ -444,7 +443,7 @@ carrying the action and the principal subject, so an operator sees who was
 turned away and from what. The same denial is also appended to the plan's audit
 stream (§2, "Audit stream").
 
-**What is enforced today.** Six actions, five of them plus pause/resume:
+**What is enforced today.** Five actions, four of them plus pause/resume:
 
 | Action | Status |
 | --- | --- |
@@ -453,18 +452,16 @@ stream (§2, "Audit stream").
 | `plan:approve` | enforced (`pipeline/plan_approval.py`) |
 | `plan:reject` | enforced (`pipeline/plan_approval.py`) |
 | `plan:pause` | enforced for both pause and resume (`pipeline/merge.py`) |
-| `decision:answer` | enforced (`app/dashboard.py`, the decision route) |
 
 **What is still unenforced.** These actions exist in the `Action` enum but no
 service path asks `authorize` for them, so `LocalPolicy` cannot block them
 today: `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
-`config:write`.
+`decision:answer`, `config:write`.
 
 **Audit stream.** Every decision this module makes is also appended to the plan's
 audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
 [REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label
-(`story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause`,
-`decision:answer`),
+(`story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause`),
 `outcome` is `allowed` or `denied`, `target` carries the plan and story, and
 `detail` carries the principal subject. Records are written **only when
 enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function returns
@@ -490,8 +487,8 @@ before this plan:
   `pipeline/authorization.py` (§2, "Enforcement"). With nothing bound the
   principal is `LOCAL_OPERATOR`, which it allows for every action, so the
   enforced call sites pass exactly as they did before enforcement existed.
-- The six enforced actions (five plus pause/resume) are the only ones that can
-  now refuse; §4 lists the actions that still cannot.
+- The four (plus pause/resume) enforced actions are the only ones that can now
+  refuse; §4 lists the actions that still cannot.
 - Enforcement can be turned off wholesale with `PIPELINE_POLICY_ENFORCE=0`, and
   when it is off every action is allowed and local behavior is identical to
   before this plan.
@@ -518,7 +515,7 @@ Do not mistake any row of this table for a control that exists.
 
 | Not implemented | Consequence today |
 | --- | --- |
-| **Enforcement on the remaining actions** | Enforcement exists for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause` and `decision:answer` (§2, "Enforcement"). `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt` and `config:write` do not call `authorize()`, so a principal denied by `LocalPolicy` for those changes nothing: the mutation still runs. |
+| **Enforcement on the remaining actions** | Enforcement exists for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and `plan:pause` (§2, "Enforcement"). `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`, `decision:answer` and `config:write` do not call `authorize()`, so a principal denied by `LocalPolicy` for those changes nothing: the mutation still runs. |
 | **Plan owner / author / delegate records** | Plans carry no ownership. `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined but nothing assigns or reads them, and `request_decision` has no owner to route to. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |
@@ -542,15 +539,14 @@ This is why the dashboard — not `app/auth.py` — imports the provider: the
 
 ## 6. Follow-up
 
-The seam is established and enforced for six actions; the rest is still prep.
+The seam is established and enforced for five actions; the rest is still prep.
 The remaining work, in dependency order:
 
 1. **Enforcement on the remaining actions** (ADR 0009 section 2). Landed for
    `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and
-   `plan:pause` through `pipeline/authorization.py`, and for `decision:answer`
-   at the dashboard decision route (`app/dashboard.py`) (§2, "Enforcement").
-   What is left is the other five in §4: each mutating path calls `authorize()`
-   so a denied principal blocks it. Until then, §4's first row stands.
+   `plan:pause` through `pipeline/authorization.py` (§2, "Enforcement"). What is
+   left is the other six in §4: each mutating path calls `authorize()` so a
+   denied principal blocks it. Until then, §4's first row stands.
 2. **Ownership records.** Persist plan owner/author/delegate so the roles in
    §2 mean something and `request_decision` has a routing target (ADR 0006).
 3. **System principals.** Add `system:scheduler` and `system:worker` as

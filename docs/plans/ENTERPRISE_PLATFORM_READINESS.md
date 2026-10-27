@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default enforcement for six actions (five in the service layer plus `decision:answer` at the dashboard decision route), every enforced decision audited; an OIDC-gated remote MCP transport serves the same tools behind the same principal | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own, no rate limiting at the gate, and logs authentication attempts rather than auditing them |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited; an OIDC-gated remote MCP transport serves the same tools behind the same principal | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own, no rate limiting at the gate, and logs authentication attempts rather than auditing them |
 
 ---
 
@@ -238,10 +238,10 @@ reverse proxy in front), rate limiting at the gate, or any route into the
 hash-chained audit stream for the authentication attempts themselves — see
 [REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
 
-**Still outstanding.** Enforcement covers six actions and nothing more.
+**Still outstanding.** Enforcement covers five actions and nothing more.
 Ownership records beyond the plan's single `team` are unimplemented, as are
 enforcement checks for the remaining actions (`plan:ingest`, `plan:dispatch`,
-`story:patch`, `story:interrupt`, `config:write`). The audit
+`story:patch`, `story:interrupt`, `decision:answer`, `config:write`). The audit
 stream of allow/deny decisions exists locally (hash-chained per plan); what it
 still lacks is the external anchor that would make tail truncation detectable.
 

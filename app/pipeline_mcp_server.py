@@ -9,6 +9,7 @@ module's entire public AND private surface so existing callers —
 and ``test_backend.py`` — keep working unchanged.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -39,4 +40,12 @@ def _assert_interpreter() -> None:
 if __name__ == "__main__":
     _assert_interpreter()
     configure_logging_from_env()
-    mcp.run()
+    # stdio stays the default and is byte-identical to before; anything else
+    # is a remote transport, which pipeline.remote_transport refuses to serve
+    # unless OIDC is configured.
+    if os.environ.get("PIPELINE_MCP_TRANSPORT", "stdio").strip() in ("", "stdio"):
+        mcp.run()
+    else:
+        from pipeline.remote_transport import serve
+
+        serve(mcp)

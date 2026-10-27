@@ -31,10 +31,11 @@ that refetches keys per request is a denial-of-service amplifier.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from app.identity import IdentityError
-from app.oidc import OidcProvider
+from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provider
 
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 
@@ -209,3 +210,71 @@ class BearerAuthMiddleware:
             await send({"type": "websocket.close", "code": 1008})
             return
         await _send_unauthorized(send, correlation)
+
+
+TRANSPORT_ENV = "PIPELINE_MCP_TRANSPORT"
+HOST_ENV = "PIPELINE_MCP_HOST"
+PORT_ENV = "PIPELINE_MCP_PORT"
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
+
+#: Transports this module will serve. ``stdio`` is handled by the caller and is
+#: deliberately absent here: reaching this module at all means "remote".
+HTTP_TRANSPORTS = ("streamable-http", "sse")
+
+
+def _settings_from_env(env: dict[str, str]) -> tuple[str, str, int]:
+    """Return ``(transport, host, port)``, rejecting anything unusable."""
+    transport = str(env.get(TRANSPORT_ENV, "stdio")).strip()
+    if transport not in HTTP_TRANSPORTS:
+        raise SystemExit(
+            f"{TRANSPORT_ENV} must be one of {list(HTTP_TRANSPORTS)}; got {transport!r}"
+        )
+    provider = str(env.get(IDENTITY_PROVIDER_ENV, "")).strip()
+    if provider != "oidc":
+        raise SystemExit(
+            "refusing to serve MCP over HTTP without OIDC: set "
+            f"{IDENTITY_PROVIDER_ENV}=oidc and the PIPELINE_OIDC_* variables, "
+            "or keep the stdio transport"
+        )
+    host = str(env.get(HOST_ENV, DEFAULT_HOST)).strip() or DEFAULT_HOST
+    raw_port = str(env.get(PORT_ENV, DEFAULT_PORT)).strip()
+    try:
+        port = int(raw_port)
+    except ValueError:
+        raise SystemExit(f"{PORT_ENV} must be an integer; got {raw_port!r}") from None
+    if not 0 < port < 65536:
+        raise SystemExit(f"{PORT_ENV} must be between 1 and 65535; got {port}")
+    return transport, host, port
+
+
+def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
+    """Serve ``mcp`` over the configured HTTP transport, or refuse to start.
+
+    Guards run before any socket is opened: an unknown transport, or a
+    transport without OIDC, raises ``SystemExit`` so a misconfiguration stops
+    the process instead of exposing an unauthenticated endpoint.
+    """
+    env = os.environ if environ is None else environ
+    transport, host, port = _settings_from_env(env)
+    provider = build_identity_provider(lambda: "", env)
+    if not isinstance(provider, OidcProvider):
+        raise SystemExit("refusing to serve MCP over HTTP without an OIDC provider")
+
+    app = (
+        mcp.streamable_http_app(host=host)
+        if transport == "streamable-http"
+        else mcp.sse_app()
+    )
+    gated = BearerAuthMiddleware(app, provider)
+
+    import uvicorn  # imported here so stdio users never need it
+
+    logger.warning(
+        "serving MCP over %s on %s:%s behind OIDC bearer authentication",
+        transport,
+        host,
+        port,
+    )
+    uvicorn.run(gated, host=host, port=port, log_level="info")

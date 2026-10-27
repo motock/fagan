@@ -2054,6 +2054,40 @@ The formatter is wired into three entry points: the MCP launch shim
 and the startup preflight in `app/dashboard.py`. Any other entry point keeps
 plain-text logging.
 
+### Policy enforcement (`PIPELINE_POLICY_ENFORCE`)
+
+The service layer enforces the repository policy on the actions that mutate a
+plan's lifecycle and merge code. Enforcement is **ON by default** — you do not
+need to set anything to get it.
+
+The only values that disable it are `0`, `false`, `no`, `off` and `disabled`
+(case and surrounding whitespace are ignored, so `" OFF "` disables). **Any
+other value keeps it on**, including an empty string and a misspelling:
+`"offf"` and `"noo"` leave enforcement enabled, just as `"true"` does. If you
+want the kill switch, use one of the five words above; a blank variable is not
+a way to turn enforcement off.
+
+When enforcement is disabled every action is allowed and a single warning is
+logged at first use. When it is enabled, these actions are checked against the
+actor's policy:
+
+| Action | Notes |
+| --- | --- |
+| `story:merge` | merging a story branch |
+| `story:mark_done` | marking a story complete |
+| `plan:approve` | approving a plan |
+| `plan:reject` | rejecting a plan |
+| `plan:pause` | both pausing and resuming a plan |
+
+A refusal is not an exception: the call returns `{"ok": false, "error": ...}`
+and an `authorization_denied` record is appended to the plan's notification
+sidecar, so the denial is visible next to the notifications it refused to
+trigger.
+
+A caller arriving through the dashboard's chat-stream `k-` pass-through carries
+no identity. Such a caller is refused these actions — that is intended, not a
+bug: without an identity there is nothing to authorize against.
+
 ---
 
 ## Periodic security-audit reminder

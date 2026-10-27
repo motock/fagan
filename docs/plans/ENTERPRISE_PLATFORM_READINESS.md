@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | Decisions, journals, notifications, agent logs | **Not audit-grade** | Actor identity + tamper-evidence |
-| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam exists but nothing enforces it | **Seam, not a control** | Service-layer enforcement + ownership records + audit |
+| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions | **Seam, not a control** | Ownership records + audit + OIDC |
 
 ---
 
@@ -162,9 +162,13 @@ and `timestamp`. The ADR 0007 approval record should be its first tenant.
   DNS-rebinding defense, and `X-Pipeline-Origin` for UI/chat origin. The module
   states plainly that the origin header is **not** an authentication decision.
 - The MCP path has no authentication at all (`mcp.run()` is stdio).
-- A `Principal` / `IdentityProvider` / `Authorizer` seam now exists
-  (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware only)
-  and enforces nothing; see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
+- A `Principal` / `IdentityProvider` / `Authorizer` seam exists
+  (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware), and
+  the gate is in the service: `pipeline/authorization.py` enforces it,
+  deny-by-default, for `story:merge`, `story:mark_done`, `plan:approve`,
+  `plan:reject` and `plan:pause` (both pause and resume).
+  `PIPELINE_POLICY_ENFORCE` is the operator's kill switch; see
+  [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
   `app/role_registry.py` still holds **model** roles, not user roles; keep that
   naming separate.
 - The chat tool registry excludes privileged tools (`approve_merge`,
@@ -197,6 +201,13 @@ selected by configuration and fails closed if misconfigured (ADR 0004). The
 `Principal` must carry **repo/tenant scope**, so authorization is
 `principal → team → repo → plan → story`, not a global role bit.
 
+**Still outstanding.** Enforcement covers five actions and nothing more. The
+OIDC provider, ownership records beyond the plan's single `team`, the audit
+stream of allow/deny decisions, and the remote MCP transport are all unimplemented;
+so are enforcement checks for the remaining actions (`plan:ingest`,
+`plan:dispatch`, `story:patch`, `story:interrupt`, `decision:answer`,
+`config:write`).
+
 ---
 
 ## 5. Deferred low-hanging fruit, ranked
@@ -210,7 +221,7 @@ These are behavior-preserving candidates for a later Tier 1-style plan. Items 1,
 | 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | **Shipped** — `pipeline/log_format.py`, wired into `app/pipeline_mcp_server.py`, `run_daemon`, and the dashboard startup preflight. Off by default. |
 | 3 | Optional event-envelope fields | Add `event_id`, `schema_version`, `idempotency_key` only when supplied; the legacy dict shape is unchanged. | Preps a broker without changing today's semantics. | `pipeline/events.py` has room; tests pin only the no-optional-args shape. |
 | 4 | Event bus factory | `PIPELINE_EVENT_BUS=inprocess`, unknown fails closed. | Makes a broker adapter selectable. | Cosmetic until a second bus exists; pair with #3 (ADR 0004's warning about invisible gates). |
-| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). The remaining follow-up is enforcement in `PipelineService` (ADR 0009 §2); the seam is inert until then. |
+| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). Service-layer enforcement landed afterwards for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and `plan:pause` (ADR 0009 §2), with `PIPELINE_POLICY_ENFORCE` as the kill switch; the remaining actions are still unenforced and are listed as outstanding in §4. |
 
 ### Not low-hanging (the fork)
 

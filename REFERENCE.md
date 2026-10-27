@@ -2272,15 +2272,21 @@ it does not decide what they may call. So `serve()` installs a second
 middleware, `pipeline.remote_tool_policy.remote_tool_policy`, and a remote
 principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
 
-- the ten tools whose service path calls `authorize` itself, so the policy
-  decides — `approve_merge`, `approve_plan`, `dispatch_story`, `ingest_plan`,
-  `interrupt_story`, `mark_story_done`, `patch_story`, `pause_plan`,
-  `reject_plan` and `resume_plan`;
+- the remote allowlist of mutating tools: the ten tools whose service path
+  calls `authorize` itself, so the policy decides — `approve_merge`,
+  `approve_plan`, `dispatch_story`, `ingest_plan`, `interrupt_story`,
+  `mark_story_done`, `patch_story`, `pause_plan`, `reject_plan` and
+  `resume_plan`. `patch_plan` belongs to that group too: `patch_plan` edits
+  only a plan's `role_config`, so its service path requires `config:write`
+  exactly as `set_plan_role_config` does, and returns a fail-closed
+  `{ok: false}` refusal when the policy says no. It is nevertheless **not** on
+  this allowlist, so a remote caller is still refused before its handler
+  runs;
 - six read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
   `list_decisions`, `list_plans` and `list_ready_stories`. These are **not
   tenant-scoped**: any remote caller sees every plan they list.
 
-Every other tool — including `save_plan`, `patch_plan`, `set_story_status`,
+Every other tool — including `save_plan`, `set_story_status`,
 `record_security_audit`, `review_story`, `advance_all_plans` and
 `decompose_plan` — is refused before its handler runs: the caller gets an
 `isError` result saying the tool is not available over the remote transport,

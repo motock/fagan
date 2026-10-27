@@ -515,12 +515,17 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key,
     )
 
+    # Validate the caller-supplied keys BEFORE anything reads or writes a path
+    # built from them. ``authorize`` is not inert on bad input: it reads the
+    # manifest and, on denial, appends to the plan's notification sidecar, so a
+    # traversal in ``plan_name`` must be rejected before it gets that far.
+    _validate_key(plan_name)
+    _validate_key(story_key)
+
     refusal = authorize("story:merge", plan_name=plan_name, story_key=story_key)
     if refusal is not None:
         return refusal
 
-    _validate_key(plan_name)
-    _validate_key(story_key)
     manifest_path = _store.manifest_path(plan_name)
 
     with _store.transaction(plan_name) as acquired:
@@ -698,7 +703,13 @@ def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
     from .authorization import authorize
-    from .server import _store
+    from .server import _store, _validate_key
+
+    # ``authorize`` is not inert on bad input -- it reads the manifest by
+    # ``plan_name`` and, on denial, appends to the plan's notification sidecar.
+    # Reject a traversal here so the denial-write path is safe regardless of
+    # whether the caller validated first.
+    _validate_key(plan_name)
 
     refusal = authorize("plan:pause", plan_name=plan_name)
     if refusal is not None:

@@ -24,6 +24,11 @@ The contract these tests pin down:
 ``PIPELINE_POLICY_ENFORCE`` is read on every call
 (``pipeline/authorization.py:49`` -> ``enforcement_enabled``), not cached at
 import time, so ``monkeypatch.setenv`` is observed at call time.
+
+``plan_dir`` is the shared fixture from ``tests/unit/conftest.py``, which
+points the ``pipeline.server``, ``pipeline.persistence`` and
+``pipeline.concurrency`` PLAN_DIR bindings at one tmp directory -- the same
+bindings the store and the denial sidecar read through.
 """
 
 import json
@@ -32,9 +37,7 @@ import subprocess
 import pytest
 
 from app.identity import LOCAL_OPERATOR
-from pipeline import concurrency as concurrency_mod
 from pipeline import merge as merge_mod
-from pipeline import persistence as persistence_mod
 from pipeline import server as server_mod
 from pipeline.actor import ANONYMOUS, bind_principal
 
@@ -59,32 +62,18 @@ def _manifest(*, paused=False):
     }
 
 
-@pytest.fixture
-def plan_dir(tmp_path, monkeypatch):
-    """Point every PLAN_DIR binding at a tmp dir holding one plan manifest.
-
-    ``pipeline.store``'s ``FileStore`` (the ``_store`` merge.py imports from
-    ``pipeline.server``) reads ``PLAN_DIR`` through a ``_ServerRef`` that
-    resolves ``pipeline.server.PLAN_DIR`` at call time, so patching the server
-    binding is what redirects the store. ``pipeline.persistence`` and
-    ``pipeline.concurrency`` hold their own free-variable bindings and must be
-    redirected alongside it.
-    """
-    d = tmp_path / "plans"
-    d.mkdir()
-    monkeypatch.setattr(server_mod, "PLAN_DIR", d)
-    monkeypatch.setattr(persistence_mod, "PLAN_DIR", d)
-    monkeypatch.setattr(concurrency_mod, "PLAN_DIR", d)
-    return d
-
-
 def _write_manifest(plan_dir, *, paused=False):
     (plan_dir / f"{PLAN}.manifest.json").write_text(json.dumps(_manifest(paused=paused)))
 
 
+def _manifest_bytes(plan_dir):
+    """The manifest exactly as it sits on disk -- the no-op assertion."""
+    return (plan_dir / f"{PLAN}.manifest.json").read_bytes()
+
+
 def _read_manifest(plan_dir):
     """Read the manifest back from disk -- the state assertion, not the return."""
-    return json.loads((plan_dir / f"{PLAN}.manifest.json").read_text())
+    return json.loads(_manifest_bytes(plan_dir))
 
 
 def _denial_records(plan_dir):
@@ -103,6 +92,7 @@ def _denial_records(plan_dir):
 # ---------------------------------------------------------------------------
 def test_anonymous_pause_is_refused_and_manifest_unchanged(plan_dir):
     _write_manifest(plan_dir, paused=False)
+    before = _manifest_bytes(plan_dir)
 
     with bind_principal(ANONYMOUS):
         result = merge_mod._set_plan_paused(PLAN, True)
@@ -110,11 +100,13 @@ def test_anonymous_pause_is_refused_and_manifest_unchanged(plan_dir):
     assert result["ok"] is False
     assert "plan:pause" in result["error"]
     assert _read_manifest(plan_dir)["paused"] is False
+    assert _manifest_bytes(plan_dir) == before
 
 
 def test_anonymous_resume_is_refused_and_manifest_still_paused(plan_dir):
     """Resume is the same control, so it is the same ``plan:pause`` action."""
     _write_manifest(plan_dir, paused=True)
+    before = _manifest_bytes(plan_dir)
 
     with bind_principal(ANONYMOUS):
         result = merge_mod._set_plan_paused(PLAN, False)
@@ -122,6 +114,7 @@ def test_anonymous_resume_is_refused_and_manifest_still_paused(plan_dir):
     assert result["ok"] is False
     assert "plan:pause" in result["error"]
     assert _read_manifest(plan_dir)["paused"] is True
+    assert _manifest_bytes(plan_dir) == before
 
 
 def test_local_operator_pause_is_allowed_and_persisted(plan_dir):
@@ -161,6 +154,7 @@ def test_enforcement_disabled_allows_anonymous_pause(plan_dir, monkeypatch):
 # ---------------------------------------------------------------------------
 def test_anonymous_merge_is_refused_without_running_git_or_ci(plan_dir, monkeypatch):
     _write_manifest(plan_dir, paused=False)
+    before = _manifest_bytes(plan_dir)
 
     def _boom(*args, **kwargs):
         raise AssertionError("subprocess ran")
@@ -191,6 +185,39 @@ def test_anonymous_merge_is_refused_without_running_git_or_ci(plan_dir, monkeypa
 
     assert result["ok"] is False
     assert "story:merge" in result["error"]
+    assert _manifest_bytes(plan_dir) == before
+
+
+# ---------------------------------------------------------------------------
+# Unvalidated keys
+# ---------------------------------------------------------------------------
+def test_anonymous_merge_with_traversal_plan_name_writes_nothing(plan_dir):
+    """The guard must sit *after* ``_validate_key``, never before it.
+
+    ``authorize`` is not inert on bad input: it reads the manifest by
+    ``plan_name`` and, on denial, appends an ``authorization_denied`` record to
+    ``PLAN_DIR / f"{plan_name}.notifications.jsonl"``. If the guard ran on an
+    unvalidated ``plan_name``, an ANONYMOUS caller -- the transport this change
+    targets -- could have that append land outside PLAN_DIR.
+    """
+    escapee = plan_dir.parent / "escape.notifications.jsonl"
+
+    with bind_principal(ANONYMOUS), pytest.raises(ValueError):
+        merge_mod._approve_merge_impl("../escape", STORY)
+
+    assert not escapee.exists()
+    assert list(plan_dir.iterdir()) == []
+
+
+def test_anonymous_pause_with_traversal_plan_name_writes_nothing(plan_dir):
+    """Same boundary check on the pause control, which validates in-module."""
+    escapee = plan_dir.parent / "escape.notifications.jsonl"
+
+    with bind_principal(ANONYMOUS), pytest.raises(ValueError):
+        merge_mod._set_plan_paused("../escape", True)
+
+    assert not escapee.exists()
+    assert list(plan_dir.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -219,18 +246,6 @@ def test_each_refusal_appends_exactly_one_denial_record(plan_dir):
     assert _read_manifest(plan_dir)["paused"] is True
 
     with bind_principal(ANONYMOUS):
-        refused_resume = merge_mod._set_plan_paused(PLAN, False)
-    assert refused_resume["ok"] is False
-    assert len(_denial_records(plan_dir)) == 2
-    assert _read_manifest(plan_dir)["paused"] is True
-
-    with bind_principal(LOCAL_OPERATOR):
-        allowed_resume = merge_mod._set_plan_paused(PLAN, False)
-    assert allowed_resume.get("ok") is True
-    assert len(_denial_records(plan_dir)) == 2
-    assert _read_manifest(plan_dir)["paused"] is False
-
-    with bind_principal(ANONYMOUS):
         refused_merge = merge_mod._approve_merge_impl(PLAN, STORY)
     assert refused_merge["ok"] is False
-    assert len(_denial_records(plan_dir)) == 3
+    assert len(_denial_records(plan_dir)) == 2

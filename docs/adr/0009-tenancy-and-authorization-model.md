@@ -1,7 +1,20 @@
 # 0009. Tenancy and authorization are a service-layer policy over a verified principal
 
-- **Status:** Proposed (direction agreed 2026-10-26; no implementation authorized)
+- **Status:** Accepted direction (2026-10-26). The identity/authorization seam
+  and service-layer enforcement for four actions — plus `plan:pause` for both
+  pause and resume, five action names in all — are implemented; OIDC, tenant
+  scoping beyond the plan `team`, the audit stream and the remote MCP transport
+  are still unimplemented.
 - **Date:** 2026-10-26
+
+**Implementation status.** `pipeline/authorization.py` enforces the policy in
+the service for `story:merge`, `story:mark_done`, `plan:approve`,
+`plan:reject` and `plan:pause` (both pause and resume), deny-by-default, with
+`PIPELINE_POLICY_ENFORCE` as the kill switch. Everything else this record
+describes — OIDC verification, the full tenant chain, the audit stream and the
+remote transport — is unimplemented, and the remaining actions are still
+unenforced. See the "Enforcement (pipeline/authorization.py)" section of
+[`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
 
 ## Context
 
@@ -91,10 +104,12 @@ policy; both operate on a verified `Principal`.**
 
 ## Consequences
 
-- **Authentication is a hard prerequisite.** This record authorizes no code;
-  it defines the model that the identity implementation must satisfy. The
-  `Principal`, `IdentityProvider`, and `Authorizer` seams can be introduced
-  behind behavior-preserving defaults in local mode.
+- **Authentication is a hard prerequisite.** This record authorized no code when
+  accepted; it defines the model that the identity implementation must satisfy.
+  The `Principal`, `IdentityProvider`, and `Authorizer` seams were introduced
+  behind behavior-preserving defaults in local mode, and service-layer
+  enforcement for the actions in the implementation status note has since
+  landed.
 - **Negative tests are mandatory**, not optional: an unauthenticated caller,
   a non-owner patching a story, an out-of-scope repo, an unknown action, a
   system principal attempting approval, and a malformed principal must each

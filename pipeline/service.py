@@ -546,6 +546,11 @@ class PipelineService(PlanApprovalMixin):
         return _approve_merge_impl(plan_name, story_key)
 
     def ingest_plan(self, plan_name: str, only_epics: list[str] | None = None, overwrite: bool = False) -> dict[str, Any]:
+        from .authorization import authorize
+
+        refusal = authorize("plan:ingest", plan_name=plan_name)
+        if refusal is not None:
+            return refusal
         return _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
 
     def request_decision(self,

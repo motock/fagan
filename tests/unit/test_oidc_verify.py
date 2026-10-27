@@ -477,6 +477,52 @@ def test_jwks_body_over_the_cap_raises_keys_unavailable(
     assert str(excinfo.value) == "invalid token: keys unavailable"
 
 
+#: Nesting depth deep enough for ``json.loads`` to exhaust the recursion limit
+#: while its 2 bytes per level stay under ``JWKS_MAX_BYTES`` (130,600 levels is
+#: 261,200 bytes), so the size cap can never be the reason the document is
+#: refused. The C-stack threshold for RecursionError varies with interpreter and
+#: worker stack size, which is why the handler itself is pinned deterministically
+#: by ``test_json_loads_recursion_error_raises_keys_unavailable``.
+_DEEP_NESTING_LEVELS = 130_600
+
+
+def test_deeply_nested_payload_fits_under_the_jwks_size_cap():
+    payload = b"[" * _DEEP_NESTING_LEVELS + b"]" * _DEEP_NESTING_LEVELS
+    assert len(payload) < oidc.JWKS_MAX_BYTES
+
+
+def test_json_loads_recursion_error_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
+    class _RecursiveJson:
+        @staticmethod
+        def loads(payload):
+            raise RecursionError("maximum recursion depth exceeded")
+
+    # Replace only this module's ``json`` reference: PyJWT parses the token
+    # header with its own import, so the header still decodes and the failure
+    # lands squarely in the JWKS body parser.
+    monkeypatch.setattr(oidc, "json", _RecursiveJson)
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, b'{"keys": []}'))
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+def test_deeply_nested_jwks_document_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
+    nested = b"[" * _DEEP_NESTING_LEVELS + b"]" * _DEEP_NESTING_LEVELS
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, nested))
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
 def test_subject_containing_the_separator_is_rejected(rsa_key, settings):
     token = mint(rsa_key[1], sub=f"{LOCAL_OPERATOR_SUBJECT}#decoy")
     with pytest.raises(IdentityError) as excinfo:
@@ -588,16 +634,6 @@ def test_jwk_of_the_wrong_key_type_is_not_used(fake_fetch, ec_key, rsa_key, sett
     assert str(excinfo.value) == "invalid token: unknown key"
 
 
-def test_deeply_nested_jwks_document_raises_keys_unavailable(
-    monkeypatch, public_dns, rsa_key, settings
-):
-    nested = b"[" * 200000 + b"]" * 200000
-    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc, "_stream_response", _stub_stream(200, nested))
-    token = mint(rsa_key[1])
-    with pytest.raises(IdentityError) as excinfo:
-        oidc.verify_token(token, settings)
-    assert str(excinfo.value) == "invalid token: keys unavailable"
 
 
 def test_hanging_resolver_returns_within_the_deadline(monkeypatch):
@@ -645,3 +681,40 @@ def test_slow_stream_past_the_total_deadline_raises_keys_unavailable(
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
     assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+# --- review round 5: numeric claim handling in the lifetime bound ----------
+
+
+def test_string_exp_raises_verification_failed(rsa_key, settings):
+    # PyJWT int()-coerces ``exp`` for validation but leaves the claim a str, so
+    # the lifetime subtraction used to raise TypeError and become a 500.
+    token = mint(rsa_key[1], exp=str(int(time.time()) + 300))
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: verification failed"
+
+
+def test_float_iat_cannot_bypass_the_lifetime_cap(rsa_key, settings):
+    now = time.time()
+    token = mint(rsa_key[1], iat=float(now - 4000), exp=int(now + 299))
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: verification failed"
+
+
+def test_missing_iat_raises_verification_failed(rsa_key, settings):
+    # Without ``iat`` the lifetime cannot be measured at all, so the bound is
+    # enforced by refusing the token rather than by skipping the check.
+    token = mint(rsa_key[1], iat=_REMOVE)
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: verification failed"
+
+
+def test_huge_integer_exp_raises_verification_failed(rsa_key, settings):
+    # ``float(10**400)`` overflows; uncaught it would be a 500, not a rejection.
+    token = mint(rsa_key[1], exp=10**400)
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: verification failed"

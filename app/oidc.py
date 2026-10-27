@@ -24,6 +24,7 @@ import copy
 import ipaddress
 import json
 import logging
+import math
 import socket
 import threading
 import time
@@ -441,6 +442,33 @@ def _email_from_claims(claims: dict[str, Any]) -> str:
     return email
 
 
+def _numeric_claim(claims: dict[str, Any], name: str) -> float:
+    """Return the numeric claim ``name`` as a float, or raise ``IdentityError``.
+
+    PyJWT validates ``exp``/``iat`` after ``int()``-coercing each value but leaves
+    the decoded payload untouched, so a payload can carry ``"exp":
+    "1700000000"`` (a string) or ``"iat": 1700000000.5`` (a float). Subtracting
+    the first raises ``TypeError`` - turning a rejection into a 500 and breaking
+    the "every failure is an ``IdentityError``" rule - while a non-``int`` ``iat``
+    used to skip the lifetime bound entirely. Both claims are therefore
+    normalized here, and anything that is not a finite real number (including a
+    missing ``iat``, which would leave the bound unmeasurable) is refused with
+    the fixed reason token.
+    """
+    value = claims.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise IdentityError("invalid token: verification failed")
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        # An integer too large for a float (``10**400``) would otherwise raise
+        # OverflowError here and turn a rejection into a 500.
+        raise IdentityError("invalid token: verification failed") from None
+    if not math.isfinite(number):
+        raise IdentityError("invalid token: verification failed")
+    return number
+
+
 def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     """Verify ``token`` and return its ``Principal``, or raise ``IdentityError``.
 
@@ -492,12 +520,12 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     if not isinstance(subject, str) or not subject.strip():
         _log_rejection(settings, kid, "invalid token: missing subject")
         raise IdentityError("invalid token: missing subject")
-    issued_at = claims.get("iat")
-    if (
-        isinstance(issued_at, int)
-        and not isinstance(issued_at, bool)
-        and claims["exp"] - issued_at > MAX_TOKEN_LIFETIME_S
-    ):
+    try:
+        lifetime = _numeric_claim(claims, "exp") - _numeric_claim(claims, "iat")
+    except IdentityError:
+        _log_rejection(settings, kid, "invalid token: verification failed")
+        raise
+    if lifetime > MAX_TOKEN_LIFETIME_S:
         _log_rejection(settings, kid, "invalid token: verification failed")
         raise IdentityError("invalid token: verification failed")
     if "#" in subject:

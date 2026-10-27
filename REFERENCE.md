@@ -2266,6 +2266,25 @@ all of it:
   requests). Nothing throttles or locks out a caller, and a valid token
   presented after several `401`s is served normally rather than answered `429`.
 
+**Authentication is not authorization for every tool.** The gate proves who
+the caller is. Only the tools whose service path calls `authorize` —
+`approve_merge`, `approve_plan`, `dispatch_story`, `ingest_plan`,
+`interrupt_story`, `mark_story_done`, `patch_story`, `pause_plan`,
+`reject_plan` and `resume_plan` — refuse a principal the policy denies. Every
+other tool, including `save_plan`, `patch_plan`, `set_story_status`,
+`record_security_audit`, `review_story`, `advance_all_plans` and
+`decompose_plan`, runs for **any** authenticated caller. Until the transport
+refuses those for remote principals, enable it only for callers you would trust
+with the operator's own MCP session. Reads are not tenant-scoped either: a
+remote caller can list and read every plan.
+
+**Behind a reverse proxy, the loopback default rejects the public host name.**
+With `PIPELINE_MCP_HOST=127.0.0.1` the MCP SDK turns on DNS-rebinding
+protection and accepts only a `localhost`/`127.0.0.1`/`[::1]` `Host` header, so
+a proxy that forwards the public name gets `421 Invalid Host header`. Until a
+configurable host allowlist exists, have the proxy set `Host` to the upstream
+loopback address.
+
 **The process serves TLS never.** `uvicorn` is started over plain HTTP; there is
 no certificate or key option here. Put a TLS-terminating reverse proxy in front
 of the endpoint and let the proxy talk HTTP to the loopback address above. Note

@@ -1,11 +1,11 @@
 # 0009. Tenancy and authorization are a service-layer policy over a verified principal
 
 - **Status:** Accepted direction (2026-10-26). The identity/authorization seam,
-  service-layer enforcement for four actions — plus `plan:pause` for both pause
-  and resume, five action names in all — OIDC token verification, the OIDC-gated
-  remote MCP transport and the append-only, hash-chained audit stream are
-  implemented; tenant scoping beyond the plan `team` and ownership records are
-  still unimplemented.
+  service-layer enforcement for every action in the `Action` enum, OIDC token
+  verification, the OIDC-gated remote MCP transport and the append-only,
+  hash-chained audit stream are implemented; plan ownership is stored but not
+  enforced. Tenant scoping beyond the plan `team`, tenant-scoped reads, and
+  authorization of the MCP tools outside the enum are still unimplemented.
 - **Date:** 2026-10-26
 
 **Implementation status.** `pipeline/authorization.py` enforces the policy in

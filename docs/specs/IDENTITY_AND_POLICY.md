@@ -2,8 +2,9 @@
 
 - **Status:** Seam plus partial enforcement — types, two providers (the shared
   secret and an OIDC bearer-token verifier) and a deny-by-default policy exist,
-  and the service layer enforces them for five actions (§3,
-  `pipeline/authorization.py`); everything else in §4 is still unenforced.
+  and the service layer enforces them for every action in the `Action` enum
+  (§3, `pipeline/authorization.py`). MCP tools outside those service paths are
+  still unchecked (§4).
   Written 2026-10-26.
 - **Stories:** TEN-ID-01 (`Principal`/roles/scopes), TEN-ID-02
   (`SharedSecretProvider` and `LOCAL_OPERATOR`), TEN-POL-01 (`LocalPolicy`),
@@ -27,15 +28,15 @@ and the fail-closed `is_allowed()` wrapper.
 The dashboard authenticates each `/api/` request and attaches the resulting
 principal to `request.state.principal`, then binds it as the request-scoped
 actor (§2, `pipeline/actor.py`). The service layer enforces the policy for the
-actions that matter most — `story:merge`, `story:mark_done`, `plan:approve`,
-`plan:reject` and `plan:pause` — through `pipeline/authorization.py` (§2,
-"Enforcement"). Enforcement is **on by default** and
+actions in the `Action` enum — `plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `story:merge`, `story:mark_done`, `decision:answer` and `config:write` — through `pipeline/authorization.py`
+(§2, "Enforcement"). Enforcement is **on by default** and
 `PIPELINE_POLICY_ENFORCE` is the operator's kill switch.
 
-It is still a partial boundary. Every other action in §4 is unenforced: a
-principal denied by `LocalPolicy` for `plan:ingest`, `plan:dispatch`,
-`story:patch`, `story:interrupt`, `decision:answer` or `config:write` changes
-nothing, and the mutation still runs. With no identity provider configured the
+It is still a partial boundary. The enum is not every mutation: MCP tools
+whose service path never asks `authorize` — `save_plan`, `patch_plan` (which
+rewrites `role_config` without the `config:write` check
+`set_plan_role_config` now has), `set_story_status`, `record_security_audit`
+and others (§4) — run for any principal. With no identity provider configured the
 bound principal is `LOCAL_OPERATOR`, which `LocalPolicy` allows, so local mode
 behaves as it did before this plan.
 
@@ -487,8 +488,8 @@ before this plan:
   `pipeline/authorization.py` (§2, "Enforcement"). With nothing bound the
   principal is `LOCAL_OPERATOR`, which it allows for every action, so the
   enforced call sites pass exactly as they did before enforcement existed.
-- The four (plus pause/resume) enforced actions are the only ones that can now
-  refuse; §4 lists the actions that still cannot.
+- The enforced actions are the only ones that can now refuse; §4 lists the
+  mutations that still cannot.
 - Enforcement can be turned off wholesale with `PIPELINE_POLICY_ENFORCE=0`, and
   when it is off every action is allowed and local behavior is identical to
   before this plan.
@@ -515,11 +516,11 @@ Do not mistake any row of this table for a control that exists.
 
 | Not implemented | Consequence today |
 | --- | --- |
-| **Enforcement on the remaining actions** | Enforcement exists for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and `plan:pause` (§2, "Enforcement"). `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`, `decision:answer` and `config:write` do not call `authorize()`, so a principal denied by `LocalPolicy` for those changes nothing: the mutation still runs. |
+| **Enforcement outside the `Action` enum** | Every enum action is enforced (§2, "Enforcement"). Mutating MCP tools whose service path never calls `authorize()` — `save_plan`, `patch_plan`, `set_story_status`, `mark_story_in_progress`, `checkpoint`, `checkpoint_story`, `record_security_audit`, `review_story`, `advance_pipeline`, `advance_all_plans`, `decompose_plan` and `request_decision` — run for any principal. `patch_plan` in particular rewrites `role_config` without the `config:write` check. |
 | **Plan owner / author / delegate records** | Plans carry no ownership. `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined but nothing assigns or reads them, and `request_decision` has no owner to route to. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |
-| **Remote MCP transport hardening** | The transport itself has landed (§2, "Remote MCP transport"): an OIDC-gated HTTP endpoint that verifies a token and binds a `Principal`. What is missing is everything an internet-facing endpoint wants — **no rate limiting at the gate** (the only outbound bound is the JWKS refetch limit), **no TLS** (put a reverse proxy in front), and authenticated requests are logged to the application log, which is not the hash-chained audit stream. |
+| **Remote MCP transport hardening** | The transport itself has landed (§2, "Remote MCP transport"): an OIDC-gated HTTP endpoint that verifies a token and binds a `Principal`. What is missing is everything an internet-facing endpoint wants — **no rate limiting at the gate** (the only outbound bound is the JWKS refetch limit), **no TLS** (put a reverse proxy in front), **no per-tool authorization** (every authenticated caller reaches the unchecked tools in the row above, and reads are not tenant-scoped), and **no configurable host allowlist** (behind a reverse proxy the SDK's loopback DNS-rebinding check answers `421` unless the proxy sets `Host` to the loopback address). Authentication attempts are recorded in the host-scoped hash-chained stream (`<PLAN_DIR>/.audit.host.jsonl`), which has no verifier yet. |
 | **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. What is missing is an external anchor — the head hash is never shipped off-box — so truncation of the tail is undetectable and a record cannot be proven against a third-party witness. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
 

@@ -58,3 +58,4 @@ if a precise date is needed when writing one of these up.
 - stale-probe-robustness — completed 2026-10-27, 1 story
 - oidc-identity — completed 2026-10-27, 4 stories
 - remote-mcp — completed 2026-10-27, 3 stories
+- post-phase6-hardening — completed 2026-10-27, 3 stories

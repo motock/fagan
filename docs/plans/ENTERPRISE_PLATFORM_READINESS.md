@@ -234,14 +234,14 @@ The remote MCP transport has landed too: `PIPELINE_MCP_TRANSPORT=streamable-http
 (or `sse`) serves the same tools over HTTP behind the same `OidcProvider`,
 yielding the same `Principal` and binding it to the request. It refuses to start
 without `PIPELINE_IDENTITY_PROVIDER=oidc`. What it does not have is TLS (put a
-reverse proxy in front), rate limiting at the gate, or any route into the
-hash-chained audit stream for the authentication attempts themselves — see
+reverse proxy in front), rate limiting at the gate, per-tool authorization for
+remote callers, or a configurable host allowlist — see
 [REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
 
-**Still outstanding.** Enforcement covers five actions and nothing more.
-Ownership records beyond the plan's single `team` are unimplemented, as are
-enforcement checks for the remaining actions (`plan:ingest`, `plan:dispatch`,
-`story:patch`, `story:interrupt`, `decision:answer`, `config:write`). The audit
+**Still outstanding.** Every action in the `Action` enum is enforced, but
+mutating MCP tools outside the enum (`save_plan`, `patch_plan`,
+`set_story_status`, `record_security_audit` and others) are not, and reads are
+not tenant-scoped. Plan ownership is stored but not yet enforced. The audit
 stream of allow/deny decisions exists locally (hash-chained per plan); what it
 still lacks is the external anchor that would make tail truncation detectable.
 

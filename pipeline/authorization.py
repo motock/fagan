@@ -60,6 +60,8 @@ def resource_for(manifest: dict | None, plan_name: str, story_key: str | None) -
         repo=str(data.get("repo_root") or ""),
         plan=plan_name,
         story=story_key or "",
+        owner=str(data.get("owner") or ""),
+        delegates=tuple(data.get("delegates") or ()),
     )
 
 

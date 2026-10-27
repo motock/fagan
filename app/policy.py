@@ -49,6 +49,8 @@ class Resource:
     repo: str = ""
     plan: str = ""
     story: str = ""
+    owner: str = ""
+    delegates: tuple[str, ...] = ()
 
 
 class Authorizer(Protocol):
@@ -98,6 +100,23 @@ class LocalPolicy:
 
         if _coerce_action(action) is None:
             return False
+
+        # Ownership is an ADDITIONAL authority for exactly the three actions a
+        # plan's owner governs: it can only allow a principal the role rules
+        # below would deny, never deny one they would allow. The `resource.owner
+        # and` guard keeps a pre-OWN-01 plan (no owner) behaving as it does
+        # today, rather than matching a principal whose subject is empty.
+        if (
+            resource is not None
+            and isinstance(principal, Principal)
+            and action
+            in (Action.PLAN_APPROVE, Action.PLAN_REJECT, Action.STORY_MERGE)
+            and (
+                (resource.owner and principal.subject == resource.owner)
+                or principal.subject in resource.delegates
+            )
+        ):
+            return True
 
         return (
             isinstance(principal, Principal)

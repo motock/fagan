@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login, no remote MCP transport) |
 
 ---
 
@@ -210,12 +210,26 @@ selected by configuration and fails closed if misconfigured (ADR 0004). The
 `Principal` must carry **repo/tenant scope**, so authorization is
 `principal → team → repo → plan → story`, not a global role bit.
 
-**Still outstanding.** Enforcement covers five actions and nothing more. The
-OIDC provider, ownership records beyond the plan's single `team`, the audit
-stream of allow/deny decisions, and the remote MCP transport are all unimplemented;
-so are enforcement checks for the remaining actions (`plan:ingest`,
-`plan:dispatch`, `story:patch`, `story:interrupt`, `decision:answer`,
-`config:write`).
+**What exists now.** OIDC verification has landed: `app/oidc.py` holds an
+`OidcProvider` that verifies a bearer JWT against the issuer's JWKS, comparing
+`iss` and `aud` against `PIPELINE_OIDC_ISSUER` / `PIPELINE_OIDC_AUDIENCE` and
+requiring `exp`, `iss`, `aud` and `sub`. It is selected with
+`PIPELINE_IDENTITY_PROVIDER=oidc` and yields a `Principal` with the token's
+claims mapped onto it; the mapping (issuer-qualified subject,
+group-to-role intersection, scope handling) and the full rule set are in
+[`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md) §2,
+"OIDC provider". Two limits matter: it authenticates **API clients only** — the
+bundled dashboard has no login flow and mints no token, so under `oidc` its
+pages load but every `/api/` call is a `401` without a bearer token — and the
+`k-` chat-stream pass-through of shared-secret mode does not exist under it.
+
+**Still outstanding.** Enforcement covers five actions and nothing more.
+Ownership records beyond the plan's single `team` and the remote MCP transport
+are unimplemented, as are enforcement checks for the remaining actions
+(`plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
+`decision:answer`, `config:write`). The audit stream of allow/deny decisions
+exists locally (hash-chained per plan); what it still lacks is the external
+anchor that would make tail truncation detectable.
 
 ---
 

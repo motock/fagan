@@ -1,9 +1,10 @@
 # Identity and Policy Seams
 
-- **Status:** Seam plus partial enforcement — types, a local provider and a
-  deny-by-default policy exist, and the service layer enforces them for five
-  actions (§3, `pipeline/authorization.py`); everything else in §4 is still
-  unenforced. Written 2026-10-26.
+- **Status:** Seam plus partial enforcement — types, two providers (the shared
+  secret and an OIDC bearer-token verifier) and a deny-by-default policy exist,
+  and the service layer enforces them for five actions (§3,
+  `pipeline/authorization.py`); everything else in §4 is still unenforced.
+  Written 2026-10-26.
 - **Stories:** TEN-ID-01 (`Principal`/roles/scopes), TEN-ID-02
   (`SharedSecretProvider` and `LOCAL_OPERATOR`), TEN-POL-01 (`LocalPolicy`),
   TEN-WIRE-01 (dashboard attaches the principal), TEN-DOC-01 (this spec).
@@ -47,8 +48,9 @@ complete security boundary. §4 lists, in one table, everything the seam does
 ADR 0009 splits the problem in two:
 
 - **Authentication is an adapter concern.** An `IdentityProvider` turns a
-  credential into a verified `Principal`. Adapters (the dashboard today; an
-  OIDC verifier and the remote MCP transport later) own this step.
+  credential into a verified `Principal`. Adapters (the dashboard with either
+  the shared secret or `PIPELINE_IDENTITY_PROVIDER=oidc`; the remote MCP
+  transport later) own this step.
 - **Authorization is a service-layer policy.** Every mutating
   `PipelineService` method will take the principal and ask
   `allow(principal, action, resource) -> bool`, which denies by default. The
@@ -77,6 +79,53 @@ cycle.
 | `IdentityProvider` | `runtime_checkable` Protocol with `authenticate(credential) -> Principal`. Implementations raise `IdentityError` for every rejection and never leak the credential or the expected secret. |
 | `LOCAL_OPERATOR` | Today's single-operator identity: subject `local-operator`, all roles, scope `*`, `auth_method="shared-secret"`. ADR 0009 section 7 defines local mode as this principal holding the full action set. |
 | `SharedSecretProvider` | The local `IdentityProvider`. Compares the presented credential against a fixed string or a callable (the dashboard passes `app.auth.get_or_create_api_key`, so a lazily created or rotated key is read per call, never cached). Comparison is constant-time over UTF-8 bytes; a missing or non-matching credential raises `IdentityError`. |
+
+### OIDC provider (`app/oidc.py`)
+
+The second `IdentityProvider`. Selected with
+`PIPELINE_IDENTITY_PROVIDER=oidc`; the default `shared-secret` is unchanged and
+any other value raises at startup rather than downgrading authentication
+(ADR 0004). Like `app/identity.py`, the module imports the identity types and
+nothing else from `app.*`, so the service layer can depend on it without a
+cycle. The variables it reads, and their defaults, are tabled in
+[REFERENCE.md](../../REFERENCE.md#oidc-identity-verification).
+
+`OidcProvider.authenticate(credential)` verifies a bearer JWT against the
+issuer's JWKS. Every failure raises `IdentityError` with a fixed reason token —
+never the token, the key material or a claims dump — and the dashboard turns it
+into `401 {"detail": "Unauthorized"}`.
+
+**Verification rules.** Each one is load-bearing, not a style choice:
+
+| Rule | Why |
+| --- | --- |
+| The accepted algorithms are a fixed allowlist, `RS256` and `ES256`, checked against the header *before a key is selected*. A JWK's advertised `alg`/`kty` must also match. | The token never chooses its own algorithm. That is what makes `alg: none` and the HS256-for-RS256 confusion attack impossible here, and why a key published for ES256 cannot verify an RS256 token under the same `kid`. |
+| `exp`, `iss`, `aud` and `sub` are all **required**. | A token that omits an expiry is rejected rather than treated as eternal. |
+| `iss` and `aud` are compared against `PIPELINE_OIDC_ISSUER` / `PIPELINE_OIDC_AUDIENCE`, never against values taken from the token. | A token cannot nominate its own provenance. |
+| One bounded clock skew (`PIPELINE_OIDC_CLOCK_SKEW_S`, default `60`, capped at `300`) covers `exp` and `nbf`. | Absorbs clock drift without un-expiring tokens; a large skew would make a stale credential valid again, so the value is bounded rather than merely validated. |
+| Keys are selected by the header `kid`; a `kid` absent from the JWKS triggers at most one refetch per 10 seconds before the token is rejected. | Keeps signing-key rotation from becoming a 300-second outage, without letting a stream of bogus `kid`s turn into a stream of outbound requests. |
+| The JWKS document is cached for 300 seconds, capped at 256 KiB, and fetched only over `https://` from a host that resolves to a public address. | A cached, size-bounded, address-checked fetch keeps a misconfigured URL from turning the shared server into an SSRF probe against loopback or a cloud metadata endpoint. `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is the opt-in for a self-hosted IdP inside a VPC. |
+
+**Claims → `Principal`.** The mapping is the security-relevant part:
+
+| Claim | Becomes | Rule |
+| --- | --- | --- |
+| `sub` | `Principal.subject` = `<issuer>#<sub>` | The subject is **issuer-qualified**. A `sub` is unique per issuer and never globally (RFC 9068 §2.2); unqualified, another issuer's user could collide with this deployment's `local-operator` and be treated as the operator (CWE-290). `#` is refused in both halves — rejected in the token's `sub` and rejected in `PIPELINE_OIDC_ISSUER` — so the separator cannot be forged. |
+| `groups`, or `roles` when `groups` is absent | `Principal.roles` | Intersected with the ADR 0009 role set (`ROLES`). A group the role set does not name is dropped: no role is invented from an unrecognised group. |
+| `scope` (space-separated), or `scp` (list) when `scope` is absent | `Principal.scopes` | Empty and `*` parts are dropped. A token that says `*` means "no scope", not "every scope": the token cannot carry the whole authorization decision, so wildcards stay server-resolved. |
+| `email` | `Principal.email` | Carried **only** when the issuer also sets `email_verified: true`. `email` is user-editable on several issuers, so an unverified address would invite spoofing. |
+
+`auth_method` is `"oidc"` for every principal this provider returns.
+
+**Boundary: OIDC authenticates API clients only.** The bundled browser
+dashboard has no login flow and mints no token. Under
+`PIPELINE_IDENTITY_PROVIDER=oidc` its pages still load, but every `/api/` call
+returns `401` until the caller sends `Authorization: Bearer <token>`. OIDC mode
+is for a token-bearing client — including the remote MCP transport, once it
+exists — and it is **not** a drop-in replacement for the shared secret for a
+browser-only deployment. The chat-stream `k-` pass-through that exists in
+shared-secret mode does not exist under OIDC: every `/api/` request,
+`/api/chat/stream` included, requires a bearer token.
 
 ### `app/policy.py`
 
@@ -246,14 +295,19 @@ With the formatter off, logs are unchanged.
 
 ### The one consumer: `app/dashboard.py`
 
-The `/api/` middleware (`_enforce_api_key`) already gates every API request on
-the shared secret. After the gate passes it resolves the presented key through
-a module-level `SharedSecretProvider(get_or_create_api_key)` and attaches the
-result to `request.state.principal`. Two cases deliberately attach `None`
-rather than a principal:
+The `/api/` middleware (`_enforce_api_key`) gates every API request with the
+identity provider `build_identity_provider(get_or_create_api_key)` selects from
+`PIPELINE_IDENTITY_PROVIDER` (§2, "OIDC provider"). With the default
+`shared-secret` it resolves the presented key through a `SharedSecretProvider`
+and attaches the result to `request.state.principal`; with `oidc` it reads
+`Authorization: Bearer <token>`, verifies it and attaches the token's
+principal, answering `401 {"detail": "Unauthorized"}` on any rejection. Two
+cases attach no principal:
 
-- the chat-stream pass-through, where the caller-supplied `k-` value is
-  validated upstream by the pipeline, so the dashboard has no identity for it;
+- in shared-secret mode, the chat-stream pass-through, where the
+  caller-supplied `k-` value is validated upstream by the pipeline, so the
+  dashboard has no identity for it (under `oidc` this pass-through does not
+  exist — the request needs a bearer token like any other);
 - any credential the provider rejects.
 
 That is the whole of the wiring. The middleware then binds the principal — or
@@ -405,7 +459,7 @@ Do not mistake any row of this table for a control that exists.
 | **Enforcement on the remaining actions** | Enforcement exists for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and `plan:pause` (§2, "Enforcement"). `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`, `decision:answer` and `config:write` do not call `authorize()`, so a principal denied by `LocalPolicy` for those changes nothing: the mutation still runs. |
 | **Plan owner / author / delegate records** | Plans carry no ownership. `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined but nothing assigns or reads them, and `request_decision` has no owner to route to. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
-| **OIDC provider** | There is no `OidcProvider`. `SharedSecretProvider` is the only `IdentityProvider`, so there is no JWT/JWKS verification, issuer/audience/expiry check, or group-to-role mapping. |
+| **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |
 | **Remote MCP transport** | MCP is stdio only. There is no HTTP transport layer to verify a token and yield a `Principal`. |
 | **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. What is missing is an external anchor — the head hash is never shipped off-box — so truncation of the tail is undetectable and a record cannot be proven against a third-party witness. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
@@ -443,9 +497,11 @@ The remaining work, in dependency order:
    section 8 record for every decision the policy makes (§2, "Audit stream").
    What remains open is the external anchor — shipping the head hash off-box,
    so that truncation of the tail becomes detectable.
-5. **The OIDC adapter.** Add `OidcProvider` (JWT against JWKS, issuer,
-   audience, expiry) and the remote MCP transport that verifies the same token
-   and yields the same `Principal`, for the shared server.
+5. **The OIDC adapter.** Landed: `OidcProvider` (§2, "OIDC provider") verifies
+   a JWT against a JWKS with the issuer, audience and expiry checks and maps
+   its claims to a `Principal`. Still outstanding is the remote MCP transport
+   that verifies the same token and yields the same `Principal`, for the shared
+   server — MCP is stdio only today, so no remote client is authenticated yet.
 
 Steps 1–3 are the multi-tenant implementation ADR 0008 calls "not prep"; step 4
 has landed as far as the local stream goes; step 5 is the provider swap the seam

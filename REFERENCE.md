@@ -2147,6 +2147,59 @@ A caller arriving through the dashboard's chat-stream `k-` pass-through carries
 no identity. Such a caller is refused these actions — that is intended, not a
 bug: without an identity there is nothing to authorize against.
 
+### OIDC identity verification
+
+By default the dashboard authenticates `/api/` requests with the shared secret
+(`app/auth.py`). Setting `PIPELINE_IDENTITY_PROVIDER=oidc` switches it to
+bearer-token authentication: a caller presents `Authorization: Bearer <token>`,
+the token is verified as a JWT against the issuer's JWKS, and the resulting
+principal is attached to the request.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` switches the dashboard to bearer-token authentication. Any other value raises at startup rather than silently downgrading authentication. |
+| `PIPELINE_OIDC_ISSUER` | *(required when `oidc`)* | The expected `iss` claim, compared against the configured value — never against a value taken from the token. Must not contain `#` (it joins the issuer and subject into one principal id). |
+| `PIPELINE_OIDC_AUDIENCE` | *(required when `oidc`)* | The expected `aud` claim, likewise from configuration only. |
+| `PIPELINE_OIDC_JWKS_URL` | *(required when `oidc`)* | Where the issuer publishes its signing keys. Must use `https://`. A host that resolves to a private or loopback address is refused unless `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is set. |
+| `PIPELINE_OIDC_CLOCK_SKEW_S` | `60` | Leeway, in seconds, applied to `exp` and `nbf`. Must be a non-negative integer and is capped at `300`; a larger value raises at startup. |
+| `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` | *(unset → off)* | Permits a JWKS host that resolves to a private or loopback address — what a self-hosted IdP inside a VPC (Keycloak, Dex, ADFS) needs. Only `1` or `true` (case-insensitive) enable it; any other value, including `yes` or `on`, leaves the restrictive default in place. Enabling it also pins the JWKS fetch to the resolved address, so the request cannot traverse an HTTP egress proxy — an operator behind one needs direct egress to the IdP. |
+
+The verification rules are fixed, not configurable:
+
+- Only `RS256` and `ES256` are accepted. The token header never picks its own
+  algorithm, which is what makes `alg: none` and HS256-for-RS256 confusion
+  attacks impossible here.
+- `exp`, `iss`, `aud` and `sub` are all required, so a token that omits an
+  expiry is rejected rather than treated as eternal.
+- A failure is a `401` whose body is `{"detail": "Unauthorized"}`. The response
+  never echoes the token, the key material or a claims dump.
+
+The verifier also applies these bounds, so an operator can predict a rejection
+before the client ever sees one:
+
+| Bound | Value |
+| --- | --- |
+| Required lifetime anchor | `iat` is required; `exp - iat` must be at most `3600` seconds. |
+| Configured clock skew | Capped at `300` seconds: a larger `PIPELINE_OIDC_CLOCK_SKEW_S` raises at startup instead of un-expiring tokens. |
+| JWKS cache | The document is cached for `300` seconds and capped at `256 KiB`; anything larger is refused unparsed. |
+| Token size | A token longer than `16 KiB` is refused before it is parsed. |
+| Key rotation | A `kid` absent from the JWKS triggers at most one refetch per `10` seconds. |
+
+The shared-secret path is untouched when the provider is not `oidc`: unset,
+the dashboard reads and compares the API key exactly as before.
+
+`PyJWT[crypto]` is pinned in `requirements.txt` because token verification needs
+it. It is a declared form of a dependency `mcp` already requires
+(`pyjwt[crypto]>=2.10.1`), not a new library in the install.
+
+OIDC authenticates API clients only. The bundled browser dashboard has no login
+flow and mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages
+still load but every `/api/` call returns `401`. In particular, the chat-stream
+`k-` pass-through that exists in shared-secret mode does not exist here: every
+`/api/` request, `/api/chat/stream` included, needs a bearer token. See
+[docs/specs/IDENTITY_AND_POLICY.md](docs/specs/IDENTITY_AND_POLICY.md) for the
+claims-to-principal mapping.
+
 ---
 
 ## Periodic security-audit reminder

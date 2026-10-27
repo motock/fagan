@@ -53,3 +53,5 @@ if a precise date is needed when writing one of these up.
 - structured-logs — completed 2026-10-26, 4 stories
 - dispatch-stale-base — completed 2026-10-27, 1 story
 - policy-enforcement — completed 2026-10-27, 6 stories
+- stale-base-probe — completed 2026-10-27, 1 story
+- audit-stream — completed 2026-10-27, 6 stories

@@ -27,6 +27,74 @@ _provision_worktree_venv = _ModuleRef(
     "pipeline.dispatch", "_provision_worktree_venv"
 )
 
+#: Bound on each freshness probe. Both probes are read-only and local or
+#: single-round-trip, so a reply slower than this is a network condition, not
+#: a slow git - treat it as "unknown" rather than hold dispatch open.
+_PROBE_TIMEOUT_S = 30
+
+
+def _remote_tip(repo_root: Path, default_branch: str) -> str | None:
+    """Return the remote's current tip for ``default_branch``, or ``None``.
+
+    Reads the remote with ``git ls-remote`` instead of fetching: it consults
+    the remote without writing any local ref, so it needs neither the advisory
+    git lock nor a working tree. ``None`` means the question could not be
+    answered (network failure, no origin, no such remote branch) and must be
+    read as "unknown", never as "fresh".
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "ls-remote", "origin", f"refs/heads/{default_branch}"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    fields = completed.stdout.split()
+    return fields[0] if fields else None
+
+
+def _cached_remote_tip(repo_root: Path, default_branch: str) -> str | None:
+    """Return this checkout's cached ``origin/<default>`` tip, or ``None``."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", f"refs/remotes/origin/{default_branch}"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return completed.stdout.strip() or None
+
+
+def _stale_base_error(
+    repo_root: Path, default_branch: str, branch: str
+) -> str | None:
+    """Return a refusal message when the base is *provably* stale.
+
+    Only a provable mismatch refuses: the remote tip was read successfully and
+    differs from the cached ``origin/<default>`` this worktree would be cut
+    from. An unanswerable probe (outage, no origin, missing branch) returns
+    ``None`` so dispatch keeps the degrade-and-warn behaviour - refusing on an
+    outage would block a dispatch that has done nothing wrong.
+    """
+    remote = _remote_tip(repo_root, default_branch)
+    cached = _cached_remote_tip(repo_root, default_branch)
+    if remote is None or cached is None or remote == cached:
+        return None
+    return (
+        f"{branch}: refusing to dispatch from a provably stale base - the "
+        f"cached origin/{default_branch} is {cached[:12]} but the remote is "
+        f"{remote[:12]}. Another process held the git lock, so the fetch was "
+        "skipped; the next scheduler tick retries with the lock free."
+    )
+
 
 def _create_fresh_worktree(
     plan_name: str, branch: str, worktree_path: Path
@@ -80,6 +148,16 @@ def _create_fresh_worktree(
                         severity="warning",
                         event="stale_base_dispatch",
                     )
+                    stale = _stale_base_error(repo_root, default_branch, branch)
+                    if stale is not None:
+                        _notify_user(
+                            plan_name,
+                            stale,
+                            story_key=None,
+                            severity="warning",
+                            event="stale_base_refused",
+                        )
+                        return {"ok": False, "error": stale}
             subprocess.run(
                 [
                     "git",

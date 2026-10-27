@@ -49,6 +49,8 @@ class Resource:
     repo: str = ""
     plan: str = ""
     story: str = ""
+    owner: str = ""
+    delegates: tuple[str, ...] = ()
 
 
 class Authorizer(Protocol):
@@ -79,6 +81,29 @@ def _coerce_action(action: Action | str) -> Action | None:
     return None
 
 
+#: The three actions a plan's owner and its delegates govern (OWN-02).
+_OWNER_GATED_ACTIONS = frozenset(
+    {Action.PLAN_APPROVE, Action.PLAN_REJECT, Action.STORY_MERGE}
+)
+
+
+def _is_owner_or_delegate(
+    principal: Principal, action: Action, resource: Resource | None
+) -> bool:
+    """Return whether *principal* owns or is delegated *action* on *resource*.
+
+    Ownership is an ADDITIONAL authority for the owner-gated actions only, so
+    every other action is untouched. A resource with no owner (every plan
+    written before OWN-01) grants nothing: the ``resource.owner`` guard keeps
+    an empty owner from matching any principal.
+    """
+    if resource is None or action not in _OWNER_GATED_ACTIONS:
+        return False
+    if resource.owner and principal.subject == resource.owner:
+        return True
+    return principal.subject in resource.delegates
+
+
 class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
@@ -96,13 +121,17 @@ class LocalPolicy:
         if principal is None:
             return False
 
-        if _coerce_action(action) is None:
+        coerced = _coerce_action(action)
+        if coerced is None:
             return False
 
-        return (
-            isinstance(principal, Principal)
-            and principal.subject == LOCAL_OPERATOR_SUBJECT
-        )
+        if not isinstance(principal, Principal):
+            return False
+
+        if principal.subject == LOCAL_OPERATOR_SUBJECT:
+            return True
+
+        return _is_owner_or_delegate(principal, coerced, resource)
 
 
 def default_authorizer() -> Authorizer:

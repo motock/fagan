@@ -329,11 +329,15 @@ class _FakeMCP:
         self.calls: list[tuple[str, str | None]] = []
         self.middleware: list[object] = []
 
-    def streamable_http_app(self, host: str | None = None) -> object:
+    def streamable_http_app(
+        self, host: str | None = None, transport_security: object = None
+    ) -> object:
         self.calls.append(("streamable_http_app", host))
         return object()
 
-    def sse_app(self, host: str | None = None) -> object:
+    def sse_app(
+        self, host: str | None = None, transport_security: object = None
+    ) -> object:
         self.calls.append(("sse_app", host))
         return object()
 

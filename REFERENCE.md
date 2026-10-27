@@ -2200,6 +2200,81 @@ still load but every `/api/` call returns `401`. In particular, the chat-stream
 [docs/specs/IDENTITY_AND_POLICY.md](docs/specs/IDENTITY_AND_POLICY.md) for the
 claims-to-principal mapping.
 
+### Remote MCP transport
+
+By default the MCP server speaks `stdio`, exactly as before: nothing in
+`pipeline/remote_transport.py` runs, and `uvicorn` is never imported. Naming an
+HTTP transport instead serves the same tools over the network, and that is a
+deliberate two-part act — the transport must be named *and* OIDC must be
+configured.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_MCP_TRANSPORT` | `stdio` | `stdio` keeps the local subprocess transport. `streamable-http` or `sse` serve the tools on a network endpoint. Any other value stops the process at startup. |
+| `PIPELINE_MCP_HOST` | `127.0.0.1` | Interface the endpoint binds to. The loopback default keeps the server off the network unless you change it. |
+| `PIPELINE_MCP_PORT` | `8000` | Port the endpoint binds to. Must be an integer in `1`–`65535`, otherwise the process stops at startup. |
+
+A network transport refuses to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`.
+The check runs before any socket is opened, so a misconfiguration produces a
+`SystemExit` at startup rather than an unauthenticated control plane serving on
+the network:
+
+```bash
+# Refuses to start: the transport is remote but nobody would be authenticated.
+PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=static \
+  python3 app/pipeline_mcp_server.py
+
+# Starts: OIDC is what makes the endpoint authenticating.
+PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=oidc \
+PIPELINE_OIDC_ISSUER=... PIPELINE_OIDC_AUDIENCE=... PIPELINE_OIDC_JWKS_URL=... \
+  python3 app/pipeline_mcp_server.py
+```
+
+Every HTTP request to the endpoint must carry exactly one
+`Authorization: Bearer <token>` header, verified with the same verifier and the
+same `PIPELINE_OIDC_*` configuration the dashboard uses. A rejected request is a
+`401` whose body is `{"detail":"Unauthorized"}` — the same body the dashboard
+returns, so a client cannot tell which process it spoke to. The response also
+carries:
+
+| Header | Value |
+| --- | --- |
+| `X-Correlation-ID` | The request's correlation id, echoed on success too. |
+| `WWW-Authenticate` | `Bearer` — RFC 6750 requires a challenge from a bearer-protected resource. |
+| `Cache-Control` | `no-store`. |
+
+The gate's behaviour is fixed, not configurable, and an operator should expect
+all of it:
+
+- Only `lifespan` scopes bypass authentication (uvicorn sends one during
+  startup, and answering it with `401` would stop the app booting). Any other
+  non-`http` scope is closed without reaching the wrapped app; a `websocket`
+  scope is closed with code `1008` rather than answered, because a WebSocket
+  route on the mounted app would otherwise be reachable unauthenticated.
+- A request carrying more than one `Authorization` header is denied, not
+  resolved to one value. A reverse proxy that appends instead of replacing
+  could otherwise let the proxy validate one token while this gate validates
+  another.
+- `BearerAuthMiddleware` refuses to be constructed with anything that is not an
+  `OidcProvider` — it raises `TypeError` — so the default `SharedSecretProvider`
+  cannot be wired in by accident.
+- There is **no rate limiting** at the gate. A stream of unauthenticated
+  requests is answered `401` indefinitely; the only outbound bound in this path
+  is the JWKS refetch limit in `app.oidc` (an unknown `kid` triggers at most one
+  refetch per 10 seconds, so bogus tokens cannot become a stream of outbound
+  requests). Nothing throttles or locks out a caller, and a valid token
+  presented after several `401`s is served normally rather than answered `429`.
+
+**The process serves TLS never.** `uvicorn` is started over plain HTTP; there is
+no certificate or key option here. Put a TLS-terminating reverse proxy in front
+of the endpoint and let the proxy talk HTTP to the loopback address above. Note
+that the proxy must *replace* — not append — the `Authorization` header, per the
+duplicate-header rule above.
+
+`uvicorn` is a runtime dependency of this mode only, and that is acceptable
+because `mcp` (`2.3.0`) already requires `uvicorn>=0.31.1`; it is not a new
+install, and `requirements.txt` gains nothing.
+
 ---
 
 ## Periodic security-audit reminder

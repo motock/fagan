@@ -85,8 +85,13 @@ class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
     Every other principal — including any future system principal — is denied
-    every action. ADR 0009 requires that a system principal never approve its
-    own plan, so the deny is not special-cased per action.
+    every action, with one exception: a plan's ``owner`` and its ``delegates``
+    are additionally allowed ``plan:approve``, ``plan:reject`` and
+    ``story:merge``. Ownership is additive only — it can allow a principal the
+    role rule denies, never deny one it allows — and a plan with no owner (every
+    plan written before OWN-01) falls through to the role rule unchanged. ADR
+    0009 requires that a system principal never approve its own plan; ownership
+    is scoped to those three actions and grants nothing else.
     """
 
     def allow(

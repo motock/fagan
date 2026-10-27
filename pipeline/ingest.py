@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, testfiles
+from . import cross_plan, persistence, testfiles
 from .actor import actor_id
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
@@ -562,11 +562,9 @@ def _ingest_plan_impl(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     _validate_key(plan_name)
-    path = PLAN_DIR / f"{plan_name}.json"
-    if not path.exists():
-        return {"ok": False, "error": f"No plan named {plan_name}"}
-
-    plan = json.loads(path.read_text())
+    plan, refusal = persistence.read_plan_file(PLAN_DIR / f"{plan_name}.json")
+    if refusal is not None:
+        return refusal
 
     # advance_all_plans() iterates every plan in shared PLAN_DIR, each
     # potentially belonging to a different repo, so a manifest without its
@@ -747,9 +745,10 @@ def _ingest_plan_impl(
 
         # Any caller can rewrite a plan file, so resolve ownership against the
         # manifest on disk even when overwriting, before any provider call.
-        saved_manifest: dict[str, Any] = (
-            json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-        )
+        saved_manifest, manifest_refusal = persistence.read_plan_file(manifest_path)
+        # A missing manifest is a first ingest; a present one must be readable.
+        if manifest_refusal is not None and manifest_path.exists():
+            return manifest_refusal
         try:
             ownership = resolve_ownership(plan_name, plan, saved_manifest, actor_id())
         except ValueError as exc:

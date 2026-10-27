@@ -229,6 +229,11 @@ def _authenticated_test_client(monkeypatch):
     self_managed = {
         "test_dashboard_index_serves_key",
         "test_chat_internal_loopback_auth",
+        # OIDC-03: the bearer branch must be exercised with NO shared secret
+        # present, and the shared-secret branch must reject a bearer-only
+        # request — a force-attached valid key would turn both denials into
+        # 200s.
+        "test_dashboard_oidc",
     }
 
     original_init = TestClient.__init__

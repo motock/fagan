@@ -104,15 +104,20 @@ _DEFAULT_BRANCH_REFS = (
 
 
 def _branch_commit_subject(worktree: str, branch: str) -> str:
-    """The newest Conventional Commits subject among this branch's own
+    """The oldest Conventional Commits subject among this branch's own
     commits, or "" when there is none.
 
     The squash-merge subject on the default branch is the PR title, so it
     should be the message the agent actually wrote for the story rather than
     the generated "<key>: <summary>" fallback (_pr_title). The review gate
-    already requires that commit to be a Conventional Commits header, so the
-    branch's newest such subject is the right title and _pr_title stays the
-    fallback.
+    already requires that commit to be a Conventional Commits header, so a
+    conventional subject is the right title and _pr_title stays the fallback
+    when there is none.
+
+    It is the OLDEST such subject because a story that went through review
+    rework ends with a fix commit answering the review: that newer commit
+    describes the review response rather than the story, so taking it made
+    `git log` on the default branch under-describe what landed.
 
     `wip(<key>):` checkpoints are skipped: a step-cap run can leave one as the
     newest commit, and taking it would reproduce PR #821, where a
@@ -144,13 +149,14 @@ def _branch_commit_subject(worktree: str, branch: str) -> str:
         return ""
     if proc.returncode != 0:
         return ""
+    selected = ""
     for subject in proc.stdout.splitlines():
         subject = subject.strip()
         if not subject or subject.lower().startswith("wip("):
             continue
         if _CONVENTIONAL_SUBJECT_RE.match(subject):
-            return subject
-    return ""
+            selected = subject
+    return selected
 
 
 def _pr_title(story_key: str, summary: str) -> str:

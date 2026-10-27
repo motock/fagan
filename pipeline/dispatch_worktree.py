@@ -54,7 +54,11 @@ def _remote_tip(repo_root: Path, default_branch: str) -> str | None:
         )
     except (subprocess.SubprocessError, OSError):
         return None
-    fields = completed.stdout.split()
+    # The dispatch tests substitute subprocess.run with a recorder that
+    # returns None, and this value is advisory by contract: an unreadable
+    # tip is "unknown", never an exception that kills the dispatch.
+    output = getattr(completed, "stdout", "") or ""
+    fields = output.split()
     return fields[0] if fields else None
 
 
@@ -71,7 +75,10 @@ def _cached_remote_tip(repo_root: Path, default_branch: str) -> str | None:
         )
     except (subprocess.SubprocessError, OSError):
         return None
-    return completed.stdout.strip() or None
+    # Same guard as _remote_tip: a recorder-substituted run has no stdout,
+    # and an unreadable cached tip means "unknown", not a crash.
+    output = getattr(completed, "stdout", "") or ""
+    return output.strip() or None
 
 
 def _stale_base_error(

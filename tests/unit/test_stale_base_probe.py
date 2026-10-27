@@ -231,3 +231,35 @@ def test_healthy_lock_path_never_probes(monkeypatch, tmp_path):
         if cmd[:3] == ["git", "rev-parse", "--verify"]
     ] == []
     assert ["git", "fetch", "origin", "master"] in git.commands
+
+
+def test_probe_result_without_stdout_is_unknown_not_a_crash(monkeypatch, tmp_path):
+    """A ``subprocess.run`` result with no ``stdout`` means "unknown", not a crash.
+
+    Roughly thirty dispatch tests substitute ``subprocess.run`` with a recorder
+    that returns ``None``. They passed only because the stale branch runs just
+    while another worker holds the advisory git lock, so the unguarded
+    ``completed.stdout`` read surfaced rarely (PR #1309, Python 3.12 job): the
+    warning fired, the probe raised ``AttributeError``, and the dispatch died
+    instead of proceeding with an unknown base. Two consecutive unknown probes
+    must also leave nothing poisoned behind for the next, readable one.
+    """
+    _setup(monkeypatch, tmp_path, _Git(lock_acquired=False))
+    monkeypatch.setattr(dispatch_worktree.subprocess, "run", lambda *args, **kwargs: None)
+
+    first = _dispatch(tmp_path)
+    second = _dispatch(tmp_path)
+
+    assert (first, second) == (None, None)
+
+    def _readable(cmd, *args, **kwargs):
+        """A real ``CompletedProcess`` again, with a readable, current tip."""
+        stdout = "abc1234\trefs/heads/master" if cmd[:2] == ["git", "ls-remote"] else "abc1234"
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(dispatch_worktree.subprocess, "run", _readable)
+
+    third = _dispatch(tmp_path)
+
+    assert dispatch_worktree._remote_tip(tmp_path, "master") == "abc1234"
+    assert third is None

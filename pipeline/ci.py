@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
-PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "300"))
+PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "900"))
 # Mirrors ``PIPELINE_MERGE_CI_GATE``'s opt‑out pattern for operators with
 # slow builds who don't want a build re‑run at the merge gate.
 PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != "0"

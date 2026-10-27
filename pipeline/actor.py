@@ -66,16 +66,6 @@ def current_principal() -> Principal:
     return _BOUND.get() or LOCAL_OPERATOR
 
 
-def bound_principal() -> Principal | None:
-    """Return the principal bound to this request, or ``None`` when none is.
-
-    Unlike :func:`current_principal` this never defaults to ``LOCAL_OPERATOR``:
-    a policy that has to fail closed cannot tell a missing binding from a local
-    operator through a defaulting accessor.
-    """
-    return _BOUND.get()
-
-
 def actor_id() -> str:
     """Return the current actor's subject, for stamping onto records."""
     return current_principal().subject

@@ -18,7 +18,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from app import oidc
-from app.identity import ROLES, IdentityError, Principal
+from app.identity import LOCAL_OPERATOR, ROLES, IdentityError, Principal
+from app.policy import LOCAL_OPERATOR_SUBJECT, LocalPolicy
 
 ISSUER = "https://issuer.example"
 AUDIENCE = "pipeline"
@@ -109,12 +110,14 @@ def ec_key():
 
 @pytest.fixture(autouse=True)
 def fake_fetch(monkeypatch, rsa_key):
-    """Clear the JWKS cache and serve the published RSA JWK for every test."""
+    """Clear the JWKS caches and serve the published RSA JWK for every test."""
     oidc._JWKS_CACHE.clear()
+    oidc._JWKS_FAILURES.clear()
     fake = _FakeFetch({"keys": [_rsa_jwk(rsa_key[0].public_key())]})
     monkeypatch.setattr(oidc, "_fetch_jwks", fake)
     yield fake
     oidc._JWKS_CACHE.clear()
+    oidc._JWKS_FAILURES.clear()
 
 
 @pytest.fixture
@@ -147,11 +150,12 @@ def test_valid_rs256_token_yields_principal(rsa_key, settings):
     token = mint(
         rsa_key[1],
         email="user@example.com",
+        email_verified=True,
         scope="read write",
         groups=[*sorted(ROLES), "wizard"],
     )
     assert oidc.verify_token(token, settings) == Principal(
-        subject="user-1",
+        subject=f"{ISSUER}#user-1",
         roles=ROLES,
         scopes=("read", "write"),
         email="user@example.com",
@@ -162,7 +166,7 @@ def test_valid_rs256_token_yields_principal(rsa_key, settings):
 def test_es256_token_is_accepted(ec_key, fake_fetch, settings):
     fake_fetch.document["keys"].append(_ec_jwk(ec_key[0].public_key()))
     token = mint(ec_key[1], algorithm="ES256", kid="e1")
-    assert oidc.verify_token(token, settings).subject == "user-1"
+    assert oidc.verify_token(token, settings).subject == f"{ISSUER}#user-1"
 
 
 def test_unknown_group_role_is_dropped_not_rejected(rsa_key, settings):
@@ -172,7 +176,7 @@ def test_unknown_group_role_is_dropped_not_rejected(rsa_key, settings):
 
 def test_exp_thirty_seconds_past_is_accepted(rsa_key, settings):
     token = mint(rsa_key[1], exp=int(time.time()) - 30)
-    assert oidc.verify_token(token, settings).subject == "user-1"
+    assert oidc.verify_token(token, settings).subject == f"{ISSUER}#user-1"
 
 
 def test_second_verification_uses_cached_jwks(rsa_key, fake_fetch, settings):
@@ -308,3 +312,67 @@ def test_expired_rejection_does_not_echo_token(rsa_key, settings):
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
     assert token not in str(excinfo.value)
+
+
+# --- review round 2: subject collision, scopes, email, config -------------
+
+
+def test_token_sub_local_operator_is_not_the_local_operator(rsa_key, settings):
+    token = mint(rsa_key[1], sub=LOCAL_OPERATOR_SUBJECT)
+    principal = oidc.verify_token(token, settings)
+    assert principal != LOCAL_OPERATOR
+
+
+def test_token_sub_local_operator_is_denied_by_local_policy(rsa_key, settings):
+    token = mint(rsa_key[1], sub=LOCAL_OPERATOR_SUBJECT)
+    principal = oidc.verify_token(token, settings)
+    assert LocalPolicy().allow(principal, "plan:approve") is False
+
+
+def test_wildcard_scope_in_token_is_dropped(rsa_key, settings):
+    token = mint(rsa_key[1], scope="* read")
+    assert oidc.verify_token(token, settings).scopes == ("read",)
+
+
+def test_unverified_email_is_not_carried(rsa_key, settings):
+    token = mint(rsa_key[1], email="user@example.com", email_verified=False)
+    assert oidc.verify_token(token, settings).email == ""
+
+
+def test_jwks_url_pointing_at_loopback_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            jwks_url="https://169.254.169.254/latest/meta-data/jwks",
+        )
+    assert str(excinfo.value) == "invalid jwks_url: must not target an internal host"
+
+
+def test_repeated_fetch_failure_is_not_retried_per_call(monkeypatch, rsa_key, settings):
+    fetches = []
+
+    def failing(settings_arg):
+        fetches.append(settings_arg)
+        raise IdentityError("invalid token: keys unavailable")
+
+    monkeypatch.setattr(oidc, "_fetch_jwks", failing)
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError):
+        oidc.verify_token(token, settings)
+    with pytest.raises(IdentityError):
+        oidc.verify_token(token, settings)
+    assert len(fetches) == 1
+
+
+def test_clock_skew_above_the_bound_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            jwks_url=JWKS_URL,
+            clock_skew_s=oidc.MAX_CLOCK_SKEW_S + 1,
+        )
+    assert str(excinfo.value) == (
+        f"invalid clock_skew_s: must not exceed {oidc.MAX_CLOCK_SKEW_S}"
+    )

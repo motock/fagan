@@ -197,7 +197,9 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             if block is not None:
                 return block
             story.pop("dispatch_block_reason", None)
-            setup_error = _create_fresh_worktree(plan_name, branch, worktree_path)
+            setup_error = _create_fresh_worktree(
+                plan_name, branch, worktree_path, story_key=story_key
+            )
             if setup_error is not None:
                 return setup_error
         else:

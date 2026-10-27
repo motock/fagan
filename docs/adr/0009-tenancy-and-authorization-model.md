@@ -2,9 +2,10 @@
 
 - **Status:** Accepted direction (2026-10-26). The identity/authorization seam,
   service-layer enforcement for four actions — plus `plan:pause` for both pause
-  and resume, five action names in all — OIDC token verification and the
-  append-only, hash-chained audit stream are implemented; tenant scoping beyond
-  the plan `team` and the remote MCP transport are still unimplemented.
+  and resume, five action names in all — OIDC token verification, the OIDC-gated
+  remote MCP transport and the append-only, hash-chained audit stream are
+  implemented; tenant scoping beyond the plan `team` and ownership records are
+  still unimplemented.
 - **Date:** 2026-10-26
 
 **Implementation status.** `pipeline/authorization.py` enforces the policy in
@@ -13,9 +14,11 @@ the service for `story:merge`, `story:mark_done`, `plan:approve`,
 `PIPELINE_POLICY_ENFORCE` as the kill switch. `app/oidc.py` verifies bearer
 tokens against the issuer's JWKS — issuer, audience, expiry and the claims-to-
 `Principal` mapping — when `PIPELINE_IDENTITY_PROVIDER=oidc`; it authenticates
-API clients only, since the bundled dashboard has no login flow. Everything else
-this record describes — the full tenant chain and the remote transport — is
-unimplemented, and the remaining actions are still unenforced. See the
+API clients only, since the bundled dashboard has no login flow. The remote MCP
+transport (`pipeline/remote_transport.py`) serves the same tools over HTTP
+behind the same `OidcProvider`, refusing to start without it. What remains
+unimplemented is the full tenant chain and ownership records beyond the plan
+`team`, and the remaining actions are still unenforced. See the
 "Enforcement (pipeline/authorization.py)" and "OIDC provider" sections of
 [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
 
@@ -39,10 +42,12 @@ allowed to do, how scope is checked, or where enforcement lives. Building
 identity code before answering those questions would produce exactly the
 transport-first mistake ADR 0006 warns about.
 
-The current code has no user-identity layer. `app/auth.py` is one shared
+The current code had no user-identity layer when this record was written; the
+paragraph below is historical context for the decision, not a description of
+today's code (see **Implementation status** above). `app/auth.py` was one shared
 secret plus a `Host` allowlist and `X-Pipeline-Origin`; the module states that
-the origin header is **not** an authentication decision. The MCP path is stdio
-and unauthenticated. There is no `Principal`, `Role`, `Permission`, `Scope`,
+the origin header is **not** an authentication decision. The MCP path was stdio
+and unauthenticated. There was no `Principal`, `Role`, `Permission`, `Scope`,
 OIDC, or JWT type anywhere. `app/role_registry.py` is about **model** roles,
 not user roles; the two must not be conflated.
 

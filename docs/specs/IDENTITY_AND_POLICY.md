@@ -49,8 +49,8 @@ ADR 0009 splits the problem in two:
 
 - **Authentication is an adapter concern.** An `IdentityProvider` turns a
   credential into a verified `Principal`. Adapters (the dashboard with either
-  the shared secret or `PIPELINE_IDENTITY_PROVIDER=oidc`; the remote MCP
-  transport later) own this step.
+  the shared secret or `PIPELINE_IDENTITY_PROVIDER=oidc`, and the remote MCP
+  transport) own this step.
 - **Authorization is a service-layer policy.** Every mutating
   `PipelineService` method will take the principal and ask
   `allow(principal, action, resource) -> bool`, which denies by default. The
@@ -316,6 +316,65 @@ recording sites in §2 read it through `actor_id()`. Whether that principal may
 perform an action is a separate question, answered in the service layer by the
 section below.
 
+### Remote MCP transport (`pipeline/remote_transport.py`)
+
+The second consumer of the OIDC provider, and the only one that is not the
+dashboard. The MCP server speaks `stdio` by default; naming
+`PIPELINE_MCP_TRANSPORT=streamable-http` (or `sse`) hands the same `mcp` object
+to `pipeline.remote_transport.serve`, which mounts it behind
+`BearerAuthMiddleware`. The configuration variables are tabled in
+[REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
+
+**Same token, same principal.** The gate verifies `Authorization: Bearer
+<token>` with `build_identity_provider(...)` under the same `PIPELINE_OIDC_*`
+configuration the dashboard reads, so a token that `/api/` accepts is a token
+this endpoint accepts, and the `Principal` it yields is identical — same
+issuer-qualified `subject`, same `roles`, same `scopes`. There is no second,
+MCP-specific notion of identity to keep in sync.
+
+**The principal is bound to the request.** On success the gate enters
+`bind_principal(principal)` and `bind_correlation_id(correlation)` around the
+wrapped app (§2, "Actor propagation"), so a tool invocation records
+`actor_id()` as the caller rather than `ANONYMOUS`/`LOCAL_OPERATOR`, and tool-side
+audit records attribute to the authenticated subject. This is the same
+binding the dashboard's `/api/` middleware performs; the transport adds no new
+actor mechanism.
+
+**No OIDC, no transport.** A network transport refuses to start unless
+`PIPELINE_IDENTITY_PROVIDER=oidc`, and `BearerAuthMiddleware` additionally
+raises `TypeError` when constructed with anything that is not an `OidcProvider`.
+Both guards run before a socket is opened, so a misconfiguration stops the
+process instead of exposing an unauthenticated control plane over the network.
+
+**The honest gap: authentication attempts are logged, not audited.** Every
+attempt — success or failure — is written to the application log by the gate
+with:
+
+| Field | Content |
+| --- | --- |
+| `outcome` | `authenticated`, `denied`, or `denied_scope`. |
+| `subject` | The principal subject, on success only. A failed attempt records none. |
+| `correlation_id` | The request's correlation id (from `X-Correlation-ID`, or generated). |
+| `client_ip` | The peer address from the ASGI scope. |
+| `path` | The request path, truncated to 256 characters because it is attacker-controlled. |
+
+The credential and the provider's exception text never appear (an exception can
+quote the token); a rejection records a fixed reason instead. A worked example —
+a successful request for subject `alice@example.com`, correlation `c-123`,
+client `203.0.113.7`, path `/mcp` logs `outcome=authenticated`,
+`subject=alice@example.com`; a request with no token and correlation `c-124`
+logs `outcome=denied` with no `subject`.
+
+What these records are **not** is part of the hash-chained audit stream (ADR
+0009 §8, §2 "Audit stream"). That stream is per plan, and an authentication
+attempt has no plan: nothing about it belongs to a `{actor, action, target}`
+record. So an authentication attempt lives only in the application log, which
+carries no hash chain and no external anchor — it is not tamper-evident, and it
+is not made so retroactively. A later authenticated request *for a plan* does
+append plan-bound records for whatever that request does, but those records
+cover the action, not the earlier authentication attempts, which stay in the
+log and outside the chain.
+
 ### Enforcement (pipeline/authorization.py)
 
 `pipeline/authorization.py` is the only place the service asks the policy. It
@@ -460,7 +519,7 @@ Do not mistake any row of this table for a control that exists.
 | **Plan owner / author / delegate records** | Plans carry no ownership. `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined but nothing assigns or reads them, and `request_decision` has no owner to route to. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |
-| **Remote MCP transport** | MCP is stdio only. There is no HTTP transport layer to verify a token and yield a `Principal`. |
+| **Remote MCP transport hardening** | The transport itself has landed (§2, "Remote MCP transport"): an OIDC-gated HTTP endpoint that verifies a token and binds a `Principal`. What is missing is everything an internet-facing endpoint wants — **no rate limiting at the gate** (the only outbound bound is the JWKS refetch limit), **no TLS** (put a reverse proxy in front), and authenticated requests are logged to the application log, which is not the hash-chained audit stream. |
 | **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. What is missing is an external anchor — the head hash is never shipped off-box — so truncation of the tail is undetectable and a record cannot be proven against a third-party witness. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
 
@@ -497,11 +556,15 @@ The remaining work, in dependency order:
    section 8 record for every decision the policy makes (§2, "Audit stream").
    What remains open is the external anchor — shipping the head hash off-box,
    so that truncation of the tail becomes detectable.
-5. **The OIDC adapter.** Landed: `OidcProvider` (§2, "OIDC provider") verifies
-   a JWT against a JWKS with the issuer, audience and expiry checks and maps
-   its claims to a `Principal`. Still outstanding is the remote MCP transport
-   that verifies the same token and yields the same `Principal`, for the shared
-   server — MCP is stdio only today, so no remote client is authenticated yet.
+5. **The OIDC adapter and the remote MCP transport.** Landed: `OidcProvider`
+   (§2, "OIDC provider") verifies a JWT against a JWKS with the issuer,
+   audience and expiry checks and maps its claims to a `Principal`, and the
+   remote MCP transport (§2, "Remote MCP transport") verifies the same token
+   and yields the same `Principal` for the shared server — naming an HTTP
+   `PIPELINE_MCP_TRANSPORT` and `PIPELINE_IDENTITY_PROVIDER=oidc` makes a
+   remote client authenticated. What remains open is only the audit gap: an
+   authentication attempt is written to the application log, not to the
+   per-plan hash-chained stream.
 
 Steps 1–3 are the multi-tenant implementation ADR 0008 calls "not prep"; step 4
 has landed as far as the local stream goes; step 5 is the provider swap the seam

@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login, no remote MCP transport) |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited; an OIDC-gated remote MCP transport serves the same tools behind the same principal | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own, no rate limiting at the gate, and logs authentication attempts rather than auditing them |
 
 ---
 
@@ -109,8 +109,10 @@ test-only. The notification channel layer is the template for the rest.
   refusals, and stamps it as `correlation_id` on the decisions record and the
   plan-approval record. A story's `correlation_id` is still minted per *story* at
   dispatch and propagated to the agent subprocess, notifications, events, and
-  logs. What still does not exist: the MCP/stdio path has no request to
-  correlate, so those calls record an empty id.
+  logs. What still does not exist: the stdio MCP path has no request to
+  correlate, so those calls record an empty id. The HTTP MCP transport does not
+  have that gap — its gate mints or preserves a correlation id per request,
+  echoes it in `X-Correlation-ID`, and binds it for the tools it calls.
 - **No tracing and no metrics sink.** There is no OpenTelemetry, Prometheus,
   StatsD, or span instrumentation. Metrics are computed on demand by scanning
   notification JSONL (`story_metrics.load_notification_records`), which is
@@ -170,7 +172,12 @@ head hash somewhere the pipeline cannot rewrite it.
 - `app/auth.py` is one shared secret in a 0600 file, a `Host` allowlist for
   DNS-rebinding defense, and `X-Pipeline-Origin` for UI/chat origin. The module
   states plainly that the origin header is **not** an authentication decision.
-- The MCP path has no authentication at all (`mcp.run()` is stdio).
+- MCP authentication depends on the transport. The default stdio path
+  (`mcp.run()`) still has no authentication at all; naming an HTTP transport
+  (`PIPELINE_MCP_TRANSPORT=streamable-http` or `sse`) serves the same tools
+  behind OIDC bearer verification, which refuses to start unless
+  `PIPELINE_IDENTITY_PROVIDER=oidc`. That gate has no TLS of its own and no
+  rate limiting.
 - A `Principal` / `IdentityProvider` / `Authorizer` seam exists
   (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware), and
   the gate is in the service: `pipeline/authorization.py` enforces it,
@@ -223,13 +230,20 @@ bundled dashboard has no login flow and mints no token, so under `oidc` its
 pages load but every `/api/` call is a `401` without a bearer token — and the
 `k-` chat-stream pass-through of shared-secret mode does not exist under it.
 
+The remote MCP transport has landed too: `PIPELINE_MCP_TRANSPORT=streamable-http`
+(or `sse`) serves the same tools over HTTP behind the same `OidcProvider`,
+yielding the same `Principal` and binding it to the request. It refuses to start
+without `PIPELINE_IDENTITY_PROVIDER=oidc`. What it does not have is TLS (put a
+reverse proxy in front), rate limiting at the gate, or any route into the
+hash-chained audit stream for the authentication attempts themselves — see
+[REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
+
 **Still outstanding.** Enforcement covers five actions and nothing more.
-Ownership records beyond the plan's single `team` and the remote MCP transport
-are unimplemented, as are enforcement checks for the remaining actions
-(`plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
-`decision:answer`, `config:write`). The audit stream of allow/deny decisions
-exists locally (hash-chained per plan); what it still lacks is the external
-anchor that would make tail truncation detectable.
+Ownership records beyond the plan's single `team` are unimplemented, as are
+enforcement checks for the remaining actions (`plan:ingest`, `plan:dispatch`,
+`story:patch`, `story:interrupt`, `decision:answer`, `config:write`). The audit
+stream of allow/deny decisions exists locally (hash-chained per plan); what it
+still lacks is the external anchor that would make tail truncation detectable.
 
 ---
 

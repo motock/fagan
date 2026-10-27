@@ -18,7 +18,7 @@ from unittest.mock import Mock
 import pytest
 
 import pipeline.persistence
-from app.identity import LOCAL_OPERATOR, Principal
+from app.identity import LOCAL_OPERATOR, ROLES, Principal
 from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider
 from pipeline import remote_transport as rt
 from pipeline.actor import bind_principal
@@ -157,6 +157,29 @@ def test_unbound_refusal_is_audited_as_unbound(tmp_path: Path) -> None:
     ]
 
 
+def test_unbound_refusal_is_not_attributed_to_the_local_operator(tmp_path: Path) -> None:
+    # ``actor`` is stamped from the bound principal and written into a
+    # tamper-evident chain, so attributing a remote denial to the local operator
+    # would be permanent and would make a genuine local action indistinguishable
+    # from a remote attack attempt when filtering the audit trail by actor.
+    _call({"name": "approve_plan"}, principal=None)
+    assert [r["actor"] for r in _audit_records(tmp_path)] == ["anonymous"]
+
+
+def test_shared_secret_identity_cannot_reach_an_enforced_tool() -> None:
+    # Fail-closed must not depend on the identity of the ``LOCAL_OPERATOR``
+    # singleton: a freshly built principal carrying the local operator's values
+    # is equal-valued, and the downstream ``authorize`` would grant it.
+    forged = Principal(
+        subject=LOCAL_OPERATOR.subject,
+        roles=ROLES,
+        scopes=("*",),
+        auth_method=LOCAL_OPERATOR.auth_method,
+    )
+    _, recorder = _call({"name": "approve_merge"}, principal=forged)
+    assert recorder.calls == 0
+
+
 def test_denial_audits_the_calling_principal(tmp_path: Path) -> None:
     _call({"name": "save_plan"})
     assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [
@@ -238,6 +261,22 @@ def test_non_os_audit_failure_still_refuses(
     monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
     result, recorder = _call({"name": "save_plan"})
     assert result["isError"] is True and recorder.calls == 0
+
+
+def test_audit_failure_warning_names_what_was_denied(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # When the audit trail has a hole, the server log is the only remaining
+    # record of the attempt, so it has to say what was denied.
+    def _boom(**kwargs: object) -> object:
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
+    with caplog.at_level("WARNING", logger="pipeline.remote_tool_policy"):
+        _call({"name": "save_plan"})
+    assert "save_plan" in caplog.text and ALICE.subject in caplog.text
 
 
 # --- consecutive calls ----------------------------------------------------

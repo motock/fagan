@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import json
 import logging
+import socket
 import threading
 import time
 import urllib.parse
@@ -93,6 +95,10 @@ class OidcSettings:
                 raise IdentityError(f"invalid {name}: must be a non-empty string")
         if not self.jwks_url.startswith("https://"):
             raise IdentityError("invalid jwks_url: must use https")
+        if "#" in self.issuer:
+            # ``#`` joins issuer and subject into one identifier; a value that
+            # can carry it could be used to forge a different principal's id.
+            raise IdentityError("invalid issuer: must not contain '#'")
         if _is_internal_target(self.jwks_url):
             raise IdentityError("invalid jwks_url: must not target an internal host")
         if (
@@ -111,20 +117,16 @@ class OidcSettings:
 _UNKNOWN_KEY = "invalid token: unknown key"
 
 
-def _is_internal_target(url: str) -> bool:
-    """Return True if ``url`` points at a loopback/private/link-local target.
+def _is_internal_address(address: Any) -> bool:
+    """Return True for any IP a JWKS request must never be sent to.
 
-    ``jwks_url`` must be operator-controlled, but a misconfiguration (or a
-    value sourced from the environment in OIDC-02) would otherwise turn the
-    shared server into an SSRF probe against loopback or cloud metadata.
+    IPv4 addresses wrapped in IPv6 (``::ffff:127.0.0.1``, 6to4) are unwrapped
+    first: judging the wrapper alone would let a loopback target through.
     """
-    host = urllib.parse.urlsplit(url).hostname
-    if not host:
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return host == "localhost" or host.endswith(".localhost")
+    if isinstance(address, ipaddress.IPv6Address):
+        wrapped = address.ipv4_mapped or address.sixtofour
+        if wrapped is not None:
+            return _is_internal_address(wrapped)
     return (
         address.is_loopback
         or address.is_private
@@ -135,21 +137,84 @@ def _is_internal_target(url: str) -> bool:
     )
 
 
+def _is_internal_target(url: str) -> bool:
+    """Return True if ``url`` names a loopback/private/link-local host.
+
+    ``jwks_url`` must be operator-controlled, but a misconfiguration (or a
+    value sourced from the environment in OIDC-02) would otherwise turn the
+    shared server into an SSRF probe against loopback or cloud metadata.
+
+    Case and a trailing dot are folded first: ``LOCALHOST`` and ``localhost.``
+    both resolve to 127.0.0.1 but neither compares equal to ``localhost``.
+    This is only the syntactic half of the guard - it runs at configuration
+    time, when resolving a name would fail closed on an offline host - and
+    :func:`_resolve` judges the actual address on every fetch.
+    """
+    host = urllib.parse.urlsplit(url).hostname
+    if not host:
+        return True
+    host = host.casefold().rstrip(".")
+    try:
+        return _is_internal_address(ipaddress.ip_address(host))
+    except ValueError:
+        return host == "localhost" or host.endswith(".localhost")
+
+
+def _resolve(url: str) -> str | None:
+    """Return the public address ``url``'s host resolves to, or None.
+
+    None means "do not fetch": either the name does not resolve at all, or any
+    of its addresses is loopback/private/link-local. Judging the resolved
+    addresses rather than the name is what stops ``127-0-0-1.nip.io`` (or any
+    other public name pointing back inside) from reaching loopback or the
+    cloud metadata service. Resolving again on every fetch also means a name
+    that starts resolving inward after a cached document expires is refused
+    instead of trusted on the strength of its first answer.
+    """
+    host = urllib.parse.urlsplit(url).hostname
+    if not host:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return None
+    if not infos:
+        return None
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except (IndexError, TypeError, ValueError):
+            return None
+        if _is_internal_address(address):
+            return None
+    return str(infos[0][4][0])
+
+
 def _fetch_jwks(settings: OidcSettings) -> dict[str, Any]:
     """Fetch and parse the JWKS document. Raises ``IdentityError`` on failure."""
+    if _resolve(settings.jwks_url) is None:
+        raise IdentityError("invalid token: keys unavailable")
     try:
-        response = httpx.get(
-            settings.jwks_url, timeout=JWKS_TIMEOUT_S, follow_redirects=False
-        )
+        with httpx.stream(
+            "GET",
+            settings.jwks_url,
+            timeout=JWKS_TIMEOUT_S,
+            follow_redirects=False,
+        ) as response:
+            if response.status_code != 200:
+                raise IdentityError("invalid token: keys unavailable")
+            # The cap is enforced while the body is read, not after: testing a
+            # fully buffered response would let a compromised IdP stream
+            # gigabytes into memory before the length check ever ran.
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > JWKS_MAX_BYTES:
+                    raise IdentityError("invalid token: keys unavailable")
     except (httpx.HTTPError, httpx.InvalidURL, UnicodeError, ValueError):
         raise IdentityError("invalid token: keys unavailable") from None
-    if response.status_code != 200:
-        raise IdentityError("invalid token: keys unavailable")
-    body = getattr(response, "content", b"")
-    if isinstance(body, bytes) and len(body) > JWKS_MAX_BYTES:
-        raise IdentityError("invalid token: keys unavailable")
     try:
-        document = response.json()
+        document = json.loads(bytes(body))
     except ValueError:
         raise IdentityError("invalid token: keys unavailable") from None
     if not isinstance(document, dict) or not isinstance(document.get("keys"), list):
@@ -286,6 +351,8 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     if algorithm not in ALLOWED_ALGORITHMS:
         raise IdentityError("invalid token: unsupported algorithm")
     kid = header.get("kid")
+    if not isinstance(kid, str):
+        kid = None
     try:
         key = _signing_key(settings, kid)
     except IdentityError as exc:
@@ -316,13 +383,19 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     if not isinstance(subject, str) or not subject.strip():
         _log_rejection(settings, kid, "invalid token: missing subject")
         raise IdentityError("invalid token: missing subject")
+    if "#" in subject:
+        # ``#`` is the issuer/subject separator below. Refusing it here makes the
+        # collision guarantee a checked invariant instead of an assumption about
+        # what every configured issuer happens to mint.
+        _log_rejection(settings, kid, "invalid token: unsupported subject")
+        raise IdentityError("invalid token: unsupported subject")
     # A ``sub`` is unique per issuer, never globally (RFC 9068 2.2), so it is
     # qualified by the issuer the token proved it came from. Without this, any
     # issuer whose users choose their own account name could mint a token whose
     # sub collides with this deployment's local operator and be treated as the
-    # operator by LocalPolicy (CWE-290). The separator cannot appear in an
-    # issuer or a subject under any of the allowlisted issuers, so no token can
-    # produce the bare local-operator string.
+    # operator by LocalPolicy (CWE-290). ``#`` cannot appear in either half
+    # (rejected above for the subject, refused in ``OidcSettings`` for the
+    # issuer), so no token can produce the bare local-operator string.
     return Principal(
         subject=f"{claims['iss']}#{subject}",
         roles=_roles_from_claims(claims),
@@ -332,15 +405,37 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     )
 
 
+#: Bound on the ``kid`` echoed to the security log. The value is attacker-chosen
+#: text, so it is truncated rather than allowed to bloat every rejection line.
+_LOG_KID_MAX_CHARS = 64
+
+
+def _log_safe_kid(kid: object) -> str:
+    """Return a printable, bounded rendering of an unverified header ``kid``.
+
+    ``kid`` comes from a token nobody has verified yet, so it is untrusted text.
+    Raw CR/LF or ANSI escapes would let an unauthenticated caller forge a second
+    audit line - a fake "rejected" record, or padding that hides the real attack
+    sequence (CWE-117). Non-printables are dropped, not escaped, so the emitted
+    message is always one line; the result is bounded and rendered with ``%r``
+    so a value that had to be altered is visible as a quoted string.
+    """
+    if not isinstance(kid, str):
+        return ""
+    return "".join(ch for ch in kid if ch.isprintable())[:_LOG_KID_MAX_CHARS]
+
+
 def _log_rejection(settings: OidcSettings, kid: object, reason: str) -> None:
     """Record a rejected verification: reason token, kid and issuer only.
 
     Never the token, the key material or a claims dump - an exception string
-    and a log line both end up somewhere durable.
+    and a log line both end up somewhere durable. ``kid`` is sanitized here, at
+    the single point where an untrusted header value reaches a logger, so no
+    future caller can reintroduce the injection by passing it raw.
     """
     logger.warning(
-        "oidc verification rejected: reason=%s kid=%s issuer=%s",
+        "oidc verification rejected: reason=%r kid=%r issuer=%r",
         reason,
-        kid if isinstance(kid, str) else None,
+        _log_safe_kid(kid),
         settings.issuer,
     )

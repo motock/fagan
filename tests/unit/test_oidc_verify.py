@@ -10,7 +10,11 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+import socket
 import time
+from collections.abc import Callable
+from typing import Self
 
 import jwt
 import pytest
@@ -83,15 +87,48 @@ class _FakeFetch:
         return self.document
 
 
-class _StubResponse:
-    """The slice of ``httpx.Response`` that ``_fetch_jwks`` reads."""
+class _StubStream:
+    """The slice of ``httpx.Response`` that the streaming ``_fetch_jwks`` reads.
 
-    def __init__(self, status_code: int, document) -> None:
+    ``_fetch_jwks`` consumes the body incrementally, so a stub exposing only
+    ``.content``/``.json()`` could not exercise the size cap it enforces.
+    """
+
+    def __init__(self, status_code: int, body: bytes) -> None:
         self.status_code = status_code
-        self._document = document
+        self._body = body
 
-    def json(self):
-        return self._document
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+    def iter_bytes(self, chunk_size: int | None = None):
+        yield self._body
+
+
+def _stub_stream(status_code: int, body: bytes = b"") -> Callable[..., _StubStream]:
+    """Return a stand-in for ``httpx.stream`` that yields a fixed response."""
+    return lambda *args, **kwargs: _StubStream(status_code, body)
+
+
+def _forbidden_stream(*args: object, **kwargs: object) -> None:
+    """Fail the test if anything tries to open a JWKS connection."""
+    raise AssertionError("a rejected JWKS host must never be contacted")
+
+
+#: A public (TEST-NET-3) address: the resolver is stubbed to it so no test
+#: performs a real lookup or reaches the network.
+PUBLIC_ADDRESS = "203.0.113.10"
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    """Resolve every host to a public address instead of asking a resolver."""
+    address = (PUBLIC_ADDRESS, 0)
+    info = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", address)
+    monkeypatch.setattr(oidc.socket, "getaddrinfo", lambda *args, **kwargs: [info])
 
 
 @pytest.fixture(scope="session")
@@ -289,18 +326,22 @@ def test_token_signed_by_different_key_raises_verification_failed(rsa_key, setti
     assert str(excinfo.value) == "invalid token: verification failed"
 
 
-def test_jwks_non_200_raises_keys_unavailable(monkeypatch, rsa_key, settings):
+def test_jwks_non_200_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc.httpx, "get", lambda *args, **kwargs: _StubResponse(503, None))
+    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(503))
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
     assert str(excinfo.value) == "invalid token: keys unavailable"
 
 
-def test_jwks_without_keys_raises_keys_unavailable(monkeypatch, rsa_key, settings):
+def test_jwks_without_keys_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
     monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
-    monkeypatch.setattr(oidc.httpx, "get", lambda *args, **kwargs: _StubResponse(200, {}))
+    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(200, b"{}"))
     token = mint(rsa_key[1])
     with pytest.raises(IdentityError) as excinfo:
         oidc.verify_token(token, settings)
@@ -376,3 +417,74 @@ def test_clock_skew_above_the_bound_is_rejected():
     assert str(excinfo.value) == (
         f"invalid clock_skew_s: must not exceed {oidc.MAX_CLOCK_SKEW_S}"
     )
+
+
+# --- review round 3: log injection, SSRF resolution, streaming cap, '#' ---
+
+
+def test_kid_control_characters_cannot_forge_a_log_line(rsa_key, settings, caplog):
+    token = mint(rsa_key[1], kid="a\n2026-10-27 WARNING forged\x1bc")
+    with caplog.at_level(logging.WARNING, logger="pipeline.identity"), pytest.raises(
+        IdentityError
+    ):
+        oidc.verify_token(token, settings)
+    assert [record.getMessage() for record in caplog.records] == [
+        (
+            "oidc verification rejected: reason='invalid token: unknown key' "
+            "kid='a2026-10-27 WARNING forgedc' issuer='https://issuer.example'"
+        )
+    ]
+
+
+def test_jwks_url_with_uppercase_loopback_name_and_trailing_dot_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer=ISSUER, audience=AUDIENCE, jwks_url="https://LOCALHOST./jwks"
+        )
+    assert str(excinfo.value) == "invalid jwks_url: must not target an internal host"
+
+
+def test_jwks_host_resolving_inward_is_never_fetched(monkeypatch, rsa_key, settings):
+    loopback = (
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+        socket.IPPROTO_TCP,
+        "",
+        ("127.0.0.1", 0),
+    )
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc.socket, "getaddrinfo", lambda *args, **kwargs: [loopback])
+    monkeypatch.setattr(oidc.httpx, "stream", _forbidden_stream)
+    monkeypatch.setattr(oidc.httpx, "get", _forbidden_stream)
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+def test_jwks_body_over_the_cap_raises_keys_unavailable(
+    monkeypatch, public_dns, rsa_key, settings
+):
+    oversize = b"{" + b" " * oidc.JWKS_MAX_BYTES
+    monkeypatch.setattr(oidc, "_fetch_jwks", _REAL_FETCH_JWKS)
+    monkeypatch.setattr(oidc.httpx, "stream", _stub_stream(200, oversize))
+    monkeypatch.setattr(oidc.httpx, "get", _forbidden_stream)
+    token = mint(rsa_key[1])
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: keys unavailable"
+
+
+def test_subject_containing_the_separator_is_rejected(rsa_key, settings):
+    token = mint(rsa_key[1], sub=f"{LOCAL_OPERATOR_SUBJECT}#decoy")
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.verify_token(token, settings)
+    assert str(excinfo.value) == "invalid token: unsupported subject"
+
+
+def test_issuer_containing_the_separator_is_rejected():
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.OidcSettings(
+            issuer="https://a.example#x", audience=AUDIENCE, jwks_url=JWKS_URL
+        )
+    assert str(excinfo.value) == "invalid issuer: must not contain '#'"

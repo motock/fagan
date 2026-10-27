@@ -55,3 +55,6 @@ if a precise date is needed when writing one of these up.
 - policy-enforcement — completed 2026-10-27, 6 stories
 - stale-base-probe — completed 2026-10-27, 1 story
 - audit-stream — completed 2026-10-27, 6 stories
+- stale-probe-robustness — completed 2026-10-27, 1 story
+- oidc-identity — completed 2026-10-27, 4 stories
+- remote-mcp — completed 2026-10-27, 3 stories

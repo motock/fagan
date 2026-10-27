@@ -24,6 +24,7 @@ from typing import Any
 
 from . import cross_plan, testfiles
 from .actor import actor_id
+from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
 from .context_sources import (
     DEFAULT_MAX_TOTAL_CHARS,
@@ -283,6 +284,22 @@ def _blocked_by_error(story: dict) -> str | None:
                 f"story {summary!r}: `blocked_by` entry must be "
                 f"'<plan>:<story_key>', got {entry!r}"
             )
+    return None
+
+
+_TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def _team_error(plan: dict) -> str | None:
+    """Return an error string when the plan's optional ``team`` is malformed."""
+    team = plan.get("team")
+    if team is None:
+        return None
+    if not isinstance(team, str) or not _TEAM_RE.match(team):
+        return (
+            "plan field 'team' must be a lowercase slug matching "
+            "^[a-z0-9][a-z0-9-]{0,31}$"
+        )
     return None
 
 
@@ -565,6 +582,14 @@ def _ingest_plan_impl(
             "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
         }
 
+    # AUTH-02: the manifest records the team a policy decision is evaluated
+    # against (ADR 0009: principal -> team -> repo -> plan -> story). Validate
+    # it here, with the other plan-level fields and before any file is
+    # written, so a typo'd slug fails closed instead of landing on disk.
+    team_error = _team_error(plan)
+    if team_error is not None:
+        return {"ok": False, "error": team_error}
+
     # LAG-5: a repo whose ecosystem fagan cannot test (Ruby, PHP, Swift,
     # Elixir) would otherwise ingest fine and burn dispatch/rework budget on
     # a test gate that always fails with "unsupported ecosystem". Rejecting
@@ -828,6 +853,7 @@ def _ingest_plan_impl(
             "role_config", prior.get("role_config", {})
         )
         final_manifest["ingested_by"] = actor_id()
+        final_manifest["team"] = plan.get("team") or prior.get("team") or DEFAULT_TEAM
         if plan_context is not None:
             final_manifest["context"] = plan_context
 

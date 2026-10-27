@@ -54,7 +54,11 @@ def resolve_ownership(
     manifest's ownership stands unless the plan names a different one, and that
     change is allowed only for the current owner or the local operator. Any
     other caller gets a ``ValueError``, which ingest returns as its structured
-    refusal. Every attempted change is audited, allowed or denied.
+    refusal. Every attempted change is audited, allowed or denied. On the first
+    ingest only the local operator may name an owner that differs from the
+    caller or supply delegates; any other caller owns the plan they created,
+    delegates nothing, and any naming thus ignored is recorded as
+    ``plan:ownership_change`` with outcome ``ignored``.
     """
     requested = ownership_from_plan(plan, actor)
     # Normalise the owner: a whitespace variant would produce a manifest no
@@ -63,6 +67,23 @@ def resolve_ownership(
     # the shape; normalisation belongs here, on the way to the manifest.
     requested["owner"] = requested["owner"].strip()
     if not prior:
+        # ADR 0006 decision 1: the owner is the authenticated caller at
+        # ingest. A plan file is writable by any caller, so only the local
+        # operator may name a different owner or any delegates on the first
+        # ingest; everyone else owns the plan they created and delegates
+        # nothing.
+        if actor != LOCAL_OPERATOR.subject:
+            if requested["owner"] != actor or requested["delegates"]:
+                record_audit(
+                    plan_name,
+                    action="plan:ownership_change",
+                    outcome="ignored",
+                    detail={
+                        "ignored_owner": requested["owner"],
+                        "ignored_delegates": len(requested["delegates"]),
+                    },
+                )
+            return {"owner": actor, "delegates": []}
         return requested
     current = {
         "owner": str(prior.get("owner") or ""),

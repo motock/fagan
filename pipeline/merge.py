@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .audit import record_audit
 from .branch_names import story_branch
 
 _lock_state = {}
@@ -674,6 +675,13 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
+        record_audit(
+            plan_name,
+            action="story.merge",
+            outcome="allowed",
+            target={"plan": plan_name, "story": story_key},
+            detail={"branch": story_branch(story_key)},
+        )
 
         from .plan_completion import notify_if_plan_completed
 
@@ -727,4 +735,11 @@ def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
         manifest = _store.get_manifest(plan_name)
         manifest["paused"] = paused
         _store.save_manifest(plan_name, manifest)
+        record_audit(
+            plan_name,
+            action="plan.paused" if paused else "plan.resumed",
+            outcome="allowed",
+            target={"plan": plan_name},
+            detail={},
+        )
         return {"ok": True, "plan_name": plan_name, "paused": paused}

@@ -102,11 +102,10 @@ def test_stale_base_skips_fetch_and_emits_warning(monkeypatch, tmp_path):
         str(tmp_path / "S1"),
         "origin/master",
     ]
-    # The staleness probe issues two read-only git reads before the worktree
-    # add (git ls-remote, then git rev-parse). This test's subject is that no
-    # fetch ran and the worktree was still created, so assert that rather than
-    # pinning the full command list.
-    assert commands[-1] == worktree_add
+    # The probe and the provenance read add read-only git calls around the
+    # worktree add. This test's subject is that no fetch ran and the worktree
+    # was still created, so assert that rather than the full command list.
+    assert worktree_add in commands
     assert [cmd for cmd in commands if cmd[:2] == ["git", "fetch"]] == []
 
     records = _records("p")
@@ -145,6 +144,7 @@ def test_healthy_lock_fetches_and_does_not_add_stale_record(monkeypatch, tmp_pat
             str(tmp_path / "S2"),
             "origin/master",
         ],
+        ["git", "rev-parse", "HEAD"],
     ]
     assert len(_records("p")) == 1
 

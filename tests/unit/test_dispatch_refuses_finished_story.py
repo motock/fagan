@@ -47,7 +47,7 @@ def worktree_root(tmp_path, monkeypatch):
 def worktree_calls(monkeypatch):
     calls = []
 
-    def _stub(plan_name, branch, worktree_path):
+    def _stub(plan_name, branch, worktree_path, **kwargs):
         calls.append(str(worktree_path))
         return {"ok": False, "error": "stub: stop before git"}
 

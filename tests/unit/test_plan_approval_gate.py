@@ -124,7 +124,7 @@ def launcher(monkeypatch):
     """
     calls = []
 
-    def _stub(plan_name, branch, worktree_path):
+    def _stub(plan_name, branch, worktree_path, **kwargs):
         calls.append((plan_name, branch, str(worktree_path)))
         return {"ok": False, "error": "stub: stop before git"}
 

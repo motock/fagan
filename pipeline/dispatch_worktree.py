@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .audit import record_audit
 from .branch_guard import BranchGuardError, refusal
 from .module_ref import _ModuleRef
 
@@ -96,8 +97,34 @@ def _stale_base_error(
     )
 
 
+def _worktree_base_sha(worktree_path: Path) -> str | None:
+    """Return the commit the new worktree was cut from, or ``None``.
+
+    Read after ``git worktree add`` succeeds: the branch was created at
+    ``origin/<default>``, so the worktree's first commit IS the base the agent
+    will build on. An unreadable value is recorded as ``None`` rather than
+    failing a dispatch whose worktree already exists.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    # The dispatch tests substitute subprocess.run with a recorder that returns
+    # None, and this value is advisory by contract: an unreadable base is
+    # recorded as unknown, never turned into a failure of a dispatch whose
+    # worktree already exists.
+    output = getattr(completed, "stdout", "") or ""
+    return output.strip() or None
+
+
 def _create_fresh_worktree(
-    plan_name: str, branch: str, worktree_path: Path
+    plan_name: str, branch: str, worktree_path: Path, *, story_key: str | None = None
 ) -> dict[str, Any] | None:
     """Create the story branch's worktree from ``origin/<default>``.
 
@@ -123,8 +150,10 @@ def _create_fresh_worktree(
                     ),
                 }
             default_branch = _default_branch()
+            fetch_outcome = "stale_skipped"
             with _try_acquire_git_lock(repo_root) as acquired:
                 if acquired:
+                    fetch_outcome = "fetched"
                     subprocess.run(
                         ["git", "fetch", "origin", default_branch],
                         cwd=repo_root,
@@ -156,6 +185,13 @@ def _create_fresh_worktree(
                             story_key=None,
                             severity="warning",
                             event="stale_base_refused",
+                        )
+                        record_audit(
+                            plan_name,
+                            action="story.dispatch",
+                            outcome="refused",
+                            target={"plan": plan_name, "story": story_key or branch},
+                            detail={"branch": branch, "reason": "stale_base"},
                         )
                         return {"ok": False, "error": stale}
             subprocess.run(
@@ -192,6 +228,17 @@ def _create_fresh_worktree(
                 f"{detail}"
             ),
         }
+    record_audit(
+        plan_name,
+        action="story.dispatch",
+        outcome="allowed",
+        target={"plan": plan_name, "story": story_key or branch},
+        detail={
+            "branch": branch,
+            "base_sha": _worktree_base_sha(worktree_path),
+            "fetch_outcome": fetch_outcome,
+        },
+    )
     _exclude_worktree_logs_from_tracking(Path(repo_root))
     # A fresh worktree has no .venv (gitignored) - give it its own
     # complete one now rather than let it fall back to (and

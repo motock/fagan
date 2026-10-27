@@ -171,7 +171,7 @@ def _stub_externals(monkeypatch, fake_backend, planner_calls):
             return _REAL_RUN(cmd, **kwargs)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def _fake_create_worktree(plan_name, branch, worktree_path):
+    def _fake_create_worktree(plan_name, branch, worktree_path, **kwargs):
         worktree_path.mkdir(parents=True, exist_ok=True)
 
     def _fake_planner(agent_instructions, **kwargs):

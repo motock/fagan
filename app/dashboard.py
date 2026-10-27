@@ -75,7 +75,8 @@ from app.dashboard_routes_story import (
     set_story_status_route,
     start_story_route,
 )
-from app.identity import IdentityError, SharedSecretProvider
+from app.identity import IdentityError
+from app.oidc import OidcProvider, build_identity_provider
 from app.story_replay import build_replay_events  # noqa: F401
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.actor import (
@@ -136,8 +137,10 @@ _service = PipelineService()
 # ADR 0009 identity seam: the one provider the dashboard resolves credentials
 # with. The callable form (not ``get_or_create_api_key()``) is load-bearing —
 # the key is created lazily on first use and can be rotated, so it must be
-# read per request rather than frozen at import time.
-_identity = SharedSecretProvider(get_or_create_api_key)
+# read per request rather than frozen at import time. The provider is now
+# selected by ``PIPELINE_IDENTITY_PROVIDER``, and a misconfiguration raises at
+# import instead of silently falling back.
+_identity = build_identity_provider(get_or_create_api_key)
 
 
 @app.middleware("http")
@@ -155,7 +158,17 @@ async def _enforce_api_key(request: Request, call_next):
 
     if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):
         return _tagged(JSONResponse(status_code=403, content={"detail": "Forbidden"}))
-    if request.url.path.startswith("/api/"):
+    if request.url.path.startswith("/api/") and isinstance(_identity, OidcProvider):
+        authorization = request.headers.get("authorization") or ""
+        scheme, _, token = authorization.partition(" ")
+        credential = token.strip() if scheme.lower() == "bearer" else None
+        try:
+            request.state.principal = _identity.authenticate(credential)
+        except IdentityError:
+            return _tagged(
+                JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            )
+    elif request.url.path.startswith("/api/"):
         try:
             require_api_key(
                 request.headers.get("x-pipeline-api-key"), request.url.path

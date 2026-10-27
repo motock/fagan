@@ -109,8 +109,10 @@ test-only. The notification channel layer is the template for the rest.
   refusals, and stamps it as `correlation_id` on the decisions record and the
   plan-approval record. A story's `correlation_id` is still minted per *story* at
   dispatch and propagated to the agent subprocess, notifications, events, and
-  logs. What still does not exist: the MCP/stdio path has no request to
-  correlate, so those calls record an empty id.
+  logs. What still does not exist: the stdio MCP path has no request to
+  correlate, so those calls record an empty id. The HTTP MCP transport does not
+  have that gap — its gate mints or preserves a correlation id per request,
+  echoes it in `X-Correlation-ID`, and binds it for the tools it calls.
 - **No tracing and no metrics sink.** There is no OpenTelemetry, Prometheus,
   StatsD, or span instrumentation. Metrics are computed on demand by scanning
   notification JSONL (`story_metrics.load_notification_records`), which is
@@ -170,7 +172,12 @@ head hash somewhere the pipeline cannot rewrite it.
 - `app/auth.py` is one shared secret in a 0600 file, a `Host` allowlist for
   DNS-rebinding defense, and `X-Pipeline-Origin` for UI/chat origin. The module
   states plainly that the origin header is **not** an authentication decision.
-- The MCP path has no authentication at all (`mcp.run()` is stdio).
+- MCP authentication depends on the transport. The default stdio path
+  (`mcp.run()`) still has no authentication at all; naming an HTTP transport
+  (`PIPELINE_MCP_TRANSPORT=streamable-http` or `sse`) serves the same tools
+  behind OIDC bearer verification, which refuses to start unless
+  `PIPELINE_IDENTITY_PROVIDER=oidc`. That gate has no TLS of its own and no
+  rate limiting.
 - A `Principal` / `IdentityProvider` / `Authorizer` seam exists
   (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware), and
   the gate is in the service: `pipeline/authorization.py` enforces it,

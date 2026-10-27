@@ -2221,7 +2221,7 @@ the network:
 
 ```bash
 # Refuses to start: the transport is remote but nobody would be authenticated.
-PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=static \
+PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=shared-secret \
   python3 app/pipeline_mcp_server.py
 
 # Starts: OIDC is what makes the endpoint authenticating.

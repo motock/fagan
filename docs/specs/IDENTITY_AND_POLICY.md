@@ -556,11 +556,15 @@ The remaining work, in dependency order:
    section 8 record for every decision the policy makes (§2, "Audit stream").
    What remains open is the external anchor — shipping the head hash off-box,
    so that truncation of the tail becomes detectable.
-5. **The OIDC adapter.** Landed: `OidcProvider` (§2, "OIDC provider") verifies
-   a JWT against a JWKS with the issuer, audience and expiry checks and maps
-   its claims to a `Principal`. Still outstanding is the remote MCP transport
-   that verifies the same token and yields the same `Principal`, for the shared
-   server — MCP is stdio only today, so no remote client is authenticated yet.
+5. **The OIDC adapter and the remote MCP transport.** Landed: `OidcProvider`
+   (§2, "OIDC provider") verifies a JWT against a JWKS with the issuer,
+   audience and expiry checks and maps its claims to a `Principal`, and the
+   remote MCP transport (§2, "Remote MCP transport") verifies the same token
+   and yields the same `Principal` for the shared server — naming an HTTP
+   `PIPELINE_MCP_TRANSPORT` and `PIPELINE_IDENTITY_PROVIDER=oidc` makes a
+   remote client authenticated. What remains open is only the audit gap: an
+   authentication attempt is written to the application log, not to the
+   per-plan hash-chained stream.
 
 Steps 1–3 are the multi-tenant implementation ADR 0008 calls "not prep"; step 4
 has landed as far as the local stream goes; step 5 is the provider swap the seam

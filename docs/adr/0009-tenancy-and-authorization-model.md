@@ -42,10 +42,12 @@ allowed to do, how scope is checked, or where enforcement lives. Building
 identity code before answering those questions would produce exactly the
 transport-first mistake ADR 0006 warns about.
 
-The current code has no user-identity layer. `app/auth.py` is one shared
+The current code had no user-identity layer when this record was written; the
+paragraph below is historical context for the decision, not a description of
+today's code (see **Implementation status** above). `app/auth.py` was one shared
 secret plus a `Host` allowlist and `X-Pipeline-Origin`; the module states that
-the origin header is **not** an authentication decision. The MCP path is stdio
-and unauthenticated. There is no `Principal`, `Role`, `Permission`, `Scope`,
+the origin header is **not** an authentication decision. The MCP path was stdio
+and unauthenticated. There was no `Principal`, `Role`, `Permission`, `Scope`,
 OIDC, or JWT type anywhere. `app/role_registry.py` is about **model** roles,
 not user roles; the two must not be conflated.
 

@@ -234,8 +234,10 @@ These are behavior-preserving candidates for a later Tier 1-style plan. Items 1,
 
 ### Not low-hanging (the fork)
 
-A broker consumer worker; a metrics/OTel sink; a tamper-evident audit stream;
-OIDC plus RBAC/ownership/scope; request-scoped repo/config; and a
+A broker consumer worker; a metrics/OTel sink; an audit-stream anchor outside
+the pipeline (the per-plan hash-chained stream landed in AUD-06, but nothing
+off-box witnesses its head hash yet); OIDC plus RBAC/ownership/scope;
+request-scoped repo/config; and a
 `scheduler_daemon.py` / `pipeline/server.py` split. These are the multi-tenant
 implementation, not prep.
 

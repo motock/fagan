@@ -327,7 +327,8 @@ does:
 The denial is appended as an `authorization_denied` record on the plan's
 notification sidecar (`_notify_user(..., event="authorization_denied")`),
 carrying the action and the principal subject, so an operator sees who was
-turned away and from what before the audit stream of §4 exists.
+turned away and from what. The same denial is also appended to the plan's audit
+stream (§2, "Audit stream").
 
 **What is enforced today.** Five actions, four of them plus pause/resume:
 
@@ -343,6 +344,23 @@ turned away and from what before the audit stream of §4 exists.
 service path asks `authorize` for them, so `LocalPolicy` cannot block them
 today: `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
 `decision:answer`, `config:write`.
+
+**Audit stream.** Every decision this module makes is also appended to the plan's
+audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
+[REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label
+(`story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause`),
+`outcome` is `allowed` or `denied`, `target` carries the plan and story, and
+`detail` carries the principal subject. Records are written **only when
+enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function returns
+before it consults the policy — so an `allowed` record always corresponds to a real
+check of that action for that principal.
+
+The approval and merge transitions carry their own records rather than relying on
+the authorization record: the decision is written as `plan.approved` or
+`plan.changes_requested` (outcome `allowed`, or `refused` when the canonical digest
+no longer matches), and a completed merge as `story.merge`. With enforcement off,
+where `authorize` writes nothing, those transition records are the only trace of
+the action.
 
 ## 3. The invariant that keeps local mode unchanged
 
@@ -389,7 +407,7 @@ Do not mistake any row of this table for a control that exists.
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC provider** | There is no `OidcProvider`. `SharedSecretProvider` is the only `IdentityProvider`, so there is no JWT/JWKS verification, issuer/audience/expiry check, or group-to-role mapping. |
 | **Remote MCP transport** | MCP is stdio only. There is no HTTP transport layer to verify a token and yield a `Principal`. |
-| **Audit stream** | No allow/deny record is emitted. ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` stream does not exist. |
+| **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. What is missing is an external anchor — the head hash is never shipped off-box — so truncation of the tail is undetectable and a record cannot be proven against a third-party witness. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
 
 ## 5. The `app/auth.py` import rule
@@ -421,11 +439,14 @@ The remaining work, in dependency order:
 3. **System principals.** Add `system:scheduler` and `system:worker` as
    distinct, narrowly scoped principals that are audited like a human and
    cannot approve a plan (ADR 0009 section 6).
-4. **The audit stream.** Emit the allow/deny record from ADR 0009 section 8 for
-   every decision the policy makes.
+4. **The audit stream.** Landed: `pipeline/audit.py` appends the ADR 0009
+   section 8 record for every decision the policy makes (§2, "Audit stream").
+   What remains open is the external anchor — shipping the head hash off-box,
+   so that truncation of the tail becomes detectable.
 5. **The OIDC adapter.** Add `OidcProvider` (JWT against JWKS, issuer,
    audience, expiry) and the remote MCP transport that verifies the same token
    and yields the same `Principal`, for the shared server.
 
-Steps 1–4 are the multi-tenant implementation ADR 0008 calls "not prep"; step 5
-is the provider swap the seam was built to accept.
+Steps 1–3 are the multi-tenant implementation ADR 0008 calls "not prep"; step 4
+has landed as far as the local stream goes; step 5 is the provider swap the seam
+was built to accept.

@@ -97,6 +97,10 @@ def resolved_runtime() -> dict[str, str]:
 
     ``resolved_topology()`` deliberately does not gain these keys — it stays
     pinned to its four documented topology fields.
+
+    ``/api/health`` returns this dict as produced under its ``runtime`` key,
+    never rebuilt as a literal, so a selection added here reaches the health
+    payload without editing ``app/dashboard.py``.
     """
     # Imported inside the function: this module's reads are late-bound so a
     # caller that re-imports or re-patches ``pipeline.event_wiring`` is still

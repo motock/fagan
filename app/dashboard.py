@@ -324,15 +324,8 @@ def health() -> dict[str, Any]:
     ``config_mismatch=[]`` with HTTP 200 — a health check must never 500.
 
     ``topology`` is additive and observational: the process's resolved
-    ``plan_dir`` / ``repo_root`` / branch and worktree namespaces, read live
-    per request by :func:`pipeline.topology_identity.resolved_topology`.
-
-    ``runtime`` is the cumulative block of runtime selections, read live per
-    request by :func:`pipeline.topology_identity.resolved_runtime`; today it
-    carries ``event_bus`` (the bus ``PIPELINE_EVENT_BUS`` selects). It is
-    returned as produced, so keys added there show up here. Reporting is
-    fail-soft (an unsupported value becomes ``invalid``) so a mistyped variable
-    never 500s this endpoint; ``build_bus()`` still fails closed.
+    ``plan_dir`` / ``repo_root`` / branch and worktree namespaces, plus the
+    runtime selections ``resolved_runtime()`` reports, read live per request.
     """
     plan_dir = str(PLAN_DIR)
     scheduler: Any = None
@@ -363,9 +356,6 @@ def health() -> dict[str, Any]:
         "scheduler": scheduler,
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),
-        # Cumulative runtime wiring (event bus today; other stories add their
-        # own selections here). Merged from resolved_runtime(), never rebuilt
-        # as a literal, so later keys survive.
         "runtime": resolved_runtime(),
     }
 

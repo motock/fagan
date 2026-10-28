@@ -206,6 +206,9 @@ class _PendingLogin:
     nonce: str = field(repr=False)
     code_verifier: str = field(repr=False)
     expires_at: float = 0.0
+    #: The validated same-origin path to return to after login. Kept last so
+    #: existing positional construction of the record is unaffected.
+    next: str = "/"
 
 
 @dataclass

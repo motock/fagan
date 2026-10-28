@@ -478,6 +478,47 @@ function toggleTheme() {
   writeStoredTheme(next);
 }
 
+// A sign-out control only makes sense when the dashboard has login configured,
+// so ask /auth/status first with a plain fetch: fetchJson would send the 401
+// that shared-secret mode answers straight into the login redirect, and this
+// probe is not an API call. Shared-secret mode answers 404, so nothing renders.
+async function wireSignOut() {
+  let login = false;
+  try {
+    const probe = await fetch("/auth/status", {
+      headers: { Accept: "application/json" },
+    });
+    login = probe.ok && (await probe.json())?.login === true;
+  } catch {
+    login = false;
+  }
+  const toolbar = login ? document.querySelector("header .toolbar") : null;
+  if (!toolbar) return;
+  const button = document.createElement("button");
+  button.id = "sign-out";
+  button.type = "button";
+  button.className = "theme-toggle";
+  button.textContent = "Sign out";
+  button.addEventListener("click", async () => {
+    let body = null;
+    try {
+      const res = await fetch("/auth/logout", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    // A null, missing or empty end_session_url means the provider offers no
+    // RP-initiated logout: go home rather than to the relative path "/null".
+    const target =
+      typeof body?.end_session_url === "string" ? body.end_session_url : "";
+    window.location.assign(target === "" ? "/" : target);
+  });
+  toolbar.appendChild(button);
+}
+
 (function wireThemeToggle() {
   const btn = document.getElementById("theme-toggle");
   if (btn) btn.addEventListener("click", toggleTheme);
@@ -495,6 +536,7 @@ applyHashToState();
 window.addEventListener("hashchange", applyHashToState);
 refresh();
 checkConfigMismatch();
+wireSignOut();
 startPolling();
 
 // Expose helpers for node-based smoke tests. Guarded so the file still works

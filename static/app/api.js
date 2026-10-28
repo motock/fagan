@@ -30,12 +30,44 @@ function _scopePlansListUrl(url) {
 // request must carry it as the X-Pipeline-Api-Key header. When the global is
 // absent (e.g. a stale cached page) the header is simply omitted rather than
 // sending the literal string "undefined".
+// A 401 from one of our own endpoints means this browser has no valid session:
+// either it was never logged in or the session lapsed. When the dashboard has
+// login configured (GET /auth/status answers 200 with {"login": true}) send the
+// user through login and back to the page they are on. In shared-secret mode
+// the probe is a 404 and nothing happens, so the caller sees exactly the error
+// it saw before. The probe is a plain fetch on purpose: routing it through
+// fetchJson would recurse forever if the probe itself answered 401.
+async function _redirectToLoginIfConfigured(res) {
+  if (res.status !== 401) return;
+  let login = false;
+  try {
+    const probe = await fetch("/auth/status", {
+      headers: { Accept: "application/json" },
+    });
+    login = probe.ok && (await probe.json())?.login === true;
+  } catch {
+    // Offline, blocked, or an unparseable body: behave as if login is absent.
+    login = false;
+  }
+  if (login) {
+    // A site-relative path, not location.href: the server accepts only a
+    // same-origin path and encodes the query so "&" and "#" survive intact.
+    window.location.assign(
+      "/auth/login?next=" +
+        encodeURIComponent(location.pathname + location.search),
+    );
+  }
+}
+
 async function fetchJson(url) {
   const key = window.__PIPELINE_API_KEY__;
   const headers = {};
   if (key) headers["X-Pipeline-Api-Key"] = key;
   const res = await fetch(_scopePlansListUrl(url), { headers });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  if (!res.ok) {
+    await _redirectToLoginIfConfigured(res);
+    throw new Error(`${url} -> ${res.status}`);
+  }
   const body = await res.json();
   // Plans-list responses normalize to { plans: [...] } at this boundary so a
   // body lacking the array (e.g. a narrow test stub) renders as an empty
@@ -53,7 +85,10 @@ async function postJson(url) {
   const headers = { "Content-Type": "application/json" };
   if (key) headers["X-Pipeline-Api-Key"] = key;
   const res = await fetch(url, { method: "POST", headers });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  if (!res.ok) {
+    await _redirectToLoginIfConfigured(res);
+    throw new Error(`${url} -> ${res.status}`);
+  }
   return res.json();
 }
 

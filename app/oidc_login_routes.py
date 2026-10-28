@@ -35,6 +35,32 @@ def _with_query(url: str, params: dict[str, str]) -> str:
     )
 
 
+def validate_next_path(raw: object) -> str:
+    """Return ``raw`` if it is a safe same-origin path, else ``"/"``.
+
+    ``next`` arrives from a ``401``-triggered redirect, so it is
+    attacker-influenced: a value that a browser resolves as an absolute URL
+    turns the post-login redirect into an open redirect. The accepted shape is
+    a path that starts with a single ``/`` and cannot be reinterpreted as an
+    authority: no ``//`` prefix, no backslash (browsers normalise ``\\`` to
+    ``/``, which would recreate ``//``), no scheme or netloc, and no control
+    character that could split a header or smuggle a second value. Anything else
+    - including a non-string or an empty value - becomes ``"/"``.
+    """
+    if not isinstance(raw, str) or not raw:
+        return "/"
+    if not raw.startswith("/") or raw.startswith("//"):
+        return "/"
+    if "\\" in raw:
+        return "/"
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw):
+        return "/"
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    return raw
+
+
 def _refuse(
     status: int, payload: dict[str, str], reason: str, *, clear_state: bool = True
 ) -> JSONResponse:
@@ -110,7 +136,12 @@ def _begin_login(config: core.OidcLoginConfig, request: Request) -> Response:
             nonce = core._new_token()
             verifier = core._new_code_verifier()
             core._PENDING[state] = core._PendingLogin(
-                nonce=nonce, code_verifier=verifier, expires_at=now + core.STATE_TTL_S
+                nonce=nonce,
+                code_verifier=verifier,
+                expires_at=now + core.STATE_TTL_S,
+                # Store the validated value, never the raw query string: this
+                # is what the callback redirects to.
+                next=validate_next_path(request.query_params.get("next")),
             )
     if at_capacity:
         # Unauthenticated callers cannot make the pending map unbounded.
@@ -236,7 +267,9 @@ def _finish_login(config: core.OidcLoginConfig, request: Request) -> Response:
 
     session_id = core._create_session(principal)
     core.logger.info("OIDC login completed", extra={"principal_subject": principal.subject})
-    response = RedirectResponse("/", status_code=302)
+    # The destination was validated and stored when the attempt began; it is
+    # never re-read from this request.
+    response = RedirectResponse(pending.next, status_code=302)
     response.set_cookie(
         core.SESSION_COOKIE,
         session_id,
@@ -304,6 +337,18 @@ def mount_auth_routes(app: FastAPI, config: core.OidcLoginConfig) -> None:
     """
     if not config.enabled:
         return
+
+    @app.get("/auth/status")
+    def status() -> dict[str, bool]:  # pragma: no cover - via TestClient
+        """Tell an unauthenticated browser that login is available here.
+
+        The UI probes this after a ``401`` to decide whether to send the user
+        through login. It answers without authentication on purpose: the caller
+        is, by definition, not logged in yet. It exists only when login is
+        configured, so shared-secret mode answers ``404`` and the UI does not
+        redirect.
+        """
+        return {"login": True}
 
     @app.get("/auth/login")
     def login(request: Request) -> Response:  # pragma: no cover - via TestClient

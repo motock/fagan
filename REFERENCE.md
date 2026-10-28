@@ -2340,6 +2340,23 @@ UI to follow. `GET /auth/logout` does the same and redirects to `/`. Logout is
 local and succeeds even when the provider is unreachable — the end-session URL
 is then simply `null`.
 
+**Telling the UI that login exists, and where to come back to.** A browser that
+is not logged in cannot read `/api/health` or any other `/api/` route to find out
+why its request failed, so login advertises itself on the auth surface alone:
+
+- `GET /auth/status` answers `200 {"login": true}` **without authentication** —
+  the caller is by definition logged out. It exists only when login is
+  configured: in shared-secret mode the routes are not mounted, so it is a
+  `404` and the UI stays put instead of redirecting.
+- `GET /auth/login` accepts a `next` query parameter naming the page to return
+  to. The value must be a same-origin path: it starts with a single `/`, does
+  not start with `//`, and contains no backslash, no scheme, no netloc and no
+  control characters. Anything else — an absolute URL, a protocol-relative
+  `//host` path, `/\host` (which browsers normalise to `//host`), a
+  `javascript:` URL, an empty value — is treated as `/`. The validated value is
+  stored with the pending login and is what the callback redirects to, so the
+  post-login redirect is never to an absolute URL.
+
 ### Remote MCP transport
 
 By default the MCP server speaks `stdio`, exactly as before: nothing in

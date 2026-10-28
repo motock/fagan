@@ -19,6 +19,7 @@ from .rebase_conflict_feedback import (
     conflict_rework_feedback,
     parse_conflict_files,
 )
+from .telemetry import record_merge_result
 
 MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
 
@@ -255,6 +256,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 ),
             )
             summary["parked"].append(key)
+            record_merge_result("parked")
             summary["notify"].append(key)
             continue
 
@@ -524,6 +526,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     ),
                 )
                 summary["failed"].append(key)
+                record_merge_result("failed")
             else:
                 # leave pr_open; the next tick retries within budget.
                 _notify_user(
@@ -567,6 +570,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     ),
                 )
                 summary["failed"].append(key)
+                record_merge_result("failed")
             else:
                 # leave pr_open; the next tick retries within budget.
                 _notify_user(
@@ -617,4 +621,5 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
             summary["notify"].append(key)
         summary["merged"].append(key)
+        record_merge_result("merged")
     _atomic_write_json(manifest_path, manifest)

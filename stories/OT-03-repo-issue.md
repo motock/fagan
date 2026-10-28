@@ -16,6 +16,13 @@ record as a different story.
 `OT-03` done, do **not** merge `agent/ot-03`. A human re-runs the detached grade on
 the preserved commit and merges only if that grade is green.
 
+Manifest note — read this before acting. The live manifest entry for `OT-03` reads
+`status: parked` with `parked_reason: "repo issue filed as OT-03-repo-issue by
+triage; re-dispatch OT-03 after it merges"`. The trailing clause (**re-dispatch
+OT-03 after this story merges**) is stale and contradicts the ruling: there is no
+re-dispatch step. A human re-runs the detached grade on `46b4ab5` and merges if
+green. `triage_attempts` stays at `1`; filing this story must not reset it.
+
 ## Preserved work (verified, not re-dispatched)
 
 - commit `46b4ab5` — `docs(telemetry): document the OTel endpoint and metric names`

@@ -39,7 +39,8 @@ EVENT_TYPES = frozenset(
 # ---------------------------------------------------------------------------
 
 def make_event(type: str, plan: str, story_key=None, payload=None,
-               correlation_id=None) -> dict:
+               correlation_id=None, *, event_id=None, schema_version=None,
+               idempotency_key=None) -> dict:
     """Create a new event dictionary.
 
     Parameters
@@ -59,23 +60,57 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         ``"correlation_id"`` key on the returned event dict. When ``None``
         (the default) the key is absent entirely, so the legacy event shape
         is unchanged.
+    event_id:
+        Optional stable identifier for this event, stamped as a TOP-LEVEL
+        ``"event_id"`` key. Must be a non-empty string of at most 64
+        characters. When ``None`` (the default) the key is absent.
+    schema_version:
+        Optional envelope schema version, stamped as a TOP-LEVEL
+        ``"schema_version"`` key. Must be an ``int`` >= 1; ``bool`` is not
+        accepted because it is not a meaningful version. When ``None`` (the
+        default) the key is absent.
+    idempotency_key:
+        Optional producer-supplied idempotency key, stamped as a TOP-LEVEL
+        ``"idempotency_key"`` key. Must be a non-empty string of at most 128
+        characters. When ``None`` (the default) the key is absent.
 
     Returns
     -------
     dict
         A mapping with keys ``type``, ``plan``, ``story_key``, ``payload`` and
-        ``ts`` (timestamp in ISO‑8601 UTC format), plus ``correlation_id``
-        only when one is supplied.
+        ``ts`` (timestamp in ISO‑8601 UTC format), plus each of
+        ``correlation_id``, ``event_id``, ``schema_version`` and
+        ``idempotency_key`` only when it is supplied. Each call builds a fresh
+        dict, so optional fields never leak between calls.
 
     Raises
     ------
     ValueError
-        If *type* is not a known event type or if *plan* is empty/None.
+        If *type* is not a known event type or if *plan* is empty/None, or if
+        any optional envelope field is supplied with an invalid shape. The
+        message names the offending field and never its value.
     """
     if type not in EVENT_TYPES:
         raise ValueError(f"Unknown event type: {type}")
     if not plan:
         raise ValueError("Plan must be non-empty")
+
+    if event_id is not None and not (
+        isinstance(event_id, str) and 0 < len(event_id) <= 64
+    ):
+        raise ValueError("event_id must be a non-empty str of at most 64 characters")
+    if schema_version is not None and not (
+        isinstance(schema_version, int)
+        and not isinstance(schema_version, bool)
+        and schema_version >= 1
+    ):
+        raise ValueError("schema_version must be an int >= 1")
+    if idempotency_key is not None and not (
+        isinstance(idempotency_key, str) and 0 < len(idempotency_key) <= 128
+    ):
+        raise ValueError(
+            "idempotency_key must be a non-empty str of at most 128 characters"
+        )
 
     if payload is None:
         payload = {}
@@ -90,6 +125,12 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
     }
     if correlation_id is not None:
         event["correlation_id"] = correlation_id
+    if event_id is not None:
+        event["event_id"] = event_id
+    if schema_version is not None:
+        event["schema_version"] = schema_version
+    if idempotency_key is not None:
+        event["idempotency_key"] = idempotency_key
     return event
 
 # ---------------------------------------------------------------------------

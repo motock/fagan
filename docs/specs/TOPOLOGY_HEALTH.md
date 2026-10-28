@@ -15,8 +15,7 @@ topology** — the plan dir, target repo root, and branch/worktree namespaces
 this process is actually operating on.
 
 The change is **additive and behavior-preserving**: no existing health key
-changes meaning, and the new data appears in two additive observational blocks,
-`topology` and `runtime`.
+changes meaning, and the new data is a single extra key.
 
 ## 1. The four fields
 
@@ -46,9 +45,7 @@ Rules:
 
 ## 2. The `/api/health` surface
 
-`GET /api/health` gains two additive, observational top-level keys:
-`topology` (this story) and `runtime` (the cumulative block of runtime
-selections). No pre-existing key changes meaning.
+`GET /api/health` gains exactly one key:
 
 ```json
 {
@@ -61,23 +58,9 @@ selections). No pre-existing key changes meaning.
     "repo_root": "~/src/target-repo",
     "branch_namespace": "team-a",
     "worktree_namespace": null
-  },
-  "runtime": {
-    "event_bus": "inprocess"
   }
 }
 ```
-
-- `topology` — the four fields of §1, read live per request by
-  `pipeline.topology_identity.resolved_topology()`.
-- `runtime` — returned exactly as produced by
-  `pipeline.topology_identity.resolved_runtime()`, so it is **cumulative**:
-  each runtime selection (event bus, store, broker status, …) adds its own key
-  there, and `health()` never rebuilds the literal, which would silently drop
-  keys added by other work.
-  - `event_bus` — the bus `PIPELINE_EVENT_BUS` selects (`inprocess` or
-    `jsonl`), or the marker `invalid` when the variable holds an unsupported
-    value. The rejected value is never echoed: it may be a path or a secret.
 
 Unchanged:
 
@@ -91,15 +74,6 @@ The fail-soft fingerprint logic is untouched: any problem reading or parsing
 `.scheduler_health.json` still degrades to `scheduler=null` /
 `config_mismatch=[]` with HTTP 200. `topology` is computed independently of
 the fingerprint and cannot turn a health check into a 500.
-
-`runtime` is fail-soft for the same reason: reporting an unsupported
-`PIPELINE_EVENT_BUS` as the marker `invalid` (via
-`pipeline.event_wiring.reported_event_bus_name()`) keeps `/api/health` at HTTP
-200, because a health check must never 500 — `scripts/standalone-setup.sh`
-polls it. **Failing closed still applies where it matters:** `build_bus()`
-raises `ValueError` for the same unsupported value, so the pipeline refuses to
-run with a selection it cannot honour. Only the observation degrades; the
-rejected value is never echoed.
 
 ## 3. Values are observational, not validated
 
@@ -131,10 +105,6 @@ the dashboard half is verified on its own.
 - `tests/unit/test_topology_identity.py` — the four fields, call-time reads,
   unset/empty/set namespaces, non-validation, and the `/api/health`
   `topology` key alongside the existing keys.
-- `tests/unit/test_event_bus_selector.py` — `PIPELINE_EVENT_BUS` selection
-  (`inprocess`, `jsonl`, unset, unsupported value), the jsonl bus persisting
-  *and* dispatching to its subscribers, and the `/api/health` `runtime`
-  `event_bus` report including the `invalid` marker.
 - `tests/unit/test_dashboard_health_plan_dir.py` and
   `tests/unit/test_dashboard_health_config_mismatch.py` — unchanged; they
   assert membership of the pre-existing keys and must keep passing.

@@ -62,6 +62,41 @@ Required behaviour for the fix:
    the negative/boundary paths (missing payload, empty payload, child killed,
    retry-once) with tests in the normal `tests/unit/` suite.
 
+## Second defect — the inline re-verify flakes in `test_plan_approval.py`
+
+Recorded 2026-10-28, after OT-03 was merged by hand. `approve_merge` failed
+OT-03 five times, and the failures are two different defects, not one. The
+first is the detached-grade crash above. The second is an intermittent red
+suite in the **inline** re-verify (`_reverify_acceptance`, `pipeline/ci.py`),
+and it has a sharper signature than "could not reproduce":
+
+- the gate's failing run recorded **18147 passed + 20 failed = 18167**;
+- the operator's own run of the gate's exact command, in the gate's own
+  rebased worktree, recorded **18167 passed, 15 skipped, 0 failed**.
+
+Same suite, same collected total, opposite verdict. That rules out an
+environment split (a different suite, a stripped `PIPELINE_*` env, a stale
+`.pipeline.env`, a `PYTHONPATH` difference — all were tested and rejected)
+and points at a **flake**, in the 20 failing cases, all of which are the
+env/`monkeypatch`-driven cases in `tests/unit/test_plan_approval.py`.
+
+Neither the story's diff nor its branch can explain it: OT-03 was
+`REFERENCE.md +46/-0`. The same gate then passed FLK-02 and FLK-03 on the
+unchanged inline path, so the flake is intermittent rather than a
+deterministic property of any one branch.
+
+Scope for this half of the record: find the shared state or scheduling race
+in `tests/unit/test_plan_approval.py` that lets 20 of its cases fail under
+`-n auto` in a fresh worktree, and fix it the same way `FLK-01` (module
+attribute restored by the `fresh_import` fixture) and `FLK-02` (the store
+contract test's release-ordering race) were fixed — a reproducing test first,
+observed failing, then the fix. Do not loosen the assertions to make it pass.
+
+The two defects need separate diagnosis even if they share a fix: a green
+suite that the harness nonetheless records as red hides the flake, and a
+flaky suite hides the harness defect. Both are invisible from `story_status.py`
+today, which is the point of the first defect.
+
 ## Explicit non-goal
 
 This story **does not implement OT-03's deliverable**. The `REFERENCE.md`

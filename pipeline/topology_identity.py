@@ -70,3 +70,41 @@ def resolved_topology() -> dict[str, str | None]:
         "branch_namespace": _namespace(branch_names.NAMESPACE_ENV),
         "worktree_namespace": _namespace(WORKTREE_NAMESPACE_ENV),
     }
+
+
+def resolved_runtime() -> dict[str, str]:
+    """Return the runtime wiring this process actually selected.
+
+    Keys so far (the block is cumulative — later work adds its own):
+
+    * ``event_bus`` — the bus ``PIPELINE_EVENT_BUS`` selects: ``"inprocess"``
+      (default), ``"jsonl"``, or the marker ``"invalid"`` when the variable
+      holds an unsupported value. Reported by
+      ``pipeline.event_wiring.reported_event_bus_name()``.
+
+    Read live on every call and free of side effects: the environment is not
+    written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
+    keeps meaning "inprocess" rather than freezing that choice into the process.
+
+    Raises
+    ------
+    Nothing: this is an observational read. An unsupported
+    ``PIPELINE_EVENT_BUS`` is reported as ``"invalid"`` rather than raised, so a
+    read-only health check never fails because of one mistyped variable.
+    :func:`pipeline.event_wiring.build_bus` stays fail-closed and still refuses
+    to run with a selection it cannot honour; only this report degrades, and it
+    never echoes the rejected value (it may be a path or a secret).
+
+    ``resolved_topology()`` deliberately does not gain these keys — it stays
+    pinned to its four documented topology fields.
+
+    ``/api/health`` returns this dict as produced under its ``runtime`` key,
+    never rebuilt as a literal, so a selection added here reaches the health
+    payload without editing ``app/dashboard.py``.
+    """
+    # Imported inside the function: this module's reads are late-bound so a
+    # caller that re-imports or re-patches ``pipeline.event_wiring`` is still
+    # observed, and the import graph stays free of a cycle at module load.
+    from pipeline.event_wiring import reported_event_bus_name
+
+    return {"event_bus": reported_event_bus_name()}

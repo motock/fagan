@@ -42,7 +42,7 @@ import sys
 
 from .parsers import _validate_key
 from .persistence import _notify_user
-from .store import FileStore
+from .store import build_store
 
 __all__ = ["UNPARKABLE_FIELDS", "clear_story_fields", "main"]
 
@@ -131,7 +131,7 @@ def clear_story_fields(
             f"invalid status {status!r}: must be one of {sorted(_VALID_STATUSES)}"
         )
 
-    store = FileStore()
+    store = build_store()
     with store.transaction(plan_name) as acquired:
         if not acquired:
             raise RuntimeError(

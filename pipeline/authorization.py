@@ -72,9 +72,9 @@ def resource_for(manifest: dict | None, plan_name: str, story_key: str | None) -
 def _load_manifest(plan_name: str) -> dict:
     """Read the plan manifest, or an empty dict when it cannot be read."""
     try:
-        from .store import FileStore
+        from .store import build_store
 
-        return FileStore().get_manifest(plan_name)
+        return build_store().get_manifest(plan_name)
     except Exception:  # noqa: BLE001 - an unreadable manifest must not allow
         return {}
 

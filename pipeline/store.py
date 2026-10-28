@@ -393,3 +393,33 @@ class FileStore:
             tmp.unlink(missing_ok=True)
             raise
 
+
+def store_kind(environ=None) -> str:
+    """Return the selected Store kind without constructing a store.
+
+    ``PIPELINE_STORE`` unset, or exactly ``file``, selects the JSON-files
+    ``FileStore``. Every other value -- including the empty string -- raises,
+    because a store selection an operator cannot be given must never fall back
+    silently to a different one. Nothing is cached: the variable is read on
+    every call, so a later change is observed.
+
+    ``environ`` defaults to the live process environment; passing a mapping
+    reads that instead, which is how callers state a selection explicitly.
+    """
+    source = os.environ if environ is None else environ
+    raw = source.get("PIPELINE_STORE")
+    if raw is None or raw == "file":
+        return "file"
+    raise ValueError(
+        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file')"
+    )
+
+
+def build_store(environ=None) -> Store:
+    """Select the configured Store; validates before any filesystem work.
+
+    The kind is resolved first, so a rejected configuration raises without
+    constructing a ``FileStore`` -- i.e. without touching the plan directory.
+    """
+    store_kind(environ)
+    return FileStore()

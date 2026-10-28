@@ -9,11 +9,19 @@ The names this module reads that are bound at module level in
 
 import json
 import logging
+import math
 import os
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import merge_reverify
+from .merge_reverify import (
+    cancel_merge_reverify,
+    collect_merge_reverify,
+    start_merge_reverify,
+)
 from .module_ref import _ModuleRef
 from .rebase_conflict_feedback import (
     conflict_rework_feedback,
@@ -27,6 +35,16 @@ MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
 # with PIPELINE_CONFLICT_REWORK_MAX; an unparseable/negative value falls back
 # to this default rather than silently disabling the route.
 CONFLICT_REWORK_MAX_DEFAULT = 2
+
+# The verdicts the detached re-verify job can report (see
+# ``pipeline.merge_reverify``); anything else fails closed.
+_REVERIFY_PASS = "pass"
+_REVERIFY_FAIL = "fail"
+
+# Default wall-clock budget for one detached re-verify, overridable with
+# PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS.
+MERGE_REVERIFY_TIMEOUT_DEFAULT = 1800.0
+
 _atomic_write_json = _ModuleRef("pipeline.advance", "_atomic_write_json")
 _ci_pending_expired = _ModuleRef("pipeline.advance", "_ci_pending_expired")
 _ci_rerun = _ModuleRef("pipeline.advance", "_ci_rerun")
@@ -202,6 +220,116 @@ def _readjudicate_parked_merge_hold(
     return decision
 
 
+def _merge_reverify_gate(
+    plan_name: str,
+    key: str,
+    story: dict[str, Any],
+    worktree: str,
+    pushed_sha: str,
+    manifest_path: Path,
+    summary: dict[str, Any],
+) -> tuple[str, bool]:
+    """Gate one story's merge on a re-verify of ``pushed_sha``.
+
+    Returns ``(gate_error, wait)``. ``wait`` means "no verdict this tick": the
+    story stays ``pr_open`` and nothing is merged, and the caller's manifest
+    write still happens - exactly the ``ci_wait`` contract above it.
+
+    The guarantee is unchanged: no merge without a passing re-verify of the
+    exact SHA being merged. Only the *placement* varies. Under pytest, and for
+    an operator who sets ``PIPELINE_MERGE_REVERIFY_DETACHED=0``, the re-verify
+    runs inline here; otherwise it runs as a detached job started on one tick
+    and collected on a later one, so a full suite plus a build no longer
+    blocks the advance tick.
+    """
+    if not merge_reverify.detached_enabled():
+        gate_error = ""
+        if not gate_error:
+            # Independent of review: re-run the acceptance oracle
+            # against the just-rebased branch right before merging.
+            # Closes the gap CI alone can't (a repo without CI, or a
+            # CI-independent slip between tests_passed and review).
+            acc = _reverify_acceptance(story, worktree, key)
+            if acc["state"] == "fail":
+                gate_error = f"acceptance reverify fail: {acc['error']}"
+        if not gate_error:
+            # Independent of tests: a green suite doesn't mean the
+            # project actually builds (PR #48 merged with `npm run
+            # build` broken - retro §3.1).
+            build = _reverify_build(worktree)
+            if build["state"] == "fail":
+                gate_error = f"build reverify fail: {build['error']}"
+        return gate_error, False
+
+    job = story.get("merge_reverify")
+    if job and job.get("sha") != pushed_sha:
+        # The branch head moved since this job started: its verdict grades a
+        # commit that is no longer the one being merged, so it can never
+        # authorise this merge.
+        cancel_merge_reverify(job)
+        story.pop("merge_reverify", None)
+        job = None
+    if not job:
+        base = Path(manifest_path).parent
+        env_dir = os.environ.get("PIPELINE_STATE_DIR")
+        if env_dir:
+            state_root = Path(env_dir)
+            if not state_root.is_absolute():
+                # Relative overrides resolve against the manifest's directory,
+                # never the scheduler's CWD: the collect tick may run
+                # somewhere else entirely.
+                state_root = base / state_root
+        else:
+            state_root = base
+        try:
+            job = start_merge_reverify(plan_name, key, worktree, state_root)
+        except (ValueError, OSError) as exc:
+            # The exception's text can carry a path, so only its class name
+            # reaches the gate message.
+            return (
+                "merge re-verify could not start: " + type(exc).__name__,
+                False,
+            )
+        story["merge_reverify"] = {**job, "sha": pushed_sha}
+        summary.setdefault("reverify_pending", []).append(key)
+        return "", True
+
+    timeout = MERGE_REVERIFY_TIMEOUT_DEFAULT
+    raw = os.environ.get("PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS")
+    if raw is not None:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = float("nan")
+        # NaN fails every comparison and inf would hand subprocess an
+        # unbounded budget, so only a finite positive value overrides.
+        if math.isfinite(value) and value > 0:
+            timeout = value
+    res = collect_merge_reverify(job, timeout)
+    if res is None:
+        summary.setdefault("reverify_pending", []).append(key)
+        return "", True
+    story.pop("merge_reverify", None)
+    if isinstance(res.get("last_test_check"), dict):
+        story["last_test_check"] = res["last_test_check"]
+    if "sha" in res and res["sha"] != pushed_sha:
+        return "merge re-verify graded a different commit", False
+    if res.get("state") == _REVERIFY_PASS:
+        return "", False
+    if res.get("state") == _REVERIFY_FAIL:
+        # A red gate is an ordinary gate failure: it counts against
+        # MERGE_MAX_ATTEMPTS and retries like a transient merge failure.
+        return res.get("error", "merge re-verify failed"), False
+    # An error - or any state this module does not recognise - is never a
+    # pass: fail closed and keep the tail of the job log for the operator.
+    story["merge_reverify_log_tail"] = res.get("log_tail", "")
+    return (
+        "merge re-verify harness error: "
+        + res.get("error", "unrecognised re-verify result"),
+        False,
+    )
+
+
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     manifest_path = _store.manifest_path(plan_name)
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
@@ -234,6 +362,11 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             ):
                 decision = _merge_decision(story)
         if decision["action"] != "merge":
+            # A detached re-verify may still be running; it must not outlive
+            # the story leaving pr_open.
+            _rv_job = story.pop("merge_reverify", None)
+            if _rv_job:
+                cancel_merge_reverify(_rv_job)
             story["status"] = "parked"
             story["parked_reason"] = decision["reason"]
             # MERGEPARK-2: record the evidence this ruling was made on, so a
@@ -300,6 +433,33 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # polling the exact SHA recorded on the first pending observation.
         if story.get("ci_pending_sha"):
             pushed_sha = story["ci_pending_sha"]
+        elif story.get("merge_reverify"):
+            # A pending re-verify must not re-rebase and restart CI every
+            # tick: poll the exact commit the job was started for as long as
+            # the branch head is still that commit. A moved head makes the
+            # job's verdict worthless, so cancel it and rebase as usual.
+            head = None
+            if worktree:
+                try:
+                    proc = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=worktree,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    head = (proc.stdout or "").strip() or None
+                except (OSError, subprocess.SubprocessError):
+                    head = None
+            if head is not None and head == story["merge_reverify"].get("sha"):
+                pushed_sha = head
+            else:
+                _rv_job = story.pop("merge_reverify", None)
+                if _rv_job:
+                    cancel_merge_reverify(_rv_job)
+                gate_error, pushed_sha = _rebase_and_push_for_merge(
+                    plan_name, key, branch, worktree
+                )
         else:
             gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
         if not gate_error:
@@ -364,20 +524,14 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             summary["ci_pending"].append(key)
             continue
         if not gate_error:
-            # Independent of review: re-run the acceptance oracle
-            # against the just-rebased branch right before merging.
-            # Closes the gap CI alone can't (a repo without CI, or a
-            # CI-independent slip between tests_passed and review).
-            acc = _reverify_acceptance(story, worktree, key)
-            if acc["state"] == "fail":
-                gate_error = f"acceptance reverify fail: {acc['error']}"
-        if not gate_error:
-            # Independent of tests: a green suite doesn't mean the
-            # project actually builds (PR #48 merged with `npm run
-            # build` broken - retro §3.1).
-            build = _reverify_build(worktree)
-            if build["state"] == "fail":
-                gate_error = f"build reverify fail: {build['error']}"
+            gate_error, reverify_wait = _merge_reverify_gate(
+                plan_name, key, story, worktree, pushed_sha, manifest_path, summary
+            )
+            if reverify_wait:
+                # The detached re-verify is still running: nothing is merged
+                # and the manifest write at the end of this function still
+                # persists the job handle. Same contract as ``ci_wait``.
+                continue
 
         if gate_error:
             # RC-02: a merge-gate REBASE CONFLICT can never be fixed by
@@ -420,6 +574,11 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                         _default_branch(),
                     ),
                 )
+                # A detached re-verify may still be running; it must not
+                # outlive the story leaving pr_open.
+                _rv_job = story.pop("merge_reverify", None)
+                if _rv_job:
+                    cancel_merge_reverify(_rv_job)
                 story["status"] = "changes_requested"
                 files = parse_conflict_files(conflict_text)
                 named = ", ".join(files) if files else "the conflicted files"
@@ -489,6 +648,11 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     story.get("review_feedback"),
                     _ci_rework_feedback(gate_error, attempts),
                 )
+                # A detached re-verify may still be running; it must not
+                # outlive the story leaving pr_open.
+                _rv_job = story.pop("merge_reverify", None)
+                if _rv_job:
+                    cancel_merge_reverify(_rv_job)
                 story["status"] = "changes_requested"
                 _notify_user(
                     plan_name,
@@ -511,6 +675,11 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             attempts = story.get("merge_attempts", 0) + 1
             story["merge_attempts"] = attempts
             if attempts >= MERGE_MAX_ATTEMPTS:
+                # A detached re-verify may still be running; it must not
+                # outlive the story leaving pr_open.
+                _rv_job = story.pop("merge_reverify", None)
+                if _rv_job:
+                    cancel_merge_reverify(_rv_job)
                 story["status"] = "failed"
                 story["merge_error"] = gate_error
                 _notify_user(

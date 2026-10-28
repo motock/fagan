@@ -14,7 +14,9 @@
 #     worktrees survive container replacement;
 #   * streamable-http MCP behind OIDC, refusing to start otherwise (see
 #     pipeline/remote_transport.py);
-#   * a HEALTHCHECK on the dashboard's /api/health route;
+#   * a HEALTHCHECK on a credential-free dashboard route: the image exports
+#     PIPELINE_IDENTITY_PROVIDER=oidc, which puts a bearer-token gate on every
+#     /api/ route (app/dashboard.py), so the probe uses "/" instead;
 #   * no secrets baked in. Every credential arrives as a mounted file at
 #     runtime; nothing secret is COPYed and no build ARG is declared, because
 #     both leak into image history.
@@ -99,6 +101,7 @@ COPY --chown=10001:10001 model_registry.json pyproject.toml ./
 COPY --chown=10001:10001 deploy/entrypoint.sh ./deploy/entrypoint.sh
 
 RUN chmod 0755 ./deploy/entrypoint.sh \
+ && chown 10001:10001 /app \
  && install -d -o 10001 -g 10001 -m 0750 \
         /var/lib/pipeline/plans /var/lib/pipeline/worktrees
 
@@ -110,10 +113,14 @@ USER 10001:10001
 
 EXPOSE 8000 8080
 
-# Probe the dashboard, not the MCP endpoint: MCP requires a bearer token, and
-# a health probe must not need a credential. The dashboard's /api/health
-# reports plan_dir and scheduler liveness, so this catches a wedged server.
+# Probe the dashboard's index route, not the MCP endpoint and not an /api/
+# route: this image exports PIPELINE_IDENTITY_PROVIDER=oidc, and
+# app/dashboard.py's middleware then requires a bearer token on *every*
+# /api/ route -- /api/health included -- so an anonymous probe there can only
+# ever get a 401. "/" is outside that prefix, so it is reachable without a
+# credential, and rendering it still reads the API-key store and the plan
+# directory, which is where a wedged or mis-owned container fails first.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import os,sys,urllib.request; port=os.environ.get('DASHBOARD_PORT','8000'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/api/health' % port, timeout=4).status==200 else 1)"
+    CMD python -c "import os,sys,urllib.request; port=os.environ.get('DASHBOARD_PORT','8000'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/' % port, timeout=4).status==200 else 1)"
 
 ENTRYPOINT ["/app/deploy/entrypoint.sh"]

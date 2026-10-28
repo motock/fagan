@@ -51,8 +51,22 @@ Published ports:
 | 8000 | dashboard (uvicorn, `app.dashboard:app`) | `DASHBOARD_PORT` |
 | 8080 | MCP remote transport (`streamable-http`) | `PIPELINE_MCP_PORT` |
 
-A compose example that wires the same contract up next to a NATS broker and a
-Keycloak realm lives alongside this file.
+Both surfaces are authenticated, in different ways:
+
+- **`:8080` (MCP)** verifies an OIDC bearer token against the configured
+  issuer's JWKS. `pipeline/remote_transport.py` refuses to start without an
+  identity provider.
+- **`:8000` (dashboard)** is gated by `PIPELINE_IDENTITY_PROVIDER=oidc` as
+  well: `app/dashboard.py`'s middleware then requires an OIDC bearer token on
+  **every** `/api/*` route, `/api/health` included. The browser page at `/`
+  requires no token, but it is not an anonymous surface either — it is
+  protected by the `Host` check in `app/auth.py` (`host_is_allowed`): any
+  `Host` that is not the bound address or a loopback alias gets a 403.
+
+A reverse proxy therefore has to (a) obtain a bearer token for the `/api/*`
+calls it forwards, and (b) forward the bound address as the upstream `Host`
+(nginx: `proxy_set_header Host 127.0.0.1:8000;`). A proxy that passes the
+public hostname through with the default `$host` form gets a 403.
 
 ## Required environment
 
@@ -64,7 +78,7 @@ Keycloak realm lives alongside this file.
 | `PIPELINE_OIDC_ISSUER` | unset — required | Issuer URL of the identity provider. |
 | `PIPELINE_OIDC_AUDIENCE` | unset — required | Expected `aud` claim. |
 | `PIPELINE_OIDC_JWKS_URL` | unset — required | JWKS endpoint used to verify signatures. |
-| `PIPELINE_OIDC_CLIENT_SECRET_FILE` | `/run/secrets/oidc_client_secret` | Path of the mounted client-secret file. The entrypoint fails fast when it is unreadable. |
+| `PIPELINE_OIDC_CLIENT_SECRET_FILE` | `/run/secrets/oidc_client_secret` | Path of the mounted client-secret file. The entrypoint fails fast when it is unreadable. Bearer-token verification itself is JWKS-only; this file is a deployment credential, not an input to signature checking. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | unset | Comma-separated allowlist enabling DNS-rebinding protection for a proxied deployment. Set it whenever the container sits behind a reverse proxy. |
 | `PLAN_DIR` | `/var/lib/pipeline/plans` | Where plans and decision files live. |
 | `WORKTREE_ROOT` | `/var/lib/pipeline/worktrees` | Where per-plan git worktrees live. |
@@ -91,18 +105,32 @@ uid.
 The image runs as uid/gid `10001` (`pipeline`) with no home directory. When
 binding a host path instead of a named volume, `chown 10001:10001` it first.
 
+`/app` (the working directory) is owned by uid 10001 as well. The dashboard
+creates its shared-secret file at `.dashboard_api_key` inside the repo root on
+first use, so a root-owned `/app` would make the index route return 500. That
+file is part of the container's writable layer, not of the volume: it is
+regenerated when the container is replaced.
+
 ## Health
 
 The image declares
 
 ```
-HEALTHCHECK CMD python -c "... http://127.0.0.1:$DASHBOARD_PORT/api/health ..."
+HEALTHCHECK CMD python -c "... http://127.0.0.1:$DASHBOARD_PORT/ ..."
 ```
 
-It probes the dashboard rather than the MCP endpoint on purpose: MCP requires a
-bearer token, and a health probe must not need a credential. `/api/health`
-reports the resolved `plan_dir` and scheduler liveness, so a wedged scheduler
-shows up as an unhealthy container.
+It probes the dashboard's index route rather than the MCP endpoint or an
+`/api/` route, because neither of those is reachable without a credential:
+MCP verifies a bearer token, and `PIPELINE_IDENTITY_PROVIDER=oidc` puts the
+same requirement on every `/api/*` route, `/api/health` included. `/` sits
+outside that prefix, so the probe needs nothing but the loopback `Host` the
+gate already allows — and rendering it reads the plan directory and the
+dashboard's API-key store, so a container that cannot write its own state (or
+whose dashboard died) turns unhealthy instead of staying green.
+
+The probe is deliberately shallow: it starts the container healthy only after
+`--start-period`, and reports `unhealthy` after three consecutive failures
+~30 s apart.
 
 ## What the image is not
 
@@ -110,5 +138,7 @@ shows up as an unhealthy container.
   worktrees in the mounted volume.
 - It does not run the scheduler daemon or the MCP transport over stdio. Those
   are separate processes in the operator's host deployment.
-- It carries no secrets. A deployment that cannot mount the OIDC client secret
-  should not run this image.
+- It carries no secrets. The OIDC client secret is a mounted file, and
+  bearer-token verification is JWKS-only; the image only asserts that the
+  mount exists so a missing credential fails at start rather than at the first
+  token exchange.

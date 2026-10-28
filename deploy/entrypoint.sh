@@ -45,9 +45,11 @@ die() {
     exit 1
 }
 
-# The remote transport is authenticated; without the mounted secret the
-# identity provider cannot be constructed, and starting anyway would mean
-# serving an endpoint nobody can authenticate to.
+# Fail fast when the deployment forgot to mount the OIDC client credential.
+# Bearer-token verification itself is JWKS-only (pipeline/remote_transport.py
+# never reads this file), so the check is a configuration assertion, not a
+# dependency of the verification path: it turns a missing mount into a start
+# failure instead of a failure on the first token exchange.
 if [ "$PIPELINE_IDENTITY_PROVIDER" = "oidc" ]; then
     [ -r "$PIPELINE_OIDC_CLIENT_SECRET_FILE" ] \
         || die "PIPELINE_OIDC_CLIENT_SECRET_FILE is not readable; mount the secret file"

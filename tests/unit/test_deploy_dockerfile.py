@@ -16,7 +16,8 @@ invariants that must hold for *every* revision of the image:
 * a numeric non-root ``USER`` that applies to the entrypoint;
 * ``PLAN_DIR`` / worktree root pointing inside a declared ``VOLUME``;
 * an entrypoint that starts the dashboard and the remote MCP transport;
-* a ``HEALTHCHECK`` on ``/api/health``;
+* a ``HEALTHCHECK`` on a credential-free dashboard route (not ``/api/health``,
+  which the image's OIDC gate requires a bearer token for);
 * no ``.env`` or secret material copied into the image.
 
 They fail on assertion (not on import) before the image exists.
@@ -162,11 +163,61 @@ def test_plan_dir_and_worktree_root_live_on_a_declared_volume() -> None:
         ), f"{key}={value} must live inside a declared VOLUME ({volume_text})"
 
 
-def test_healthcheck_targets_the_dashboard_health_route() -> None:
+def test_healthcheck_probes_a_credential_free_dashboard_route() -> None:
+    """The probe runs inside the container with no credential available.
+
+    The image selects the OIDC identity provider for the whole process, so
+    ``app/dashboard.py``'s middleware requires a bearer token on every
+    ``/api/`` route -- ``/api/health`` included. A probe that fetched
+    ``/api/health`` anonymously would get a 401 and mark the container
+    unhealthy forever. The probe must hit the dashboard on a path outside the
+    gated ``/api/`` prefix, which still exercises the app and its API-key
+    store.
+    """
     healthchecks = _instructions(_dockerfile(), "HEALTHCHECK")
     assert healthchecks, "deploy/Dockerfile must declare a HEALTHCHECK"
-    assert any("/api/health" in item for item in healthchecks), (
-        "the HEALTHCHECK must probe the dashboard's /api/health route"
+    probe = healthchecks[-1]
+    assert "/api/health" not in probe, (
+        "the HEALTHCHECK must not probe /api/health: the image sets "
+        "PIPELINE_IDENTITY_PROVIDER=oidc, so every /api/ route needs a bearer "
+        "token and an anonymous probe can only ever get 401"
+    )
+    assert re.search(r"127\.0\.0\.1:%s/['\"]", probe), (
+        f"the HEALTHCHECK must GET the dashboard's index route; got {probe!r}"
+    )
+    assert "status==200" in probe.replace(" ", ""), (
+        "the probe must treat a non-200 response as unhealthy"
+    )
+
+
+def test_workdir_is_writable_by_the_runtime_user() -> None:
+    """The dashboard writes its shared-secret key into the working directory.
+
+    ``app/auth.py`` keeps the key at ``REPO_ROOT / ".dashboard_api_key"`` and
+    creates it lazily on first use, so the image's WORKDIR must be owned by
+    the runtime uid. A root-owned ``/app`` makes the index route raise
+    ``PermissionError`` and answer 500 -- which is also the route the
+    HEALTHCHECK exercises.
+    """
+    text = _dockerfile()
+    # The last WORKDIR belongs to the runtime stage; the builder stage's
+    # scratch directory never holds application state.
+    workdirs = _instructions(text, "WORKDIR")
+    assert workdirs, "deploy/Dockerfile must set a WORKDIR"
+    workdir = workdirs[-1]
+
+    users = _instructions(text, "USER")
+    assert users, "deploy/Dockerfile must switch to a non-root USER"
+    uid = int(users[-1].split(":")[0])
+
+    runs = " ".join(_instructions(text, "RUN"))
+    chown = re.search(rf"chown\s+(?:-R\s+)?(\d+):\d+\s+{re.escape(workdir)}\b", runs)
+    assert chown, (
+        f"WORKDIR {workdir!r} is created root-owned and never chowned to the "
+        "runtime uid, so the dashboard cannot create .dashboard_api_key there"
+    )
+    assert int(chown.group(1)) == uid, (
+        f"{workdir!r} must be owned by the runtime uid {uid}, got {chown.group(1)}"
     )
 
 

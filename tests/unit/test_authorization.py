@@ -164,7 +164,7 @@ def test_raising_policy_fails_closed(plan_dir, monkeypatch) -> None:
     with bind_principal(LOCAL_OPERATOR):
         result = authorize("story:merge", plan_name="p", story_key="S", manifest={})
 
-    assert result == {"ok": False, "error": expected}
+    assert result == {"ok": False, "forbidden": True, "action": "story:merge", "error": expected}
 
 
 def test_resource_for_builds_the_scope_chain() -> None:

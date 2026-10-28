@@ -47,6 +47,7 @@ from app.dashboard_models import (
     StoryStatusBody,
     WorkspaceRequest,
 )
+from app.dashboard_refusal import raise_if_forbidden
 from app.dashboard_routes import (
     config_providers,
     effective_config,
@@ -500,22 +501,26 @@ def unarchive_plan(plan_name: str) -> dict[str, Any]:
 def pause_plan(plan_name: str) -> dict[str, Any]:
     """Pause a plan's execution. Delegates the manifest mutation to
     _service.pause_plan (which persists the `paused` flag) and returns the
-    service's result verbatim. A plan with no manifest is a 404, matching the
-    archive/unarchive precedent."""
+    service's result verbatim, except that an authorization refusal is a 403.
+    A plan with no manifest is a 404, matching the archive/unarchive precedent."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    return _service.pause_plan(plan_name)
+    result = _service.pause_plan(plan_name)
+    raise_if_forbidden(result)
+    return result
 
 
 @app.post("/api/plans/{plan_name}/resume")
 def resume_plan(plan_name: str) -> dict[str, Any]:
     """Resume a plan's execution. Delegates the manifest mutation to
     _service.resume_plan (which clears the `paused` flag) and returns the
-    service's result verbatim. A plan with no manifest is a 404, matching the
-    archive/unarchive precedent."""
+    service's result verbatim, except that an authorization refusal is a 403.
+    A plan with no manifest is a 404, matching the archive/unarchive precedent."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    return _service.resume_plan(plan_name)
+    result = _service.resume_plan(plan_name)
+    raise_if_forbidden(result)
+    return result
 
 @app.post("/api/plans/{plan_name}/decisions")
 def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
@@ -616,6 +621,7 @@ def set_role_default_route(role: str, body: RoleDefaultBody) -> dict[str, Any]:
     failures surface as HTTP 400 with the service's error message.
     """
     result = _service.set_role_default(role, body.provider, body.model)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     effective = config_provenance.resolve_role_provenance(
@@ -640,6 +646,7 @@ def set_plan_role_config_route(
     if role not in config_provenance.PIPELINE_ROLES:
         raise HTTPException(status_code=400, detail=f"unknown role {role!r}")
     result = _service.set_plan_role_config(plan_name, role, body.provider, body.model)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     manifest = _service.get_manifest_or_none(plan_name) or {}

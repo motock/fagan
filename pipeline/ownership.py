@@ -49,8 +49,7 @@ def resolve_ownership(
 
     Ownership is authority -- an owner may approve, reject and merge -- so the
     plan file, which ``save_plan`` writes for any caller, cannot be what grants
-    it. On a first ingest (no prior manifest) the plan may name an owner and
-    delegates, the owner defaulting to the ingester. On every later ingest the
+    it. On every later ingest the
     manifest's ownership stands unless the plan names a different one, and that
     change is allowed only for the current owner or the local operator. Any
     other caller gets a ``ValueError``, which ingest returns as its structured

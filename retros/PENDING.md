@@ -62,3 +62,5 @@ if a precise date is needed when writing one of these up.
 - ownership-and-ingest-followups — completed 2026-10-27, 2 stories
 - remote-mcp-hardening — completed 2026-10-28, 2 stories
 - config-write-guards — completed 2026-10-28, 2 stories
+- one-repo-server-remainder — completed 2026-10-28, 8 stories
+- dashboard-refusals-followups — completed 2026-10-28, 3 stories

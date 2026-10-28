@@ -150,6 +150,8 @@ def authorize(
     )
     return {
         "ok": False,
+        "forbidden": True,
+        "action": action_label,
         "error": (
             f"not authorized: {action_label} on plan {plan_name!r} "
             f"(principal {principal.subject!r})"
@@ -200,6 +202,8 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
     )
     return {
         "ok": False,
+        "forbidden": True,
+        "action": label,
         "error": (
             f"not authorized: {label} for {what} "
             f"(principal {principal.subject!r})"

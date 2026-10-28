@@ -398,9 +398,12 @@ against the implementation:
 
 **`authorize(action, *, plan_name, story_key=None, manifest=None) -> dict | None`**
 is the single entry point the service calls. It returns `None` when the action
-is allowed and a refusal dict `{"ok": False, "error": ...}` when it is denied —
-the same shape every mutating service operation already returns, so a refusal
-needs no special handling at the call site. The steps are:
+is allowed and a refusal dict `{"ok": False, "forbidden": True, "action": ...,
+"error": ...}` when it is denied. `ok` and `error` are the shape every mutating
+service operation already returns, so a call site that only checks `ok` needs no
+change; `forbidden` and `action` let an HTTP adapter tell a refusal from any other
+failure (`app/dashboard_refusal.py`). `refusal_for_host_config` returns the same
+shape. The steps are:
 
 1. If enforcement is disabled, return `None` (allow) — and log exactly one
    `WARNING` at first use, so an operator who set the kill switch sees it in the
@@ -462,6 +465,11 @@ stream (§2, "Audit stream").
 `delegates` are additionally allowed `plan:approve`, `plan:reject` and
 `story:merge` on that plan; ownership grants nothing else, and a plan with no
 owner grants nothing to anyone but the local operator.
+
+**Dashboard responses.** A dashboard route whose service call is refused answers
+`403` with the detail `not authorized: <action>` (the action only, never the
+principal) through `app/dashboard_refusal.py`. Every other failure keeps the
+route's existing status, and an MCP caller still receives the full refusal dict.
 
 **Audit stream.** Every decision this module makes is also appended to the plan's
 audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see

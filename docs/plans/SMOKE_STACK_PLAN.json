@@ -48,7 +48,7 @@
           ],
           "blocked_by": [
             "audit-anchor:AA-01",
-            "remote-mcp-hardening:RMH-02",
+            "remote-mcp-hardening-2:RMH-02",
             "dashboard-oidc-login:LG-02",
             "eventing-broker-adapter:BR-04"
           ]

@@ -29,7 +29,7 @@ provider to `claude`, which skips the preflight gate.
 | 2 | [`DECISION_ROUTING_PLAN.json`](DECISION_ROUTING_PLAN.json) | `decision-routing` | RT-01..03 | Done, stacked on plan 1; 2 pre-authorized | ENF-03 |
 | 3 | [`SYSTEM_PRINCIPALS_PLAN.json`](SYSTEM_PRINCIPALS_PLAN.json) | `system-principals` | SYS-01..02 | Done, stacked on plan 1; 2 re-scoped | ENF-03 |
 | 4 | [`AUDIT_ANCHOR_PLAN.json`](AUDIT_ANCHOR_PLAN.json) | `audit-anchor` | AA-01..02 | Done; 1 pre-authorized, 1 re-scoped | — |
-| 5 | [`REMOTE_MCP_HARDENING_PLAN.json`](REMOTE_MCP_HARDENING_PLAN.json) | `remote-mcp-hardening` | RMH-01..02 | Done; 0 conflicts | — |
+| 5 | [`REMOTE_MCP_HARDENING_PLAN.json`](REMOTE_MCP_HARDENING_PLAN.json) | `remote-mcp-hardening-2` (the name `remote-mcp-hardening` is taken by a completed plan) | RMH-01..02 | Done; 0 conflicts | — |
 | 6 | [`DASHBOARD_OIDC_LOGIN_PLAN.json`](DASHBOARD_OIDC_LOGIN_PLAN.json) | `dashboard-oidc-login` | LG-01..03 | Done; 0 conflicts | — |
 | 7 | [`OBSERVABILITY_OTEL_PLAN.json`](OBSERVABILITY_OTEL_PLAN.json) | `observability-otel` | OT-01..02 | Done; 0 conflicts | — |
 | 8 | [`EVENTING_BROKER_PREP_PLAN.json`](EVENTING_BROKER_PREP_PLAN.json) | `eventing-broker-prep` | EV-01..02 | Done; 2 re-scoped | — |

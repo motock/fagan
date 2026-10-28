@@ -1,9 +1,9 @@
 # Enterprise readiness — remaining work roadmap
 
-- **Status:** drafted 2026-10-28 on `855cc1e`. Eleven plan files, none ingested.
-  Only the first plan has been preflighted; every other plan's stories carry
-  `Preflight: NOT RUN`, which `ingest_plan` refuses, so none of them can be
-  dispatched by accident before its preflight is done.
+- **Status:** drafted 2026-10-28 on `855cc1e`; every plan preflighted the same
+  day on `master` `cd09a83`. Eleven plan files, none ingested. A dry-run ingest
+  of all eleven (dispatch provider resolved to a non-Claude tier, so the
+  preflight gate was active) accepts every story.
 - **Inputs:** [`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md)
   (the gap list), [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md)
   §4 and §6 (what is not implemented, in dependency order),
@@ -25,17 +25,17 @@ provider to `claude`, which skips the preflight gate.
 
 | # | File | Plan name to ingest as | Stories | Preflight | Blocked by |
 |---|---|---|---|---|---|
-| 1 | [`ENTERPRISE_ENFORCEMENT_CLOSEOUT_PLAN.json`](ENTERPRISE_ENFORCEMENT_CLOSEOUT_PLAN.json) | `enterprise-enforcement-closeout` | ENF-00..03 | **Done** (2026-10-28) | — |
-| 2 | [`DECISION_ROUTING_PLAN.json`](DECISION_ROUTING_PLAN.json) | `decision-routing` | RT-01..03 | Not run | ENF-03 |
-| 3 | [`SYSTEM_PRINCIPALS_PLAN.json`](SYSTEM_PRINCIPALS_PLAN.json) | `system-principals` | SYS-01..02 | Not run | ENF-03 |
-| 4 | [`AUDIT_ANCHOR_PLAN.json`](AUDIT_ANCHOR_PLAN.json) | `audit-anchor` | AA-01..02 | Not run | — |
-| 5 | [`REMOTE_MCP_HARDENING_PLAN.json`](REMOTE_MCP_HARDENING_PLAN.json) | `remote-mcp-hardening` | RMH-01..02 | Not run | — |
-| 6 | [`DASHBOARD_OIDC_LOGIN_PLAN.json`](DASHBOARD_OIDC_LOGIN_PLAN.json) | `dashboard-oidc-login` | LG-01..03 | Not run | — |
-| 7 | [`OBSERVABILITY_OTEL_PLAN.json`](OBSERVABILITY_OTEL_PLAN.json) | `observability-otel` | OT-01..02 | Not run | — |
-| 8 | [`EVENTING_BROKER_PREP_PLAN.json`](EVENTING_BROKER_PREP_PLAN.json) | `eventing-broker-prep` | EV-01..02 | Not run | — |
-| 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Not run | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) (Proposed) |
-| 9 | [`CONTROL_PLANE_STORE_PLAN.json`](CONTROL_PLANE_STORE_PLAN.json) | `control-plane-store` | ST-01..03 | Not run | **ADR 0008 accepted** (a decision, not a story) |
-| 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Not run | AA-01, RMH-02, LG-02, BR-04 (on DK-03) |
+| 1 | [`ENTERPRISE_ENFORCEMENT_CLOSEOUT_PLAN.json`](ENTERPRISE_ENFORCEMENT_CLOSEOUT_PLAN.json) | `enterprise-enforcement-closeout` | ENF-00..03 | Done; 1 conflict, pre-authorized | — |
+| 2 | [`DECISION_ROUTING_PLAN.json`](DECISION_ROUTING_PLAN.json) | `decision-routing` | RT-01..03 | Done, stacked on plan 1; 2 pre-authorized | ENF-03 |
+| 3 | [`SYSTEM_PRINCIPALS_PLAN.json`](SYSTEM_PRINCIPALS_PLAN.json) | `system-principals` | SYS-01..02 | Done, stacked on plan 1; 2 re-scoped | ENF-03 |
+| 4 | [`AUDIT_ANCHOR_PLAN.json`](AUDIT_ANCHOR_PLAN.json) | `audit-anchor` | AA-01..02 | Done; 1 pre-authorized, 1 re-scoped | — |
+| 5 | [`REMOTE_MCP_HARDENING_PLAN.json`](REMOTE_MCP_HARDENING_PLAN.json) | `remote-mcp-hardening` | RMH-01..02 | Done; 0 conflicts | — |
+| 6 | [`DASHBOARD_OIDC_LOGIN_PLAN.json`](DASHBOARD_OIDC_LOGIN_PLAN.json) | `dashboard-oidc-login` | LG-01..03 | Done; 0 conflicts | — |
+| 7 | [`OBSERVABILITY_OTEL_PLAN.json`](OBSERVABILITY_OTEL_PLAN.json) | `observability-otel` | OT-01..02 | Done; 0 conflicts | — |
+| 8 | [`EVENTING_BROKER_PREP_PLAN.json`](EVENTING_BROKER_PREP_PLAN.json) | `eventing-broker-prep` | EV-01..02 | Done; 2 re-scoped | — |
+| 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Done, stacked on plan 8; 0 conflicts | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) (Proposed) |
+| 9 | [`CONTROL_PLANE_STORE_PLAN.json`](CONTROL_PLANE_STORE_PLAN.json) | `control-plane-store` | ST-01..03 | Done; 0 conflicts | **ADR 0008 accepted** (a decision, not a story) |
+| 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Done; 0 conflicts (no Docker daemon here) | AA-01, RMH-02, LG-02, BR-04 (on DK-03) |
 
 `blocked_by` entries use the plan names in the third column, so ingest each
 plan under exactly that name. Plans 1–3 finish ADR 0008 stage 1. Plans 4–6
@@ -47,33 +47,58 @@ Every story is `risk: high` (security-engineer pass, held for human review)
 except the behavior-preserving or non-auth ones, which are marked `low` or
 `medium` in the JSON.
 
-### Ingesting a plan that says `Preflight: NOT RUN`
+### Preflight results (2026-10-28, `master` `cd09a83`)
 
-These preflight results go stale once earlier plans merge, so each plan is
-preflighted when its turn comes, against the `master` of that day:
+Each plan's stand-in (a rough version of all its stories) ran against the full
+suite, `ruff check .` and `scripts/check_line_limit.py` in a scratch worktree.
+Plans 2–3 ran stacked on plan 1's stand-in, and plan 8b on plan 8's, because
+they build on those changes. Every conflict was resolved one of two ways:
+- **Pre-authorized:** the brief names the file, the test and the literal edit.
+- **Re-scoped:** the story was changed so it no longer collides.
 
-1. Follow `.claude/rules/local-dispatch-preflight.md` §1: apply a rough
-   stand-in of each story in a scratch worktree, then run the full suite and
-   `ruff check .`.
-2. Re-derive each story's `files` from where the code lives then, including
-   `wc -l` headroom.
-3. Pre-authorize every conflict in the brief, using the literal before/after
-   text.
-4. Replace the `Preflight: NOT RUN …` line with the result.
+| Conflict | Story | Resolution |
+|---|---|---|
+| `test_service_active_workspace::test_save_plan_unchanged` (sha256 pin of `save_plan`) | ENF-02 | Pre-authorized: delete the pin and its baseline entry |
+| `test_lifecycle_tool_registration::test_tools_tuple_has_nine_entries_in_original_order` (exact `TOOLS` list) | AA-01 | Pre-authorized: append `verify_audit` (the precedent is the plan-approval tools) |
+| `test_readme_reference_split` (byte-compared MCP tools reference) | AA-01 | Re-scoped: document `verify_audit` in REFERENCE.md's Audit stream section |
+| `test_topology_identity` ×2 (exact topology keys) | EV-02 (and ST-01, BR-05) | Re-scoped: a separate, cumulative `runtime` block in `/api/health` |
+| `test_notification_routing` (pins `match.owner` as unsupported) | RT-03 | Pre-authorized: drop that one case; keep the "not supported yet" wording |
+| `test_oa2_request_decision_failopen::test_success_path_return_and_record_unchanged` | RT-02 | Pre-authorized: add `requested_by` and `routed_to` to the expected record |
+| `test_scheduler_daemon` (`reconcile_fn is advance_all_plans`), `test_scheduler_daemon_scan_watchdog` (stdlib/`pipeline`-only imports) | SYS-02 | Re-scoped: bind the principal inside the watchdog worker thread; import it through `pipeline.actor` |
 
-Plan 1's preflight is the model to follow. Its stand-in of all four stories
-showed one conflict (a sha256 pin of `save_plan`, pre-authorized in ENF-02). An
-earlier stand-in also showed that moving `decompose_plan` or
-`mark_story_in_progress` breaks eight source-shape tests, so ENF-00 moves
-different methods.
+The runs also changed several briefs:
+- **`master` moved during drafting** (refusals gained `forbidden`/`action`,
+  plus `app/dashboard_refusal.py`). Plan 1 was re-run on the new base, and its
+  briefs now add `raise_if_forbidden` to the six dashboard routes they gate.
+- **Rate-limit keys (RMH-01):** limits key through an explicit trusted-proxy
+  list. Behind a reverse proxy the raw peer is the proxy, so one client's failed
+  logins would otherwise lock out everyone.
+- **Read scoping (RMH-02):** an invisible plan is hidden exactly like a missing
+  one, so a caller can't probe which plans exist.
+- **Scheduler grants (SYS-01):** a static pass found what the tick reaches
+  (`plan:dispatch`, `story:merge`, `story:mark_done`, `story:interrupt`). The
+  scheduler is granted only those.
+- **Small cleanups:** ENF-00 removes an import that becomes unused, ST-01
+  declares `pipeline/unpark.py`, and SqliteStore delegates its
+  filesystem-native reads to `FileStore`.
 
-The planning container fails four tests on untouched `855cc1e` for
+**What these runs do not prove:**
+- The OpenTelemetry packages, `nats-py` and `nats-server` were not installed.
+  The planning container has the Docker client but no daemon.
+- Those paths are graded only by the stories' own tests: the NATS integration
+  tests, which CI is required to run, and DK-04's CI smoke job.
+
+The planning container also fails four tests on untouched `master` for
 environmental reasons:
 - `test_aider_harness_availability` ×2: the proxy injects `GH_TOKEN`.
 - `test_docs_have_no_personal_home_path`: the container `HOME` is the root user's home, which the guard bans by value.
 - `test_remote_sync`: there is no `ssh` binary.
 
 They pass on a normal host and are not conflicts.
+
+**If `master` moves before a plan is ingested,** re-run its impact check:
+`.claude/rules/local-dispatch-preflight.md` §1, then update the plan's
+`Preflight:` lines. A result is only as current as the commit it names.
 
 ## Decisions made while drafting (override any of them before ingest)
 

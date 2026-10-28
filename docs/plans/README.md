@@ -19,7 +19,7 @@ update this index in the same change.
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
 | 1 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 2 | [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) | Drafted; plan 1 preflighted | Eleven plans finishing enterprise readiness, in dependency order; plan 1 (`enterprise-enforcement-closeout`) gates the last unchecked mutating tools. | Ingest plan 1; preflight each later plan when its turn comes. |
+| 2 | [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) | Drafted and preflighted | Eleven plans finishing enterprise readiness, in dependency order; plan 1 (`enterprise-enforcement-closeout`) gates the last unchecked mutating tools. | Ingest plan 1; re-run a plan's impact check if master has moved before its turn. |
 | 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Enterprise platform readiness (assessed 2026-10-25):**
@@ -36,9 +36,7 @@ transport) shipped 2026-10-27. The remaining work — the rest of ADR 0008 stage
 1, Phase 6 hardening, observability, broker prep, stage 2 and a CI smoke stack
 — is drafted as eleven plan files indexed in
 [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md)
-(2026-10-28). Only the first, `enterprise-enforcement-closeout`, is
-preflighted; the rest say `Preflight: NOT RUN` and ingest refuses them until
-their preflight is done.
+(2026-10-28), all eleven preflighted on `master` `cd09a83`.
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends

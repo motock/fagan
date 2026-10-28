@@ -18,10 +18,10 @@ The ``plan_dir`` fixture is copied verbatim from
 from __future__ import annotations
 
 import pytest
-from app.dashboard_refusal import raise_if_forbidden
 from fastapi import HTTPException
 
 from app import dashboard as d
+from app.dashboard_refusal import raise_if_forbidden
 from app.identity import Principal
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers

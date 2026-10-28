@@ -16,7 +16,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from app.identity import LOCAL_OPERATOR, Principal
+from app.identity import (
+    LOCAL_OPERATOR,
+    SYSTEM_AUTH_METHOD,
+    SYSTEM_SCHEDULER,
+    SYSTEM_SUBJECT_PREFIX,
+    SYSTEM_WORKER,
+    Principal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,35 @@ class Action(str, Enum):
     STORY_MERGE = "story:merge"
     STORY_MARK_DONE = "story:mark_done"
     CONFIG_WRITE = "config:write"
+
+
+#: The actions each reserved ``system:`` principal holds, and nothing more.
+#:
+#: The rows are the actions the code those principals run actually reaches:
+#: the scheduler tick (``advance_all_plans``/``scan_all_plans``) dispatches
+#: (``plan:dispatch``), merges (``story:merge``), marks done
+#: (``story:mark_done``) and interrupts (``story:interrupt``); a dispatched
+#: worker only patches its own story (``story:patch``). ``plan:approve``,
+#: ``plan:reject``, ``plan:ingest``, ``config:write`` and ``decision:answer``
+#: appear in no row: a system principal never holds human authority, and ADR
+#: 0009 forbids a scheduler approving its own work. ``plan:pause`` (pause /
+#: resume tools) and the scheduler's ``story:patch`` are likewise absent
+#: because no system code path asks for them.
+#:
+#: Keyed by subject, not auth method: a reserved subject stays confined to its
+#: row whatever ``auth_method`` it arrives with. The values are frozensets, so
+#: a decision can never add an action to a row.
+SYSTEM_PRINCIPAL_GRANTS: dict[str, frozenset[Action]] = {
+    SYSTEM_SCHEDULER.subject: frozenset(
+        {
+            Action.PLAN_DISPATCH,
+            Action.STORY_MERGE,
+            Action.STORY_MARK_DONE,
+            Action.STORY_INTERRUPT,
+        }
+    ),
+    SYSTEM_WORKER.subject: frozenset({Action.STORY_PATCH}),
+}
 
 
 @dataclass(frozen=True)
@@ -84,14 +120,18 @@ def _coerce_action(action: Action | str) -> Action | None:
 class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
-    Every other principal — including any future system principal — is denied
-    every action, with one exception: a plan's ``owner`` and its ``delegates``
-    are additionally allowed ``plan:approve``, ``plan:reject`` and
-    ``story:merge``. Ownership is additive only — it can allow a principal the
-    role rule denies, never deny one it allows — and a plan with no owner (every
-    plan written before OWN-01) falls through to the role rule unchanged. ADR
-    0009 requires that a system principal never approve its own plan; ownership
-    is scoped to those three actions and grants nothing else.
+    Every other principal is denied every action, with two exceptions. A plan's
+    ``owner`` and its ``delegates`` are allowed ``plan:approve``,
+    ``plan:reject`` and ``story:merge``; ownership is additive only — it can
+    allow a principal the role rule denies, never deny one it allows — and a
+    plan with no owner (every plan written before OWN-01) falls through to the
+    role rule unchanged. Ownership never applies to a ``system:`` subject: ADR
+    0009 requires that a system principal never approve its own plan.
+
+    The second exception is the reserved ``system:`` principals, which hold
+    exactly their row of :data:`SYSTEM_PRINCIPAL_GRANTS` and nothing else. That
+    branch is decided before ownership is read, so naming a system subject as
+    ``owner`` or ``delegate`` in a manifest grants it nothing.
     """
 
     def allow(
@@ -103,8 +143,20 @@ class LocalPolicy:
         if principal is None:
             return False
 
-        if _coerce_action(action) is None:
+        resolved_action = _coerce_action(action)
+        if resolved_action is None:
             return False
+
+        # A reserved system principal is decided by its grant row alone, before
+        # any manifest is consulted: ownership must never widen a `system:`
+        # subject, or a scheduler could approve the plan it dispatches.
+        if isinstance(principal, Principal) and (
+            principal.subject.startswith(SYSTEM_SUBJECT_PREFIX)
+            or principal.auth_method == SYSTEM_AUTH_METHOD
+        ):
+            return resolved_action in SYSTEM_PRINCIPAL_GRANTS.get(
+                principal.subject, frozenset()
+            )
 
         # Ownership is an ADDITIONAL authority for exactly the three actions a
         # plan's owner governs: it can only allow a principal the role rules
@@ -114,7 +166,7 @@ class LocalPolicy:
         if (
             resource is not None
             and isinstance(principal, Principal)
-            and action
+            and resolved_action
             in (Action.PLAN_APPROVE, Action.PLAN_REJECT, Action.STORY_MERGE)
             and (
                 (resource.owner and principal.subject == resource.owner)

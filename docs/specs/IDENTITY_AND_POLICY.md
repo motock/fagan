@@ -573,6 +573,8 @@ Do not mistake any row of this table for a control that exists.
 | **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. An external anchor now exists for the head hash: `PIPELINE_AUDIT_ANCHOR=file:<absolute path>` appends each chain's `(seq, hash)` head to a log outside `PLAN_DIR` on every daemon tick, and `verify_audit()` reports a cut tail or an edited anchored record against it. The anchor only ratchets — the highest `seq` ever recorded stands, and at equal `seq` the hash recorded first — so a tick after the tampering does not re-anchor the forged head: the verdict persists until an operator resolves it, and retiring a chain is an operator action on the sink because an append-only (or WORM) log cannot un-anchor a head. A log that cannot be read is reported as `anchor log unreadable` and the tick appends nothing, so a broken sink can neither clear a verdict nor re-anchor the head it hides. The sink file is opened with `O_NOFOLLOW` and its mode is re-imposed to `0o600` on the open descriptor, so a pre-existing looser mode is tightened and a symlink planted in a writable sink directory is refused rather than trusted, with the refusal treated as a sink failure. It is opt-in and off by default, and the `file:` sink is only evidence where the pipeline host cannot rewrite it — a WORM or object-lock mount, or a separate host's NFS export with append-only permissions. What is missing is a sink the operator cannot reach from the pipeline host at all (an HTTP or S3/WORM endpoint), so a record cannot yet be proven against a third-party witness, and truncation is undetectable while the variable is unset. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor in the record itself. Dispatch, story status changes (pause/resume, mark-done) and decision requests now record their actor through the policy's allowed/denied audit records rather than in the story's own fields. Checkpoint and the advance tick record only denials — their allowed decisions are taken with `record_allowed=False`, because they run on every agent and scheduler tick — so an allowed one leaves no actor record. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
 
+| **A `system:` principal holding human authority** | `system:scheduler` (auth method `system`) and `system:worker` (auth method `system`) are reserved, non-human identities defined in `app/identity.py`. Their grants are the explicit table `app/policy.py`'s `LocalPolicy` applies, limited to the actions their own code reaches: the scheduler may `plan:dispatch`, `story:merge`, `story:mark_done` and `story:interrupt`; a worker may `story:patch` and nothing else. Neither holds `plan:approve`, `plan:reject`, `plan:ingest`, `config:write` or `decision:answer`, and ownership never applies to a `system:` subject — a manifest that names one as `owner` or `delegate` still denies it approve and reject, so a scheduler can never approve its own work (ADR 0009). No OIDC token can mint such a subject either: `app/oidc.py` refuses a `sub` that claims the reserved `system:` prefix, and every OIDC subject is qualified by its issuer regardless. |
+
 ## 5. The `app/auth.py` import rule
 
 `app/auth.py` must contain **no** `app.*` or `pipeline.*` imports. It is the
@@ -604,9 +606,16 @@ The remaining work, in dependency order:
    and `delegates`, and they may approve, reject and merge that plan's work
    (§2, "Enforcement"). What remains is giving `request_decision` the owner as
    its routing target (ADR 0006).
-3. **System principals.** Add `system:scheduler` and `system:worker` as
-   distinct, narrowly scoped principals that are audited like a human and
-   cannot approve a plan (ADR 0009 section 6).
+3. **System principals.** Landed: `system:scheduler` and `system:worker` are
+   distinct, narrowly scoped principals, defined in `app/identity.py` with the
+   reserved `system:` subject prefix and auth method `system`. Their grants are
+   the explicit table `app/policy.py`'s `LocalPolicy` applies — never ownership,
+   which never applies to a `system:` subject, so neither can approve or reject
+   a plan (ADR 0009 section 6) — and they are audited like a human because a
+   decision records the principal subject it was made for. Binding happens at
+   the daemon and worker entrypoints, which act as these principals rather than
+   as the unbound local operator. `app/oidc.py` refuses any token whose `sub`
+   claims the reserved prefix, so the identity provider can never mint one.
 4. **The audit stream.** Landed: `pipeline/audit.py` appends the ADR 0009
    section 8 record for every decision the policy makes (§2, "Audit stream"),
    except an allowed decision taken with `record_allowed=False` (`checkpoint`);

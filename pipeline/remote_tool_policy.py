@@ -2,8 +2,8 @@
 
 The bearer gate in ``pipeline.remote_transport`` proves who a caller is; it
 does not decide what they may call. Only some tools reach a service path that
-asks ``authorize`` -- the rest (``record_security_audit``, ``review_story``,
-``advance_pipeline`` ...) would run for any authenticated caller. So a
+asks ``authorize`` -- the rest (``save_plan``, ``set_story_status``,
+``record_security_audit`` ...) would run for any authenticated caller. So a
 remote principal may call exactly the tools listed here, and every other tool
 is refused before its handler runs.
 

@@ -264,6 +264,129 @@ def test_truncation_reported_by_the_verify_audit_tool(plan_dir: Path, anchor_fil
 
 
 # --------------------------------------------------------------------------
+# The strongest anchor is never lowered
+# --------------------------------------------------------------------------
+
+
+def test_a_later_tick_does_not_reanchor_a_truncated_head(plan_dir: Path, anchor_file: Path) -> None:
+    """Cutting the tail and waiting one daemon tick must not launder the chain."""
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    before = anchor_file.read_text()
+    _truncate(_stream(plan_dir), keep=1)
+
+    appended = audit_anchor.anchor_heads()  # the next 60s tick
+
+    assert appended == 0
+    assert anchor_file.read_text() == before
+    assert audit_anchor.verify_against_anchor("p") == "truncated below anchored seq 1"
+
+
+def test_truncation_is_still_reported_by_verify_audit_after_a_later_tick(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    _truncate(_stream(plan_dir), keep=1)
+    audit_anchor.anchor_heads()
+
+    from pipeline import server_tools_lifecycle
+
+    assert server_tools_lifecycle.verify_audit()["anchor"]["p"] == "truncated below anchored seq 1"
+
+
+def test_a_later_tick_does_not_reanchor_an_edited_anchored_record(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    """A rewritten record at the anchored seq stays anchored to the original hash."""
+    record = _record()
+    audit_anchor.anchor_heads()
+    forged = {**record, "outcome": "refused"}
+    forged["hash"] = audit_mod._record_hash(forged)
+    _stream(plan_dir).write_text(json.dumps(forged) + "\n")
+    before = anchor_file.read_text()
+
+    appended = audit_anchor.anchor_heads()
+
+    assert appended == 0
+    assert anchor_file.read_text() == before
+    assert audit_anchor.verify_against_anchor("p") == "anchored hash mismatch at seq 0"
+
+
+def test_edited_record_is_still_reported_by_verify_audit_after_a_later_tick(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    record = _record()
+    audit_anchor.anchor_heads()
+    forged = {**record, "outcome": "refused"}
+    forged["hash"] = audit_mod._record_hash(forged)
+    _stream(plan_dir).write_text(json.dumps(forged) + "\n")
+    audit_anchor.anchor_heads()
+
+    from pipeline import server_tools_lifecycle
+
+    assert server_tools_lifecycle.verify_audit()["anchor"]["p"] == "anchored hash mismatch at seq 0"
+
+
+def test_refusing_to_lower_an_anchor_logs_chain_and_seqs_only(
+    plan_dir: Path, anchor_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    _truncate(_stream(plan_dir), keep=1)
+
+    with caplog.at_level(logging.WARNING, logger="pipeline.audit_anchor"):
+        audit_anchor.anchor_heads()
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert "p" in messages
+    assert "1" in messages
+    assert "0" in messages
+    assert str(anchor_file) not in messages
+    assert str(plan_dir) not in messages
+
+
+def test_a_malformed_anchor_line_is_ignored(plan_dir: Path, anchor_file: Path) -> None:
+    """A hand-mangled anchor line is not read as an anchor at all."""
+    _record()
+    anchor_file.write_text(
+        json.dumps({"chain": "p", "seq": None, "hash": ""}) + "\n"
+        + json.dumps({"chain": "p", "seq": "7", "hash": "abc"}) + "\n"
+    )
+
+    assert audit_anchor.verify_against_anchor("p") is None
+
+
+def test_unreadable_stream_is_reported_as_tampered_not_raised(plan_dir: Path, anchor_file: Path) -> None:
+    _record("q")
+    audit_anchor.anchor_heads()
+    stream = _stream(plan_dir, "q")
+    stream.unlink()
+    stream.mkdir()
+
+    assert audit_anchor.verify_against_anchor("q") == "truncated below anchored seq 0"
+
+
+def test_unreadable_stream_does_not_abort_the_anchor_pass(plan_dir: Path, anchor_file: Path) -> None:
+    _record("p")
+    _record("q")
+    audit_anchor.anchor_heads()
+    stream = _stream(plan_dir, "q")
+    stream.unlink()
+    stream.mkdir()
+    _record("p")
+
+    appended = audit_anchor.anchor_heads()
+
+    assert appended == 1
+    assert [line["chain"] for line in _anchor_lines(anchor_file)].count("p") == 2
+
+
+# --------------------------------------------------------------------------
 # Fail closed on an unusable sink
 # --------------------------------------------------------------------------
 

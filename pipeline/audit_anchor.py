@@ -14,6 +14,19 @@ raises the bar - a forger has to edit or delete anchor lines as well as chain
 lines - but the same principal who can rewrite the chain can rewrite the file,
 so it is not tamper-proof evidence. An HTTP or S3 sink is a later story.
 
+Anchoring only ever ratchets upwards. A chain's anchor is the highest ``seq``
+ever recorded for it, and at equal ``seq`` the hash recorded first: a later pass
+can raise the anchor but never lower it, and never replace the hash it already
+vouched for. A head that went backwards (the tail was cut) or that changed hash
+at the anchored ``seq`` (the record was rewritten) is therefore left un-anchored
+and keeps failing verification on every following tick, instead of being
+laundered by the next one. That also means such a verdict is permanent until an
+operator intervenes: a retired chain stays anchored forever, because an
+append-only log cannot un-anchor it (a WORM or object-lock sink cannot be edited
+at all), so retiring a chain is an operator action on the sink - record the
+retirement outside the anchor log, or roll to a fresh sink - never a pipeline
+action.
+
 Off by default: unset or empty means no anchor file is created and verification
 reports nothing. ``file:<absolute path>`` is the only accepted form; any other
 value fails closed with :class:`ValueError` at first use (ADR 0004) rather than
@@ -74,37 +87,60 @@ def _anchor_path() -> Path | None:
     return path
 
 
-def _canonical(record: dict[str, Any]) -> str:
-    return json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
+def _read_records(path: Path, *, context: str) -> Iterator[dict[str, Any]]:
+    """Stream the well-formed records of *path*, in file order.
 
-
-def _records(path: Path) -> list[dict[str, Any]]:
-    """Every well-formed record in *path*, in file order; nothing for a missing file."""
+    The anchor log grows without bound, so it is streamed line by line instead
+    of being read into memory. A missing file yields nothing; an unreadable one
+    is reported once - naming *context* (a chain name) and the error type, never
+    the path or the exception text - and yields nothing, so one damaged stream
+    cannot abort a whole pass.
+    """
     try:
-        text = path.read_text()
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    yield record
     except (FileNotFoundError, NotADirectoryError):
-        return []
-    records: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
+        return
+    except OSError as exc:
+        logger.warning("could not read the audit stream for %s: %s", context, type(exc).__name__)
 
 
-def _latest_anchors(path: Path) -> dict[str, dict[str, Any]]:
-    """The most recent anchor record per chain name."""
-    latest: dict[str, dict[str, Any]] = {}
-    for record in _records(path):
+def _anchors(path: Path) -> dict[str, tuple[int, str]]:
+    """The strongest ``(seq, hash)`` anchor recorded per chain.
+
+    The strongest is the highest ``seq`` ever anchored and, at equal ``seq``, the
+    hash anchored first. Anchoring therefore ratchets: a later pass can only
+    raise a chain's anchor, never lower it or replace the hash already vouched
+    for, so a cut tail or a rewritten record stays visible on every following
+    tick instead of being laundered by the next one. A line without an integer
+    ``seq`` and a non-empty ``hash`` is not an anchor and is ignored.
+    """
+    strongest: dict[str, tuple[int, str]] = {}
+    for record in _read_records(path, context="the anchor log"):
         chain = record.get("chain")
-        if isinstance(chain, str):
-            latest[chain] = record
-    return latest
+        seq = record.get("seq")
+        digest = record.get("hash")
+        if (
+            not isinstance(chain, str)
+            or not isinstance(seq, int)
+            or isinstance(seq, bool)
+            or not isinstance(digest, str)
+            or not digest
+        ):
+            continue
+        prior = strongest.get(chain)
+        if prior is None or seq > prior[0]:
+            strongest[chain] = (seq, digest)
+    return strongest
 
 
 def _chain_streams() -> Iterator[tuple[str, Path]]:
@@ -120,14 +156,23 @@ def _stream_for(chain: str) -> Path:
     return audit.host_audit_path() if chain == HOST_CHAIN else audit.audit_path(chain)
 
 
-def _head(path: Path) -> tuple[int, str] | None:
-    """The ``(seq, hash)`` of the last usable record, or ``None``."""
-    records = _records(path)
-    if not records:
+def _head(path: Path, chain: str) -> tuple[int, str] | None:
+    """The ``(seq, hash)`` of the chain's last usable record, or ``None``.
+
+    Only the tail is read, so anchoring costs one seek per chain however long
+    the stream has grown. An unreadable stream is reported by chain name and
+    error type only, and treated as having no head.
+    """
+    try:
+        record = audit._tail(path)
+    except OSError as exc:
+        logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
         return None
-    seq = records[-1].get("seq")
-    digest = records[-1].get("hash")
-    if not isinstance(seq, int) or not isinstance(digest, str) or not digest:
+    if record is None:
+        return None
+    seq = record.get("seq")
+    digest = record.get("hash")
+    if not isinstance(seq, int) or isinstance(seq, bool) or not isinstance(digest, str) or not digest:
         return None
     return seq, digest
 
@@ -138,18 +183,21 @@ def _append(path: Path, record: dict[str, Any]) -> None:
     fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, (_canonical(record) + "\n").encode("utf-8"))
+        os.write(fd, (audit._canonical(record) + "\n").encode("utf-8"))
     finally:
         os.close(fd)
 
 
 def anchor_heads() -> int:
-    """Anchor every chain head that changed since its last anchor record.
+    """Anchor every chain head, never lowering an anchor already recorded.
 
     Appends ``{"chain": <plan|"host">, "seq": <head seq>, "hash": <head hash>,
-    "at": <utc iso>}`` for each plan chain and the host chain whose head moved.
-    An unchanged head adds nothing, so a daemon that calls this every tick does
-    not grow the log while the stream is quiet.
+    "at": <utc iso>}`` for each plan chain and the host chain whose head moved
+    forward. An unchanged head adds nothing, so a quiet stream does not grow the
+    log. A head that went backwards - the tail was cut - or that changed hash at
+    an already anchored ``seq`` - that record was rewritten - is *not* anchored:
+    the strongest anchor stands, a WARNING names the chain and the two seq
+    values, and the tamper stays reported until an operator resolves it.
 
     Returns:
         How many anchor records were appended; ``0`` when anchoring is off.
@@ -157,26 +205,40 @@ def anchor_heads() -> int:
     path = _anchor_path()
     if path is None:
         return 0
-    known = _latest_anchors(path)
+    known = _anchors(path)
     appended = 0
     for chain, stream in _chain_streams():
-        head = _head(stream)
+        head = _head(stream, chain)
         if head is None:
             continue
         seq, digest = head
         prior = known.get(chain)
-        if prior is not None and prior.get("seq") == seq and prior.get("hash") == digest:
-            continue
+        if prior is not None:
+            prior_seq, prior_digest = prior
+            if seq < prior_seq:
+                logger.warning(
+                    "chain %s reports seq %s below the anchored seq %s; keeping the anchored head",
+                    chain,
+                    seq,
+                    prior_seq,
+                )
+                continue
+            if seq == prior_seq:
+                if digest != prior_digest:
+                    logger.warning(
+                        "chain %s changed hash at the anchored seq %s; keeping the anchored hash",
+                        chain,
+                        seq,
+                    )
+                continue
         _append(path, {"chain": chain, "seq": seq, "hash": digest, "at": datetime.now(UTC).isoformat()})
         appended += 1
     return appended
 
 
-def _verdict(chain: str, anchored: dict[str, Any]) -> str | None:
-    """Compare *chain* with one anchored ``(seq, hash)`` record."""
-    seq = anchored.get("seq")
-    digest = anchored.get("hash")
-    for record in _records(_stream_for(chain)):
+def _verdict(chain: str, seq: int, digest: str) -> str | None:
+    """Compare *chain* with one anchored ``(seq, hash)``."""
+    for record in _read_records(_stream_for(chain), context=chain):
         if record.get("seq") == seq:
             if record.get("hash") == digest:
                 return None
@@ -185,7 +247,7 @@ def _verdict(chain: str, anchored: dict[str, Any]) -> str | None:
 
 
 def verify_against_anchor(chain: str) -> str | None:
-    """Compare *chain* with the last head anchored for it.
+    """Compare *chain* with the strongest head anchored for it.
 
     Returns:
         ``None`` when anchoring is off, when nothing has been anchored for
@@ -193,17 +255,19 @@ def verify_against_anchor(chain: str) -> str | None:
         Otherwise the tamper verdict: ``"truncated below anchored seq N"`` when
         the chain no longer reaches the anchored record - the tail was cut - or
         ``"anchored hash mismatch at seq N"`` when that record was edited.
+        Anchors never lower, so a verdict does not clear itself on a later pass.
     """
     path = _anchor_path()
     if path is None:
         return None
-    anchored = _latest_anchors(path).get(chain)
+    anchored = _anchors(path).get(chain)
     if anchored is None:
         return None
-    return _verdict(chain, anchored)
+    seq, digest = anchored
+    return _verdict(chain, seq, digest)
 
 
-def _anchor_report() -> dict[str, str | None] | None:
+def anchor_report() -> dict[str, str | None] | None:
     """A verdict per anchored chain, or ``None`` when anchoring is off.
 
     The chains come from the anchor log rather than the plan directory, so a
@@ -214,6 +278,6 @@ def _anchor_report() -> dict[str, str | None] | None:
     if path is None:
         return None
     return {
-        chain: _verdict(chain, anchored)
-        for chain, anchored in _latest_anchors(path).items()
+        chain: _verdict(chain, seq, digest)
+        for chain, (seq, digest) in _anchors(path).items()
     }

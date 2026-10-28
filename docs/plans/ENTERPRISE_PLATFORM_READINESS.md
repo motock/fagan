@@ -148,14 +148,18 @@ test-only. The notification channel layer is the template for the rest.
   decisions, plan pause/resume, `story.dispatch` and `story.merge`.
 - **External anchor: opt-in, file-only for now.** `PIPELINE_AUDIT_ANCHOR` ships
   each chain's `(seq, hash)` head to an append-only log on every daemon tick, and
-  `verify_audit()` reports a truncation or a mismatch against it. It is off by
-  default, and the only sink is `file:<absolute path>`: worth anything only where
-  the pipeline host cannot rewrite that path (a WORM or object-lock mount, another
-  host's append-only NFS export) — on local disk a forger who can rewrite the
-  chain can rewrite the anchor too. Nothing is stored write-once by the pipeline
-  itself, an HTTP or S3/WORM sink does not exist yet, and while the variable is
-  unset truncation of the tail is undetectable, so a clean verification only means
-  that no record in the middle was altered. Decisions
+  `verify_audit()` reports a truncation or a mismatch against it. Anchors ratchet:
+  the highest `seq` ever recorded stands, and at equal `seq` the hash recorded
+  first, so cutting a tail or rewriting an anchored record is not laundered by the
+  next tick — it keeps failing verification until an operator resolves it, because
+  an append-only log cannot un-anchor a head and a WORM sink cannot be edited. It
+  is off by default, and the only sink is `file:<absolute path>`: worth anything
+  only where the pipeline host cannot rewrite that path (a WORM or object-lock
+  mount, another host's append-only NFS export) — on local disk a forger who can
+  rewrite the chain can rewrite the anchor too. Nothing is stored write-once by
+  the pipeline itself, an HTTP or S3/WORM sink does not exist yet, and while the
+  variable is unset truncation of the tail is undetectable, so a clean verification
+  only means that no record in the middle was altered. Decisions
   (`<plan>.decisions.json`) and per-story journals
   (`<plan>.<story>.journal.json`) also keep their own files for now.
 - `record_security_audit` records *that* an audit happened and at which SHA,

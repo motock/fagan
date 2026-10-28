@@ -284,7 +284,7 @@ def verify_audit() -> dict[str, Any]:
         "host": audit.verify_host_audit_chain(),
     }
     if os.environ.get(audit_anchor.PIPELINE_AUDIT_ANCHOR, "").strip():
-        result["anchor"] = audit_anchor._anchor_report()
+        result["anchor"] = audit_anchor.anchor_report()
     return result
 
 

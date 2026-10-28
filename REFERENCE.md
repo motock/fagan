@@ -887,11 +887,30 @@ were not removed. Setting `PIPELINE_AUDIT_ANCHOR` supplies that head and adds an
 
 Each tick, `pipeline/audit_anchor.py` writes
 `{"chain": <plan|"host">, "seq": <head seq>, "hash": <head hash>, "at": <utc iso>}`
-for every plan chain and the host chain whose head changed since its last anchor
-record. An unchanged head writes nothing, so a quiet pipeline does not grow the
-log. Lines are appended with `O_APPEND` and the file is never rewritten. A sink
-failure is logged at `WARNING` with the error type only and never stops the plan
-sweep, because tamper evidence must not be able to halt dispatch.
+for every plan chain and the host chain whose head moved forward since the
+strongest anchor recorded for it. An unchanged head writes nothing, so a quiet
+pipeline does not grow the log. Lines are appended with `O_APPEND` and the file is
+never rewritten. A sink failure is logged at `WARNING` with the error type only and
+never stops the plan sweep, because tamper evidence must not be able to halt
+dispatch.
+
+Anchoring only ratchets upwards. The anchor read back for a chain is the highest
+`seq` ever recorded for it and, at equal `seq`, the hash recorded first: a later
+tick can raise it but never lower it, and never replace the hash it already
+vouched for. A head that went backwards (the tail was cut) or that changed hash at
+an already anchored `seq` (that record was rewritten) is therefore *not*
+re-anchored — the pass keeps the stronger anchor and logs a `WARNING` naming the
+chain and the two seq values only — so the tamper stays reported on every
+following tick instead of being laundered by the next one.
+
+That makes such a verdict permanent until an operator resolves it, which is
+deliberate: the pipeline cannot distinguish a forgery from a legitimate change, so
+it never clears one by itself. Retiring a chain — archiving a plan for good, say —
+is an operator action on the sink, not a pipeline action: an append-only log
+cannot un-anchor a head, and a WORM or object-lock sink cannot be edited at all,
+so the retirement is recorded outside the anchor log (an operator note against the
+anchored head) or the deployment rolls to a fresh sink and the new log starts from
+the then-current heads.
 
 `verify_audit()` then reports, under `anchor`, one entry per anchored chain —
 `None` when the anchored `(seq, hash)` is still in the chain,

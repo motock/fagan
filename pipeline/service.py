@@ -25,7 +25,7 @@ from typing import Any
 
 from pipeline import cross_plan
 from pipeline.plan_approval import PlanApprovalMixin
-from pipeline.telemetry import record_dispatch_attempt, record_dispatch_outcome
+from pipeline.telemetry import record_dispatch_attempt
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -893,14 +893,14 @@ class PipelineService(PlanApprovalMixin):
             logger.exception(
                 "dispatch_story failed for plan=%s story=%s", plan_name, story_key
             )
-            # The funnel is the one place every dispatch passes through, so
-            # each attempt is recorded here exactly once: a launch, a skip, a
-            # pending test-author phase, or a failure.
-            record_dispatch_outcome("failed")
-            return {
+            result = {
                 "ok": False,
                 "error": f"dispatch failed: {type(e).__name__}: {e}",
             }
+        # Every attempt reaches this funnel exactly once, so the outcome is
+        # recorded from its result in one place - a launch, a skip, a pending
+        # test-author phase, or a failure - never per enqueue plus per worker
+        # callback. A ValueError above is malformed input, not an attempt.
         record_dispatch_attempt(result)
         return result
 

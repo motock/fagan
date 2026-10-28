@@ -16,7 +16,7 @@ import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from . import audit, paths, security_audit
+from . import audit, audit_anchor, paths, security_audit
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -267,7 +267,10 @@ def verify_audit() -> dict[str, Any]:
     config write — is verified the same way and reported under ``host``.
 
     A chain with no externally recorded head cannot prove that trailing records
-    were not removed, so truncation of the tail verifies intact.
+    were not removed, so truncation of the tail verifies intact. When
+    ``PIPELINE_AUDIT_ANCHOR`` names a sink, the answer gains an ``anchor``
+    mapping from the same chain names to this tool's tamper verdict for each
+    one, which is what catches a cut tail.
     """
     probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
     suffix = probe.name
@@ -275,7 +278,14 @@ def verify_audit() -> dict[str, Any]:
     for path in sorted(probe.parent.glob(f"*{suffix}")):
         plan_name = path.name.removesuffix(suffix)
         plans[plan_name] = audit.verify_audit_chain(plan_name)
-    return {"ok": True, "plans": plans, "host": audit.verify_host_audit_chain()}
+    result: dict[str, Any] = {
+        "ok": True,
+        "plans": plans,
+        "host": audit.verify_host_audit_chain(),
+    }
+    if os.environ.get(audit_anchor.PIPELINE_AUDIT_ANCHOR, "").strip():
+        result["anchor"] = audit_anchor._anchor_report()
+    return result
 
 
 # The tools this module provides, in registration order. pipeline.server

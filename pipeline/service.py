@@ -25,6 +25,7 @@ from typing import Any
 
 from pipeline import cross_plan
 from pipeline.plan_approval import PlanApprovalMixin
+from pipeline.telemetry import record_dispatch_attempt
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -878,7 +879,7 @@ class PipelineService(PlanApprovalMixin):
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         try:
-            return _dispatch_story_impl(plan_name, story_key)
+            result = _dispatch_story_impl(plan_name, story_key)
         except ValueError:
             # _validate_key's rejection of a malformed plan/story key (path
             # traversal, disallowed characters) is a deliberate input-
@@ -892,10 +893,16 @@ class PipelineService(PlanApprovalMixin):
             logger.exception(
                 "dispatch_story failed for plan=%s story=%s", plan_name, story_key
             )
-            return {
+            result = {
                 "ok": False,
                 "error": f"dispatch failed: {type(e).__name__}: {e}",
             }
+        # Every attempt reaches this funnel exactly once, so the outcome is
+        # recorded from its result in one place - a launch, a skip, a pending
+        # test-author phase, or a failure - never per enqueue plus per worker
+        # callback. A ValueError above is malformed input, not an attempt.
+        record_dispatch_attempt(result)
+        return result
 
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)

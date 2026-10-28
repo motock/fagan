@@ -28,6 +28,7 @@ from app.policy import Action, Resource, default_authorizer, is_allowed
 
 from .actor import current_principal
 from .audit import append_host_audit, record_audit
+from .telemetry import record_authz_decision
 
 logger = logging.getLogger("pipeline")
 
@@ -137,6 +138,11 @@ def authorize(
         action,
         resource_for(manifest, plan_name, story_key),
     )
+    # The decision is final here, so record it once with the action label and
+    # the outcome word only. The principal is deliberately not a label: it is
+    # PII, and per-subject series would grow without bound. It stays in the
+    # audit record and the denial warning.
+    record_authz_decision(action_label, "allowed" if allowed else "denied")
     if allowed:
         if record_allowed:
             record_audit(

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from . import audit_anchor, paths, security_audit
 from .events import make_event
 from .persistence import _notify_user
+from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,25 @@ def _scan_security_audits(repo_plans: dict[str, str]) -> None:
         _SECURITY_DUE_LAST_EMIT[dedup_key] = now_mono
 
 
+def _manifest_status_counts(manifest: dict) -> dict[str, int]:
+    """Count one loaded manifest's stories by status (pure).
+
+    Used by the scan tick to publish the gauge snapshot: the counts come from
+    the manifest the scan already parsed, so collection never touches disk.
+    """
+    counts: dict[str, int] = {}
+    stories = manifest.get("stories") or {}
+    if not isinstance(stories, dict):
+        return counts
+    for story in stories.values():
+        if not isinstance(story, dict):
+            continue
+        status = story.get("status")
+        if isinstance(status, str):
+            counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
 def scan_all_plans(bus):
     """Scan all plan manifests in :data:`PLAN_DIR` and publish events.
 
@@ -184,6 +204,8 @@ def scan_all_plans(bus):
     """
     events: list[dict] = []
     repo_plans: dict[str, str] = {}
+    status_counts: dict[str, int] = {}
+    capacity_in_use = 0
     for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         try:
@@ -194,6 +216,10 @@ def scan_all_plans(bus):
             continue
         if manifest.get("paused"):
             continue
+        counts = _manifest_status_counts(manifest)
+        capacity_in_use += counts.get(CAPACITY_IN_USE_STATUS, 0)
+        for status, count in counts.items():
+            status_counts[status] = status_counts.get(status, 0) + count
         events.extend(scan_done_markers(manifest, plan_name, bus))
         repo_root = manifest.get("repo_root")
         if repo_root and os.path.isdir(repo_root):
@@ -210,4 +236,8 @@ def scan_all_plans(bus):
         audit_anchor.anchor_heads()
     except Exception as exc:  # noqa: BLE001 - the sweep must survive a broken sink
         logger.warning("audit anchor pass failed: %s", type(exc).__name__)
+    # Last statement of a successful tick: publish the gauge snapshot built
+    # from the manifests above. A tick that raised never reaches this line, so
+    # the previous complete snapshot stays published instead of being zeroed.
+    update_manifest_snapshot(status_counts, capacity_in_use)
     return events

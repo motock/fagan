@@ -23,5 +23,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0007](0007-plan-approval-at-activation.md) | Plans are approved before activation, not before ingestion | Accepted |
 | [0008](0008-shared-control-plane-per-repo-workers.md) | Enterprise topology is a shared control plane with per-repo workers | Proposed |
 | [0009](0009-tenancy-and-authorization-model.md) | Tenancy and authorization are a service-layer policy over a verified principal | Proposed |
+| [0010](0010-event-delivery-contract-and-nats-jetstream.md) | Events have an at-least-once delivery contract; NATS JetStream is the default broker | Proposed |
 
 See [`template.md`](template.md) when adding one.

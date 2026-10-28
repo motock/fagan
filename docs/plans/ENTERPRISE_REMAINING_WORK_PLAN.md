@@ -1,6 +1,6 @@
 # Enterprise readiness — remaining work roadmap
 
-- **Status:** drafted 2026-10-28 on `855cc1e`. Ten plan files, none ingested.
+- **Status:** drafted 2026-10-28 on `855cc1e`. Eleven plan files, none ingested.
   Only the first plan has been preflighted; every other plan's stories carry
   `Preflight: NOT RUN`, which `ingest_plan` refuses, so none of them can be
   dispatched by accident before its preflight is done.
@@ -33,12 +33,13 @@ provider to `claude`, which skips the preflight gate.
 | 6 | [`DASHBOARD_OIDC_LOGIN_PLAN.json`](DASHBOARD_OIDC_LOGIN_PLAN.json) | `dashboard-oidc-login` | LG-01..03 | Not run | — |
 | 7 | [`OBSERVABILITY_OTEL_PLAN.json`](OBSERVABILITY_OTEL_PLAN.json) | `observability-otel` | OT-01..02 | Not run | — |
 | 8 | [`EVENTING_BROKER_PREP_PLAN.json`](EVENTING_BROKER_PREP_PLAN.json) | `eventing-broker-prep` | EV-01..02 | Not run | — |
+| 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Not run | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) (Proposed) |
 | 9 | [`CONTROL_PLANE_STORE_PLAN.json`](CONTROL_PLANE_STORE_PLAN.json) | `control-plane-store` | ST-01..03 | Not run | **ADR 0008 accepted** (a decision, not a story) |
-| 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Not run | AA-01, RMH-02, LG-02 (on DK-03) |
+| 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Not run | AA-01, RMH-02, LG-02, BR-04 (on DK-03) |
 
 `blocked_by` entries use the plan names in the third column, so ingest each
 plan under exactly that name. Plans 1–3 finish ADR 0008 stage 1. Plans 4–6
-harden what Phase 6 shipped. Plans 7–8 are observability and broker prep.
+harden what Phase 6 shipped. Plans 7, 8 and 8b are observability, broker prep and the NATS JetStream adapter.
 Plan 9 is stage 2. Plan 10 is the deployable smoke stack. Within a plan, the
 stories are chained by `dependencies` because most of them edit the same files.
 
@@ -102,6 +103,12 @@ They pass on a normal host and are not conflicts.
    (stage 3).
 7. **The newly gated tools stay off the remote MCP allowlist.** Widening the
    remote surface is a separate decision.
+8. **NATS JetStream is the default broker (ADR 0010, Proposed).** Delivery is
+   at-least-once with idempotent handlers, bounded redelivery and a dead-letter
+   subject; there is no ordering guarantee. The scheduler daemon is the only
+   consumer, and the in-process bus stays the default and stays best-effort.
+   Kafka was considered; it fits a high-volume event-streaming estate, not this
+   pipeline's thousands of events per day.
 
 ## Open questions with no plan yet
 
@@ -121,8 +128,10 @@ They pass on a normal host and are not conflicts.
   and namespaced branches and worktrees by default on a shared server.
 - **Moving the sidecars into the database:** notifications, audit, journals and
   decisions are still files under `PLAN_DIR` even with `SqliteStore`.
-- **A broker adapter** (NATS, Redis Streams, …). It needs plan 8 first and a
-  choice of broker.
+- **A Kafka adapter.** ADR 0010 makes NATS JetStream the default and keeps the
+  contract broker-neutral, so Kafka can be a second implementation that passes
+  the same contract suite. It is not drafted until someone needs to publish
+  into an existing Kafka estate.
 - **An HTTP/S3 object-lock audit anchor sink, and a shared rate limiter for
   more than one replica.** Plans 4 and 5 ship single-host versions.
 
@@ -139,13 +148,13 @@ pieces must exist first, or the containers would show nothing:
 | IdP (Keycloak) | API and MCP clients: yes (OIDC bearer). Browser: **no**, the dashboard has no login flow, so every `/api/` call from the UI is a 401. | Plan 6 (LG-01..03). |
 | TLS | No. The remote MCP transport has no TLS of its own. | A Caddy proxy in DK-03. |
 | Lightweight DB | **No.** `FileStore` is the only `Store`. A database container would sit unused. | Plan 9 (SQLite needs no container; Postgres waits on stage 3). |
-| Message broker | **No.** Only the in-process and JSONL buses exist, and no broker adapter. | Plan 8 is prep only; the adapter is unplanned (above). |
+| Message broker | **No.** Only the in-process and JSONL buses exist, and no broker adapter. | Plans 8 and 8b (NATS JetStream, ADR 0010); DK-03 adds a `nats` service and asserts delivery survives a restart. |
 | OTel collector and Grafana | **No** traces or metrics exist. JSON logs (`PIPELINE_LOG_FORMAT=json`) could already feed Loki. | Plan 7. |
 | A model to run against | CI cannot call Claude or a local model. | DK-02, a scripted OpenAI-compatible stub. |
 | A forge for PRs and merges | `pipeline/forge.py` knows only GitHub and GitLab. | The smoke run stops at "reviewed, merge parked". A real forge, a GitLab container or a new adapter is a separate decision. |
 | Authorization worth smoke-testing | Mostly. Some write tools are unchecked, reads are not tenant-scoped, and there is no rate limiting. | Plans 1, 5. |
 
-So the order is plans 1–9, then plan 10. Adding the database, broker and
+So the order is plans 1–9 (including 8b), then plan 10. Adding the database, broker and
 Grafana containers only once their adapters exist also follows ADR 0004's
 warning: a container nothing uses gives a smoke test that passes while the
 feature is absent.

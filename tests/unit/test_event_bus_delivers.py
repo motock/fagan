@@ -14,7 +14,7 @@ directions, and the fallback taken for a bus object that predates the method.
 from typing import ClassVar
 
 import pipeline.server  # noqa: F401  -- breaks the pre-existing import cycle
-from pipeline import event_wiring, persistence
+from pipeline import event_wiring, notification_outbox, paths, persistence
 from pipeline.events import EventBus, InProcessEventBus, JsonlEventBus
 
 
@@ -27,10 +27,20 @@ def _noop_handler(event):
 
 
 def _plan_dir(tmp_path, monkeypatch):
-    """Point the notifications log at a per-test directory."""
+    """Point every notification writer at a per-test directory.
+
+    The direct write in ``persistence._notify_user`` reads
+    ``persistence.PLAN_DIR`` at call time, but the production sinks resolve
+    their own module-level bindings: ``notification_sinks`` re-reads
+    ``persistence.PLAN_DIR``, while ``notification_outbox`` captured
+    ``paths.PLAN_DIR`` at import. Patch all three so no sink can append into the
+    repository's real plan directory.
+    """
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
     monkeypatch.setattr(persistence, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(notification_outbox, "PLAN_DIR", plan_dir)
     return plan_dir
 
 

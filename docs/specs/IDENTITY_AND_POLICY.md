@@ -398,9 +398,12 @@ against the implementation:
 
 **`authorize(action, *, plan_name, story_key=None, manifest=None) -> dict | None`**
 is the single entry point the service calls. It returns `None` when the action
-is allowed and a refusal dict `{"ok": False, "error": ...}` when it is denied —
-the same shape every mutating service operation already returns, so a refusal
-needs no special handling at the call site. The steps are:
+is allowed and a refusal dict `{"ok": False, "forbidden": True, "action": ...,
+"error": ...}` when it is denied. `ok` and `error` are the shape every mutating
+service operation already returns, so a call site that only checks `ok` needs no
+change; `forbidden` and `action` let an HTTP adapter tell a refusal from any other
+failure (`app/dashboard_refusal.py`). `refusal_for_host_config` returns the same
+shape. The steps are:
 
 1. If enforcement is disabled, return `None` (allow) — and log exactly one
    `WARNING` at first use, so an operator who set the kill switch sees it in the

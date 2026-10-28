@@ -592,6 +592,12 @@ class PipelineService(PlanApprovalMixin):
     def mark_story_in_progress(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
+        from .authorization import authorize
+        # Claiming a story is the first step of dispatch, so it is decided as
+        # plan:dispatch rather than as a status patch.
+        refusal = authorize("plan:dispatch", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
@@ -615,6 +621,22 @@ class PipelineService(PlanApprovalMixin):
                    summary: str,
                    next_hint: str = "",
                   ) -> dict[str, Any]:
+        # Validate before gating: the authorization check reads the manifest by
+        # name and appends to the notification sidecar on denial, so a traversal
+        # must be rejected before it can reach either.
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        from .authorization import authorize
+        # checkpoint runs on every agent tick, so its allowed decisions would
+        # drown the audit chain; its denials are still recorded in full.
+        refusal = authorize(
+            "story:patch",
+            plan_name=plan_name,
+            story_key=story_key,
+            record_allowed=False,
+        )
+        if refusal is not None:
+            return refusal
         return _checkpoint_impl(plan_name, story_key, step, summary, next_hint)
 
     
@@ -790,6 +812,16 @@ class PipelineService(PlanApprovalMixin):
         return {"ok": True, "plan": plan}
 
     def set_story_status(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:
+        # Validate before gating: the authorization check reads the manifest by
+        # name and appends to the notification sidecar on denial, so a traversal
+        # must be rejected before it can reach either. The invalid-status check
+        # stays in the impl, behind the gate.
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        from .authorization import authorize
+        refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
         return _set_story_status_impl(self, plan_name, story_key, status)
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     def patch_story(

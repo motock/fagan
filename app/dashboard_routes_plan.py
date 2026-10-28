@@ -92,6 +92,7 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
         )
     next_hint = body.get("next_hint", "")
     result = _service.checkpoint(plan_name, story_key, step, summary, next_hint)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

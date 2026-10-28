@@ -396,7 +396,7 @@ against the implementation:
 | `"0"` / `"False"` / `" OFF "` / `"disabled"` | `False` |
 | `"offf"` / `"noo"` / `"true"` | `True` |
 
-**`authorize(action, *, plan_name, story_key=None, manifest=None) -> dict | None`**
+**`authorize(action, *, plan_name, story_key=None, manifest=None, record_allowed=True) -> dict | None`**
 is the single entry point the service calls. It returns `None` when the action
 is allowed and a refusal dict `{"ok": False, "forbidden": True, "action": ...,
 "error": ...}` when it is denied. `ok` and `error` are the shape every mutating
@@ -445,6 +445,13 @@ carrying the action and the principal subject, so an operator sees who was
 turned away and from what. The same denial is also appended to the plan's audit
 stream (§2, "Audit stream").
 
+**`record_allowed=False`** keeps the decision but writes no `allowed` record;
+denials are recorded in full either way. It exists for operations that run
+continuously rather than when a human acts — `checkpoint` is the case it
+serves, reached by every agent tick and every `checkpoint_story` call — where an
+`allowed` record per call would bury the audit chain without adding a fact
+worth having.
+
 **What is enforced today.** Every action in the `Action` enum:
 
 | Action | Status |
@@ -455,8 +462,8 @@ stream (§2, "Audit stream").
 | `plan:reject` | enforced (`pipeline/plan_approval.py`) |
 | `plan:pause` | enforced for both pause and resume (`pipeline/merge.py`) |
 | `plan:ingest` | enforced (`pipeline/service.py`, `ingest_plan`) |
-| `plan:dispatch` | enforced (`pipeline/dispatch.py`) |
-| `story:patch` | enforced (`pipeline/service.py`, `patch_story`) |
+| `plan:dispatch` | enforced (`pipeline/dispatch.py`, and `pipeline/service.py`, `mark_story_in_progress` — claiming a story is the first step of dispatch) |
+| `story:patch` | enforced (`pipeline/service.py`, `patch_story`, `set_story_status` and `checkpoint`; `checkpoint` records denials only) |
 | `story:interrupt` | enforced (`pipeline/service.py`, `interrupt_story`) |
 | `decision:answer` | enforced on the dashboard decision route (`app/dashboard.py`) |
 | `config:write` | enforced for `set_plan_role_config` and `patch_plan` (`pipeline/service.py`), and for `set_role_default` through `refusal_for_host_config`, which decides against an empty resource and records in `<PLAN_DIR>/.audit.host.jsonl` because the model registry belongs to the host, not to a plan |
@@ -536,7 +543,7 @@ Do not mistake any row of this table for a control that exists.
 
 | Not implemented | Consequence today |
 | --- | --- |
-| **Enforcement outside the `Action` enum** | Every enum action is enforced (§2, "Enforcement"). Mutating MCP tools whose service path never calls `authorize()` — `save_plan`, `set_story_status`, `mark_story_in_progress`, `checkpoint`, `checkpoint_story`, `record_security_audit`, `review_story`, `advance_pipeline`, `advance_all_plans`, `decompose_plan` and `request_decision` — run for any principal. The dashboard's `set_role_default` route is not one of them: it requires `config:write`, decided against an empty resource because `model_registry.json` is host-scoped rather than owned by a plan, and the decision is recorded in `<PLAN_DIR>/.audit.host.jsonl`. |
+| **Enforcement outside the `Action` enum** | Every enum action is enforced (§2, "Enforcement"). Mutating MCP tools whose service path never calls `authorize()` — `save_plan`, `record_security_audit`, `review_story`, `advance_pipeline`, `advance_all_plans`, `decompose_plan` and `request_decision` — run for any principal. The dashboard's `set_role_default` route is not one of them: it requires `config:write`, decided against an empty resource because `model_registry.json` is host-scoped rather than owned by a plan, and the decision is recorded in `<PLAN_DIR>/.audit.host.jsonl`. |
 | **Plan owner / author / delegate records** | A plan's manifest now records an `owner` and `delegates`, but `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined without being assigned to any principal, and `request_decision` has no owner to route to. Ownership is chosen at ingest, not authored: on a first ingest (no prior manifest) only the local operator may set an `owner` that differs from the caller, defaulting to the ingester, and `delegates`, defaulting to none; any other first-ingest caller owns the plan they created, has its delegates dropped, and its ignored naming is audited as `plan:ownership_change` with outcome `ignored`. On every later ingest — including a wholesale-replace (`overwrite=True`) re-ingest — the manifest's existing ownership is the starting point; the plan's `owner` replaces it only when the plan names one and the plan's `delegates` replace them only when that key is present, and nothing is recorded when the result is unchanged. Any such change is accepted only when the ingester is the local operator or the plan's current non-empty owner — a delegate cannot change ownership, and anyone else is refused with no manifest written. A manifest written before ownership existed stays owner-less on re-ingest unless the local operator names an owner. Every attempted change, allowed or denied, is recorded as `plan:ownership_change` in the plan's audit stream with the from/to owner and whether the delegates changed. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |

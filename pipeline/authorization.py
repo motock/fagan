@@ -12,6 +12,9 @@ semantics:
   shape every mutating service operation already returns;
 * a refusal is recorded in the plan's notification sidecar, so an operator can
   see who was turned away and from what, before the audit stream exists;
+* a denial always reaches the audit stream; an allowed decision does unless the
+  caller passes ``record_allowed=False``, which exists for the high-frequency
+  operations whose allowed records would bury the chain;
 * anything unexpected -- an unreadable manifest, a policy that raises -- lands
   denied, never allowed.
 """
@@ -101,8 +104,18 @@ def authorize(
     plan_name: str,
     story_key: str | None = None,
     manifest: dict | None = None,
+    record_allowed: bool = True,
 ) -> dict | None:
-    """Return a refusal dict when *action* is denied, or ``None`` when allowed."""
+    """Return a refusal dict when *action* is denied, or ``None`` when allowed.
+
+    ``record_allowed=False`` keeps the decision but skips the ``allowed`` audit
+    record; denials are always recorded (sidecar, audit and warning log), because
+    a denial is what an investigator needs. The option exists for operations that
+    run on a high-frequency schedule -- ``checkpoint`` in particular, which every
+    agent tick and every MCP ``checkpoint_story`` call reaches -- where writing
+    an ``allowed`` record per call would bury the audit chain in noise without
+    adding a fact worth having. Refusals of those operations stay fully audited.
+    """
     global _warned_disabled
 
     if not enforcement_enabled():
@@ -125,13 +138,14 @@ def authorize(
         resource_for(manifest, plan_name, story_key),
     )
     if allowed:
-        record_audit(
-            plan_name,
-            action=action_label,
-            outcome="allowed",
-            target={"plan": plan_name, "story": story_key or ""},
-            detail={"principal": principal.subject},
-        )
+        if record_allowed:
+            record_audit(
+                plan_name,
+                action=action_label,
+                outcome="allowed",
+                target={"plan": plan_name, "story": story_key or ""},
+                detail={"principal": principal.subject},
+            )
         return None
     _record_denial(action_label, principal.subject, plan_name, story_key)
     record_audit(

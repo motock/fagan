@@ -45,6 +45,7 @@ def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
 def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.mark_story_in_progress(plan_name, story_key)."""
     result = _service.mark_story_in_progress(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -70,6 +71,7 @@ def set_story_status_route(
 ) -> dict[str, Any]:
     """Delegates to _service.set_story_status(plan_name, story_key, status)."""
     result = _service.set_story_status(plan_name, story_key, body.status)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,

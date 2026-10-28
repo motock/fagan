@@ -881,6 +881,9 @@ Actions recorded today:
 
 - `plan:approve` / `plan:reject` — the authorization check for a plan decision.
 - `plan:pause` — the authorization check for pause *and* resume.
+- `plan:dispatch` — the authorization check for claiming a story.
+- `story:patch` — the authorization check for a status change; checkpoint
+  denials only.
 - `story:merge` / `story:mark_done` — the authorization checks for merging and for
   the manual done transition.
 - `plan.approved` / `plan.changes_requested` — the decision itself, outcome
@@ -2152,11 +2155,19 @@ actor's policy:
 | `plan:approve` | approving a plan |
 | `plan:reject` | rejecting a plan |
 | `plan:pause` | both pausing and resuming a plan |
+| `plan:ingest` | ingesting a plan |
+| `plan:dispatch` | dispatching a story, and claiming it with `mark_story_in_progress` |
+| `story:patch` | patching a story, setting its status, and checkpointing it |
+| `story:interrupt` | interrupting a running story |
+| `decision:answer` | answering a decision from the dashboard |
+| `config:write` | a plan's role config, `patch_plan`, and the host-wide role defaults |
 
 A refusal is not an exception: the call returns `{"ok": false, "error": ...}`
 and an `authorization_denied` record is appended to the plan's notification
 sidecar, so the denial is visible next to the notifications it refused to
-trigger.
+trigger. Checkpoint is the one action whose denials are recorded but whose
+allowed decisions are not written to the audit stream: it runs on every agent
+tick, so an allowed record per call would bury the chain.
 
 A caller arriving through the dashboard's chat-stream `k-` pass-through carries
 no identity. Such a caller is refused these actions — that is intended, not a

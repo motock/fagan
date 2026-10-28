@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 
+from . import telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus
 from .notification_outbox import outbox_sink
@@ -61,6 +62,11 @@ def build_bus() -> EventBus:
     bus.subscribe("agent_done", wake_handler)
     bus.subscribe("notification", file_log_sink)
     bus.subscribe("notification", outbox_sink)
+    # Lifecycle tracing is opt-in: with PIPELINE_OTEL_ENDPOINT unset this adds
+    # no handler at all, so an untraced process pays nothing per tick.
+    if telemetry.enabled():
+        for event_type in telemetry.LIFECYCLE_EVENT_TYPES:
+            bus.subscribe(event_type, telemetry.record_lifecycle_event)
     return bus
 
 # Process‑level singleton for the event bus.

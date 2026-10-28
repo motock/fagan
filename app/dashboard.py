@@ -79,7 +79,13 @@ from app.dashboard_routes_story import (
 from app.identity import IdentityError
 from app.oidc import OidcProvider, build_identity_provider
 from app.story_replay import build_replay_events  # noqa: F401
-from pipeline import config_provenance, guard_liveness, preflight, story_metrics
+from pipeline import (
+    config_provenance,
+    guard_liveness,
+    preflight,
+    story_metrics,
+    telemetry,
+)
 from pipeline.actor import (
     ANONYMOUS,
     actor_id,
@@ -153,8 +159,20 @@ async def _enforce_api_key(request: Request, call_next):
     # written downstream are stamped with it.
     correlation = request_correlation_id(request.headers.get("x-correlation-id"))
 
+    # One opt-in trace span per /api/ request. It carries the method, the
+    # ROUTE TEMPLATE (never the concrete path) and the status -- no query
+    # string, headers or body. Every return below goes through _tagged, so a
+    # refusal is traced with its status too.
+    request_span = (
+        telemetry.start_request_span(request, correlation)
+        if request.url.path.startswith("/api/")
+        else None
+    )
+
     def _tagged(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = correlation
+        if request_span is not None:
+            request_span.finish(response.status_code)
         return response
 
     if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):

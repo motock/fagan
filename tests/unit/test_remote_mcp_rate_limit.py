@@ -491,3 +491,131 @@ def test_429_body_matches_the_401_shape_and_leaks_nothing(
     for secret in (TOKEN.encode(), b"alice", b"203.0.113.9", b"ratelimit", b"RateLimit",
                    limit.encode()):
         assert secret not in body
+
+
+# ---------------------------------------------------------------------------
+# Part 5: the bucket map is bounded (client addresses are attacker-influenced)
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_map_is_bounded_and_fails_closed_under_distinct_clients(
+    gate: tuple[BearerAuthMiddleware, _RecordingApp, _StubProvider],
+    clock: _FakeClock,
+) -> None:
+    """Rotating source addresses must not grow the bucket map without bound."""
+    middleware, _app, provider = gate
+    limiter = middleware._limiter
+    limit = limiter.max_entries
+    assert limit > 0, "the failed-auth bucket set must be bounded"
+
+    async def run(scope: dict[str, Any]) -> int:
+        sent: list[dict[str, Any]] = []
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await middleware(scope, receive, send)
+        return _status(sent)
+
+    async def burst(clients: list[str], credential: str) -> list[int]:
+        return [
+            await run(_http_scope(_auth(credential), client=client))
+            for client in clients
+        ]
+
+    statuses = asyncio.run(
+        burst([f"2001:db8::{index:x}" for index in range(limit)], "bad-token")
+    )
+    assert statuses == [401] * limit, "each distinct client is charged normally"
+    assert limiter.failed_auth_buckets <= limit
+
+    before = provider.calls
+    overflow = asyncio.run(burst(["2001:db8:dead:beef::1"], "bad-token"))
+    assert overflow == [429], "a saturated map fails closed, never grows"
+    assert provider.calls == before, "a fail-closed rejection costs no JWKS work"
+    assert limiter.failed_auth_buckets <= limit
+
+    # Once the live buckets refill they carry no state worth keeping, so they
+    # are dropped and the set serves new clients again.
+    clock.t = 60.0
+    fresh = asyncio.run(burst(["2001:db8:dead:beef::2"], "bad-token"))
+    assert fresh == [401], "refilled buckets are evictable, so the set recovers"
+    assert limiter.failed_auth_buckets <= limit
+
+
+def test_malformed_forwarded_for_hop_does_not_collapse_clients_into_one_bucket(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """A junk hop must not make every proxied client share the proxy's bucket."""
+    env.setenv(TRUSTED_PROXIES_ENV, "10.0.0.0/8")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+    for _ in range(10):
+        sent: list[dict[str, Any]] = []
+        scope = _http_scope(
+            _auth("bad-token"), _xff("203.0.113.9, not-an-ip"), client="10.0.0.5"
+        )
+        _send(middleware, scope, sent)
+        assert _status(sent) == 401
+
+    blocked: list[dict[str, Any]] = []
+    _send(
+        middleware,
+        _http_scope(_auth("bad-token"), _xff("203.0.113.9, not-an-ip"), client="10.0.0.5"),
+        blocked,
+    )
+    assert _status(blocked) == 429
+
+    other: list[dict[str, Any]] = []
+    _send(
+        middleware,
+        _http_scope(
+            _auth("bad-token"), _xff("198.51.100.4, not-an-ip"), client="10.0.0.5"
+        ),
+        other,
+    )
+    assert _status(other) == 401, "a malformed hop must not widen one client's blast radius"
+
+
+@pytest.mark.parametrize("value", ["+5", " 5", "5 ", "0x10", "1_000"])
+def test_non_canonical_auth_fail_count_refuses_startup(
+    env: pytest.MonkeyPatch, clock: _FakeClock, value: str
+) -> None:
+    env.setenv(AUTH_FAIL_ENV, value)
+    with pytest.raises(ValueError, match=AUTH_FAIL_ENV):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+
+def test_non_canonical_request_count_refuses_startup(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    env.setenv(REQUESTS_ENV, "+120")
+    with pytest.raises(ValueError, match=REQUESTS_ENV):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+
+@pytest.mark.parametrize("value", ["10.0.0.5/8", "2001:db8::1/32", "10.0.0.0/33"])
+def test_trusted_proxy_that_widens_the_set_refuses_startup(
+    env: pytest.MonkeyPatch, clock: _FakeClock, value: str
+) -> None:
+    """A CIDR with host bits set would silently trust a wider range than written."""
+    env.setenv(TRUSTED_PROXIES_ENV, value)
+    with pytest.raises(ValueError, match=TRUSTED_PROXIES_ENV):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+
+def test_trusted_proxy_logs_the_normalised_set_at_startup(
+    env: pytest.MonkeyPatch,
+    clock: _FakeClock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env.setenv(TRUSTED_PROXIES_ENV, " 10.0.0.0/8 , 2001:db8::/32 ")
+    with caplog.at_level("INFO"):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "10.0.0.0/8" in logged
+    assert "2001:db8::/32" in logged
+

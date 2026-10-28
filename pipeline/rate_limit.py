@@ -19,12 +19,19 @@ rather than serving with a limiter that silently disabled itself.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import math
 import os
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+#: A counter value: decimal digits only, no sign, spaces or underscores.
+_COUNT_RE = re.compile(r"[0-9]+")
 
 AUTH_FAIL_ENV = "PIPELINE_MCP_AUTH_FAIL_PER_MIN"
 REQUESTS_ENV = "PIPELINE_MCP_REQUESTS_PER_MIN"
@@ -35,6 +42,16 @@ DEFAULT_REQUESTS_PER_MIN = 120
 
 #: The window every counter is expressed in: "per minute".
 WINDOW_SECONDS = 60.0
+
+#: Upper bound on the number of live buckets a single set may hold.
+#:
+#: Bucket keys are attacker-influenced: a failed-auth key is a client address,
+#: and a client can rotate source addresses cheaply (an IPv6 /64 is free), so an
+#: unbounded map turns the anti-DoS control into a memory-exhaustion DoS. At the
+#: bound, refilled buckets -- which are indistinguishable from fresh ones -- are
+#: evicted; if every entry still carries live throttling state, the caller fails
+#: closed instead of allocating.
+DEFAULT_MAX_BUCKET_ENTRIES = 4096
 
 #: An ``ipaddress`` network of either family.
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -54,18 +71,14 @@ def parse_count(
     raw = env.get(var_name)
     if raw is None:
         return default
-    text = str(raw).strip()
-    try:
-        value = int(text)
-    except ValueError:
+    text = str(raw)
+    # Canonical decimal digits only: ``int()`` also accepts "+5", " 5" and
+    # "1_000", so a typo would look like a working setting. ``0`` stays valid.
+    if not _COUNT_RE.fullmatch(text):
         raise ValueError(
             f"{var_name} must be a positive integer (0 disables it); got {text!r}"
-        ) from None
-    if value < 0:
-        raise ValueError(
-            f"{var_name} must be a positive integer (0 disables it); got {value}"
         )
-    return value
+    return int(text)
 
 
 def parse_trusted_proxies(
@@ -95,12 +108,20 @@ def parse_trusted_proxies(
                 "CIDRs with no empty entry"
             )
         try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
+            # strict=True: "10.0.0.5/8" means "10.0.0.0/8" to a lenient parser,
+            # silently trusting a far wider range than written. Refuse instead.
+            networks.append(ipaddress.ip_network(entry, strict=True))
         except ValueError:
             raise ValueError(
                 f"{TRUSTED_PROXIES_ENV} must be a comma-separated list of IPs or "
-                f"CIDRs; got {entry!r}"
+                f"CIDRs with no host bits set; got {entry!r}"
             ) from None
+    normalised = [str(network) for network in networks]
+    logger.info(
+        "trusted proxy set configured: %s",
+        ", ".join(normalised),
+        extra={"trusted_proxies": normalised},
+    )
     return networks
 
 
@@ -137,8 +158,10 @@ def client_ip(scope: dict[str, Any], trusted: Iterable[Network] = ()) -> str:
     separate bucket. Taking the left-most entry hands the client control of its
     own bucket; taking the right-most blindly collapses every proxied client
     into ``10.0.0.7``; honouring the header from an untrusted peer lets anyone
-    mint unlimited fresh buckets. A malformed or empty header falls back to the
-    peer.
+    mint unlimited fresh buckets. A hop that is not an IP address is skipped --
+    it is client-supplied, and treating it as "give up" would collapse every
+    client that sends one onto the proxy's shared bucket. When no well-formed
+    untrusted hop is left, the peer is the key.
     """
     peer = _peer_ip(scope)
     networks = tuple(trusted)
@@ -157,7 +180,10 @@ def client_ip(scope: dict[str, Any], trusted: Iterable[Network] = ()) -> str:
         try:
             candidate = ipaddress.ip_address(entry)
         except ValueError:
-            return peer
+            # A junk hop is client-supplied: skip it rather than collapsing
+            # every such client onto the proxy's address, which would hand an
+            # attacker a way to widen its own blast radius to everyone.
+            continue
         if not any(candidate in network for network in networks):
             return str(candidate)
     return peer
@@ -247,6 +273,16 @@ class TokenBucket:
         # exact 5.0 into 5.000000000000001 and round it up to 6.
         return False, max(1.0, math.ceil(round(seconds, 9)))
 
+    def is_refilled(self, now: float | None = None) -> bool:
+        """Return ``True`` when the bucket behaves exactly like a fresh one.
+
+        A fresh bucket starts full, and the rejection-audit flag clears once the
+        bucket refills, so a refilled bucket carries no state worth keeping and
+        can be dropped without loosening the limit.
+        """
+        moment = self._clock() if now is None else now
+        return self._credited(moment) >= self.capacity
+
     def mark_audited(self) -> bool:
         """Return ``True`` only for the first rejection recorded in this window."""
         if self._audited:
@@ -266,18 +302,51 @@ class Decision:
 
 @dataclass
 class _BucketSet:
-    """The buckets of one limiter, keyed by client IP or by subject."""
+    """The buckets of one limiter, keyed by client IP or by subject.
+
+    The map is bounded by *max_entries*. Keys are attacker-influenced (a client
+    address is, and rotating addresses is cheap), so an unbounded map would let
+    the rate limiter be the memory-exhaustion vector it exists to prevent. When
+    the map is full, buckets that have refilled are dropped first -- they are
+    behaviourally identical to a fresh bucket -- and if nothing is evictable the
+    set refuses to allocate and the caller fails closed.
+    """
 
     capacity: int
     clock: Callable[[], float]
+    max_entries: int = DEFAULT_MAX_BUCKET_ENTRIES
     buckets: dict[str, TokenBucket] = field(default_factory=dict)
+    #: Set once a rejection was audited because the map was too full to hold a
+    #: bucket for the key; clears again as soon as the map has room. Keeps the
+    #: fail-closed path from writing one audit record per request.
+    saturated_audited: bool = False
 
-    def bucket(self, key: str) -> TokenBucket:
+    def bucket(self, key: str) -> TokenBucket | None:
+        """Return the bucket for *key*, allocating it, or ``None`` when full."""
         found = self.buckets.get(key)
-        if found is None:
-            found = TokenBucket(self.capacity, WINDOW_SECONDS, self.clock)
-            self.buckets[key] = found
+        if found is not None:
+            return found
+        if len(self.buckets) >= self.max_entries:
+            self._evict_refilled()
+            if len(self.buckets) >= self.max_entries:
+                return None
+        found = TokenBucket(self.capacity, WINDOW_SECONDS, self.clock)
+        self.buckets[key] = found
+        self.saturated_audited = False
         return found
+
+    def _evict_refilled(self) -> None:
+        """Drop every bucket that has refilled; oldest entries are scanned first."""
+        now = self.clock()
+        for key in [k for k, b in self.buckets.items() if b.is_refilled(now)]:
+            del self.buckets[key]
+
+    def note_saturated(self) -> bool:
+        """Return ``True`` only the first time saturation is the reason to audit."""
+        if self.saturated_audited:
+            return False
+        self.saturated_audited = True
+        return True
 
 
 class RateLimiter:
@@ -286,6 +355,11 @@ class RateLimiter:
     A capacity of ``0`` disables that bucket explicitly: every call is allowed
     and nothing is tracked. Buckets are in-process memory; a multi-replica
     deployment needs a shared limiter instead.
+
+    Each bucket set is bounded (``max_entries``). Client addresses are
+    attacker-supplied, so a full set evicts refilled buckets and otherwise
+    refuses new ones: the limiter fails closed rather than growing without
+    bound, which would make it the memory-exhaustion vector it guards against.
     """
 
     def __init__(
@@ -295,26 +369,43 @@ class RateLimiter:
         *,
         clock: Callable[[], float] | None = None,
         trusted_proxies: Iterable[Network] = (),
+        max_entries: int = DEFAULT_MAX_BUCKET_ENTRIES,
     ) -> None:
         self._clock = clock or time.monotonic
-        self._failed_auth = _BucketSet(auth_fail_per_min, self._clock)
-        self._requests = _BucketSet(requests_per_min, self._clock)
+        self.max_entries = max_entries
+        self._failed_auth = _BucketSet(auth_fail_per_min, self._clock, max_entries)
+        self._requests = _BucketSet(requests_per_min, self._clock, max_entries)
         self.trusted_proxies: tuple[Network, ...] = tuple(trusted_proxies)
 
     def client_ip(self, scope: dict[str, Any]) -> str:
         """Resolve the client address for *scope* under the trusted-proxy rule."""
         return client_ip(scope, self.trusted_proxies)
 
+    @property
+    def failed_auth_buckets(self) -> int:
+        """Number of live client buckets; bounded by ``max_entries``."""
+        return len(self._failed_auth.buckets)
+
+    @property
+    def request_buckets(self) -> int:
+        """Number of live subject buckets; bounded by ``max_entries``."""
+        return len(self._requests.buckets)
+
     def peek_failed_auth(self, client: str) -> Decision:
         """Read-only check of the failed-auth bucket: consumes no token.
 
         The pre-auth check must not consume and must not touch the
         rejection-audit flag, because only a request actually answered ``401``
-        charges the bucket.
+        charges the bucket. A client with no bucket at all is allowed unless the
+        set is saturated, in which case it is refused (fail closed) without
+        allocating.
         """
         if self._failed_auth.capacity <= 0:
             return Decision(True)
-        allowed, retry_after = self._failed_auth.bucket(client).peek()
+        bucket = self._failed_auth.bucket(client)
+        if bucket is None:
+            return Decision(False, _saturated_retry_after())
+        allowed, retry_after = bucket.peek()
         return Decision(allowed, int(retry_after))
 
     def record_failed_auth(self, client: str) -> Decision:
@@ -325,22 +416,38 @@ class RateLimiter:
         """
         if self._failed_auth.capacity <= 0:
             return Decision(True)
-        allowed, retry_after = self._failed_auth.bucket(client).consume()
+        bucket = self._failed_auth.bucket(client)
+        if bucket is None:
+            return Decision(False, _saturated_retry_after())
+        allowed, retry_after = bucket.consume()
         return Decision(allowed, int(retry_after))
 
     def note_rejection(self, client: str) -> bool:
         """Mark a rejection of *client*; ``True`` only the first one per window."""
         if self._failed_auth.capacity <= 0:
             return False
-        return self._failed_auth.bucket(client).mark_audited()
+        bucket = self._failed_auth.bucket(client)
+        if bucket is None:
+            return self._failed_auth.note_saturated()
+        return bucket.mark_audited()
 
     def check_request(self, subject: str) -> Decision:
         """Charge one request token for *subject*, or refuse the request."""
         if self._requests.capacity <= 0:
             return Decision(True)
         bucket = self._requests.bucket(subject)
+        if bucket is None:
+            decision = Decision(False, _saturated_retry_after())
+            if self._requests.note_saturated():
+                decision.audit_key = subject
+            return decision
         allowed, retry_after = bucket.consume()
         decision = Decision(allowed, int(retry_after))
         if not allowed and bucket.mark_audited():
             decision.audit_key = subject
         return decision
+
+
+def _saturated_retry_after() -> int:
+    """Retry delay when the bucket map is full of live buckets: one window."""
+    return max(1, math.ceil(WINDOW_SECONDS))

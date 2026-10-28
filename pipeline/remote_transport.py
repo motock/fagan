@@ -26,9 +26,12 @@ Two token buckets bound the gate (``pipeline.rate_limit``): a failed-auth bucket
 per client address, checked *before* token verification so a blocked client
 costs no JWKS work, and a request bucket per authenticated subject. Going over
 either answers ``429`` with ``Retry-After``. Both live in process memory, so a
-multi-replica deployment needs a shared limiter. The JWKS refetch bound in
-``app.oidc.verify_token`` stays in place: an unauthenticated endpoint that
-refetches keys per request is a denial-of-service amplifier.
+multi-replica deployment needs a shared limiter. Both bucket maps are bounded and
+fail closed when saturated, because a client address is attacker-supplied: an
+unbounded map would make the limiter itself the memory-exhaustion vector. The
+JWKS refetch bound in ``app.oidc.verify_token`` stays in place: an
+unauthenticated endpoint that refetches keys per request is a denial-of-service
+amplifier.
 """
 
 from __future__ import annotations

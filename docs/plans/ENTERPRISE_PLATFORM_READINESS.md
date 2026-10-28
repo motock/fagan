@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident; head anchor opt-in, file-only** | A sink the pipeline host cannot reach (HTTP/S3 with object lock, or a WORM export) so truncation is detectable without a local file; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Seam, not a control** | Mutating tools outside the `Action` enum are unchecked; reads are not tenant-scoped; decisions are not routed to the plan owner; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own and no rate limiting at the gate |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; every mutating MCP tool's service path asks the policy (`decompose_plan` is the one deliberate exception, because it writes no state); plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Seam, not a control** | Reads are not tenant-scoped; decisions are not routed to the plan owner; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own and no rate limiting at the gate |
 
 ---
 
@@ -255,9 +255,11 @@ name is accepted through `PIPELINE_MCP_ALLOWED_HOSTS`, and the transport
 refuses to start with policy enforcement off — see
 [REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
 
-**Still outstanding.** Every action in the `Action` enum is enforced, but
-mutating MCP tools outside the enum (`save_plan`, `set_story_status`,
-`record_security_audit` and others) are not, and reads are not tenant-scoped.
+**Still outstanding.** Every mutating MCP tool's service path consults the
+policy — every action in the `Action` enum is enforced, and the mutations
+outside it are decided against the nearest action (`decompose_plan` is the one
+deliberate exception, because it writes no state) — but reads are not
+tenant-scoped.
 Plan ownership is stored and enforced for `plan:approve`, `plan:reject` and
 `story:merge`, but decisions are not yet routed to the owner. The audit
 stream of allow/deny decisions exists locally (hash-chained per plan), and the

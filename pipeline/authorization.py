@@ -180,13 +180,19 @@ def authorize(
 
 
 def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
-    """Return a refusal dict for a host-scoped config write, or ``None``.
+    """Return a refusal dict for a host-scoped write, or ``None``.
 
-    ``set_role_default`` rewrites ``model_registry.json`` -- the default model
-    for every role on this host -- and has no plan to scope a check to. It is
-    decided against an empty resource, which ``LocalPolicy`` grants only to the
-    local operator, and recorded in the host-scoped chain because no plan chain
-    can own the record.
+    A host-scoped write changes state that belongs to no single plan, so there
+    is no plan to scope the decision to. It is decided against an empty
+    resource, which ``LocalPolicy`` grants only to the local operator, and the
+    decision is recorded in the host-scoped chain
+    (``<PLAN_DIR>/.audit.host.jsonl``) because no plan chain can own it.
+    ``what`` names the write in that record.
+
+    Callers: ``set_role_default`` (rewrites ``model_registry.json``, the
+    default model for every role on this host) and ``record_security_audit``
+    (writes the per-repository audit record the periodic security-audit
+    reminder trusts).
     """
     global _warned_disabled
 

@@ -237,6 +237,13 @@ def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, A
         return {"ok": False, "error": f"repo_root must be an absolute path to an existing directory: {repo_root!r}"}
     if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{4,64}", sha)):
         return {"ok": False, "error": f"sha must be 4-64 hex characters: {sha!r}"}
+    from .authorization import refusal_for_host_config
+    # The audit record silences the periodic security-audit reminder for this
+    # repository, so writing one is a host-scoped config write: decided before
+    # any state is touched or any caller-supplied path reaches a subprocess.
+    refusal = refusal_for_host_config("config:write", "the security-audit record")
+    if refusal is not None:
+        return refusal
     target = sha if sha is not None else "HEAD"
     try:
         proc = subprocess.run(

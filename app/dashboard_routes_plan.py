@@ -69,6 +69,7 @@ def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None, x_pipe
 def advance_pipeline(plan_name: str) -> dict[str, Any]:
     """Delegates to _service.advance_pipeline(plan_name)."""
     result = _service.advance_pipeline(plan_name)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

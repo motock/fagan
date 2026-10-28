@@ -480,7 +480,9 @@ route's existing status, and an MCP caller still receives the full refusal dict.
 
 **Audit stream.** Every decision this module makes is also appended to the plan's
 audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
-[REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label
+[REFERENCE.md](../../REFERENCE.md)) — except an allowed decision whose caller
+passed `record_allowed=False`, which `checkpoint` does; denials are always
+appended, whatever the caller asked for. `action` is the enforced label
 from the table above, `outcome` is `allowed` or `denied`, `target` carries the plan and story, and
 `detail` carries the principal subject. Records are written **only when
 enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function returns
@@ -583,9 +585,11 @@ The remaining work, in dependency order:
    distinct, narrowly scoped principals that are audited like a human and
    cannot approve a plan (ADR 0009 section 6).
 4. **The audit stream.** Landed: `pipeline/audit.py` appends the ADR 0009
-   section 8 record for every decision the policy makes (§2, "Audit stream").
-   What remains open is the external anchor — shipping the head hash off-box,
-   so that truncation of the tail becomes detectable.
+   section 8 record for every decision the policy makes (§2, "Audit stream"),
+   except an allowed decision taken with `record_allowed=False` (`checkpoint`);
+   denials are appended either way. What remains open is the external anchor —
+   shipping the head hash off-box, so that truncation of the tail becomes
+   detectable.
 5. **The OIDC adapter and the remote MCP transport.** Landed: `OidcProvider`
    (§2, "OIDC provider") verifies a JWT against a JWKS with the issuer,
    audience and expiry checks and maps its claims to a `Principal`, and the

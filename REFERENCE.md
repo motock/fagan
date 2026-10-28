@@ -2214,6 +2214,7 @@ configured.
 | `PIPELINE_MCP_TRANSPORT` | `stdio` | `stdio` keeps the local subprocess transport. `streamable-http` or `sse` serve the tools on a network endpoint. Any other value stops the process at startup. |
 | `PIPELINE_MCP_HOST` | `127.0.0.1` | Interface the endpoint binds to. The loopback default keeps the server off the network unless you change it. |
 | `PIPELINE_MCP_PORT` | `8000` | Port the endpoint binds to. Must be an integer in `1`–`65535`, otherwise the process stops at startup. |
+| `PIPELINE_MCP_ALLOWED_HOSTS` | *(unset)* | Comma-separated list of `Host` values the endpoint accepts. Unset means the MCP SDK's own loopback-only check, which is all a loopback bind needs. Set it to a name such as `mcp.example.com` (or `mcp.example.com:*` to accept any port) when a reverse proxy forwards a public name: DNS-rebinding protection stays on, restricted to this list. |
 
 A network transport refuses to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`.
 The check runs before any socket is opened, so a misconfiguration produces a
@@ -2300,12 +2301,21 @@ treated as the local operator, so a lost binding fails closed. The local operato
 unaffected for a different reason: the stdio path never calls `serve()`, so
 this middleware is not installed there at all.
 
-**Behind a reverse proxy, the loopback default rejects the public host name.**
-With `PIPELINE_MCP_HOST=127.0.0.1` the MCP SDK turns on DNS-rebinding
-protection and accepts only a `localhost`/`127.0.0.1`/`[::1]` `Host` header, so
-a proxy that forwards the public name gets `421 Invalid Host header`. Until a
-configurable host allowlist exists, have the proxy set `Host` to the upstream
-loopback address.
+**Behind a reverse proxy, set `PIPELINE_MCP_ALLOWED_HOSTS` to the public name.**
+With no allowlist the MCP SDK turns on DNS-rebinding protection and accepts only
+a `localhost`/`127.0.0.1`/`[::1]` `Host` header, so a proxy that forwards the
+public name gets `421 Invalid Host header`. Set
+`PIPELINE_MCP_ALLOWED_HOSTS=mcp.example.com` (comma-separated for several
+names, e.g. `mcp.example.com,mcp.internal:*`) to accept that name; protection
+stays on, restricted to the list, and a browser `Origin` you have not named is
+still rejected. Leaving the variable unset or blank keeps the SDK default
+untouched.
+
+**The HTTP transports refuse to start when `PIPELINE_POLICY_ENFORCE` disables
+enforcement.** `serve()` raises `SystemExit` before building the ASGI app or
+opening a socket if that variable is set to one of its disabling values (`0`,
+`false`, `no`, `off`, `disabled`), because a network endpoint with every
+authorization check switched off is an unauthenticated control plane.
 
 **The process serves TLS never.** `uvicorn` is started over plain HTTP; there is
 no certificate or key option here. Put a TLS-terminating reverse proxy in front

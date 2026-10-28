@@ -188,7 +188,7 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   atomic with respect to the 60s `advance_all_plans` tick; when the lock is
   held it returns `{ok: true, skipped: "locked"}` without touching the manifest.
   The edit requires the `config:write` permission and is refused fail-closed
-  otherwise, before any manifest is read or written.
+  otherwise, before the lock is taken or the manifest is written.
 
 ### Manual status (kept for the human-driven flow)
 - `mark_story_in_progress(plan_name, story_key)`, `mark_story_done(...)`.

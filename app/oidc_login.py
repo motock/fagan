@@ -48,13 +48,17 @@ PKCE, and each part below carries one invariant:
   that has just failed discovery is not re-probed until
   ``DISCOVERY_FAILURE_TTL_S`` has passed, so an unauthenticated caller cannot
   turn the login page into an amplifier against the provider or the threadpool.
+
+The request handlers for ``/auth/login``, ``/auth/callback`` and ``/auth/logout``
+live in ``app.oidc_login_routes``, which reads the configuration, discovery,
+outbound HTTP, pending-login and session machinery kept here. That module imports
+this one, so ``mount_auth_routes`` below is a shim that imports it lazily.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -68,9 +72,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-import jwt
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import FastAPI, Request
 
 from . import oidc
 from .identity import IdentityError, Principal
@@ -634,31 +636,6 @@ def authenticate_api_request(
     return principal
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-
-def _with_query(url: str, params: dict[str, str]) -> str:
-    """Append ``params`` to ``url``, preserving any query it already carries."""
-    parts = urllib.parse.urlsplit(url)
-    query = "&".join(filter(None, [parts.query, urllib.parse.urlencode(params)]))
-    return urllib.parse.urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
-    )
-
-
-def _refuse(
-    status: int, payload: dict[str, str], reason: str, *, clear_state: bool = True
-) -> JSONResponse:
-    """A fixed error body plus a log line that names only the action and reason."""
-    logger.warning("OIDC login refused", extra={"reason": reason})
-    response = JSONResponse(status_code=status, content=payload)
-    if clear_state:
-        _clear_login_state_cookie(response)
-    return response
-
-
 def _client_key(request: Request) -> str:
     """Who to count a request against: the peer address, nothing else.
 
@@ -694,280 +671,11 @@ def _rate_limited(key: str, now: float) -> bool:
     return limited
 
 
-def _set_login_state_cookie(response: Response, state: str) -> None:
-    """Bind ``state`` to this browser, one shot, for the attempt's lifetime.
-
-    A browser holds one binding at a time, so a second login in the same browser
-    supersedes the first attempt's cookie - and therefore fails its binding
-    check instead of consuming it. That is the safe direction: the superseded
-    attempt is refused, never spent by whoever presents it.
-    """
-    response.set_cookie(
-        LOGIN_STATE_COOKIE,
-        state,
-        max_age=STATE_TTL_S,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="lax",
-    )
-
-
-def _clear_login_state_cookie(response: Response) -> None:
-    """Drop the binding cookie, on success and on every failure alike."""
-    response.delete_cookie(
-        LOGIN_STATE_COOKIE,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="lax",
-    )
-
-
-def _state_is_from_this_browser(request: Request, state: str) -> bool:
-    """Whether ``state`` came back with the cookie that vouched for it.
-
-    Both values are compared in constant time. A non-ASCII cookie or ``state``
-    cannot equal the URL-safe value that was minted, and is refused rather than
-    handed to ``hmac.compare_digest``, which raises on non-ASCII text.
-    """
-    bound = request.cookies.get(LOGIN_STATE_COOKIE) or ""
-    if not bound or not bound.isascii() or not state.isascii():
-        return False
-    return hmac.compare_digest(bound, state)
-
-
-def _begin_login(config: OidcLoginConfig, request: Request) -> Response:
-    """Mint ``state``/``nonce``/PKCE verifier, store them, and redirect."""
-    if _rate_limited(_client_key(request), _now()):
-        return _refuse(429, TOO_MANY_REQUESTS, "rate_limited")
-    try:
-        endpoints = _discovery(config)
-    except OidcLoginError:
-        logger.warning("OIDC login unavailable", extra={"reason": "discovery_failed"})
-        return JSONResponse(status_code=503, content=AUTHENTICATION_UNAVAILABLE)
-
-    now = _now()
-    with _LOCK:
-        _prune_pending(now)
-        if len(_PENDING) >= MAX_PENDING_LOGINS:
-            at_capacity = True
-        else:
-            at_capacity = False
-            state = _new_token()
-            nonce = _new_token()
-            verifier = _new_code_verifier()
-            _PENDING[state] = _PendingLogin(
-                nonce=nonce, code_verifier=verifier, expires_at=now + STATE_TTL_S
-            )
-    if at_capacity:
-        # Unauthenticated callers cannot make the pending map unbounded.
-        return _refuse(
-            429, TOO_MANY_REQUESTS, "pending_logins_at_capacity", clear_state=False
-        )
-
-    logger.info("OIDC login started")
-    location = _with_query(
-        endpoints["authorization_endpoint"],
-        {
-            "response_type": "code",
-            "client_id": config.client_id,
-            "redirect_uri": config.redirect_uri,
-            "scope": LOGIN_SCOPE,
-            "state": state,
-            "nonce": nonce,
-            "code_challenge": pkce_challenge(verifier),
-            "code_challenge_method": "S256",
-        },
-    )
-    response = RedirectResponse(location, status_code=302)
-    _set_login_state_cookie(response, state)
-    return response
-
-
-def _finish_login(config: OidcLoginConfig, request: Request) -> Response:
-    """Consume ``state``, exchange the code, verify the ID token, start a session."""
-    if _rate_limited(_client_key(request), _now()):
-        return _refuse(429, TOO_MANY_REQUESTS, "rate_limited")
-    params = request.query_params
-    state = params.get("state") or ""
-    code = params.get("code") or ""
-    if not state:
-        return _refuse(400, INVALID_REQUEST, "unknown_state")
-    if not _state_is_from_this_browser(request, state):
-        # Login CSRF: a callback URL minted in another browser must not be
-        # spendable here, so the entry is left untouched for its real owner.
-        return _refuse(400, INVALID_REQUEST, "state_not_bound_to_browser")
-    with _LOCK:
-        now = _now()
-        # Single use, unconditionally: the entry is removed before the expiry
-        # check and before the exchange, so a replay or a failed exchange can
-        # never be retried, and a later callback cannot restart the window.
-        pending = _PENDING.pop(state, None) if state else None
-    if pending is None:
-        return _refuse(400, INVALID_REQUEST, "unknown_state")
-    if now >= pending.expires_at:
-        return _refuse(400, INVALID_REQUEST, "expired_state")
-    if params.get("error"):
-        # The provider's error code is deliberately not echoed or logged: it is
-        # attacker-influenced text and belongs to the provider, not to us.
-        return _refuse(401, AUTHENTICATION_FAILED, "provider_error")
-    if not code:
-        return _refuse(400, INVALID_REQUEST, "missing_code")
-
-    try:
-        endpoints = _discovery(config)
-    except OidcLoginError:
-        logger.warning("OIDC login unavailable", extra={"reason": "discovery_failed"})
-        return JSONResponse(status_code=503, content=AUTHENTICATION_UNAVAILABLE)
-
-    try:
-        secret = _read_client_secret(config)
-    except OidcLoginConfigError:
-        logger.error("OIDC login unavailable", extra={"reason": "secret_unavailable"})
-        return JSONResponse(status_code=503, content=AUTHENTICATION_UNAVAILABLE)
-
-    try:
-        tokens = _post_form(
-            endpoints["token_endpoint"],
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": config.redirect_uri,
-                "client_id": config.client_id,
-                "client_secret": secret,
-                "code_verifier": pending.code_verifier,
-            },
-        )
-    except OidcLoginError:
-        return _refuse(401, AUTHENTICATION_FAILED, "token_exchange_failed")
-
-    id_token = tokens.get("id_token")
-    if not isinstance(id_token, str) or not id_token:
-        return _refuse(401, AUTHENTICATION_FAILED, "missing_id_token")
-
-    try:
-        settings = oidc.OidcSettings(
-            issuer=config.issuer,
-            audience=config.client_id,
-            jwks_url=endpoints["jwks_uri"],
-        )
-        principal = oidc.verify_token(id_token, settings)
-    except IdentityError:
-        return _refuse(401, AUTHENTICATION_FAILED, "id_token_rejected")
-
-    try:
-        # Signature, issuer, audience and expiry are already verified above;
-        # only the nonce is read here, and only to compare it in constant time.
-        claims = jwt.decode(
-            id_token,
-            options={
-                "verify_signature": False,
-                "verify_aud": False,
-                "verify_exp": False,
-                "verify_nbf": False,
-                "verify_iat": False,
-            },
-        )
-    except jwt.PyJWTError:
-        return _refuse(401, AUTHENTICATION_FAILED, "id_token_rejected")
-    token_nonce = claims.get("nonce") if isinstance(claims, dict) else None
-    # ``compare_digest`` raises on non-ASCII text, and a provider (or an
-    # attacker-supplied token) can put any string in a claim: refuse instead of
-    # turning a mismatch into a 500 with a traceback.
-    if (
-        not isinstance(token_nonce, str)
-        or not token_nonce.isascii()
-        or not hmac.compare_digest(token_nonce, pending.nonce)
-    ):
-        return _refuse(401, AUTHENTICATION_FAILED, "nonce_mismatch")
-
-    session_id = _create_session(principal)
-    logger.info("OIDC login completed", extra={"principal_subject": principal.subject})
-    response = RedirectResponse("/", status_code=302)
-    response.set_cookie(
-        SESSION_COOKIE,
-        session_id,
-        max_age=SESSION_ABSOLUTE_TIMEOUT_S,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="strict",
-    )
-    _clear_login_state_cookie(response)
-    return response
-
-
-def _end_session_url(config: OidcLoginConfig) -> str | None:
-    """The provider's RP-initiated logout URL, or None when it has none.
-
-    Discovery is best-effort: logout is local and must succeed even when the
-    provider is unreachable.
-    """
-    try:
-        return _discovery(config).get("end_session_endpoint")
-    except OidcLoginError:
-        logger.warning(
-            "OIDC logout metadata unavailable", extra={"reason": "discovery_failed"}
-        )
-        return None
-
-
-def _end_session(
-    config: OidcLoginConfig, request: Request, *, as_json: bool
-) -> Response:
-    """End this browser's session, clear its cookie, and answer the caller.
-
-    Logout is local by design: the dashboard's sessions are its own, so ending
-    one here is immediate, while revoking it at the identity provider only bites
-    at the next authorization. The deletion is what makes the call effective:
-    replaying the cookie afterwards resolves to no session. It sits outside the
-    middleware's ``/api/`` same-origin check, but a cross-site request cannot
-    reach it either - ``SameSite=Strict`` withholds the cookie. ``as_json`` adds
-    the provider's end-session URL for the UI to follow.
-    """
-    session_id = request.cookies.get(SESSION_COOKIE) or ""
-    with _LOCK:
-        session = _SESSIONS.pop(session_id, None) if session_id else None
-    logger.info(
-        "OIDC logout completed",
-        extra={"principal_subject": session.principal.subject if session else None},
-    )
-    response: Response = (
-        JSONResponse({"end_session_url": _end_session_url(config)})
-        if as_json
-        else RedirectResponse("/", status_code=302)
-    )
-    response.delete_cookie(
-        SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict"
-    )
-    return response
-
-
 def mount_auth_routes(app: FastAPI, config: OidcLoginConfig) -> None:
-    """Register the ``/auth`` routes when login is enabled.
+    """Mount ``/auth/login``, ``/auth/callback`` and ``/auth/logout``; see ``app.oidc_login_routes``."""
+    from app import oidc_login_routes  # deferred: that module imports this one
 
-    Disabled login registers nothing at all, so an unconfigured dashboard has
-    no ``/auth`` surface to probe.
-    """
-    if not config.enabled:
-        return
-
-    @app.get("/auth/login")
-    def login(request: Request) -> Response:  # pragma: no cover - via TestClient
-        return _begin_login(config, request)
-
-    @app.get("/auth/callback")
-    def callback(request: Request) -> Response:  # pragma: no cover - ditto
-        return _finish_login(config, request)
-
-    @app.get("/auth/logout")
-    def logout(request: Request) -> Response:  # pragma: no cover - ditto
-        return _end_session(config, request, as_json=False)
-
-    @app.post("/auth/logout")
-    def logout_post(request: Request) -> Response:  # pragma: no cover - ditto
-        return _end_session(config, request, as_json=True)
+    oidc_login_routes.mount_auth_routes(app, config)
 
 
 __all__ = [

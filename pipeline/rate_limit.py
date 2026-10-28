@@ -2,16 +2,18 @@
 
 Two independent token buckets guard the gate (``pipeline.remote_transport``):
 
-* a **failed-authentication** bucket per client network prefix (an IPv6 /64 or an
-  IPv4 /24), checked *before* token verification so a blocked client costs no
-  JWKS work; and
+* a **failed-authentication** bucket per resolved client address, checked
+  *before* token verification so a blocked client costs no JWKS work; and
 * a **request** bucket per authenticated subject, checked after a token is
   verified and before the tool runs.
 
-Aggregating the failed-auth key to a network prefix rather than a bare address
-matters: a single tenant is routinely handed a whole /64, so per-address keys
-would let it allocate thousands of buckets by rotating the host bits it already
-owns.
+The failed-auth key is the client address itself, never a wider block. Any
+aggregation wider than one client -- the raw proxy peer, an IPv4 /24, an IPv6
+/64 -- makes one caller's failures throttle its neighbours, and carrier NAT and
+corporate /24s routinely put unrelated callers in the same block; ten failures
+per minute from one of them would lock the rest out even with valid tokens. The
+bucket map is bounded instead, so an attacker rotating addresses evicts refilled
+buckets and can at worst lose its *own* tracking.
 
 Both are in-process memory. A multi-replica deployment therefore needs a shared
 limiter; the buckets here are per process and are not coordinated across
@@ -44,13 +46,6 @@ REQUESTS_ENV = "PIPELINE_MCP_REQUESTS_PER_MIN"
 TRUSTED_PROXIES_ENV = "PIPELINE_MCP_TRUSTED_PROXIES"
 MAX_BUCKETS_ENV = "PIPELINE_MCP_MAX_BUCKETS"
 
-#: Failed-auth buckets aggregate to the block a single tenant is handed: an IPv6
-#: /64 or an IPv4 /24. Per-address keys let one holder of a /64 allocate
-#: thousands of buckets by rotating the host bits it already owns, which is
-#: cheap; charging the block instead makes that rotation cost its own budget.
-IPV4_PREFIX_LEN = 24
-IPV6_PREFIX_LEN = 64
-
 DEFAULT_AUTH_FAIL_PER_MIN = 10
 DEFAULT_REQUESTS_PER_MIN = 120
 
@@ -59,8 +54,8 @@ WINDOW_SECONDS = 60.0
 
 #: Upper bound on the number of live buckets a single set may hold.
 #:
-#: Bucket keys are attacker-influenced: a failed-auth key is a network prefix,
-#: and prefixes can be rotated, so an unbounded map turns the anti-DoS control
+#: Bucket keys are attacker-influenced: a failed-auth key is the client address,
+#: and addresses can be rotated, so an unbounded map turns the anti-DoS control
 #: into a memory-exhaustion DoS. At the bound, refilled buckets -- which are
 #: indistinguishable from fresh ones -- are evicted; a key that cannot get a
 #: bucket after that is simply not tracked. Tracking is the only thing lost:
@@ -118,21 +113,6 @@ def parse_count(
     if value == 0 and not allow_zero:
         raise ValueError(f"{var_name} must be a positive integer; got {text!r}")
     return value
-
-
-def parse_prefix_limits(client: str) -> str:
-    """Return the network prefix that *client* is charged against.
-
-    An address that does not parse -- an empty ASGI peer, a placeholder such as
-    ``"testclient"`` -- is returned unchanged: it is already a fixed key, and
-    inventing a prefix for it would merge unrelated callers.
-    """
-    try:
-        address = ipaddress.ip_address(client)
-    except ValueError:
-        return client
-    bits = IPV6_PREFIX_LEN if address.version == 6 else IPV4_PREFIX_LEN
-    return str(ipaddress.ip_network(f"{address}/{bits}", strict=False))
 
 
 def parse_trusted_proxies(
@@ -217,9 +197,9 @@ def client_ip(scope: dict[str, Any], trusted: Iterable[Network] = ()) -> str:
     client that sends one onto the proxy's shared bucket. When no well-formed
     untrusted hop is left, the peer is the key.
 
-    The returned address is the bucket key for *that request*; the failed-auth
-    bucket aggregates it to a network prefix (see ``parse_prefix_limits``), so
-    rotating addresses inside one /64 costs one budget.
+    The returned address is the failed-auth bucket key exactly as resolved: the
+    gate never widens it to a network block, so one caller's failures cannot
+    throttle anyone else sharing its block.
     """
     peer = _peer_ip(scope)
     networks = tuple(trusted)
@@ -360,10 +340,10 @@ class Decision:
 
 @dataclass
 class _BucketSet:
-    """The buckets of one limiter, keyed by network prefix or by subject.
+    """The buckets of one limiter, keyed by client address or by subject.
 
     The map is bounded by *max_entries*. Keys are attacker-influenced (rotating
-    source prefixes is cheap), so an unbounded map would let the rate limiter be
+    source addresses is cheap), so an unbounded map would let the rate limiter be
     the memory-exhaustion vector it exists to prevent. When the map is full,
     buckets that have refilled are dropped first -- they are behaviourally
     identical to a fresh bucket.
@@ -431,13 +411,13 @@ class _BucketSet:
 
 
 class RateLimiter:
-    """The gate's two buckets: failed auths per client prefix, requests per subject.
+    """The gate's two buckets: failed auths per client address, requests per subject.
 
     A capacity of ``0`` disables that bucket explicitly: every call is allowed
     and nothing is tracked. Buckets are in-process memory; a multi-replica
     deployment needs a shared limiter instead.
 
-    Each bucket set is bounded (``max_entries``). Client prefixes are
+    Each bucket set is bounded (``max_entries``). Client addresses are
     attacker-supplied, so a full set evicts refilled buckets and then stops
     tracking new keys rather than refusing them: dropping accuracy is
     recoverable, while a full map that refuses unknown keys is a denial of
@@ -474,14 +454,15 @@ class RateLimiter:
         return len(self._requests.buckets)
 
     def failed_auth_key(self, client: str) -> str:
-        """Return the bucket key for *client*: its network prefix, not the address.
+        """Return the bucket key for *client*: the client's own address.
 
-        Keying on the address lets one holder of an IPv6 /64 mint thousands of
-        buckets by rotating host bits, which pins any bounded map. Charging the
-        /64 (or the IPv4 /24) makes that rotation spend one budget instead.
+        Deliberately not a network block. One client's failures must never
+        charge its neighbours: carrier NAT and corporate /24s put unrelated
+        callers behind one address block, so a wider key would let ten failures
+        from one caller answer ``429`` to every other caller in the block, even
+        those presenting a valid token.
         """
-        return parse_prefix_limits(client)
-
+        return client
 
     def peek_failed_auth(self, client: str) -> Decision:
         """Read-only check of the failed-auth bucket: consumes no token.

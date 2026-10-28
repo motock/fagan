@@ -23,15 +23,17 @@ one during startup, and 401-ing it would prevent the app from booting). An
 on the mounted app would otherwise be reachable unauthenticated.
 
 Two token buckets bound the gate (``pipeline.rate_limit``): a failed-auth bucket
-per client network prefix (IPv6 /64, IPv4 /24), checked *before* token
-verification so a blocked client costs no JWKS work, and a request bucket per
-authenticated subject. Going over either answers ``429`` with ``Retry-After``.
-Both live in process memory, so a multi-replica deployment needs a shared
-limiter. Both bucket maps are bounded, because a client prefix is
-attacker-supplied and rotating prefixes is cheap: an unbounded map would make
-the limiter itself the memory-exhaustion vector. A bounded map only stops
-*tracking* keys once it is full -- it never refuses a request -- so filling it
-cannot deny service to anyone else. The JWKS refetch bound in
+per resolved client address, checked *before* token verification so a blocked
+client costs no JWKS work, and a request bucket per authenticated subject. Going
+over either answers ``429`` with ``Retry-After``. The failed-auth key is the
+client address itself, never a wider network block: carrier NAT and corporate
+/24s put unrelated callers in one block, so a block key would let one caller's
+failures throttle its neighbours. Both live in process memory, so a multi-replica
+deployment needs a shared limiter. Both bucket maps are bounded, because a client
+address is attacker-supplied and rotating addresses is cheap: an unbounded map
+would make the limiter itself the memory-exhaustion vector. A bounded map only
+stops *tracking* keys once it is full -- it never refuses a request -- so filling
+it cannot deny service to anyone else. The JWKS refetch bound in
 ``app.oidc.verify_token`` stays in place: an unauthenticated endpoint that
 refetches keys per request is a denial-of-service amplifier.
 """

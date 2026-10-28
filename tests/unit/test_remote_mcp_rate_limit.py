@@ -533,7 +533,7 @@ def test_bucket_map_is_bounded_and_never_becomes_a_lockout(
             for client in clients
         ]
 
-    # One /64 per client, so prefix aggregation cannot merge them.
+    # One distinct client address per request, so each gets its own bucket.
     statuses = asyncio.run(
         burst([f"2001:db8:{index:x}::1" for index in range(limit)], "bad-token")
     )
@@ -629,73 +629,63 @@ def test_trusted_proxy_logs_the_normalised_set_at_startup(
 
 
 # ---------------------------------------------------------------------------
-# Part 6: saturation must never become a global lockout
+# Part 6: per-address keying -- one client's failures never charge its neighbours
 #
-# An attacker who can rotate source addresses cheaply can fill any bounded map
-# of per-address buckets. The bucket map is therefore keyed by *network prefix*
-# for the failed-auth bucket (one IPv6 /64, one IPv4 /24 -- the smallest block a
-# single tenant is routinely handed), so rotating inside a /64 charges a single
-# bucket instead of allocating thousands. A saturated map must also never deny a
-# caller that presents a valid credential: otherwise a full map is a cheaper
-# denial of service than the memory exhaustion it replaced.
+# The failed-auth bucket is keyed on the resolved client address, never on a
+# wider block. Carrier NAT and corporate /24s put unrelated callers behind one
+# address block, so a block key would let ten failures per minute from one
+# caller answer 429 to every other caller in that block, even one presenting a
+# valid token -- a shared-bucket lockout. An attacker that rotates source
+# addresses can still fill the bounded map; a full map only stops *tracking* new
+# keys, so the worst it achieves is losing its own tracking, never another
+# caller's service.
 # ---------------------------------------------------------------------------
 
 
-def test_rotating_addresses_in_one_prefix_share_a_single_failed_auth_bucket(
+def test_failed_auth_bucket_is_keyed_on_the_exact_client_address(
     env: pytest.MonkeyPatch, clock: _FakeClock
 ) -> None:
-    """One IPv6 /64 rotating addresses must be charged as one client."""
-    env.setenv(AUTH_FAIL_ENV, "10")
+    """Two addresses in one /24 are two clients, not one."""
+    env.setenv(AUTH_FAIL_ENV, "2")
     middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
     limiter = middleware._limiter
 
-    statuses: list[int] = []
-    for index in range(11):
+    for client in ("203.0.113.9", "203.0.113.10"):
         sent: list[dict[str, Any]] = []
-        # Distinct addresses, all inside 2001:db8:1:2::/64.
-        _send(
-            middleware,
-            _http_scope(_auth("bad-token"), client=f"2001:db8:1:2::{index:x}"),
-            sent,
-        )
+        _send(middleware, _http_scope(_auth("bad-token"), client=client), sent)
+        assert _status(sent) == 401
+
+    assert limiter.failed_auth_buckets == 2, "each address gets its own bucket"
+
+
+def test_saturated_address_does_not_throttle_a_neighbour_in_the_same_block(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """10 failures from one address must not answer 429 for the whole /24."""
+    env.setenv(AUTH_FAIL_ENV, "10")
+    app = _RecordingApp()
+    middleware = BearerAuthMiddleware(app, _StubProvider(), clock=clock.now)
+
+    statuses: list[int] = []
+    for _ in range(11):
+        sent: list[dict[str, Any]] = []
+        _send(middleware, _http_scope(_auth("bad-token"), client="203.0.113.9"), sent)
         statuses.append(_status(sent))
 
     assert statuses[:10] == [401] * 10
-    assert statuses[10] == 429, "rotating inside one /64 must charge one bucket"
-    assert limiter.failed_auth_buckets == 1, "the whole /64 is one bucket"
+    assert statuses[10] == 429, "the address that failed is throttled"
 
-
-def test_rotating_one_prefix_cannot_deny_an_unrelated_client_with_a_valid_token(
-    env: pytest.MonkeyPatch, clock: _FakeClock
-) -> None:
-    """The stated attack: fill the map from one /64, then a real client is denied.
-
-    Each address is charged exactly once so every bucket stays below capacity
-    (hence not evictable), which is what pinned the map full. The honest client
-    presents a *valid* token and must still be served: saturation may refuse new
-    authentication attempts, never traffic that has already authenticated.
-    """
-    env.setenv(MAX_BUCKETS_ENV, "8")
-    env.setenv(TRUSTED_PROXIES_ENV, "10.0.0.0/8")
-    app = _RecordingApp()
-    middleware = BearerAuthMiddleware(app, _StubProvider(), clock=clock.now)
-    limiter = middleware._limiter
-    assert limiter.max_entries == 8
-
-    # One tenant holds 10.0.0.0/24; rotating inside it must not allocate 8
-    # buckets, so the map never fills and the honest client is never affected.
-    for index in range(8):
-        sent: list[dict[str, Any]] = []
-        _send(middleware, _http_scope(_auth("bad-token"), client=f"10.0.0.{index + 1}"), sent)
-        assert _status(sent) == 401
-
-    assert limiter.failed_auth_buckets == 1, "an IPv4 /24 is one bucket, not per address"
-
-    # The honest client, from a different /24, still authenticates.
+    # A different client in the same /24 with a valid credential is served.
     sent = []
-    _send(middleware, _http_scope(_auth("alice-token"), client="10.0.99.5"), sent)
-    assert _status(sent) == 200, "a valid credential is never throttled by saturation"
+    _send(middleware, _http_scope(_auth("alice-token"), client="203.0.113.10"), sent)
+    assert _status(sent) == 200, "a neighbour in the same /24 is not locked out"
     assert app.calls == 1
+
+    # A different client in the same /24 with a bad credential gets its own 401
+    # rather than the neighbour's 429.
+    sent = []
+    _send(middleware, _http_scope(_auth("bad-token"), client="203.0.113.11"), sent)
+    assert _status(sent) == 401, "a neighbour starts with a full bucket of its own"
 
 
 def test_a_valid_token_is_served_while_the_failed_auth_map_is_saturated(
@@ -706,7 +696,7 @@ def test_a_valid_token_is_served_while_the_failed_auth_map_is_saturated(
     middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
     limiter = middleware._limiter
 
-    # Four distinct /64s, one failed auth each: every bucket is live (not
+    # Four distinct addresses, one failed auth each: every bucket is live (not
     # refilled) so nothing is evictable and the map is pinned at the bound.
     for index in range(4):
         sent: list[dict[str, Any]] = []
@@ -718,33 +708,35 @@ def test_a_valid_token_is_served_while_the_failed_auth_map_is_saturated(
         assert _status(sent) == 401
     assert limiter.failed_auth_buckets == 4
 
-    # A brand-new client with a valid token, from a fifth /64.
+    # A brand-new client with a valid token, from a fifth address.
     sent = []
     _send(middleware, _http_scope(_auth("bob-token"), client="2001:db8:ffff::1"), sent)
     assert _status(sent) == 200, "saturation must not deny an authenticated request"
 
 
-def test_prefix_keying_maps_ipv4_to_a_slash_24_and_ipv6_to_a_slash_64(
+def test_failed_auth_bucket_is_not_shared_across_a_block(
     env: pytest.MonkeyPatch, clock: _FakeClock
 ) -> None:
-    """Two addresses in one /24 share a bucket; adjacent /24s do not."""
-    env.setenv(AUTH_FAIL_ENV, "2")
-    env.setenv(TRUSTED_PROXIES_ENV, "10.0.0.0/8")
+    """IPv6 neighbours in one /64 are separate clients too."""
+    env.setenv(AUTH_FAIL_ENV, "1")
     middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
-    limiter = middleware._limiter
 
-    # Same /24 as 203.0.113.9 -> 203.0.113.0/24.
-    for client in ("203.0.113.9", "203.0.113.200"):
-        _send(middleware, _http_scope(_auth("bad-token"), client=client), [])
-    sent: list[dict[str, Any]] = []
-    _send(middleware, _http_scope(_auth("bad-token"), client="203.0.113.1"), sent)
-    assert _status(sent) == 429, "one /24 is one bucket"
-    assert limiter.failed_auth_buckets == 1
+    # 2001:db8:1:2::9 spends its single token.
+    statuses: list[int] = []
+    for _ in range(2):
+        sent: list[dict[str, Any]] = []
+        _send(
+            middleware,
+            _http_scope(_auth("bad-token"), client="2001:db8:1:2::9"),
+            sent,
+        )
+        statuses.append(_status(sent))
+    assert statuses == [401, 429]
 
-    # A neighbouring /24 has its own bucket.
+    # 2001:db8:1:2::a is in the same /64 and still has its own token.
     sent = []
-    _send(middleware, _http_scope(_auth("bad-token"), client="203.0.114.9"), sent)
-    assert _status(sent) == 401, "an adjacent /24 is a separate bucket"
+    _send(middleware, _http_scope(_auth("bad-token"), client="2001:db8:1:2::a"), sent)
+    assert _status(sent) == 401, "the /64 is not one bucket"
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +796,7 @@ def test_saturation_does_not_scan_the_whole_map_on_every_request(
     middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
     limiter = middleware._limiter
 
-    # Pin the map full with live buckets, one per /64.
+    # Pin the map full with live buckets, one per distinct client address.
     for index in range(64):
         _send(
             middleware,

@@ -466,6 +466,11 @@ stream (§2, "Audit stream").
 `story:merge` on that plan; ownership grants nothing else, and a plan with no
 owner grants nothing to anyone but the local operator.
 
+**Dashboard responses.** A dashboard route whose service call is refused answers
+`403` with the detail `not authorized: <action>` (the action only, never the
+principal) through `app/dashboard_refusal.py`. Every other failure keeps the
+route's existing status, and an MCP caller still receives the full refusal dict.
+
 **Audit stream.** Every decision this module makes is also appended to the plan's
 audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
 [REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label

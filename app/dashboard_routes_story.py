@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.dashboard_models import StoryPatchBody, StoryStatusBody
+from app.dashboard_refusal import raise_if_forbidden
 
 
 def _dashboard():
@@ -32,6 +33,7 @@ _service = _DashboardServiceProxy()
 def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.dispatch_story(plan_name, story_key)."""
     result = _service.dispatch_story(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -54,6 +56,7 @@ def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
 def interrupt_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.interrupt_story(plan_name, story_key)."""
     result = _service.interrupt_story(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -81,6 +84,7 @@ def patch_story_route(
     """Delegates to _service.patch_story(plan_name, story_key, fields=...)."""
     fields = body.model_dump(exclude_unset=True)
     result = _service.patch_story(plan_name, story_key, fields=fields)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=400,
@@ -103,6 +107,7 @@ def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
 def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.approve_merge(plan_name, story_key)."""
     result = _service.approve_merge(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -114,6 +119,7 @@ def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
 def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.mark_story_done(plan_name, story_key)."""
     result = _service.mark_story_done(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,

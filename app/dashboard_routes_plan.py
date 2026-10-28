@@ -16,6 +16,7 @@ from fastapi import Header, HTTPException
 
 from app.auth import refuse_chat_origin
 from app.dashboard_models import DecomposeRequest, IngestPlanRequest, SavePlanRequest
+from app.dashboard_refusal import raise_if_forbidden
 
 
 def _dashboard():
@@ -54,8 +55,10 @@ def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None, x_pipe
     refuse_chat_origin(x_pipeline_origin)
     if request is None:
         result = _service.ingest_plan(plan_name)
+        raise_if_forbidden(result)
     else:
         result = _service.ingest_plan(plan_name, only_epics=request.only_epics, overwrite=request.overwrite)
+        raise_if_forbidden(result)
 
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))

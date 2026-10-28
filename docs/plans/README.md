@@ -19,7 +19,8 @@ update this index in the same change.
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
 | 1 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 2 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
+| 2 | [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) | Drafted and preflighted | Eleven plans finishing enterprise readiness, in dependency order; plan 1 (`enterprise-enforcement-closeout`) gates the last unchecked mutating tools. | Ingest plan 1; re-run a plan's impact check if master has moved before its turn. |
+| 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Enterprise platform readiness (assessed 2026-10-25):**
 [`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md) records
@@ -30,9 +31,12 @@ came out of it and all shipped 2026-10-26: the behavior-preserving
 seam only, spec `docs/specs/IDENTITY_AND_POLICY.md`). The findings are now being
 worked in dependency order: actor identity, request correlation, structured
 logs and policy enforcement shipped 2026-10-26/27, and the tamper-evident audit
-stream shipped 2026-10-27. What remains is Phase 6 (OIDC verification and the
-remote MCP transport) and Phase 7 (the shared control plane, ADR 0008) — both
-still deferred and ranked in that document.
+stream shipped 2026-10-27, and Phase 6 (OIDC verification and the remote MCP
+transport) shipped 2026-10-27. The remaining work — the rest of ADR 0008 stage
+1, Phase 6 hardening, observability, broker prep, stage 2 and a CI smoke stack
+— is drafted as eleven plan files indexed in
+[`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md)
+(2026-10-28), all eleven preflighted on `master` `cd09a83`.
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends

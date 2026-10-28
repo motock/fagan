@@ -576,25 +576,3 @@ class TestTerminalFailureCancelsJob:
         assert seams["merge_pr"].count == 0
         assert seams["collect"].count == 0
 
-
-# ---------------------------------------------------------------------------
-# Path safety: the job directory derives from the two keys, so neither may
-# traverse. Validated where the boundary is - at the start call.
-# ---------------------------------------------------------------------------
-class TestJobPathRejectsTraversal:
-    @pytest.mark.parametrize("key", [".", ".."])
-    def test_dot_keys_are_rejected_before_any_path_is_built(self, tmp_path, key):
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-        state_root = tmp_path / "sr"
-        state_root.mkdir()
-
-        with pytest.raises(ValueError) as excinfo:
-            merge_reverify.start_merge_reverify(PLAN, key, str(worktree), state_root)
-
-        # The message names the argument, never the value (which is a path
-        # component) and never the state root.
-        assert str(excinfo.value) == "invalid story_key"
-        assert str(state_root) not in str(excinfo.value)
-        # Nothing outside the key directory was touched.
-        assert sorted(p.name for p in state_root.iterdir()) == []

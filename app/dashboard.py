@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, chat, role_registry
+from app import auth, chat, oidc_login, role_registry
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -984,6 +984,15 @@ app.post("/api/plans/{plan_name}/ingest")(ingest_plan)
 app.post("/api/plans/{plan_name}/advance")(advance_pipeline)
 app.post("/api/plans/advance_all")(advance_all_plans)
 app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")(checkpoint)
+
+# Browser login (authorization code + PKCE). Nothing is mounted unless the
+# operator configured all three PIPELINE_OIDC_* variables; a partial set raises
+# here, at import time, so the app refuses to start instead of half-enabling it.
+# Registered before the catch-all StaticFiles mount below, which would
+# otherwise swallow /auth/login and /auth/callback.
+_oidc_login_config = oidc_login.load_config()
+if _oidc_login_config.enabled:
+    oidc_login.mount_auth_routes(app, _oidc_login_config)
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

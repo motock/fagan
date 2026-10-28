@@ -25,6 +25,7 @@ from pipeline.remote_transport import BearerAuthMiddleware
 AUTH_FAIL_ENV = "PIPELINE_MCP_AUTH_FAIL_PER_MIN"
 REQUESTS_ENV = "PIPELINE_MCP_REQUESTS_PER_MIN"
 TRUSTED_PROXIES_ENV = "PIPELINE_MCP_TRUSTED_PROXIES"
+MAX_BUCKETS_ENV = "PIPELINE_MCP_MAX_BUCKETS"
 
 TOKEN = "s3cr3t-token"
 
@@ -144,7 +145,7 @@ def clock() -> _FakeClock:
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    for name in (AUTH_FAIL_ENV, REQUESTS_ENV, TRUSTED_PROXIES_ENV):
+    for name in (AUTH_FAIL_ENV, REQUESTS_ENV, TRUSTED_PROXIES_ENV, MAX_BUCKETS_ENV):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -498,11 +499,17 @@ def test_429_body_matches_the_401_shape_and_leaks_nothing(
 # ---------------------------------------------------------------------------
 
 
-def test_bucket_map_is_bounded_and_fails_closed_under_distinct_clients(
+def test_bucket_map_is_bounded_and_never_becomes_a_lockout(
     gate: tuple[BearerAuthMiddleware, _RecordingApp, _StubProvider],
     clock: _FakeClock,
 ) -> None:
-    """Rotating source addresses must not grow the bucket map without bound."""
+    """Rotating source addresses must not grow the bucket map without bound.
+
+    A full map stops *tracking* new keys; it never refuses them. Refusing is
+    what would let one attacker who fills the map deny service to every client
+    sharing the process, which is a cheaper outage than the memory exhaustion
+    the bound exists to prevent.
+    """
     middleware, _app, provider = gate
     limiter = middleware._limiter
     limit = limiter.max_entries
@@ -526,20 +533,21 @@ def test_bucket_map_is_bounded_and_fails_closed_under_distinct_clients(
             for client in clients
         ]
 
+    # One /64 per client, so prefix aggregation cannot merge them.
     statuses = asyncio.run(
-        burst([f"2001:db8::{index:x}" for index in range(limit)], "bad-token")
+        burst([f"2001:db8:{index:x}::1" for index in range(limit)], "bad-token")
     )
     assert statuses == [401] * limit, "each distinct client is charged normally"
     assert limiter.failed_auth_buckets <= limit
 
     before = provider.calls
     overflow = asyncio.run(burst(["2001:db8:dead:beef::1"], "bad-token"))
-    assert overflow == [429], "a saturated map fails closed, never grows"
-    assert provider.calls == before, "a fail-closed rejection costs no JWKS work"
+    assert overflow == [401], "a full map drops tracking, it does not refuse the caller"
+    assert provider.calls == before + 1, "an untracked failed auth still verifies"
     assert limiter.failed_auth_buckets <= limit
 
     # Once the live buckets refill they carry no state worth keeping, so they
-    # are dropped and the set serves new clients again.
+    # are dropped and the set tracks new clients again.
     clock.t = 60.0
     fresh = asyncio.run(burst(["2001:db8:dead:beef::2"], "bad-token"))
     assert fresh == [401], "refilled buckets are evictable, so the set recovers"
@@ -618,4 +626,215 @@ def test_trusted_proxy_logs_the_normalised_set_at_startup(
     logged = " ".join(record.getMessage() for record in caplog.records)
     assert "10.0.0.0/8" in logged
     assert "2001:db8::/32" in logged
+
+
+# ---------------------------------------------------------------------------
+# Part 6: saturation must never become a global lockout
+#
+# An attacker who can rotate source addresses cheaply can fill any bounded map
+# of per-address buckets. The bucket map is therefore keyed by *network prefix*
+# for the failed-auth bucket (one IPv6 /64, one IPv4 /24 -- the smallest block a
+# single tenant is routinely handed), so rotating inside a /64 charges a single
+# bucket instead of allocating thousands. A saturated map must also never deny a
+# caller that presents a valid credential: otherwise a full map is a cheaper
+# denial of service than the memory exhaustion it replaced.
+# ---------------------------------------------------------------------------
+
+
+def test_rotating_addresses_in_one_prefix_share_a_single_failed_auth_bucket(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """One IPv6 /64 rotating addresses must be charged as one client."""
+    env.setenv(AUTH_FAIL_ENV, "10")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    limiter = middleware._limiter
+
+    statuses: list[int] = []
+    for index in range(11):
+        sent: list[dict[str, Any]] = []
+        # Distinct addresses, all inside 2001:db8:1:2::/64.
+        _send(
+            middleware,
+            _http_scope(_auth("bad-token"), client=f"2001:db8:1:2::{index:x}"),
+            sent,
+        )
+        statuses.append(_status(sent))
+
+    assert statuses[:10] == [401] * 10
+    assert statuses[10] == 429, "rotating inside one /64 must charge one bucket"
+    assert limiter.failed_auth_buckets == 1, "the whole /64 is one bucket"
+
+
+def test_rotating_one_prefix_cannot_deny_an_unrelated_client_with_a_valid_token(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """The stated attack: fill the map from one /64, then a real client is denied.
+
+    Each address is charged exactly once so every bucket stays below capacity
+    (hence not evictable), which is what pinned the map full. The honest client
+    presents a *valid* token and must still be served: saturation may refuse new
+    authentication attempts, never traffic that has already authenticated.
+    """
+    env.setenv(MAX_BUCKETS_ENV, "8")
+    env.setenv(TRUSTED_PROXIES_ENV, "10.0.0.0/8")
+    app = _RecordingApp()
+    middleware = BearerAuthMiddleware(app, _StubProvider(), clock=clock.now)
+    limiter = middleware._limiter
+    assert limiter.max_entries == 8
+
+    # One tenant holds 10.0.0.0/24; rotating inside it must not allocate 8
+    # buckets, so the map never fills and the honest client is never affected.
+    for index in range(8):
+        sent: list[dict[str, Any]] = []
+        _send(middleware, _http_scope(_auth("bad-token"), client=f"10.0.0.{index + 1}"), sent)
+        assert _status(sent) == 401
+
+    assert limiter.failed_auth_buckets == 1, "an IPv4 /24 is one bucket, not per address"
+
+    # The honest client, from a different /24, still authenticates.
+    sent = []
+    _send(middleware, _http_scope(_auth("alice-token"), client="10.0.99.5"), sent)
+    assert _status(sent) == 200, "a valid credential is never throttled by saturation"
+    assert app.calls == 1
+
+
+def test_a_valid_token_is_served_while_the_failed_auth_map_is_saturated(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """A full map must not 429 a caller whose credential verifies."""
+    env.setenv(MAX_BUCKETS_ENV, "4")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    limiter = middleware._limiter
+
+    # Four distinct /64s, one failed auth each: every bucket is live (not
+    # refilled) so nothing is evictable and the map is pinned at the bound.
+    for index in range(4):
+        sent: list[dict[str, Any]] = []
+        _send(
+            middleware,
+            _http_scope(_auth("bad-token"), client=f"2001:db8:{index:x}::1"),
+            sent,
+        )
+        assert _status(sent) == 401
+    assert limiter.failed_auth_buckets == 4
+
+    # A brand-new client with a valid token, from a fifth /64.
+    sent = []
+    _send(middleware, _http_scope(_auth("bob-token"), client="2001:db8:ffff::1"), sent)
+    assert _status(sent) == 200, "saturation must not deny an authenticated request"
+
+
+def test_prefix_keying_maps_ipv4_to_a_slash_24_and_ipv6_to_a_slash_64(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """Two addresses in one /24 share a bucket; adjacent /24s do not."""
+    env.setenv(AUTH_FAIL_ENV, "2")
+    env.setenv(TRUSTED_PROXIES_ENV, "10.0.0.0/8")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    limiter = middleware._limiter
+
+    # Same /24 as 203.0.113.9 -> 203.0.113.0/24.
+    for client in ("203.0.113.9", "203.0.113.200"):
+        _send(middleware, _http_scope(_auth("bad-token"), client=client), [])
+    sent: list[dict[str, Any]] = []
+    _send(middleware, _http_scope(_auth("bad-token"), client="203.0.113.1"), sent)
+    assert _status(sent) == 429, "one /24 is one bucket"
+    assert limiter.failed_auth_buckets == 1
+
+    # A neighbouring /24 has its own bucket.
+    sent = []
+    _send(middleware, _http_scope(_auth("bad-token"), client="203.0.114.9"), sent)
+    assert _status(sent) == 401, "an adjacent /24 is a separate bucket"
+
+
+# ---------------------------------------------------------------------------
+# Part 7: the bucket-map bound is operator-configurable
+# ---------------------------------------------------------------------------
+
+
+def test_max_buckets_is_configurable_and_bounds_the_map(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    env.setenv(MAX_BUCKETS_ENV, "3")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    assert middleware._limiter.max_entries == 3
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "many", "", "1_0", "0x10"])
+def test_invalid_max_buckets_refuses_startup(
+    env: pytest.MonkeyPatch, clock: _FakeClock, value: str
+) -> None:
+    """A bound of 0 would deny every new key, so it is refused, not honoured."""
+    env.setenv(MAX_BUCKETS_ENV, value)
+    with pytest.raises(ValueError, match=MAX_BUCKETS_ENV):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+
+def test_an_absurdly_long_counter_refuses_startup_naming_the_variable(
+    env: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """A digit string past the interpreter's limit must not leak its own error.
+
+    ``int()`` raises ``ValueError`` for such a string with a message that never
+    names the setting, which breaks the promise that every bad value is reported
+    as "<variable> must be ...". The length is capped so our own message wins.
+    """
+    env.setenv(AUTH_FAIL_ENV, "1" * 5000)
+    with pytest.raises(ValueError, match=AUTH_FAIL_ENV):
+        BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+
+
+# ---------------------------------------------------------------------------
+# Part 8: saturation work is bounded (no O(n) scan per request)
+# ---------------------------------------------------------------------------
+
+
+def test_saturation_does_not_scan_the_whole_map_on_every_request(
+    env: pytest.MonkeyPatch, clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A saturated map must cost a bounded amount of work, not O(entries).
+
+    Every request from an unknown client triggers the saturation path, so an
+    eviction scan that walks all entries turns one attacker request into n units
+    of CPU. The scan is capped: it inspects a constant number of entries.
+    """
+    from pipeline import rate_limit as rate_limit_module
+
+    env.setenv(MAX_BUCKETS_ENV, "64")
+    middleware = BearerAuthMiddleware(_RecordingApp(), _StubProvider(), clock=clock.now)
+    limiter = middleware._limiter
+
+    # Pin the map full with live buckets, one per /64.
+    for index in range(64):
+        _send(
+            middleware,
+            _http_scope(_auth("bad-token"), client=f"2001:db8:{index:x}::1"),
+            [],
+        )
+    assert limiter.failed_auth_buckets == 64
+
+    inspected: list[int] = []
+    original = rate_limit_module.TokenBucket.is_refilled
+
+    def _counting(self: Any, now: float | None = None) -> bool:
+        inspected.append(1)
+        return original(self, now)
+
+    monkeypatch.setattr(rate_limit_module.TokenBucket, "is_refilled", _counting)
+
+    for _ in range(5):
+        _send(
+            middleware,
+            _http_scope(_auth("bad-token"), client="2001:db8:eeee::1"),
+            [],
+        )
+
+    # The scan is capped at a constant (``EVICT_SCAN_LIMIT``), so five saturated
+    # requests cost a fixed amount of work -- never five times the map size.
+    assert len(inspected) <= 5 * rate_limit_module.EVICT_SCAN_LIMIT, (
+        f"the saturation path inspected {len(inspected)} buckets over 5 requests; "
+        "it must stay bounded, not walk the whole map each time"
+    )
+    assert len(inspected) < 5 * 64, "the scan must not be proportional to the map"
+
 

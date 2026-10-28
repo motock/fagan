@@ -23,15 +23,17 @@ one during startup, and 401-ing it would prevent the app from booting). An
 on the mounted app would otherwise be reachable unauthenticated.
 
 Two token buckets bound the gate (``pipeline.rate_limit``): a failed-auth bucket
-per client address, checked *before* token verification so a blocked client
-costs no JWKS work, and a request bucket per authenticated subject. Going over
-either answers ``429`` with ``Retry-After``. Both live in process memory, so a
-multi-replica deployment needs a shared limiter. Both bucket maps are bounded and
-fail closed when saturated, because a client address is attacker-supplied: an
-unbounded map would make the limiter itself the memory-exhaustion vector. The
-JWKS refetch bound in ``app.oidc.verify_token`` stays in place: an
-unauthenticated endpoint that refetches keys per request is a denial-of-service
-amplifier.
+per client network prefix (IPv6 /64, IPv4 /24), checked *before* token
+verification so a blocked client costs no JWKS work, and a request bucket per
+authenticated subject. Going over either answers ``429`` with ``Retry-After``.
+Both live in process memory, so a multi-replica deployment needs a shared
+limiter. Both bucket maps are bounded, because a client prefix is
+attacker-supplied and rotating prefixes is cheap: an unbounded map would make
+the limiter itself the memory-exhaustion vector. A bounded map only stops
+*tracking* keys once it is full -- it never refuses a request -- so filling it
+cannot deny service to anyone else. The JWKS refetch bound in
+``app.oidc.verify_token`` stays in place: an unauthenticated endpoint that
+refetches keys per request is a denial-of-service amplifier.
 """
 
 from __future__ import annotations
@@ -51,7 +53,9 @@ from .authorization import enforcement_enabled
 from .rate_limit import (
     AUTH_FAIL_ENV,
     DEFAULT_AUTH_FAIL_PER_MIN,
+    DEFAULT_MAX_BUCKET_ENTRIES,
     DEFAULT_REQUESTS_PER_MIN,
+    MAX_BUCKETS_ENV,
     REQUESTS_ENV,
     TRUSTED_PROXIES_ENV,
     RateLimiter,
@@ -103,8 +107,19 @@ def build_rate_limiter(
     env = os.environ if environ is None else environ
     auth_fail = parse_count(AUTH_FAIL_ENV, DEFAULT_AUTH_FAIL_PER_MIN, env)
     requests = parse_count(REQUESTS_ENV, DEFAULT_REQUESTS_PER_MIN, env)
+    # A bound of 0 would put every key behind a full map, so it is refused
+    # rather than honoured as an "off" switch.
+    max_entries = parse_count(
+        MAX_BUCKETS_ENV, DEFAULT_MAX_BUCKET_ENTRIES, env, allow_zero=False
+    )
     trusted = parse_trusted_proxies(env.get(TRUSTED_PROXIES_ENV), env)
-    return RateLimiter(auth_fail, requests, clock=clock, trusted_proxies=trusted)
+    return RateLimiter(
+        auth_fail,
+        requests,
+        clock=clock,
+        trusted_proxies=trusted,
+        max_entries=max_entries,
+    )
 
 
 def _logged_path(scope: dict[str, Any]) -> str:

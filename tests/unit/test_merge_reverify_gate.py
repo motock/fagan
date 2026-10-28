@@ -479,6 +479,42 @@ class TestMovedHead:
         assert seams["cancel"].calls[0][0][0] == stale_job
         assert seams["rebase"].count == 1
         assert story["merge_reverify"]["sha"] == "c0ffee1"
+
+
+# ---------------------------------------------------------------------------
+# A verdict only counts when it names the SHA it graded.
+# ---------------------------------------------------------------------------
+class TestResultMustNameTheGradedSha:
+    """A result without a ``sha`` is never a pass - the check is equality.
+
+    ``collect_merge_reverify`` validates only that the payload is a dict whose
+    ``state`` is one of the known values, so a ``{"state": "pass"}`` document
+    written by another version, a truncated-but-valid file, or a sibling
+    process is reachable input. Reading its absence as "no mismatch" would
+    merge an unverified commit.
+    """
+
+    @pytest.mark.parametrize("result", [
+        {"state": "pass", "last_test_check": {"ok": 1}},
+        {"state": "pass", "sha": None, "last_test_check": {"ok": 1}},
+    ])
+    def test_result_without_the_graded_sha_does_not_authorise_a_merge(
+        self, plan_dir, tmp_path, monkeypatch, result
+    ):
+        _repo, head = _make_worktree(tmp_path)
+        seams = _install_seams(monkeypatch)
+        seams["rebase"].value = ("", head)
+        _write_manifest(plan_dir, {KEY: _story(tmp_path / "wt")})
+        _tick(plan_dir, _summary())
+
+        seams["collect"].value = result
+        _tick(plan_dir, _summary())
+
+        story = _read_story(plan_dir)
+        assert seams["merge_pr"].count == 0
+        assert "merge_reverify" not in story
+        assert story["status"] == "pr_open"
+        assert story["merge_attempts"] == 1
         assert seams["merge_pr"].count == 0
 
 
@@ -539,3 +575,26 @@ class TestTerminalFailureCancelsJob:
         assert "merge_reverify" not in story
         assert seams["merge_pr"].count == 0
         assert seams["collect"].count == 0
+
+
+# ---------------------------------------------------------------------------
+# Path safety: the job directory derives from the two keys, so neither may
+# traverse. Validated where the boundary is - at the start call.
+# ---------------------------------------------------------------------------
+class TestJobPathRejectsTraversal:
+    @pytest.mark.parametrize("key", [".", ".."])
+    def test_dot_keys_are_rejected_before_any_path_is_built(self, tmp_path, key):
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        state_root = tmp_path / "sr"
+        state_root.mkdir()
+
+        with pytest.raises(ValueError) as excinfo:
+            merge_reverify.start_merge_reverify(PLAN, key, str(worktree), state_root)
+
+        # The message names the argument, never the value (which is a path
+        # component) and never the state root.
+        assert str(excinfo.value) == "invalid story_key"
+        assert str(state_root) not in str(excinfo.value)
+        # Nothing outside the key directory was touched.
+        assert sorted(p.name for p in state_root.iterdir()) == []

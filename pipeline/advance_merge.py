@@ -243,15 +243,14 @@ def _merge_reverify_gate(
     blocks the advance tick.
     """
     if not merge_reverify.detached_enabled():
+        # Independent of review: re-run the acceptance oracle against the
+        # just-rebased branch right before merging. Closes the gap CI alone
+        # can't (a repo without CI, or a CI-independent slip between
+        # tests_passed and review).
         gate_error = ""
-        if not gate_error:
-            # Independent of review: re-run the acceptance oracle
-            # against the just-rebased branch right before merging.
-            # Closes the gap CI alone can't (a repo without CI, or a
-            # CI-independent slip between tests_passed and review).
-            acc = _reverify_acceptance(story, worktree, key)
-            if acc["state"] == "fail":
-                gate_error = f"acceptance reverify fail: {acc['error']}"
+        acc = _reverify_acceptance(story, worktree, key)
+        if acc["state"] == "fail":
+            gate_error = f"acceptance reverify fail: {acc['error']}"
         if not gate_error:
             # Independent of tests: a green suite doesn't mean the
             # project actually builds (PR #48 merged with `npm run
@@ -312,7 +311,13 @@ def _merge_reverify_gate(
     story.pop("merge_reverify", None)
     if isinstance(res.get("last_test_check"), dict):
         story["last_test_check"] = res["last_test_check"]
-    if "sha" in res and res["sha"] != pushed_sha:
+    # Equality, not presence: a result that does not name the SHA it graded
+    # (missing key, null, or a document written by another version or a
+    # sibling writer) cannot authorise a merge of this commit. Treating a
+    # missing ``sha`` as "no mismatch" would fail open - ``collect`` only
+    # checks ``state`` - and would let any ``{"state": "pass"}`` document in
+    # the job dir merge an unverified branch.
+    if res.get("sha") != pushed_sha:
         return "merge re-verify graded a different commit", False
     if res.get("state") == _REVERIFY_PASS:
         return "", False

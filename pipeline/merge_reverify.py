@@ -94,6 +94,15 @@ def start_merge_reverify(
         _validate_key(story_key)
     except ValueError:
         raise ValueError("invalid story_key") from None
+    # ``_validate_key``'s pattern accepts bare dot-names, which are valid
+    # characters but not valid path components: ``..`` would normalise the job
+    # directory to the shared state root, so the chmod, the stale-result unlink
+    # and the log would all land on the parent's own files. Reject them here
+    # before any path is built.
+    if plan_name in {".", ".."}:
+        raise ValueError("invalid plan_name")
+    if story_key in {".", ".."}:
+        raise ValueError("invalid story_key")
     if not Path(worktree).is_dir():
         raise ValueError("worktree must be an existing directory")
 
@@ -183,10 +192,21 @@ def _parse_started_at(job: dict) -> datetime | None:
 
 
 def _log_tail(log_path: Any) -> str:
+    """Return at most ``LOG_TAIL_CHARS`` of the job log, read from the end.
+
+    The log is the raw stdout/stderr of a suite authored by the agent under
+    review, so it can be arbitrarily large; this runs while the tick holds the
+    plan lock. Read only the tail instead of loading the whole file.
+    """
     try:
-        return Path(str(log_path)).read_text(errors="replace")[-LOG_TAIL_CHARS:]
-    except OSError:
+        with open(str(log_path), "rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            size = log_file.tell()
+            log_file.seek(max(0, size - LOG_TAIL_CHARS), os.SEEK_SET)
+            data = log_file.read()
+    except (OSError, ValueError):
         return ""
+    return data.decode(errors="replace")
 
 
 def _no_result(job: dict) -> dict:

@@ -82,25 +82,22 @@ def resolved_runtime() -> dict[str, str]:
       holds an unsupported value. Reported by
       ``pipeline.event_wiring.reported_event_bus_name()``.
     * ``store`` — the store kind ``PIPELINE_STORE`` selects: ``"file"``
-      (default). Reported by ``pipeline.store.store_kind()``; the kind is read
-      without constructing a store, so a health probe never touches the plan
-      directory.
+      (default), or the marker ``"invalid"`` when the variable holds an
+      unsupported value. Reported by ``pipeline.store.store_kind()``; the kind
+      is read without constructing a store, so a health probe never touches the
+      plan directory.
 
     Read live on every call and free of side effects: the environment is not
     written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
     keeps meaning "inprocess" rather than freezing that choice into the process.
 
-    Raises
-    ------
-    ``ValueError`` when ``PIPELINE_STORE`` holds a value the store selector
-    cannot honour (anything other than unset or ``file``). The store selector
-    is fail-closed: an operator who asked for another store must never be
-    handed the JSON-file one silently, and the message never echoes the
-    rejected value (it may be a path or a secret). An unsupported
-    ``PIPELINE_EVENT_BUS``, by contrast, is reported as ``"invalid"`` rather
-    than raised: :func:`pipeline.event_wiring.build_bus` stays fail-closed and
-    still refuses to run with a selection it cannot honour, while this report
-    degrades instead.
+    A selection the wiring cannot honour is always reported as ``"invalid"``,
+    never raised: both :func:`pipeline.event_wiring.build_bus` and
+    :func:`pipeline.store.build_store` stay fail-closed and refuse to serve an
+    unsupported selection, so this report gains no safety from raising — it
+    would only turn ``/api/health`` into a 500 and hide the diagnostic. Neither
+    the rejected value nor the selector's exception text is echoed here (an
+    environment value may be a path or a secret).
 
     ``resolved_topology()`` deliberately does not gain these keys — it stays
     pinned to its four documented topology fields.
@@ -115,4 +112,13 @@ def resolved_runtime() -> dict[str, str]:
     from pipeline.event_wiring import reported_event_bus_name
     from pipeline.store import store_kind
 
-    return {"event_bus": reported_event_bus_name(), "store": store_kind()}
+    # The selector's ValueError is deliberately not propagated: this is a
+    # read-only report, so a rejected selection degrades to ``"invalid"``
+    # (exactly like an unsupported bus name) instead of turning /api/health
+    # into a 500. Fail-closed enforcement lives in ``build_store()``.
+    try:
+        selected_store = store_kind()
+    except ValueError:
+        selected_store = "invalid"
+
+    return {"event_bus": reported_event_bus_name(), "store": selected_store}

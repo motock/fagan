@@ -10,6 +10,12 @@ This scans the source rather than importing the modules, so a construction
 hidden inside a function body (as in ``pipeline.authorization._load_manifest``)
 is caught too. It asserts membership and absence, never a count, so the
 guard stays valid as call sites are added and removed.
+
+The scan is a textual tripwire: it matches the literal ``FileStore()`` anywhere
+in a file, so a comment or docstring that spells the expression out would be
+reported as an offending site. That false positive is deliberate — it is
+cheaper to reword a comment than to let a real call site slip through — so
+prose should refer to "constructing the file store" instead of the expression.
 """
 
 from __future__ import annotations

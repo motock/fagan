@@ -12,6 +12,12 @@ The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
 ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
 intentionally not imported here (a module-load copy would freeze the real
 ~/.claude/plans path into every test run).
+
+Store selection lives here too: ``build_store()`` is the only place a
+``FileStore`` is constructed, so ``PIPELINE_STORE`` governs every call site,
+and ``store_kind()`` reports the selected kind without constructing a store
+(for the ``/api/health`` ``runtime`` block). Neither is listed in ``__all__``,
+which is pinned by ``tests/unit/test_live_ref.py``.
 """
 
 import json

@@ -17,14 +17,17 @@ preflight) without changing what summarize() returns.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import logging
 import re
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
+import app
 from pipeline import preflight
 
 DASHBOARD_MODULE = "app.dashboard"
@@ -71,25 +74,52 @@ def _stub_run_preflight(monkeypatch, results):
     return calls, real_summarize
 
 
+_ABSENT = object()
+
+
+@contextlib.contextmanager
+def _fresh_dashboard_window():
+    """Import app.dashboard from scratch, yielding the fresh module.
+
+    Importing a submodule rebinds the parent package attribute, so this window
+    restores BOTH global bindings on exit: the ``sys.modules`` entry and the
+    ``app.dashboard`` attribute (popped when it was absent on entry). Leaving
+    the attribute bound to the discarded module makes later patches in the same
+    worker target a module the routes never resolve.
+    """
+    saved_module = sys.modules.get(DASHBOARD_MODULE, _ABSENT)
+    saved_attribute = vars(app).get("dashboard", _ABSENT)
+    try:
+        sys.modules.pop(DASHBOARD_MODULE, None)
+        yield importlib.import_module(DASHBOARD_MODULE)
+    finally:
+        if saved_module is _ABSENT:
+            sys.modules.pop(DASHBOARD_MODULE, None)
+        else:
+            sys.modules[DASHBOARD_MODULE] = saved_module
+        if saved_attribute is _ABSENT:
+            vars(app).pop("dashboard", None)
+        else:
+            app.dashboard = saved_attribute
+
+
 @pytest.fixture
 def fresh_import():
-    """Re-import app.dashboard from scratch; restore sys.modules afterwards.
+    """Re-import app.dashboard from scratch; restore both bindings afterwards.
 
-    The dashboard module is imported by many existing test files, so the
-    original module object is put back once the assertion window closes.
+    Each call made inside a test body opens a fresh-import window that stays
+    open until the test finishes: while it is open the freshly imported module
+    is the process-wide binding, both in ``sys.modules`` and as the
+    ``app.dashboard`` package attribute, so assertions made in the body see the
+    module the routes resolve. Teardown then puts the original module object
+    back in both places, newest window first.
     """
-    saved = sys.modules.get(DASHBOARD_MODULE)
+    with contextlib.ExitStack() as stack:
 
-    def _import_fresh():
-        sys.modules.pop(DASHBOARD_MODULE, None)
-        return importlib.import_module(DASHBOARD_MODULE)
+        def _import_fresh():
+            return stack.enter_context(_fresh_dashboard_window())
 
-    yield _import_fresh
-
-    if saved is not None:
-        sys.modules[DASHBOARD_MODULE] = saved
-    else:
-        sys.modules.pop(DASHBOARD_MODULE, None)
+        yield _import_fresh
 
 
 def _preflight_records(caplog):
@@ -236,3 +266,83 @@ def test_wiring_is_module_level_after_app_creation_and_never_raises():
         "dashboard startup must degrade, not die: raise_on_failure must not "
         "be wired into the startup path"
     )
+
+
+def test_fresh_import_restores_package_dashboard_binding(fresh_import, monkeypatch):
+    """Both global bindings leave a fresh-import window on the same module.
+
+    A discarded module may only be replaced once it is unbound everywhere: a
+    later test in the same worker that patches ``app.dashboard._service`` must
+    reach the very module app/dashboard_routes_plan.py resolves from
+    ``sys.modules``, otherwise the real PipelineService answers the request.
+    """
+    from app import dashboard_routes_plan
+
+    _stub_run_preflight(monkeypatch, [_result("probe-plan-dir", "ok", "ok")])
+
+    original_module = importlib.import_module(DASHBOARD_MODULE)
+    assert sys.modules[DASHBOARD_MODULE] is original_module
+    assert app.dashboard is original_module
+    saved_attribute = app.dashboard
+    service_before = app.dashboard._service
+
+    try:
+        # while the window is open, both bindings are the fresh module, so a
+        # patch on the package attribute reaches the route module's lazy proxy
+        fresh = fresh_import()
+        assert fresh is not original_module
+        assert sys.modules[DASHBOARD_MODULE] is fresh
+        assert app.dashboard is fresh
+
+        fake_service = types.SimpleNamespace(save_plan=object())
+        monkeypatch.setattr(app.dashboard, "_service", fake_service)
+        assert dashboard_routes_plan._service.save_plan is fake_service.save_plan
+
+        # a window entered with the package attribute present restores both
+        # bindings to exactly what they were on entry
+        saved_module = sys.modules[DASHBOARD_MODULE]
+        saved_nested = vars(app).get("dashboard", _ABSENT)
+        with _fresh_dashboard_window() as nested:
+            assert sys.modules[DASHBOARD_MODULE] is nested
+            assert app.dashboard is nested
+        assert sys.modules[DASHBOARD_MODULE] is saved_module
+        assert vars(app).get("dashboard", _ABSENT) is saved_nested
+
+        # a window entered with the attribute absent pops it again instead of
+        # leaving a discarded module (or a sentinel) bound on the package
+        vars(app).pop("dashboard", None)
+        assert "dashboard" not in vars(app)
+        with _fresh_dashboard_window() as detached:
+            assert sys.modules[DASHBOARD_MODULE] is detached
+            assert app.dashboard is detached
+        assert sys.modules[DASHBOARD_MODULE] is saved_module
+        assert "dashboard" not in vars(app)
+    finally:
+        # restored by hand, not through monkeypatch: monkeypatch would record
+        # the *fresh* module as the value to undo back to, leaving a discarded
+        # module bound on the package for the rest of the worker
+        app.dashboard = saved_attribute
+
+    # the patch replaced the module attribute, so its undo puts the very same
+    # singleton back: this test leaves no shadowing attribute on the shared
+    # PipelineService
+    assert app.dashboard._service is service_before
+
+
+def test_fresh_import_fixture_keeps_the_window_open_for_the_test_body(
+    fresh_import, monkeypatch
+):
+    """A test body sees the fresh module as the process-wide binding.
+
+    Closing the window at the import call would hand back a module nothing
+    else resolves: assertions later in the body, and the route module's lazy
+    proxy, would silently run against the original module instead.
+    """
+    _stub_run_preflight(monkeypatch, [_result("probe-plan-dir", "ok", "ok")])
+
+    original_module = importlib.import_module(DASHBOARD_MODULE)
+    fresh = fresh_import()
+
+    assert fresh is not original_module
+    assert sys.modules[DASHBOARD_MODULE] is fresh
+    assert app.dashboard is fresh

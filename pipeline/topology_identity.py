@@ -77,9 +77,10 @@ def resolved_runtime() -> dict[str, str]:
 
     Keys so far (the block is cumulative — later work adds its own):
 
-    * ``event_bus`` — ``pipeline.event_wiring.selected_event_bus_name()``, i.e.
-      the bus ``PIPELINE_EVENT_BUS`` selects: ``"inprocess"`` (default) or
-      ``"jsonl"``.
+    * ``event_bus`` — the bus ``PIPELINE_EVENT_BUS`` selects: ``"inprocess"``
+      (default), ``"jsonl"``, or the marker ``"invalid"`` when the variable
+      holds an unsupported value. Reported by
+      ``pipeline.event_wiring.reported_event_bus_name()``.
 
     Read live on every call and free of side effects: the environment is not
     written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
@@ -87,10 +88,12 @@ def resolved_runtime() -> dict[str, str]:
 
     Raises
     ------
-    ValueError
-        When ``PIPELINE_EVENT_BUS`` holds an unsupported value. Failing closed
-        is the point: reporting a bus name for a setting the pipeline refused to
-        honour would misdescribe the process.
+    Nothing: this is an observational read. An unsupported
+    ``PIPELINE_EVENT_BUS`` is reported as ``"invalid"`` rather than raised, so a
+    read-only health check never fails because of one mistyped variable.
+    :func:`pipeline.event_wiring.build_bus` stays fail-closed and still refuses
+    to run with a selection it cannot honour; only this report degrades, and it
+    never echoes the rejected value (it may be a path or a secret).
 
     ``resolved_topology()`` deliberately does not gain these keys — it stays
     pinned to its four documented topology fields.
@@ -98,6 +101,6 @@ def resolved_runtime() -> dict[str, str]:
     # Imported inside the function: this module's reads are late-bound so a
     # caller that re-imports or re-patches ``pipeline.event_wiring`` is still
     # observed, and the import graph stays free of a cycle at module load.
-    from pipeline.event_wiring import selected_event_bus_name
+    from pipeline.event_wiring import reported_event_bus_name
 
-    return {"event_bus": selected_event_bus_name()}
+    return {"event_bus": reported_event_bus_name()}

@@ -20,6 +20,10 @@ EVENT_BUS_INPROCESS = "inprocess"
 EVENT_BUS_JSONL = "jsonl"
 #: Every accepted value, in the order the error message lists them.
 ALLOWED_EVENT_BUSES = (EVENT_BUS_INPROCESS, EVENT_BUS_JSONL)
+#: Reported by :func:`reported_event_bus_name` when the variable is unset to an
+#: unsupported value. Deliberately not a bus name: it says "this process's
+#: selection could not be honoured" without echoing the rejected value.
+EVENT_BUS_INVALID = "invalid"
 
 
 def wake_handler(event: dict) -> dict:
@@ -97,6 +101,22 @@ def selected_event_bus_name() -> str:
     raise ValueError(f"{EVENT_BUS_ENV} must be one of {allowed}")
 
 
+def reported_event_bus_name() -> str:
+    """Return the selected bus name for *observation*, never raising.
+
+    Read-only reporting (``/api/health``'s ``runtime.event_bus``) must not turn
+    a health check into a 500 because of one mistyped environment variable, so
+    an unsupported value is reported as :data:`EVENT_BUS_INVALID` instead of
+    raising. The rejected value is never echoed -- it may be a path or a
+    secret. :func:`build_bus` remains fail-closed: the pipeline still refuses to
+    run with a selection it cannot honour; only the report degrades.
+    """
+    try:
+        return selected_event_bus_name()
+    except ValueError:
+        return EVENT_BUS_INVALID
+
+
 def _subscribe_handlers(bus: EventBus) -> EventBus:
     """Subscribe the pipeline's handlers to *bus* and return it."""
     bus.subscribe("agent_done", wake_handler)
@@ -110,6 +130,36 @@ def _subscribe_handlers(bus: EventBus) -> EventBus:
     return bus
 
 
+class DispatchingJsonlEventBus(JsonlEventBus):
+    """A :class:`JsonlEventBus` that persists *and* dispatches to subscribers.
+
+    ``JsonlEventBus.publish`` only appends a JSON line; its ``subscribe``
+    records handlers that it never calls. Selecting that class directly would
+    therefore silently stop every handler from running: ``agent_done`` would
+    never reach :func:`wake_handler` (no plan ever advances), the notification
+    sinks would never persist, and ``pipeline.persistence._notify_user`` would
+    skip its own direct-write fallback because it sees subscribers registered
+    -- losing notifications outright rather than merely not duplicating them.
+
+    This subclass keeps the append-log behavior and then dispatches, mirroring
+    :class:`pipeline.events.InProcessEventBus`: a handler that raises is logged
+    and the remaining handlers still run. Persisting happens first, so a
+    failing handler can never lose the log line.
+    """
+
+    def publish(self, event: dict) -> None:
+        super().publish(event)
+        # The event type and payload are not logged: a handler failure must be
+        # diagnosable without putting event contents in the log.
+        for handler in self._handlers.get(event.get("type"), []):
+            try:
+                handler(event)
+            except Exception:  # noqa: BLE001
+                logger.error(
+                    "Event handler failed for event type %s", event.get("type")
+                )
+
+
 def build_bus() -> EventBus:
     """Build the pipeline's event bus, as selected by ``PIPELINE_EVENT_BUS``.
 
@@ -117,21 +167,23 @@ def build_bus() -> EventBus:
       pipeline's handlers subscribed (``agent_done`` -> :func:`wake_handler`,
       ``notification`` -> the file-log and outbox sinks, plus the opt-in
       lifecycle tracing handlers when telemetry is enabled).
-    * ``"jsonl"`` -- a :class:`JsonlEventBus` rooted at
-      :data:`pipeline.paths.PLAN_DIR`, with the same handlers subscribed. That
-      bus appends one JSON object per event to ``<PLAN_DIR>/<plan>.events.jsonl``
-      (the log is plan-scoped, so the plan dir is its natural root; the bus's
-      own tests pin only that ``<root>/<plan>.events.jsonl`` shape and root it
-      at a per-test temporary directory).
+    * ``"jsonl"`` -- a :class:`DispatchingJsonlEventBus` rooted at
+      :data:`pipeline.paths.PLAN_DIR`, with the same handlers subscribed. It
+      appends one JSON object per event to ``<PLAN_DIR>/<plan>.events.jsonl``
+      *and* dispatches to those handlers, so persistence is added rather than
+      traded for delivery. The log is plan-scoped, which is why the plan dir is
+      its natural root; ``JsonlEventBus``'s own tests pin only the
+      ``<root>/<plan>.events.jsonl`` shape and root it at a per-test temporary
+      directory.
     * anything else, including the empty string -- ``ValueError`` from
       :func:`selected_event_bus_name`.
 
     The selection is re-read on every call and never cached, so changing the
-    variable between two calls changes the bus that comes back.
-    :func:`get_bus` is the one place that caches a built bus.
+    variable between two calls changes the bus that comes back. Only
+    :func:`get_bus` caches a built bus.
     """
     if selected_event_bus_name() == EVENT_BUS_JSONL:
-        return _subscribe_handlers(JsonlEventBus(PLAN_DIR))
+        return _subscribe_handlers(DispatchingJsonlEventBus(PLAN_DIR))
     return _subscribe_handlers(InProcessEventBus())
 
 

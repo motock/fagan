@@ -330,8 +330,9 @@ def health() -> dict[str, Any]:
     ``runtime`` is the cumulative block of runtime selections, read live per
     request by :func:`pipeline.topology_identity.resolved_runtime`; today it
     carries ``event_bus`` (the bus ``PIPELINE_EVENT_BUS`` selects). It is
-    returned as produced, so keys added there show up here without touching
-    this endpoint.
+    returned as produced, so keys added there show up here. Reporting is
+    fail-soft (an unsupported value becomes ``invalid``) so a mistyped variable
+    never 500s this endpoint; ``build_bus()`` still fails closed.
     """
     plan_dir = str(PLAN_DIR)
     scheduler: Any = None

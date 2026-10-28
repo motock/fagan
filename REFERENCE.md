@@ -2163,6 +2163,52 @@ full contracts live in the specs each row links.
 | `PIPELINE_WORKTREE_NAMESPACE` | *(unset → `WORKTREE_ROOT/<key>`)* | Inserts a namespace segment into worktree directory names (`WORKTREE_ROOT/<ns>/<key>`), mirroring `PIPELINE_BRANCH_NAMESPACE`. The value must match `^[a-z0-9][a-z0-9-]{0,31}$`; any other non-empty value raises. Set it before dispatching, and give two operators sharing one host distinct values. | [docs/specs/WORKTREE_NAMESPACE.md](docs/specs/WORKTREE_NAMESPACE.md) |
 | `PIPELINE_PLAN_APPROVAL` | *(unset → off)* | Enables the plan-approval lifecycle: ingest records an `approval` block plus a digest of the authored content, the scheduler tick and `dispatch_story` both refuse a plan that is not `approved`, and `approve_plan` / `reject_plan` move it through `pending_approval` → `approved` \| `changes_requested`. Any authored-content change (`patch_story`, `patch_plan`, re-ingest) resets the record. Unset writes manifests byte-identically to the pre-approval shape; an unrecognized value raises rather than silently enabling or disabling the gate. | [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) |
 
+### OpenTelemetry endpoint (`PIPELINE_OTEL_ENDPOINT`)
+
+Unset — the default — the pipeline imports no `opentelemetry` module and exports
+nothing; the SDK is imported lazily, so a deployment that exports nothing pays no
+import cost. An empty value counts as unset. Set `PIPELINE_OTEL_ENDPOINT` to a
+collector URL and an OTLP/HTTP exporter is built for it, on a resource whose
+`service.name` is `fagan-pipeline` — the same string is the instrumentation-scope
+name the metrics in the next subsection are created under. Both signals share
+this one switch.
+
+The exporter can never break the work it instruments: an exporter failure never
+fails a request and never fails a scheduler tick. The error is caught, the
+request or tick carries on, and a warning naming only the error's type — never
+its payload or the endpoint URL — is logged at most once a minute
+(`_WARNING_INTERVAL_SECONDS = 60.0`) so a collector outage cannot flood the log.
+The throttle suppresses rather than resets: a burst of failures produces one
+warning, and the next warning is permitted a full minute after the one actually
+emitted.
+
+### OpenTelemetry metric names
+
+Three counters and two observable gauges describe what an operator alerts on.
+They are registered once, under the `fagan-pipeline` instrumentation scope, and
+only while `PIPELINE_OTEL_ENDPOINT` is set.
+
+| Metric | Kind | What it measures | Labels |
+| --- | --- | --- | --- |
+| `pipeline.dispatch.outcomes` | counter | one record per dispatch attempt | `outcome` — one of `dispatched`, `skipped`, `pending`, `failed` |
+| `pipeline.authz.decisions` | counter | one record per authorization decision | `action` — one of the enumerated `Action` values (`plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`); `outcome` — `allowed` or `denied`. The principal is never a label: it is PII and its cardinality is unbounded. |
+| `pipeline.merge.results` | counter | one record per adjudicated story | `result` — one of `merged`, `parked`, `failed` |
+| `pipeline.stories` | observable gauge | how many stories are in each status | `status` — one of the enumerated story statuses (`todo`, `in_progress`, `running`, `interrupted`, `failed`, `tests_passed`, `pr_open`, `changes_requested`, `parked`, `done`) |
+| `pipeline.capacity.in_use` | observable gauge | how many stories hold a capacity slot — the `in_progress` count, summed over every unpaused plan manifest | none |
+
+Neither gauge touches the filesystem on collection. Both are read from the
+manifest snapshot the scheduler tick publishes as its last statement, built from
+counts the tick already computed from the manifests it loaded. A tick that raised
+never reaches that line, so the previous complete snapshot stays published
+instead of being cleared, zeroed or emptied; the gauges therefore describe the
+last *successful* tick, not live state mid-tick. The snapshot is assembled in
+locals and published with a single assignment, so a collector never observes a
+half-written one, and a status outside the enum is dropped from it rather than
+minting a series.
+
+Every label value is validated against an enum before the meter is touched, so a
+new series cannot be minted by an unexpected value.
+
 ### Structured log format (`PIPELINE_LOG_FORMAT`)
 
 Unset — the default — logging is exactly as it was before: plain-text lines

@@ -109,10 +109,11 @@ def test_brief_names_the_real_park_path_and_never_invents_state(repo_root):
     ):
         assert symbol in brief, f"brief does not name {symbol}"
     # The unmeasurable state must escalate, not park as "no new commit".
-    assert "escalate" in brief
-    # Guard against the misdirection this record previously carried: no
-    # persistent high-water mark exists in pipeline/, so none may be mandated.
-    assert "high_water" not in text and "high-water mark must not" not in brief
+    assert re.search(r"escalat|needs-human|needs_human", brief, re.IGNORECASE)
+    # Guard against the misdirection this record previously carried: the field
+    # name of a persisted high-water mark exists nowhere in pipeline/, so the
+    # brief may not mandate one by that name.
+    assert "high_water" not in text, "no persisted high_water field exists to mandate"
 
 
 def test_brief_names_the_missing_request_decision_tool(repo_root):
@@ -133,26 +134,70 @@ def test_brief_records_the_hold_and_parent_evidence(repo_root):
     brief = record["agent_instructions"]
     for token in ("f8453e5", "agent/ot-02", "1347"):
         assert token in brief, f"brief does not cite {token}"
-    assert "do NOT merge PR #1347" in brief
-    assert "do NOT redispatch OT-02" in brief
-    assert "do NOT mark OT-02 done" in brief
+    # Hold conditions are asserted as prohibition-verb-near-object patterns, not
+    # as verbatim sentences, so the brief can be reworded without failing here.
+    for pattern in (
+        r"(do not|must not|never|forbidden)[^.\n]{0,60}\bmerge\b",
+        r"(do not|must not|never)[^.\n]{0,60}\bredispatch\b",
+        r"(do not|must not|never)[^.\n]{0,60}\bmark\b[^.\n]{0,40}\bdone\b",
+    ):
+        assert re.search(pattern, brief, re.IGNORECASE), (
+            f"hold condition missing: brief matches no {pattern!r}"
+        )
+    assert re.search(r"\bunmerged\b|\bopen\b", brief, re.IGNORECASE)
 
 
 def test_brief_records_the_scope_adjudication(repo_root):
     _, record = _story(repo_root)
     brief = record["agent_instructions"]
-    assert "IN SCOPE" in brief
-    assert "PipelineService.dispatch_story" in brief
-    assert "_adjudicate_merges" in brief
-    assert "forbidden" in brief
+    assert re.search(r"in[\s_-]*scope", brief, re.IGNORECASE), "no scope verdict stated"
+    for symbol in (
+        "pipeline/service.py",
+        "PipelineService.dispatch_story",
+        "pipeline/advance_merge.py",
+        "_adjudicate_merges",
+    ):
+        assert symbol in brief, f"brief does not name recording site {symbol}"
+    assert re.search(r"(revert|delet|remov|weaken)", brief, re.IGNORECASE), (
+        "brief does not warn against undoing the recording sites"
+    )
+    assert re.search(r"forbidden|not permitted|must not|do not", brief, re.IGNORECASE)
 
 
 def test_brief_requires_a_clean_main_diff_before_merge(repo_root):
     _, record = _story(repo_root)
     brief = record["agent_instructions"]
-    assert "clean main" in brief
+    assert re.search(r"re-?derive", brief, re.IGNORECASE), (
+        "brief does not require re-deriving the diff before merge"
+    )
+    assert re.search(r"diff[^.\n]{0,80}main|main[^.\n]{0,80}diff", brief, re.IGNORECASE), (
+        "brief does not tie the re-derived diff to a clean main"
+    )
     for stray in ("app/oidc_login.py", "pipeline/authorization.py", "deploy/*"):
         assert stray in brief, f"pre-merge note does not flag {stray}"
+
+
+def test_brief_carries_the_two_call_trace_with_real_numbers(repo_root):
+    """Step 5: defect (a) must carry both call traces and the named mistake."""
+    _, record = _story(repo_root)
+    brief = record["agent_instructions"]
+    for token in ("aaaa111", "1a2b3c4", "f8453e5"):
+        assert token in brief, f"trace does not carry the {token} ref"
+    assert "INCONCLUSIVE" in brief
+    assert re.search(r"rev-list[^.\n]{0,40}count[^.\n]{0,60}aaaa111\.\.f8453e5", brief), (
+        "trace does not show the call-2 commit count against the prior base"
+    )
+    # Call 2 must yield NEW_COMMITS=1; the churn case is f8453e5..f8453e5 = 0.
+    assert re.search(r"=\s*1[^0-9]", brief) and "NEW_COMMITS=1" in brief
+    assert re.search(r"f8453e5\.\.f8453e5[^.\n]{0,40}=\s*0", brief), (
+        "trace does not name the f8453e5..f8453e5 = 0 churn case"
+    )
+    assert "NO_NEW_COMMITS" in brief
+    # The state side of the mistake: the tracked comparison point must not be
+    # advanced on an inconclusive measurement.
+    assert re.search(
+        r"(advance|overwrit|record|updat)[^.\n]{0,80}comparison point", brief, re.IGNORECASE
+    ), "trace does not require leaving the comparison point un-advanced"
 
 
 def test_filing_into_the_plan_manifest_is_an_idempotent_upsert(repo_root, monkeypatch):
@@ -178,6 +223,10 @@ def test_repo_record_can_be_filed_without_losing_its_brief(repo_root):
     """The in-repo copy and the manifest record are the same schema shape."""
     _, record = _story(repo_root)
     assert set(record) <= SCHEMA_KEYS
-    assert record["agent_instructions"].strip()
-    assert "ACCEPTANCE CRITERIA" in record["agent_instructions"]
+    brief = record["agent_instructions"]
+    # Shape, not sentences: a substantive multi-section brief whose sections are
+    # the ones the sibling tests pin by symbol.
+    assert len(brief) > 1000, "the brief must be substantive"
+    assert brief.count("\n") >= 2, "the brief must be sectioned, not one blob"
+    assert record["files"], "the brief's file scope must reach the filed record"
     assert "acceptance" not in record  # none is claimed; no empty-list stub

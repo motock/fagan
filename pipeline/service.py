@@ -24,11 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import cross_plan
-from pipeline.plan_approval import (
-    PlanApprovalMixin,
-    approval_enabled,
-    reset_if_changed,
-)
+from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -172,7 +168,11 @@ from .service_role_config import (
     _set_plan_role_config_impl,
     _set_role_default_impl,
 )
-from .service_story_ops import _get_story_diff_impl, _set_story_status_impl
+from .service_story_ops import (
+    _get_story_diff_impl,
+    _patch_story_impl,
+    _set_story_status_impl,
+)
 
 
 def _decompose_context_root(workspace: str | None) -> str | None:
@@ -853,78 +853,7 @@ class PipelineService(PlanApprovalMixin):
         it. Only the fields above may be set; status transitions go through
         set_story_status, not this tool.
         """
-        _validate_key(plan_name)
-        _validate_key(story_key)
-        from .authorization import authorize
-        refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
-        if refusal is not None:
-            return refusal
-
-        unknown = set(fields) - _PATCHABLE_STORY_FIELDS
-        if unknown:
-            return {
-                "ok": False,
-                "error": f"cannot patch field(s) {sorted(unknown)}: "
-                f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable",
-            }
-
-        if "backend" in fields and fields["backend"] not in _VALID_STORY_BACKENDS:
-            return {
-                "ok": False,
-                "error": (
-                    f"invalid backend {fields['backend']!r}: must be one of "
-                    f"{sorted(_VALID_STORY_BACKENDS)}"
-                ),
-            }
-
-        if "blocked_by" in fields and not (
-            isinstance(fields["blocked_by"], list)
-            and all(isinstance(entry, str) for entry in fields["blocked_by"])
-        ):
-            return {
-                "ok": False,
-                "error": "invalid blocked_by: must be a list of "
-                '"<plan>:<story_key>" strings',
-            }
-
-        with _store.transaction(plan_name) as acquired:
-            if not acquired:
-                return {
-                    "ok": True,
-                    "skipped": "locked",
-                    "reason": "another dispatch/ingest/interrupt is in progress for this plan",
-                }
-            before = _store.get_manifest(plan_name).get("stories", {}).get(story_key)
-            previous_instructions = before.get("agent_instructions") if before else None
-            was_dispatched = bool(before and before.get("dispatched_at"))
-            story = _store.update_story(plan_name, story_key, fields)
-            if story is None:
-                return {"ok": False, "error": f"No such story {story_key!r}"}
-            if approval_enabled():
-                # Re-read so the digest reflects the edit just persisted, and
-                # reset in the same transaction so an approval can never
-                # outlive the content it approved.
-                manifest = _store.get_manifest(plan_name)
-                if reset_if_changed(manifest):
-                    _store.save_manifest(plan_name, manifest)
-            if (
-                was_dispatched
-                and "agent_instructions" in fields
-                and fields["agent_instructions"] != previous_instructions
-            ):
-                _notify_user(
-                    plan_name,
-                    f"{story_key} brief patched after dispatch "
-                    f"(agent_instructions changed via patch_story).",
-                    story_key=story_key,
-                    event="brief_patched",
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-            return {"ok": True, "story_key": story_key, "story": story}
+        return _patch_story_impl(self, plan_name, story_key, fields)
 
     def patch_plan(self, plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """

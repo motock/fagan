@@ -2240,14 +2240,17 @@ bug: without an identity there is nothing to authorize against.
 ### OIDC identity verification
 
 By default the dashboard authenticates `/api/` requests with the shared secret
-(`app/auth.py`). Setting `PIPELINE_IDENTITY_PROVIDER=oidc` switches it to
-bearer-token authentication: a caller presents `Authorization: Bearer <token>`,
-the token is verified as a JWT against the issuer's JWKS, and the resulting
-principal is attached to the request.
+(`app/auth.py`). Setting `PIPELINE_IDENTITY_PROVIDER=oidc` switches it to OIDC:
+a caller presents `Authorization: Bearer <token>`, the token is verified as a JWT
+against the issuer's JWKS, and the resulting principal is attached to the
+request. Because the browser cannot mint a token on its own, OIDC mode also
+serves an authorization-code + PKCE login (`/auth/login`, `/auth/callback`) whose
+session cookie authenticates `/api/` for that browser — see the "Browser login
+and the session cookie" section below.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` switches the dashboard to bearer-token authentication. Any other value raises at startup rather than silently downgrading authentication. |
+| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` accepts a bearer token and, failing that, the browser login session cookie. Any other value raises at startup rather than silently downgrading authentication. |
 | `PIPELINE_OIDC_ISSUER` | *(required when `oidc`)* | The expected `iss` claim, compared against the configured value — never against a value taken from the token. Must not contain `#` (it joins the issuer and subject into one principal id). |
 | `PIPELINE_OIDC_AUDIENCE` | *(required when `oidc`)* | The expected `aud` claim, likewise from configuration only. |
 | `PIPELINE_OIDC_JWKS_URL` | *(required when `oidc`)* | Where the issuer publishes its signing keys. Must use `https://`. A host that resolves to a private or loopback address is refused unless `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is set. |
@@ -2282,13 +2285,53 @@ the dashboard reads and compares the API key exactly as before.
 it. It is a declared form of a dependency `mcp` already requires
 (`pyjwt[crypto]>=2.10.1`), not a new library in the install.
 
-OIDC authenticates API clients only. The bundled browser dashboard has no login
-flow and mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages
-still load but every `/api/` call returns `401`. In particular, the chat-stream
-`k-` pass-through that exists in shared-secret mode does not exist here: every
-`/api/` request, `/api/chat/stream` included, needs a bearer token. See
-[docs/specs/IDENTITY_AND_POLICY.md](docs/specs/IDENTITY_AND_POLICY.md) for the
-claims-to-principal mapping.
+### Browser login and the session cookie
+
+The login flow exists because a browser cannot mint a bearer token on its own.
+`/auth/login` redirects to the issuer with `state`, `nonce` and a PKCE
+`code_verifier` held server-side; `/auth/callback` verifies the ID token under
+the same rules as a bearer token, binds the `nonce` to this attempt, and sets a
+`__Host-pipeline_session` cookie. The cookie carries only a 256-bit random
+handle: the principal and its deadlines stay server-side, so the cookie is a
+lookup key, not a claim the browser can dictate.
+
+**The cookie is an ambient credential.** A browser attaches it to a request any
+page can trigger, so authenticating by cookie says nothing about who caused the
+request. The rule that follows is fixed, not configurable:
+
+- A **read** (`GET`/`HEAD`/`OPTIONS`) authenticated by the cookie needs nothing
+  more — there is no side effect to forge.
+- A **write** (`POST`/`PUT`/`PATCH`/`DELETE`) authenticated by the cookie must
+  also prove same-origin: `Sec-Fetch-Site: same-origin`, or an `Origin` whose
+  scheme and authority equal those of the configured redirect URI. `same-site`
+  is not enough, and a request with no proof at all is refused `403` *before the
+  route runs*, so nothing mutates. `403 {"detail": "Forbidden"}` names neither
+  the principal's credential nor the rejected header.
+- A **rejected bearer token never downgrades to the cookie.** A bearer token is
+  an explicit credential, so a request that presents one is refused `401`
+  outright when it does not verify, instead of being re-attributed to the
+  browser's ambient session.
+- A bearer token needs no same-origin proof: it is not ambient, and a page that
+  can read it already has the credential. Bearer authentication takes precedence
+  over the cookie when both are present.
+
+`PIPELINE_IDENTITY_PROVIDER=oidc` therefore authenticates both a token-bearing
+client — such as the remote MCP transport — and the bundled browser UI; it is a
+drop-in replacement for the shared secret in either case. The chat-stream `k-`
+pass-through that exists in shared-secret mode still does not exist under OIDC:
+that stream authenticates by the API key, so `/api/chat/stream` needs a bearer
+token or a session cookie like any other `/api/` route.
+
+**Ending a session.** A session ends at 30 minutes of inactivity, at 8 hours
+from login regardless of activity, or at `/auth/logout` — whichever comes first.
+Revoking the session at the identity provider does not reach a live dashboard
+session, so these local deadlines and re-authentication are what bound it.
+`POST /auth/logout` deletes the server-side session and clears the cookie, so
+replaying the old cookie afterwards is a `401`; when discovery advertises an
+`end_session_endpoint` the JSON response carries it as `end_session_url` for the
+UI to follow. `GET /auth/logout` does the same and redirects to `/`. Logout is
+local and succeeds even when the provider is unreachable — the end-session URL
+is then simply `null`.
 
 ### Remote MCP transport
 

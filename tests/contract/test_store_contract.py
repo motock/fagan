@@ -122,8 +122,9 @@ def test_transaction_mutual_exclusion_across_threads(store_factory):
     """One holder at a time: a contended acquire refuses and holds nothing.
 
     Traces the lock across four actors: A holds and writes, B is refused while
-    A holds (A's lock survives B's failed attempt), C acquires after A releases
-    and sees A's write, then D acquires after C releases and sees C's write.
+    A holds (A's lock survives B's failed attempt), C waits for A to release the
+    lock and then acquires, sees A's write, and releases it, then D acquires
+    after C releases and sees C's write.
     """
     store = store_factory()
     store.save_manifest(
@@ -131,6 +132,7 @@ def test_transaction_mutual_exclusion_across_threads(store_factory):
     )
 
     a_acquired = threading.Event()
+    a_released = threading.Event()
     b_checked = threading.Event()
     c_released = threading.Event()
     failures = []
@@ -147,11 +149,18 @@ def test_transaction_mutual_exclusion_across_threads(store_factory):
         store.save_manifest(PLAN, manifest)
 
     def holder_a():
-        with store.transaction(PLAN) as acquired:
-            assert acquired is True, "the first acquire must hold the plan lock"
-            a_acquired.set()
-            assert b_checked.wait(timeout=5), "the contender never finished"
-            _set_status("running")
+        try:
+            with store.transaction(PLAN) as acquired:
+                assert acquired is True, "the first acquire must hold the plan lock"
+                a_acquired.set()
+                assert b_checked.wait(timeout=5), "the contender never finished"
+                _set_status("running")
+        finally:
+            # Set only after the context manager exits: the lock is still held until
+            # then, so signalling earlier would let C race against A. A finally keeps
+            # that ordering while still waking C if A fails, so a broken A surfaces as
+            # A's own error instead of C's misleading "the holder never released".
+            a_released.set()
 
     def contender_b():
         try:
@@ -162,7 +171,9 @@ def test_transaction_mutual_exclusion_across_threads(store_factory):
             b_checked.set()
 
     def holder_c():
-        assert b_checked.wait(timeout=5), "the contender never finished"
+        # Wait on A's release, not on B: B never held the lock, so b_checked
+        # says nothing about whether A still holds it.
+        assert a_released.wait(timeout=5), "the holder never released"
         try:
             with store.transaction(PLAN) as acquired:
                 assert acquired is True, (

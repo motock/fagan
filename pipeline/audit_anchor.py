@@ -36,6 +36,12 @@ laundering the truncation permanently. So verification reports
 ``"anchor log unreadable: <OSError type>"`` and an anchoring pass appends nothing,
 leaving the previous anchors - and the previous verdict - in force.
 
+The sink file is part of that boundary, so it is opened ``O_NOFOLLOW`` and its
+mode is re-imposed to ``0o600`` on the open descriptor: a pre-existing anchor
+file with a looser mode is tightened, and a symlink planted in a writable sink
+directory is refused rather than followed, so a write cannot be steered onto a
+file the operator did not designate.
+
 Off by default: unset or empty means no anchor file is created and verification
 reports nothing. ``file:<absolute path>`` is the only accepted form; any other
 value fails closed with :class:`ValueError` at first use (ADR 0004) rather than
@@ -253,10 +259,21 @@ def _head(path: Path, chain: str) -> tuple[int, str] | None:
 
 
 def _append(path: Path, record: dict[str, Any]) -> None:
-    """Append one record with ``O_APPEND``; the log is never rewritten."""
+    """Append one record with ``O_APPEND``; the log is never rewritten.
+
+    The sink is opened ``O_NOFOLLOW`` and its mode is re-imposed to ``0o600`` on
+    the open descriptor rather than only at creation. A mode argument applies
+    only when ``open`` creates the file: a pre-existing anchor log with a looser
+    mode would otherwise stay group- or world-readable, and a symlink planted in
+    a writable sink directory would redirect the append somewhere else entirely.
+    A refusal surfaces as ``OSError`` and the caller appends nothing - the sink
+    is part of the tamper-evidence boundary, so it fails closed.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    flags = os.O_CREAT | os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
     try:
+        os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.write(fd, (audit._canonical(record) + "\n").encode("utf-8"))
     finally:

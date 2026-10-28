@@ -890,7 +890,11 @@ Each tick, `pipeline/audit_anchor.py` writes
 for every plan chain and the host chain whose head moved forward since the
 strongest anchor recorded for it. An unchanged head writes nothing, so a quiet
 pipeline does not grow the log. Lines are appended with `O_APPEND` and the file is
-never rewritten. A sink failure is logged at `WARNING` with the error type only and
+never rewritten. The log is opened with `O_NOFOLLOW` and its mode is re-imposed to
+`0o600` on the open descriptor, not only at creation, so a pre-existing anchor file
+with a looser mode is tightened and a symlink planted in a writable sink directory
+is refused instead of redirecting the append; a refusal is a sink failure, and the
+tick appends nothing. A sink failure is logged at `WARNING` with the error type only and
 never stops the plan sweep, because tamper evidence must not be able to halt
 dispatch.
 

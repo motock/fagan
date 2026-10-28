@@ -155,7 +155,10 @@ test-only. The notification channel layer is the template for the rest.
   an append-only log cannot un-anchor a head and a WORM sink cannot be edited. A
   log that cannot be read is reported as `anchor log unreadable` and the tick
   appends nothing, so a broken sink can neither clear a verdict nor re-anchor the
-  head it hides. It
+  head it hides. The sink file is opened with `O_NOFOLLOW` and its mode is
+  re-imposed to `0o600` on the open descriptor, so a pre-existing looser mode is
+  tightened and a symlink planted in a writable sink directory is refused rather
+  than followed. It
   is off by default, and the only sink is `file:<absolute path>`: worth anything
   only where the pipeline host cannot rewrite that path (a WORM or object-lock
   mount, another host's append-only NFS export) — on local disk a forger who can

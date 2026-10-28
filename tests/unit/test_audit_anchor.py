@@ -689,6 +689,51 @@ def test_anchor_writes_are_append_only(anchor_file: Path, plan_dir: Path, monkey
     assert after[1].startswith(before[1])
 
 
+def test_preexisting_loose_anchor_file_is_tightened(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    """0o600 at creation only is not enough: an existing looser file is tightened."""
+    anchor_file.write_text("")
+    anchor_file.chmod(0o644)
+    record = _record()
+
+    audit_anchor.anchor_heads()
+
+    assert anchor_file.stat().st_mode & 0o777 == 0o600
+    assert [(line["seq"], line["hash"]) for line in _anchor_lines(anchor_file)] == [
+        (record["seq"], record["hash"])
+    ]
+
+
+def test_symlinked_anchor_file_is_refused(plan_dir: Path, anchor_file: Path) -> None:
+    """A symlink planted in a writable sink directory must not redirect the append."""
+    target = anchor_file.parent / "elsewhere.jsonl"
+    target.write_text("")
+    anchor_file.symlink_to(target)
+    _record()
+
+    with pytest.raises(OSError):
+        audit_anchor.anchor_heads()
+
+    assert target.read_text() == ""
+    assert anchor_file.is_symlink()
+
+
+def test_symlinked_anchor_file_does_not_stop_scan_all_plans(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon keeps sweeping when the sink refuses the append."""
+    target = anchor_file.parent / "elsewhere.jsonl"
+    target.write_text("")
+    anchor_file.symlink_to(target)
+    _make_plan_with_marker(plan_dir, "alpha")
+
+    events = watchers.scan_all_plans(_FakeBus())
+
+    assert len(events) == 1
+    assert target.read_text() == ""
+
+
 def test_anchor_uses_append_mode(plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The sink is opened with O_APPEND so two writers cannot interleave a line."""
     _record()

@@ -327,3 +327,22 @@ def test_fresh_import_restores_package_dashboard_binding(fresh_import, monkeypat
     # singleton back: this test leaves no shadowing attribute on the shared
     # PipelineService
     assert app.dashboard._service is service_before
+
+
+def test_fresh_import_fixture_keeps_the_window_open_for_the_test_body(
+    fresh_import, monkeypatch
+):
+    """A test body sees the fresh module as the process-wide binding.
+
+    Closing the window at the import call would hand back a module nothing
+    else resolves: assertions later in the body, and the route module's lazy
+    proxy, would silently run against the original module instead.
+    """
+    _stub_run_preflight(monkeypatch, [_result("probe-plan-dir", "ok", "ok")])
+
+    original_module = importlib.import_module(DASHBOARD_MODULE)
+    fresh = fresh_import()
+
+    assert fresh is not original_module
+    assert sys.modules[DASHBOARD_MODULE] is fresh
+    assert app.dashboard is fresh

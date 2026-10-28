@@ -874,8 +874,67 @@ The `verify_audit()` MCP tool runs both over the whole plan directory and return
 plan with an audit file appears, keyed by its bare name; a plan with no audit file
 is absent rather than `None`, and an intact chain reports `None`. The tool reads
 only — it never appends, repairs or rewrites a stream — so it is offered to remote
-callers under `REMOTE_READ`. Tail truncation is **not** detected by it: a chain
-with no externally recorded head cannot prove the newest records were not removed.
+callers under `REMOTE_READ`. Tail truncation is **not** detected by the chain walk
+alone: a chain with no externally recorded head cannot prove the newest records
+were not removed. Setting `PIPELINE_AUDIT_ANCHOR` supplies that head and adds an
+`anchor` mapping of the same chain names to the verdict described below.
+
+#### Anchoring the heads (`PIPELINE_AUDIT_ANCHOR`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_AUDIT_ANCHOR` | *(unset)* | Off: no anchor file is created and nothing extra is verified. `file:<absolute path>` appends each chain's head to an append-only JSONL log on every daemon tick. Any other value — an unknown scheme, a relative path, or a path inside `PLAN_DIR` — raises `ValueError` at first use, naming the variable only and never its value; a mistyped sink stops anchoring rather than silently disabling tamper evidence. |
+
+Each tick, `pipeline/audit_anchor.py` writes
+`{"chain": <plan|"host">, "seq": <head seq>, "hash": <head hash>, "at": <utc iso>}`
+for every plan chain and the host chain whose head moved forward since the
+strongest anchor recorded for it. An unchanged head writes nothing, so a quiet
+pipeline does not grow the log. Lines are appended with `O_APPEND` and the file is
+never rewritten. The log is opened with `O_NOFOLLOW` and its mode is re-imposed to
+`0o600` on the open descriptor, not only at creation, so a pre-existing anchor file
+with a looser mode is tightened and a symlink planted in a writable sink directory
+is refused instead of redirecting the append; a refusal is a sink failure, and the
+tick appends nothing. A sink failure is logged at `WARNING` with the error type only and
+never stops the plan sweep, because tamper evidence must not be able to halt
+dispatch.
+
+Anchoring only ratchets upwards. The anchor read back for a chain is the highest
+`seq` ever recorded for it and, at equal `seq`, the hash recorded first: a later
+tick can raise it but never lower it, and never replace the hash it already
+vouched for. A head that went backwards (the tail was cut) or that changed hash at
+an already anchored `seq` (that record was rewritten) is therefore *not*
+re-anchored — the pass keeps the stronger anchor and logs a `WARNING` naming the
+chain and the two seq values only — so the tamper stays reported on every
+following tick instead of being laundered by the next one.
+
+That makes such a verdict permanent until an operator resolves it, which is
+deliberate: the pipeline cannot distinguish a forgery from a legitimate change, so
+it never clears one by itself. Retiring a chain — archiving a plan for good, say —
+is an operator action on the sink, not a pipeline action: an append-only log
+cannot un-anchor a head, and a WORM or object-lock sink cannot be edited at all,
+so the retirement is recorded outside the anchor log (an operator note against the
+anchored head) or the deployment rolls to a fresh sink and the new log starts from
+the then-current heads.
+
+`verify_audit()` then reports, under `anchor`, one entry per anchored chain —
+`None` when the anchored `(seq, hash)` is still in the chain,
+`"truncated below anchored seq N"` when the chain no longer reaches that record
+(including when the stream was deleted outright), or `"anchored hash mismatch at
+seq N"` when that record was edited. The map is keyed by chain, so a plan whose
+stream vanished is still named in the report.
+
+A log that exists but cannot be read — a mode or ACL change, a broken export, a
+read that fails part-way through — is not read as an empty one. `verify_audit()`
+reports `{"*": "anchor log unreadable: <error type>"}` (an empty map would look
+like a clean verdict), and the tick appends nothing rather than re-anchoring the
+current head, which would record a head below the anchored one and launder a
+truncation. A missing log *is* an empty log: anchoring has simply not started yet.
+
+The sink is only worth anything where the pipeline host cannot rewrite it: a WORM
+or object-lock mount, or a separate host's NFS export with append-only
+permissions. A plain file on the same host raises the bar — a forger must edit the
+anchor log too — but whoever can rewrite the chain can rewrite the file, so it is
+not third-party evidence. An HTTP or S3 sink is a later story.
 
 Actions recorded today:
 
@@ -903,10 +962,13 @@ Three limits are worth stating plainly:
   at `ERROR` (`audit append failed action=... plan=... - the action itself stands`)
   and the merge, decision or refusal proceeds as it would have. A read-only or full
   plan directory therefore degrades the trail, not the tick.
-- **Truncation of the tail is not detected.** The chain says nothing about records
-  removed from the end: the head hash is not shipped anywhere the pipeline cannot
-  rewrite, so cutting the last lines still leaves `verify_audit_chain` returning
-  `None`. Read a clean verification as "no record in the middle was altered" — not
+- **Truncation of the tail is detected only when anchoring is on.** The chain
+  alone says nothing about records removed from the end: without an external
+  record of the head, cutting the last lines still leaves `verify_audit_chain`
+  returning `None`. With `PIPELINE_AUDIT_ANCHOR` naming an append-only sink
+  outside `PLAN_DIR`, `verify_audit()` compares each chain against its last
+  anchored head and reports a truncation or a mismatch. Read a clean verification
+  as "no record in the middle was altered" — not
   as tamper-evidence.
 
 

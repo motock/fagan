@@ -19,7 +19,7 @@
 |---|---|---|---|
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
-| Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
+| Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident; head anchor opt-in, file-only** | A sink the pipeline host cannot reach (HTTP/S3 with object lock, or a WORM export) so truncation is detectable without a local file; fold the remaining sidecars in |
 | AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Seam, not a control** | Mutating tools outside the `Action` enum are unchecked; reads are not tenant-scoped; decisions are not routed to the plan owner; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own and no rate limiting at the gate |
 
 ---
@@ -146,10 +146,26 @@ test-only. The notification channel layer is the template for the rest.
   and a timestamp, and `verify_audit_chain` names the first altered record. The
   ADR 0007 approval record is its first tenant, joined by the authorization
   decisions, plan pause/resume, `story.dispatch` and `story.merge`.
-- **Still open: no external anchor.** The stream is appended to a user-writable
-  directory, nothing is stored write-once, and the head hash is not shipped anywhere
-  the pipeline cannot rewrite, so truncation of the tail is undetectable — a clean
-  verification only means that no record in the middle was altered. Decisions
+- **External anchor: opt-in, file-only for now.** `PIPELINE_AUDIT_ANCHOR` ships
+  each chain's `(seq, hash)` head to an append-only log on every daemon tick, and
+  `verify_audit()` reports a truncation or a mismatch against it. Anchors ratchet:
+  the highest `seq` ever recorded stands, and at equal `seq` the hash recorded
+  first, so cutting a tail or rewriting an anchored record is not laundered by the
+  next tick — it keeps failing verification until an operator resolves it, because
+  an append-only log cannot un-anchor a head and a WORM sink cannot be edited. A
+  log that cannot be read is reported as `anchor log unreadable` and the tick
+  appends nothing, so a broken sink can neither clear a verdict nor re-anchor the
+  head it hides. The sink file is opened with `O_NOFOLLOW` and its mode is
+  re-imposed to `0o600` on the open descriptor, so a pre-existing looser mode is
+  tightened and a symlink planted in a writable sink directory is refused rather
+  than followed. It
+  is off by default, and the only sink is `file:<absolute path>`: worth anything
+  only where the pipeline host cannot rewrite that path (a WORM or object-lock
+  mount, another host's append-only NFS export) — on local disk a forger who can
+  rewrite the chain can rewrite the anchor too. Nothing is stored write-once by
+  the pipeline itself, an HTTP or S3/WORM sink does not exist yet, and while the
+  variable is unset truncation of the tail is undetectable, so a clean verification
+  only means that no record in the middle was altered. Decisions
   (`<plan>.decisions.json`) and per-story journals
   (`<plan>.<story>.journal.json`) also keep their own files for now.
 - `record_security_audit` records *that* an audit happened and at which SHA,
@@ -244,8 +260,11 @@ mutating MCP tools outside the enum (`save_plan`, `set_story_status`,
 `record_security_audit` and others) are not, and reads are not tenant-scoped.
 Plan ownership is stored and enforced for `plan:approve`, `plan:reject` and
 `story:merge`, but decisions are not yet routed to the owner. The audit
-stream of allow/deny decisions exists locally (hash-chained per plan); what it
-still lacks is the external anchor that would make tail truncation detectable.
+stream of allow/deny decisions exists locally (hash-chained per plan), and the
+external anchor that makes tail truncation detectable exists but is opt-in and
+`file:`-only, so while `PIPELINE_AUDIT_ANCHOR` is unset — or set to a path the
+pipeline host can rewrite — truncation stays undetectable and a clean
+verification only means that no record in the middle was altered.
 
 ---
 

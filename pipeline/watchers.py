@@ -14,7 +14,7 @@ import os
 import time
 from datetime import UTC, datetime
 
-from . import paths, security_audit
+from . import audit_anchor, paths, security_audit
 from .events import make_event
 from .persistence import _notify_user
 
@@ -203,4 +203,11 @@ def scan_all_plans(bus):
         _scan_security_audits(repo_plans)
     except Exception:
         logger.exception("security audit due check failed")
+    # Ship each chain's head to the external anchor. A broken sink is a
+    # WARNING, never a reason to skip the sweep: tamper evidence must not be
+    # able to stop dispatch, and the scan's return value is unchanged either way.
+    try:
+        audit_anchor.anchor_heads()
+    except Exception as exc:  # noqa: BLE001 - the sweep must survive a broken sink
+        logger.warning("audit anchor pass failed: %s", type(exc).__name__)
     return events

@@ -33,8 +33,8 @@ actions in the `Action` enum — `plan:ingest`, `plan:approve`, `plan:reject`, `
 `PIPELINE_POLICY_ENFORCE` is the operator's kill switch.
 
 It is still a partial boundary. The enum is not every mutation: MCP tools
-whose service path never asks `authorize` — `set_story_status`,
-`record_security_audit` and others (§4) — run for any principal. With no
+whose service path never asks `authorize` — `record_security_audit` and others
+(§4) — run for any principal. With no
 identity provider configured the bound principal is `LOCAL_OPERATOR`, which
 `LocalPolicy` allows, so local mode behaves as it did before this plan.
 

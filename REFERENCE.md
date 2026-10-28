@@ -885,8 +885,8 @@ Actions recorded today:
   claiming it with `mark_story_in_progress`.
 - `plan:ingest` — the authorization check for ingesting a plan and for saving a
   plan file.
-- `story:patch` — the authorization check for a status change; checkpoint
-  denials only.
+- `story:patch` — the authorization check for a status change and for
+  requesting a decision; checkpoint denials only.
 - `story:merge` / `story:mark_done` — the authorization checks for merging and for
   the manual done transition.
 - `plan.approved` / `plan.changes_requested` — the decision itself, outcome

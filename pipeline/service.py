@@ -156,12 +156,6 @@ _PATCHABLE_STORY_FIELDS = frozenset(
         "blocked_by",
     )
 )
-# The plan-manifest TOP-LEVEL fields patch_plan may edit. Deliberately tiny
-# and fail-closed: anything not listed here (repo_root, epics, stories, ...)
-# is rejected before the lock is taken or disk is touched. role_config is the
-# only entry today because it is the one plan-level field a caller legitimately
-# needs to retune without hand-editing the manifest JSON.
-_PATCHABLE_PLAN_FIELDS = frozenset(("role_config",))
 _VALID_STORY_BACKENDS = frozenset(
     {"claude", "local", "ollama", "lmstudio", "mlx", "litellm", "auto"}
 )
@@ -173,7 +167,11 @@ _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
 from .service_decisions import _request_decision_impl
-from .service_role_config import _set_plan_role_config_impl, _set_role_default_impl
+from .service_role_config import (
+    _patch_plan_impl,
+    _set_plan_role_config_impl,
+    _set_role_default_impl,
+)
 
 
 def _decompose_context_root(workspace: str | None) -> str | None:
@@ -926,28 +924,12 @@ class PipelineService(PlanApprovalMixin):
         lock is taken, so an unknown field can never reach disk.
         """
         _validate_key(plan_name)
-        unknown = set(fields) - _PATCHABLE_PLAN_FIELDS
-        if unknown:
-            return {
-                "ok": False,
-                "error": f"cannot patch field(s) {sorted(unknown)}: "
-                f"only {sorted(_PATCHABLE_PLAN_FIELDS)} are editable",
-            }
+        from .authorization import authorize
 
-        with _store.transaction(plan_name) as acquired:
-            if not acquired:
-                return {
-                    "ok": True,
-                    "skipped": "locked",
-                    "reason": "another dispatch/ingest/interrupt is in progress for this plan",
-                }
-            if not _store.manifest_path(plan_name).exists():
-                return {"ok": False, "error": f"No such plan {plan_name!r}"}
-            manifest = _store.get_manifest(plan_name)
-            manifest.update(fields)
-            reset_if_changed(manifest)
-            _store.save_manifest(plan_name, manifest)
-            return {"ok": True, "plan_name": plan_name}
+        refusal = authorize("config:write", plan_name=plan_name)
+        if refusal is not None:
+            return refusal
+        return _patch_plan_impl(self, plan_name, fields)
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         try:

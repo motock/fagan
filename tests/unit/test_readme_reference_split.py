@@ -105,6 +105,14 @@ _PATCH_PLAN_BULLET = (
 # XP-3 added the `blocked_by` story field to the "Plan / story schema" section;
 # the pre-split README predates it, so the verbatim guard normalizes this line
 # away and separately requires it to be present.
+# AUTH-10 gated patch_plan behind config:write and stated it in the patch_plan
+# bullet. The pre-split README predates the gate, so require the clause to be
+# present and then normalize it away before the bullet itself is normalized.
+_PATCH_PLAN_CONFIG_WRITE_CLAUSE = (
+    "  The edit requires the `config:write` permission and is refused fail-closed\n"
+    "  otherwise, before the lock is taken or the manifest is written."
+)
+
 _BLOCKED_BY_SCHEMA_LINE = (
     '- `blocked_by` (optional story field) — list of `"<plan>:<story_key>"` '
     "cross-plan prerequisites; validated at ingest (shape only, existence is "
@@ -753,6 +761,13 @@ def test_moved_section_body_is_verbatim(title):
                 # normalize it (plus the blank line that separates it from the
                 # preceding bullet) away — the presence assertion means the
                 # normalization can never mask its removal.
+                assert _PATCH_PLAN_CONFIG_WRITE_CLAUSE in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must state that "
+                    f"patch_plan requires config:write."
+                )
+                reference_body = reference_body.replace(
+                    "\n" + _PATCH_PLAN_CONFIG_WRITE_CLAUSE, ""
+                )
                 assert _PATCH_PLAN_BULLET in reference_body, (
                     f"Section body for {title!r} in REFERENCE.md must document "
                     f"the new patch_plan(plan_name, fields) tool."

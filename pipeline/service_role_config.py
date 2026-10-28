@@ -7,6 +7,9 @@ pipeline.server still land.
 
 import json
 import os
+from typing import Any
+
+from .plan_approval import reset_if_changed
 
 
 def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | None=None, model: str | None=None):
@@ -124,6 +127,34 @@ def _set_role_default_impl(self, role: str, provider: str | None, model: str | N
         raise
 
     return {"ok": True, "role": role, "provider": provider, "model": model}
+
+
+_PATCHABLE_PLAN_FIELDS = frozenset(("role_config",))
+
+
+def _patch_plan_impl(self, plan_name: str, fields: dict[str, Any]):
+    unknown = set(fields) - _PATCHABLE_PLAN_FIELDS
+    if unknown:
+        return {
+            "ok": False,
+            "error": f"cannot patch field(s) {sorted(unknown)}: "
+            f"only {sorted(_PATCHABLE_PLAN_FIELDS)} are editable",
+        }
+
+    with _store.transaction(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True,
+                "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+            }
+        if not _store.manifest_path(plan_name).exists():
+            return {"ok": False, "error": f"No such plan {plan_name!r}"}
+        manifest = _store.get_manifest(plan_name)
+        manifest.update(fields)
+        reset_if_changed(manifest)
+        _store.save_manifest(plan_name, manifest)
+        return {"ok": True, "plan_name": plan_name}
 
 
 # must follow the defs: service.py back-imports _set_plan_role_config_impl/_set_role_default_impl (line 164), so defining them first keeps both import directions cycle-free

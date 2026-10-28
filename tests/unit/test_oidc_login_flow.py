@@ -164,11 +164,21 @@ def config(tmp_path):
     return oidc_login.load_config(_env(tmp_path))
 
 
-@pytest.fixture
-def client(config) -> TestClient:
+def _browser(config) -> TestClient:
+    """A client that behaves like a browser: an https origin and a cookie jar.
+
+    The origin has to be https because the login flow's cookies are ``Secure``
+    and ``__Host-`` prefixed, and a browser (like ``http.cookiejar``) stores but
+    never returns a ``Secure`` cookie to a plain-http origin.
+    """
     app = FastAPI()
     oidc_login.mount_auth_routes(app, config)
-    return TestClient(app)
+    return TestClient(app, base_url="https://testserver")
+
+
+@pytest.fixture
+def client(config) -> TestClient:
+    return _browser(config)
 
 
 def _auth_log_text(caplog) -> str:
@@ -376,7 +386,13 @@ def test_callback_rejects_nonce_mismatch(client, idp, clock):
 
     assert response.status_code == 401
     assert response.json() == {"error": "authentication_failed"}
-    assert "set-cookie" not in response.headers
+    # No session is minted; the only cookie written is the one-shot state
+    # binding being cleared.
+    assert not [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.SESSION_COOKIE}=")
+    ]
 
 
 def test_callback_rejects_token_from_another_audience(client, idp, clock):
@@ -388,7 +404,13 @@ def test_callback_rejects_token_from_another_audience(client, idp, clock):
 
     assert response.status_code == 401
     assert response.json() == {"error": "authentication_failed"}
-    assert "set-cookie" not in response.headers
+    # No session is minted; the only cookie written is the one-shot state
+    # binding being cleared.
+    assert not [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.SESSION_COOKIE}=")
+    ]
 
 
 def test_token_exchange_failure_is_generic(client, idp, caplog):
@@ -584,3 +606,172 @@ def test_session_absolute_timeout_wins_over_a_recent_activity(client, idp, clock
 def test_unknown_session_id_returns_none():
     assert oidc_login.load_session("no-such-session") is None
     assert oidc_login.load_session(None) is None
+
+
+# --------------------------------------------------------------------------
+# GET /auth/callback — the state binding to the requesting browser
+# --------------------------------------------------------------------------
+
+
+def _state_cookie(response) -> str:
+    """The ``__Host-`` binding cookie the browser must replay on the callback."""
+    for header in response.headers.get_list("set-cookie"):
+        prefix = f"{oidc_login.LOGIN_STATE_COOKIE}="
+        if header.startswith(prefix):
+            return header[len(prefix) :].split(";", 1)[0]
+    raise AssertionError("no state binding cookie was set")
+
+
+def test_login_binds_state_to_the_browser(client, idp):
+    response = client.get("/auth/login", follow_redirects=False)
+
+    params = {k: v[0] for k, v in parse_qs(urlsplit(response.headers["location"]).query).items()}
+    cookie = [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.LOGIN_STATE_COOKIE}=")
+    ]
+    assert cookie, "the login redirect must bind state to the requesting browser"
+    assert _state_cookie(response) == params["state"]
+    attributes = cookie[0].lower()
+    assert "secure" in attributes
+    assert "httponly" in attributes
+    assert "samesite=lax" in attributes
+    assert "path=/" in attributes
+    assert "domain=" not in attributes
+
+
+def test_callback_rejects_state_without_the_binding_cookie(config, client, idp, clock):
+    """A callback URL lifted from another browser authenticates nobody.
+
+    This is the login-CSRF case: the attacker completes the authorization in
+    their own browser and hands the resulting callback URL to a victim. The
+    victim's browser holds no binding cookie, so the attempt dies here.
+    """
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    victim = _browser(config)
+
+    response = _callback(victim, params["state"])
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_request"}
+    assert oidc_login.SESSION_COOKIE not in "\n".join(
+        response.headers.get_list("set-cookie")
+    )
+    assert idp.exchange_calls == 0
+    # The state entry is untouched, so its legitimate owner can still finish.
+    assert _callback(client, params["state"]).status_code == 302
+
+
+def test_callback_rejects_a_foreign_binding_cookie(config, client, idp, clock):
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    attacker = _browser(config)
+    attacker.cookies.set(oidc_login.LOGIN_STATE_COOKIE, "not-the-right-state")
+
+    response = _callback(attacker, params["state"])
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_request"}
+    assert oidc_login.SESSION_COOKIE not in "\n".join(
+        response.headers.get_list("set-cookie")
+    )
+    assert idp.exchange_calls == 0
+
+
+def test_callback_clears_the_binding_cookie_on_success(client, idp, clock):
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 302
+    cleared = [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.LOGIN_STATE_COOKIE}=")
+    ]
+    assert cleared, "the one-shot binding cookie must be cleared on success"
+    value = cleared[0].split(";", 1)[0].split("=", 1)[1]
+    assert value.strip('"') == "", "clearing must empty the binding cookie"
+
+
+def test_callback_clears_the_binding_cookie_on_failure(client, idp, clock):
+    params = _login_params(client)
+    idp.nonce = "a-different-nonce"
+
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 401
+    cleared = [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.LOGIN_STATE_COOKIE}=")
+    ]
+    assert cleared, "the binding cookie must be cleared even when login fails"
+    value = cleared[0].split(";", 1)[0].split("=", 1)[1]
+    assert value.strip('"') == "", "clearing must empty the binding cookie"
+
+
+def test_callback_rejects_a_non_ascii_nonce_without_a_server_error(
+    client, idp, clock
+):
+    params = _login_params(client)
+    idp.nonce = "nonce-with-a-\u00e9-character"
+
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 401
+    assert response.json() == {"error": "authentication_failed"}
+
+
+# --------------------------------------------------------------------------
+# GET /auth/logout
+# --------------------------------------------------------------------------
+
+
+def test_logout_ends_the_session_and_clears_the_cookie(client, idp, clock):
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    session_id = _new_session(client, idp, params["state"])
+    assert oidc_login.load_session(session_id) is not None
+
+    response = client.get("/auth/logout", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert oidc_login.load_session(session_id) is None
+    cleared = [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.SESSION_COOKIE}=")
+    ]
+    assert cleared, "logout must clear the session cookie"
+    value = cleared[0].split(";", 1)[0].split("=", 1)[1]
+    assert value.strip('"') == "", "logout must empty the session cookie"
+
+
+def test_logout_is_harmless_without_a_session(client):
+    response = client.get("/auth/logout", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert oidc_login.SESSION_COOKIE in "\n".join(
+        response.headers.get_list("set-cookie")
+    )
+
+
+# --------------------------------------------------------------------------
+# Bounds on the unauthenticated login routes
+# --------------------------------------------------------------------------
+
+
+def test_pending_logins_are_capped(client, idp, monkeypatch):
+    monkeypatch.setattr(oidc_login, "MAX_PENDING_LOGINS", 3)
+
+    codes = [
+        client.get("/auth/login", follow_redirects=False).status_code
+        for _ in range(5)
+    ]
+
+    assert codes.count(302) == 3
+    assert codes[-1] == 429

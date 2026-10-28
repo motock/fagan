@@ -14,7 +14,7 @@ directions, and the fallback taken for a bus object that predates the method.
 from typing import ClassVar
 
 import pipeline.server  # noqa: F401  -- breaks the pre-existing import cycle
-from pipeline import persistence
+from pipeline import event_wiring, persistence
 from pipeline.events import EventBus, InProcessEventBus, JsonlEventBus
 
 
@@ -204,6 +204,39 @@ def test_notify_user_falls_back_for_a_bus_without_delivers(tmp_path, monkeypatch
 
     lines = _lines(log)
     assert len(lines) == 2
+    assert lines[0] == "seed"
+
+
+# ---------------------------------------------------------------------------
+# The production bus: build_bus() subscribes a notification sink, so the
+# publisher must not write the same notice a second time.
+# ---------------------------------------------------------------------------
+
+def test_build_bus_delivers_notifications_to_its_subscribed_sink(monkeypatch):
+    """``build_bus`` wires the notification sinks, so nothing writes directly."""
+    monkeypatch.delenv("PIPELINE_OTEL_ENDPOINT", raising=False)
+    monkeypatch.delenv("PIPELINE_EVENT_BUS", raising=False)
+
+    assert event_wiring.build_bus().delivers("notification") is True
+
+
+def test_notify_user_does_not_double_write_against_the_wired_bus(
+    tmp_path, monkeypatch
+):
+    plan_dir = _plan_dir(tmp_path, monkeypatch)
+    log = plan_dir / "delivers.notifications.log"
+    log.write_text("seed\n", encoding="utf-8")
+    monkeypatch.delenv("PIPELINE_OTEL_ENDPOINT", raising=False)
+    monkeypatch.delenv("PIPELINE_EVENT_BUS", raising=False)
+    monkeypatch.setattr(persistence, "PLAN_DIR", plan_dir)
+
+    _notify(monkeypatch, event_wiring.build_bus())
+
+    # The wired ``file_log_sink`` owns the free-text log line, so the seed line
+    # plus exactly one sink line is all there is: a second append here would be
+    # the duplicate the guard exists to prevent.
+    lines = _lines(log)
+    assert len(lines) == 2, "the sink's line only; no direct-write duplicate"
     assert lines[0] == "seed"
 
 

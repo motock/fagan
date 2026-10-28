@@ -177,13 +177,23 @@ def record_audit(
 
 
 def verify_audit_chain(plan_name: str) -> int | None:
-    """Return the index of the first altered record, or ``None`` when intact.
+    """Return the seq of the first altered record, or ``None`` when intact."""
+    return _verify_chain_at(audit_path(plan_name))
+
+
+def verify_host_audit_chain() -> int | None:
+    """Return the seq of the first altered host record, or ``None`` when intact."""
+    return _verify_chain_at(host_audit_path())
+
+
+def _verify_chain_at(path: Path) -> int | None:
+    """Return the seq of the first altered record in *path*, or ``None``.
 
     Checks all three links a rewrite would break: the running ``seq``, the
     ``prev_hash`` of the previous line, and the record's own ``hash``. A line
-    that is not valid JSON is reported as broken at its own index.
+    that is not valid JSON is reported as broken at its recorded position. A
+    missing or blank file is intact: there is no record to disagree with.
     """
-    path = audit_path(plan_name)
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:

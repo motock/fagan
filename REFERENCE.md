@@ -865,6 +865,18 @@ keys:
 deleting a record in the middle breaks the chain: `verify_audit_chain(plan_name)`
 returns the index of the first altered record, or `None` when the stream is intact.
 
+The same walk verifies the host-scoped stream, `<PLAN_DIR>/.audit.host.jsonl`
+(written by `append_host_audit` for events that have no plan to belong to, such as
+host config writes), through `verify_host_audit_chain()`.
+
+The `verify_audit()` MCP tool runs both over the whole plan directory and returns
+`{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad seq>}`. Every
+plan with an audit file appears, keyed by its bare name; a plan with no audit file
+is absent rather than `None`, and an intact chain reports `None`. The tool reads
+only — it never appends, repairs or rewrites a stream — so it is offered to remote
+callers under `REMOTE_READ`. Tail truncation is **not** detected by it: a chain
+with no externally recorded head cannot prove the newest records were not removed.
+
 Actions recorded today:
 
 - `plan:approve` / `plan:reject` — the authorization check for a plan decision.
@@ -2279,9 +2291,9 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `approve_plan`, `dispatch_story`, `ingest_plan`, `interrupt_story`,
   `mark_story_done`, `patch_story`, `pause_plan`, `reject_plan` and
   `resume_plan`;
-- six read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
-  `list_decisions`, `list_plans` and `list_ready_stories`. These are **not
-  tenant-scoped**: any remote caller sees every plan they list.
+- seven read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
+  `list_decisions`, `list_plans`, `list_ready_stories` and `verify_audit`. These
+  are **not tenant-scoped**: any remote caller sees every plan they list.
 
 `patch_plan` is **not** on this allowlist, so a remote caller is refused
 before its handler runs. Its service path is nevertheless gated the same way

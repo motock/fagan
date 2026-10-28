@@ -24,7 +24,7 @@ import os
 from app.policy import Action, Resource, default_authorizer, is_allowed
 
 from .actor import current_principal
-from .audit import record_audit
+from .audit import append_host_audit, record_audit
 
 logger = logging.getLogger("pipeline")
 
@@ -152,6 +152,56 @@ def authorize(
         "ok": False,
         "error": (
             f"not authorized: {action_label} on plan {plan_name!r} "
+            f"(principal {principal.subject!r})"
+        ),
+    }
+
+
+def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
+    """Return a refusal dict for a host-scoped config write, or ``None``.
+
+    ``set_role_default`` rewrites ``model_registry.json`` -- the default model
+    for every role on this host -- and has no plan to scope a check to. It is
+    decided against an empty resource, which ``LocalPolicy`` grants only to the
+    local operator, and recorded in the host-scoped chain because no plan chain
+    can own the record.
+    """
+    global _warned_disabled
+
+    if not enforcement_enabled():
+        if not _warned_disabled:
+            _warned_disabled = True
+            logger.warning(
+                "%s disables policy enforcement; every action is allowed",
+                ENFORCE_ENV,
+            )
+        return None
+
+    label = action.value if isinstance(action, Action) else str(action)
+    principal = current_principal()
+    allowed = is_allowed(
+        default_authorizer(), principal, action, resource_for({}, "", None)
+    )
+    try:
+        append_host_audit(
+            action=label,
+            outcome="allowed" if allowed else "denied",
+            detail={"what": what, "principal": principal.subject},
+        )
+    except OSError:
+        logger.warning("host audit append failed for a %s decision", label)
+    if allowed:
+        return None
+    logger.warning(
+        "authorization denied action=%s principal=%s target=%s",
+        label,
+        principal.subject,
+        what,
+    )
+    return {
+        "ok": False,
+        "error": (
+            f"not authorized: {label} for {what} "
             f"(principal {principal.subject!r})"
         ),
     }

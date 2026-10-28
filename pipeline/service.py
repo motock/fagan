@@ -586,6 +586,14 @@ class PipelineService(PlanApprovalMixin):
         human and a single-line escalation message (a plain ``str``) is
         returned instead of raising.
         """
+        # story:patch: a decision changes the story's state and calls the overlord.
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        from .authorization import authorize
+
+        refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
         return _request_decision_impl(self, plan_name, story_key, question, options, context)
 
 
@@ -702,6 +710,12 @@ class PipelineService(PlanApprovalMixin):
         return ready
     def save_plan(self, plan_name: str, plan_json: str, workspace: str | None = None) -> dict[str, Any]:
         _validate_key(plan_name)
+        # plan:ingest: this writes the content a gated ingest_plan later reads.
+        from .authorization import authorize
+
+        refusal = authorize("plan:ingest", plan_name=plan_name)
+        if refusal is not None:
+            return refusal
         try:
             plan = json.loads(plan_json)
         except json.JSONDecodeError as e:

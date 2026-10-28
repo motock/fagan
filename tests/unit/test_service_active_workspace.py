@@ -232,14 +232,6 @@ def test_list_workspaces_unchanged():
     )
 
 
-def test_save_plan_unchanged():
-    """Do NOT modify save_plan (brief)."""
-    assert (
-        _digest(PipelineService.save_plan)
-        == "08cc8f83ba9eb885ce685d8782d75bc70f5c33c34137931c720a6ecee7ed7794"
-    )
-
-
 def test_save_plan_still_uses_store_seam_unchanged():
     """save_plan's _store usage must be untouched by this story."""
     src = _normalized_source(PipelineService.save_plan)

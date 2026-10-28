@@ -32,6 +32,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from .events import EVENT_TYPES
+
 logger = logging.getLogger(__name__)
 
 #: Environment variable that turns tracing on. Unset (or empty) means no-op.
@@ -44,17 +46,11 @@ REQUEST_SPAN_NAME = "dashboard.request"
 LIFECYCLE_SPAN_NAME = "pipeline.lifecycle"
 
 #: Event types that describe a pipeline lifecycle transition. Each one becomes
-#: a span when tracing is enabled; ``notification`` is deliberately absent, it
-#: is a delivery side effect rather than a lifecycle state change.
-LIFECYCLE_EVENT_TYPES: tuple[str, ...] = (
-    "agent_dispatched",
-    "agent_done",
-    "changes_requested",
-    "pr_open",
-    "ci_complete",
-    "story_done",
-    "parked",
-    "rework",
+#: a span when tracing is enabled. Derived from the bus contract so a type
+#: added later is traced without a second edit here; ``notification`` is the
+#: one exclusion -- a delivery side effect, not a lifecycle state change.
+LIFECYCLE_EVENT_TYPES: tuple[str, ...] = tuple(
+    sorted(EVENT_TYPES - {"notification"})
 )
 
 #: Minimum interval between two export-failure warnings.
@@ -132,6 +128,7 @@ def configure(exporter: Any | None = None) -> None:
     global _TRACER, _PROVIDER, _EXPORTER
     if _TRACER is not None:
         return
+    batch = exporter is None
     if exporter is None:
         endpoint = os.environ.get(ENDPOINT_ENV)
         if not endpoint:
@@ -144,13 +141,19 @@ def configure(exporter: Any | None = None) -> None:
 
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
     provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
-    # Simple (synchronous) processor: the exporter runs on span end, so a
-    # failure is observed -- and downgraded by _GuardedExporter -- in the same
-    # call that closes the span rather than on a background thread.
-    provider.add_span_processor(SimpleSpanProcessor(_GuardedExporter(exporter)))
+    guarded = _GuardedExporter(exporter)
+    if batch:
+        # The OTLP/HTTP exporter retries with backoff; exporting on the span's
+        # own thread would stall the request or tick being traced. Batching
+        # moves both the retry and any failure off the caller's path.
+        provider.add_span_processor(BatchSpanProcessor(guarded))
+    else:
+        # An explicitly supplied exporter (tests, a host process) exports
+        # synchronously so a span is observable as soon as it ends.
+        provider.add_span_processor(SimpleSpanProcessor(guarded))
     _PROVIDER = provider
     _EXPORTER = exporter
     _TRACER = provider.get_tracer(SERVICE_NAME)
@@ -182,7 +185,8 @@ def _set_attributes(target: Any, attributes: dict[str, Any]) -> None:
     for key, value in attributes.items():
         if value is None:
             continue
-        target.set_attribute(key, value if isinstance(value, (str, int, float, bool)) else str(value))
+        primitive = isinstance(value, (str, int, float, bool))
+        target.set_attribute(key, value if primitive else str(value))
 
 
 @contextmanager

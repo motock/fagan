@@ -25,16 +25,20 @@ owns or is a delegate of, per ``app.policy.can_view``:
 
 * the plan-scoped read tools (``check_story_status``, ``get_story_diff``,
   ``list_decisions``, ``list_ready_stories``) refuse *before* the handler runs
-  when their ``plan_name`` argument is missing, not a string, or names a plan
-  the caller may not see. The refusal is one fixed result, identical for a plan
-  that does not exist and a plan the caller may not see, so the reply is no
-  existence oracle; the refused call is recorded in the host chain as
-  ``tool:call`` with outcome ``hidden``;
+  when their ``plan_name`` argument is missing, not a string, not a safe plan
+  key (the same ``[A-Za-z0-9._-]`` rule the tools' own path building uses), or
+  names a plan the caller may not see. The refusal is one fixed result,
+  identical for a plan that does not exist and a plan the caller may not see,
+  so the reply is no existence oracle; the refused call is recorded in the host
+  chain as ``tool:call`` with outcome ``hidden``;
 * ``list_plans`` still runs, and its stems are filtered afterwards to visible
   plans. A stem names a plan by the text before its first ``.``, so
   ``beta.manifest`` reports plan ``beta`` and is kept with it. A result shape
   this middleware cannot rewrite is withheld -- the hidden refusal stands in --
-  rather than returned unfiltered;
+  rather than returned unfiltered. Structured content is read and rewritten
+  through the field the SDK's ``CallToolResult`` model actually declares -- in
+  either spelling, snake or camel case -- never through an attribute the model
+  does not have;
 * ``verify_audit`` is filtered the same way, and its ``host`` entry is dropped
   for every remote caller: the host chain records other principals'
   authentication attempts;
@@ -52,7 +56,7 @@ from typing import Any
 from app.identity import LOCAL_OPERATOR, Principal
 from app.policy import can_view
 
-from . import authorization
+from . import authorization, parsers
 from .actor import ANONYMOUS, bind_principal, current_principal
 from .audit import append_host_audit
 
@@ -184,6 +188,11 @@ def _can_view_plan(principal: Principal, plan_name: object) -> bool:
     """
     if not isinstance(plan_name, str) or not plan_name:
         return False
+    # The name comes straight from the caller and the manifest lookup resolves
+    # it to a path, so the same key rule the tools apply to their own plan paths
+    # runs first: an unsafe name is hidden without touching the filesystem.
+    if not parsers._KEY_RE.match(plan_name):
+        return False
     try:
         manifest = authorization._load_manifest(plan_name)
         resource = authorization.resource_for(manifest, plan_name, None)
@@ -218,20 +227,77 @@ def _visible_stems(principal: Principal, stems: list[str]) -> list[str]:
 
 
 def _structured_body(result: Any) -> Any:
-    """Return the structured content of a tool result, in either SDK spelling."""
-    body = getattr(result, "structured_content", None)
-    if body is None and isinstance(result, dict):
-        body = result.get("structuredContent", result.get("structured_content"))
-    return body
+    """Return the structured content of a tool result, in either SDK spelling.
 
-
-def _rebuilt(result: Any, body: Any, text: str) -> Any:
-    """Return a copy of *result* carrying *body* and one text block of *text*.
-
-    ``None`` means the result is a shape this middleware cannot rewrite; the
-    caller then withholds it rather than passing unfiltered data through.
+    The SDK's ``CallToolResult`` declares the field in snake case
+    (``structured_content``) and only renames it to ``structuredContent`` on the
+    wire, so the snake-case attribute is tried first. A dict result may carry
+    either spelling, and a result object from a build that declares the alias
+    as the field name is read the same way: whichever spelling holds a value
+    wins, and a result carrying neither has no scoped body.
     """
-    content = [{"type": "text", "text": text}]
+    if not isinstance(result, dict):
+        for attribute in ("structured_content", "structuredContent"):
+            body = getattr(result, attribute, None)
+            if body is not None:
+                return body
+        return None
+    for key in ("structuredContent", "structured_content"):
+        body = result.get(key)
+        if body is not None:
+            return body
+    return None
+
+
+def _structured_field(result: Any) -> str | None:
+    """Return the structured-content field name *result*'s model declares.
+
+    ``model_copy(update=...)`` writes by field name, so it has to be the name
+    the model actually declares: a snake-case field would silently ignore an
+    ``update`` keyed ``structuredContent``, and a model with no such field at
+    all cannot carry a rewritten body. ``None`` means "not rewriteable".
+    """
+    fields = getattr(type(result), "model_fields", None)
+    if not isinstance(fields, dict):
+        return None
+    for name in ("structured_content", "structuredContent"):
+        if name in fields:
+            return name
+    return None
+
+
+def _text_blocks(result: Any, texts: list[str]) -> list[Any]:
+    """Return one text block per *texts*, matching the shape of *result*.
+
+    A model result carries content *models*, and ``model_copy`` does not
+    re-validate an update, so a plain dict there would leave the reply holding
+    objects the SDK never produces. An existing block is copied with a new
+    ``text`` when one is available (which keeps every other field and any
+    annotations); otherwise a dict is used, which is what a dict result carries.
+    """
+    if isinstance(result, dict):
+        return [{"type": "text", "text": text} for text in texts]
+    existing = getattr(result, "content", None)
+    blocks: list[Any] = []
+    for index, text in enumerate(texts):
+        block = existing[index] if isinstance(existing, list) and index < len(existing) else None
+        copy_method = getattr(block, "model_copy", None)
+        if callable(copy_method):
+            blocks.append(copy_method(update={"text": text}))
+        else:
+            blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+def _rebuilt(result: Any, body: Any, texts: list[str]) -> Any:
+    """Return a copy of *result* carrying *body* and one text block per *texts*.
+
+    One block per entry mirrors what the SDK builds for a list-returning tool,
+    so a filtered reply keeps the shape the caller saw before. ``None`` means
+    the result is a shape this middleware cannot rewrite; the caller then
+    withholds it rather than passing unfiltered data through.
+    """
+    content = _text_blocks(result, texts)
     if isinstance(result, dict):
         copy = dict(result)
         key = "structuredContent" if "structuredContent" in copy else "structured_content"
@@ -239,8 +305,9 @@ def _rebuilt(result: Any, body: Any, text: str) -> Any:
         copy["content"] = content
         return copy
     copy_method = getattr(result, "model_copy", None)
-    if callable(copy_method):
-        return copy_method(update={"content": content, "structured_content": body})
+    field = _structured_field(result)
+    if callable(copy_method) and field is not None:
+        return copy_method(update={"content": content, field: body})
     return None
 
 
@@ -253,7 +320,7 @@ def _scope_stems(principal: Principal, result: Any) -> Any:
     kept = _visible_stems(principal, stems)
     if kept == stems:
         return result
-    return _rebuilt(result, {**body, "result": kept}, json.dumps(kept))
+    return _rebuilt(result, {**body, "result": kept}, kept)
 
 
 def _scope_audit(principal: Principal, result: Any) -> Any:
@@ -275,8 +342,10 @@ def _scope_audit(principal: Principal, result: Any) -> Any:
     }
     kept = {key: value for key, value in inner.items() if key not in ("plans", "host")}
     kept["plans"] = plans
+    if inner is body and kept == body:
+        return result
     scoped = {**body, "result": kept} if inner is nested else kept
-    return _rebuilt(result, scoped, json.dumps(scoped))
+    return _rebuilt(result, scoped, [json.dumps(scoped)])
 
 
 def _hidden_result() -> dict[str, Any]:

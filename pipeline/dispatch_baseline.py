@@ -1,8 +1,26 @@
+import fcntl
+import hashlib
+import json
+import logging
 import os
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
+from .build_detect import detect_test_command
+
+logger = logging.getLogger(__name__)
+
 _BASELINE_TEST_TIMEOUT_S = 900
+
+# A cached snapshot is only trusted while it is recent: an environment fix
+# (a missing dependency installed, a flaky upstream patch) should reach the
+# next dispatch without an operator clearing the cache by hand.
+_BASELINE_CACHE_TTL_S = 14 * 24 * 60 * 60
+_BASELINE_CACHE_DIRNAME = "baseline_cache"
+_BASELINE_CACHE_KEY_CHARS = 32
+_GIT_HEAD_TIMEOUT_S = 15
 
 
 def _baseline_test_env() -> dict[str, str]:
@@ -27,7 +45,134 @@ def _baseline_test_env() -> dict[str, str]:
     }
 
 
-def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
+def _cache_dir() -> Path:
+    """The per-install snapshot cache directory, resolved at call time.
+
+    ``pipeline.server.PLAN_DIR`` is the single surface tests and operators
+    patch to relocate plan storage, so the cache follows it rather than
+    binding the path at import.
+    """
+    import pipeline.server
+
+    return Path(pipeline.server.PLAN_DIR) / _BASELINE_CACHE_DIRNAME
+
+
+def _git_head(worktree_path: Path) -> str | None:
+    """The worktree's commit sha, or None when it is not a readable repo."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_HEAD_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if r.returncode != 0:
+        return None
+    return (r.stdout or "").strip() or None
+
+
+def _detected_key_parts(worktree_path: Path) -> tuple[list[str], str] | None:
+    """The (command, worktree-relative test dir) half of the cache key.
+
+    ``detect_test_command`` answers with a ``(test_dir, command)`` pair, but
+    it is patched in tests with a plain mapping; both shapes are accepted so
+    the key stays a faithful function of what will actually run. Never
+    raises: an undetectable command simply means "no cache", not "no
+    snapshot".
+    """
+    try:
+        detected = detect_test_command(worktree_path)
+    except Exception:  # noqa: BLE001 - key derivation must never block a dispatch
+        return None
+    if not detected:
+        return None
+    if isinstance(detected, dict):
+        command = detected.get("command") or []
+        test_dir = detected.get("test_dir", worktree_path)
+    else:
+        try:
+            test_dir, command = detected
+        except (TypeError, ValueError):
+            return None
+    try:
+        return [str(part) for part in command], _relative_test_dir(
+            worktree_path, test_dir
+        )
+    except TypeError:
+        return None
+
+
+def _relative_test_dir(worktree_path: Path, test_dir: object) -> str:
+    """``test_dir`` expressed relative to the worktree, else verbatim.
+
+    A relative form keeps the key stable across the per-dispatch worktree
+    paths that all point at the same commit.
+    """
+    try:
+        return (
+            Path(str(test_dir)).resolve().relative_to(worktree_path.resolve()).as_posix()
+        )
+    except (OSError, ValueError):
+        return str(test_dir)
+
+
+def _read_cache(path: Path) -> dict | None:
+    """The cached snapshot, or None when absent/unreadable/unparseable."""
+    try:
+        raw = path.read_text()
+    except OSError:
+        return None
+    try:
+        cached = json.loads(raw)
+    except ValueError:
+        return None
+    return cached if isinstance(cached, dict) else None
+
+
+def _write_cache(path: Path, result: dict) -> None:
+    """Serialise ``result`` to ``path`` atomically with owner-only mode.
+
+    Raises ``TypeError``/``ValueError`` when the result cannot be serialised
+    and ``OSError`` when it cannot be stored; both are the caller's cue to
+    fall back to the in-memory result rather than fail the dispatch.
+    """
+    data = json.dumps(result, sort_keys=True, default=str).encode()
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-baseline-")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _prune_cache(cache_dir: Path, keep: Path) -> None:
+    """Drop cache entries older than the TTL. One listing; never raises."""
+    cutoff = time.time() - _BASELINE_CACHE_TTL_S
+    try:
+        for entry in cache_dir.glob("*.json"):
+            if entry == keep:
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def _run_baseline_test_snapshot_uncached(worktree_path: Path) -> dict | None:
     """Run the detected test command once against a freshly created
     worktree, BEFORE the dispatched agent (or the test-author/planner
     phases) touch anything, and return its result in the same shape
@@ -70,3 +215,60 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
         "stderr_tail": (r.stderr or "")[-1000:],
     }
 
+
+def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
+    """``_run_baseline_test_snapshot_uncached``, memoised per commit.
+
+    Fresh worktrees start at the default branch's head, so concurrent and
+    consecutive dispatches of the same repository usually snapshot the same
+    commit; the full suite (bounded at 900 s) is therefore run at most once
+    per (commit, detected command, test dir) per cache TTL window. The key
+    covers the command and the worktree-relative test dir so a change to
+    either is a miss, and a per-key ``flock`` serialises concurrent
+    dispatches so exactly one of them runs the suite while the others reuse
+    its result. Only successful, non-None snapshots are stored: "no suite /
+    timed out" is not evidence about the next call. The return value is
+    exactly what the uncached run would have returned - the cache adds no
+    keys and never raises.
+    """
+    if not worktree_path.is_dir():
+        return None
+    sha = _git_head(worktree_path)
+    if sha is None:
+        return _run_baseline_test_snapshot_uncached(worktree_path)
+    parts = _detected_key_parts(worktree_path)
+    if parts is None:
+        return _run_baseline_test_snapshot_uncached(worktree_path)
+    command, test_dir = parts
+    payload = {"command": command, "sha": sha, "test_dir": test_dir}
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode()
+    ).hexdigest()[:_BASELINE_CACHE_KEY_CHARS]
+    cache_dir = _cache_dir()
+    path = cache_dir / f"{digest}.json"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(cache_dir, 0o700)
+        fd = os.open(cache_dir / f"{digest}.json.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        # An unusable cache directory must degrade to the plain snapshot.
+        return _run_baseline_test_snapshot_uncached(worktree_path)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        cached = _read_cache(path)
+        if cached is not None:
+            logger.info("dispatch baseline cache hit sha=%s hit=true", sha[:12])
+            return cached
+        result = _run_baseline_test_snapshot_uncached(worktree_path)
+        if result is not None:
+            try:
+                _write_cache(path, result)
+            except (OSError, TypeError, ValueError):
+                return result
+            _prune_cache(cache_dir, keep=path)
+        return result
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)

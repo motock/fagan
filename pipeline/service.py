@@ -217,6 +217,11 @@ class PipelineService(PlanApprovalMixin):
         without touching the file) on any unknown role, provider, or model,
         and writes atomically only to the registry path.
         """
+        from .authorization import refusal_for_host_config
+
+        refusal = refusal_for_host_config("config:write", "the global role defaults")
+        if refusal is not None:
+            return refusal
         return _set_role_default_impl(self, role, provider, model)
 
     def set_plan_role_config(

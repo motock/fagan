@@ -187,6 +187,8 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   lock the scheduler and `dispatch_story` use, so the read-modify-write is
   atomic with respect to the 60s `advance_all_plans` tick; when the lock is
   held it returns `{ok: true, skipped: "locked"}` without touching the manifest.
+  The edit requires the `config:write` permission and is refused fail-closed
+  otherwise, before any manifest is read or written.
 
 ### Manual status (kept for the human-driven flow)
 - `mark_story_in_progress(plan_name, story_key)`, `mark_story_done(...)`.
@@ -2276,15 +2278,16 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   calls `authorize` itself, so the policy decides — `approve_merge`,
   `approve_plan`, `dispatch_story`, `ingest_plan`, `interrupt_story`,
   `mark_story_done`, `patch_story`, `pause_plan`, `reject_plan` and
-  `resume_plan`. `patch_plan` belongs to that group too: `patch_plan` edits
-  only a plan's `role_config`, so its service path requires `config:write`
-  exactly as `set_plan_role_config` does, and returns a fail-closed
-  `{ok: false}` refusal when the policy says no. It is nevertheless **not** on
-  this allowlist, so a remote caller is still refused before its handler
-  runs;
+  `resume_plan`;
 - six read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
   `list_decisions`, `list_plans` and `list_ready_stories`. These are **not
   tenant-scoped**: any remote caller sees every plan they list.
+
+`patch_plan` is **not** on this allowlist, so a remote caller is refused
+before its handler runs. Its service path is nevertheless gated the same way
+as the mutating tools above: it edits only a plan's `role_config`, so it
+requires `config:write` exactly as `set_plan_role_config` does, and returns a
+fail-closed `{ok: false}` refusal when the policy says no.
 
 Every other tool — including `save_plan`, `set_story_status`,
 `record_security_audit`, `review_story`, `advance_all_plans` and

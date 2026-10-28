@@ -75,6 +75,17 @@ The recorded `parked_reason` is **stale**. The work is committed at `f8453e5` on
 `agent/ot-02` and present on that branch. Escalating or splitting the scope would
 duplicate finished work.
 
+### Evidence freshness
+
+The table above is the read-only state captured while filing this story, and
+`f8453e5` is the incident commit named by the triage ruling. While this story was
+being written the pipeline re-dispatched OT-02, which rebased `agent/ot-02` onto a
+newer base: the branch head became `db75253` (PR #1347's `headRefOid`) carrying the
+same telemetry change, and `f8453e5` still resolves as an object. Neither commit
+should be read as a new deliverable — the content is the work already reviewed at
+`f8453e5`. This re-dispatch is itself an instance of the churn defect (a) exists to
+stop.
+
 ## Defect (a) — INCONCLUSIVE measurement turned into a false "no new commit" park
 
 The new-commits/base-branch measurement returned `INCONCLUSIVE` because `main` is

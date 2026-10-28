@@ -25,7 +25,7 @@ from typing import Any
 
 from pipeline import cross_plan
 from pipeline.plan_approval import PlanApprovalMixin
-from pipeline.telemetry import record_dispatch_outcome
+from pipeline.telemetry import record_dispatch_attempt, record_dispatch_outcome
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -190,23 +190,6 @@ def _decompose_context_root(workspace: str | None) -> str | None:
     except ValueError:
         return None
     return path
-
-
-def _dispatch_outcome(result: Any) -> str:
-    """Classify a ``_dispatch_story_impl`` result into a dispatch-outcome label.
-
-    The four labels are the fixed enum ``pipeline.telemetry.DISPATCH_OUTCOMES``
-    exports; this is the single place the result shape is turned into one.
-    """
-    if not isinstance(result, dict):
-        return "dispatched"
-    if result.get("ok") is False:
-        return "failed"
-    if result.get("skipped"):
-        return "skipped"
-    if result.get("pending"):
-        return "pending"
-    return "dispatched"
 
 
 class PipelineService(PlanApprovalMixin):
@@ -918,7 +901,7 @@ class PipelineService(PlanApprovalMixin):
                 "ok": False,
                 "error": f"dispatch failed: {type(e).__name__}: {e}",
             }
-        record_dispatch_outcome(_dispatch_outcome(result))
+        record_dispatch_attempt(result)
         return result
 
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:

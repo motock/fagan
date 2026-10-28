@@ -474,12 +474,41 @@ def _add(metric_name: str, attributes: dict[str, str]) -> None:
     counter.add(1, attributes)
 
 
+def dispatch_outcome(result: Any) -> str:
+    """Classify a dispatch result into one of :data:`DISPATCH_OUTCOMES`.
+
+    The dispatch funnel returns one of four shapes -- a launch, a skip, a
+    pending test-author phase, or a failure -- and this is the single place
+    that shape becomes a label. Keeping the mapping here, next to the enum it
+    feeds, means the funnel itself only has to hand over its result.
+    """
+    if not isinstance(result, dict):
+        return "dispatched"
+    if result.get("ok") is False:
+        return "failed"
+    if result.get("skipped"):
+        return "skipped"
+    if result.get("pending"):
+        return "pending"
+    return "dispatched"
+
+
 def record_dispatch_outcome(outcome: str) -> None:
     """Record one dispatch attempt under *outcome* (:data:`DISPATCH_OUTCOMES`)."""
     _add(
         METRIC_DISPATCH_OUTCOMES,
         {"outcome": _checked_label(outcome, DISPATCH_OUTCOMES, "dispatch outcome")},
     )
+
+
+def record_dispatch_attempt(result: Any) -> None:
+    """Record exactly one outcome for one dispatch attempt.
+
+    Call once per attempt with the funnel's result, including the shape a
+    failure is reported with (``{"ok": False}``); recording in both an enqueue
+    path and a worker callback would double-count the same attempt.
+    """
+    record_dispatch_outcome(dispatch_outcome(result))
 
 
 def record_authz_decision(action: Any, outcome: str) -> None:

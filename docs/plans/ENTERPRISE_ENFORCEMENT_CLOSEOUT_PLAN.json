@@ -61,6 +61,9 @@
           "dependencies": [
             "ENF-02"
           ],
+          "blocked_by": [
+            "service-py-headroom:SVC-01"
+          ],
           "persona": "software-engineer",
           "risk": "high",
           "files": [

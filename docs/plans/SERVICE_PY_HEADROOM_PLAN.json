@@ -1,0 +1,26 @@
+{
+  "repo_root": "/Users/jessecarroll/git/fagan",
+  "epics": [
+    {
+      "summary": "PipelineService line headroom",
+      "stories": [
+        {
+          "key": "SVC-01",
+          "summary": "Move PipelineService.patch_story into pipeline/service_story_ops.py for line headroom",
+          "description": "pipeline/service.py is 982 lines after ENF-01; ENF-02/ENF-03 and OT-02 each add to it. Move the 88-line patch_story body out, following ENF-00.",
+          "dependencies": [],
+          "blocked_by": [
+            "enterprise-enforcement-closeout:ENF-02"
+          ],
+          "persona": "software-engineer",
+          "risk": "low",
+          "files": [
+            "pipeline/service.py",
+            "pipeline/service_story_ops.py"
+          ],
+          "agent_instructions": "Preflight: impact run 2026-10-28 on master 4899037 - a stand-in that moved patch_story's body into pipeline/service_story_ops.py and delegated from service.py: 17955 passed / 16 skipped, 0 conflicts. The 9 failures reported are all tests/unit/test_dashboard_script.py, which fail identically on untouched master in that scratch worktree (the script tests need the checkout at its real path) - environmental, not conflicts. ruff clean; scripts/check_line_limit.py OK; service.py 982 -> 911 lines.\n\nTARGET IMPLEMENTER: cloud open-source (Claude-class sizing). Provider/model are NOT pinned: dispatch resolves them from the live model registry's roles.dispatch entry.\n\n[no-new-tests] Behavior-preserving move; the existing suite already covers patch_story (tests/unit/test_service_enforcement.py, tests/unit/test_patch_story*.py, tests/unit/test_pipeline_mcp_server*.py). Do NOT write a new test suite.\n\nWHY: pipeline/service.py is 982 lines against the 1000-line gate (scripts/check_line_limit.py). ENF-02 and ENF-03 both add gates to this file and OT-02 adds a dispatch metric call, so those stories need headroom. patch_story is the largest remaining body that no source-shape test pins\n\nWHAT TO BUILD (2 files, 1 moved function, 0 behavior change) - this exact shape was preflighted green:\n1. In pipeline/service_story_ops.py add `_patch_story_impl(self, plan_name, story_key, fields)` holding the CURRENT body of PipelineService.patch_story verbatim, dedented one level (the existing _set_story_status_impl / _get_story_diff_impl are the model). Place it BEFORE the trailing `from .service import _ServerRef` block, next to the other impls.\n2. In pipeline/service.py keep patch_story's signature and docstring; replace its body with the single line `return _patch_story_impl(self, plan_name, story_key, fields)`.\n3. Add `_patch_story_impl` to service.py's existing back-import from `.service_story_ops` (currently `_get_story_diff_impl, _set_story_status_impl`), keeping the names sorted.\n4. In pipeline/service_story_ops.py, below the existing _ServerRef bindings add `_PATCHABLE_STORY_FIELDS`, `_VALID_STORY_BACKENDS` and `_notify_user` as _ServerRef bindings, and import `approval_enabled, reset_if_changed` from `pipeline.plan_approval` (module level, next to `from pipeline import worktree_diff`). The moved body uses exactly those names.\n5. Remove `approval_enabled` and `reset_if_changed` from service.py's `from pipeline.plan_approval import (...)` block (ruff F401 once patch_story no longer uses them). Keep `PlanApprovalMixin`; the import must stay syntactically valid, so do not leave a trailing comma on a single-name from-import.\n\nDO NOT MOVE OR TOUCH (source-shape tests pin these bodies in pipeline/service.py): decompose_plan, mark_story_in_progress, checkpoint, save_plan, advance_all_plans, list_ready_stories, request_decision, set_story_status, get_story_diff, and the _ServerRef class. Do not change patch_story's behavior, its docstring, or its authorization gate.\n\nDONE WHEN (mechanically checkable): `wc -l pipeline/service.py` reports <= 920; `.venv/bin/python -c \"import pipeline.server\"` succeeds; the full suite, `.venv/bin/python -m ruff check .` and `.venv/bin/python scripts/check_line_limit.py` are green with NO test file changed.\n\nGENERAL RULES:\n- Verify with the full suite `.venv/bin/python -m pytest -q` AND `.venv/bin/python -m ruff check .` AND `.venv/bin/python scripts/check_line_limit.py`; all must be green before you finish. Report pass/fail counts in the PR description.\n- A new test file that imports any `pipeline.*` module must `import pipeline.server` first (pre-existing import cycle).\n- The harness scratchpad `.agent_scratchpad.md` stays untracked. Commit only the two files this brief names.\n- Never modify an existing test. If a pre-existing test fails because of this move, do NOT undo the move - stop and report the conflict, naming the test and the assertion.\n- Commit message: Conventional Commits (`refactor(pipeline): <subject>`, subject <=72 chars), body explains why; put SVC-01 in the body."
+        }
+      ]
+    }
+  ]
+}

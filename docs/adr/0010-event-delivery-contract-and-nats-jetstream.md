@@ -1,6 +1,6 @@
 # 0010. Events have an at-least-once delivery contract; NATS JetStream is the default broker
 
-- **Status:** Proposed
+- **Status:** Proposed; rule 6 superseded by [0011](0011-scheduler-scale-out-leased-plan-advancement.md)
 - **Date:** 2026-10-28
 
 ## Context

@@ -143,6 +143,40 @@ def _action_label(action: object) -> str:
     return type(action).__name__
 
 
+def can_view(principal: Principal | None, resource: Resource | None) -> bool:
+    """Return whether *principal* may see the plan *resource* scopes.
+
+    Deny by default: the local operator sees every plan; a principal sees a plan
+    it owns or is a delegate of; every other plan -- including one with no owner
+    at all -- is invisible to a remote principal. Ownership is matched against
+    ``resource.owner`` only when it is non-empty, so a pre-OWN-01 plan with no
+    owner never matches a principal whose subject is empty.
+
+    Fails closed on any error, exactly as :func:`is_allowed` does: an
+    unreadable resource hides the plan rather than showing it. The warning
+    names the decision and the principal subject only -- never the plan name or
+    the exception text.
+
+    The local-operator branch compares subjects, so a remote caller claiming
+    that subject would match here; ``pipeline.remote_tool_policy`` refuses any
+    such identity before this check runs, and identity can only narrow access.
+    """
+    try:
+        if not isinstance(principal, Principal) or resource is None:
+            return False
+        if principal.subject == LOCAL_OPERATOR_SUBJECT:
+            return True
+        if resource.owner and principal.subject == resource.owner:
+            return True
+        return principal.subject in resource.delegates
+    except Exception:  # noqa: BLE001 - fail closed: any policy error hides the plan
+        logger.warning(
+            "plan visibility check failed; denying view principal=%s",
+            getattr(principal, "subject", None),
+        )
+        return False
+
+
 def is_allowed(
     authorizer: Authorizer,
     principal: Principal | None,

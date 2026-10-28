@@ -2462,8 +2462,17 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `mark_story_done`, `patch_story`, `pause_plan`, `reject_plan` and
   `resume_plan`;
 - seven read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
-  `list_decisions`, `list_plans`, `list_ready_stories` and `verify_audit`. These
-  are **not tenant-scoped**: any remote caller sees every plan they list.
+  `list_decisions`, `list_plans`, `list_ready_stories` and `verify_audit`. Reads
+  are scoped to the plans the caller may see (`app.policy.can_view`): the
+  plan-scoped tools (`check_story_status`, `get_story_diff`, `list_decisions`,
+  `list_ready_stories`) refuse before their handler runs unless the caller owns
+  or is a delegate of the plan, and return one fixed refusal that is identical
+  for a plan that does not exist and one the caller may not see, so the reply is
+  no existence oracle; `list_plans` and `verify_audit` are filtered to visible
+  plans, and `verify_audit` drops its `host` entry for every remote caller
+  because that chain records other principals' authentication attempts.
+  `check_usage` stays host-level and unfiltered: it reports deployment-wide
+  counters that belong to no plan.
 
 `patch_plan` is **not** on this allowlist, so a remote caller is refused
 before its handler runs. Its service path is nevertheless gated the same way

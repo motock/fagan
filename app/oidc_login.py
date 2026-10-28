@@ -34,7 +34,14 @@ PKCE, and each part below carries one invariant:
   session, so the local deadlines (and re-authentication) are what bound it;
 * no code, verifier, token or secret is logged or echoed in an error body -
   every failure returns a fixed payload, and every log line names the action
-  and (at most) the principal subject.
+  and (at most) the principal subject;
+* the unauthenticated routes are bounded rather than merely cheap: pending
+  attempts and tracked clients are capped (``MAX_PENDING_LOGINS``,
+  ``MAX_TRACKED_CLIENTS``), a client's request rate is limited
+  (``MAX_AUTH_REQUESTS`` per ``AUTH_RATE_WINDOW_S``), and an identity provider
+  that has just failed discovery is not re-probed until
+  ``DISCOVERY_FAILURE_TTL_S`` has passed, so an unauthenticated caller cannot
+  turn the login page into an amplifier against the provider or the threadpool.
 """
 
 from __future__ import annotations
@@ -116,6 +123,12 @@ MAX_PENDING_LOGINS = 1024
 #: cheap on a miss too.
 AUTH_RATE_WINDOW_S = 60.0
 MAX_AUTH_REQUESTS = 60
+
+#: Client keys tracked by the rate limiter at once, so the limiter's own table
+#: is bounded independently of ``MAX_PENDING_LOGINS``: the key is the peer
+#: address (see ``_client_key``), and stale keys are pruned once this bound is
+#: reached.
+MAX_TRACKED_CLIENTS = 1024
 
 HTTP_TIMEOUT_S = 10.0
 
@@ -365,7 +378,9 @@ def _fetch_json(url: str, *, allow_private: bool = False) -> dict[str, Any]:
     try:
         with (
             _client_for(url, address) as client,
-            client.stream("GET", url, headers={"accept": "application/json"}) as response,
+            client.stream(
+                "GET", url, headers={"accept": "application/json"}
+            ) as response,
         ):
             if response.status_code != 200:
                 raise OidcLoginError("identity provider document unavailable")
@@ -440,7 +455,10 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
             endpoints[name] = value
     except OidcLoginError:
         with _LOCK:
-            _DISCOVERY_FAILURES[config.issuer] = now + DISCOVERY_FAILURE_TTL_S
+            # Stamp the cooldown when the failure is known, not when the probe
+            # started: a probe that burned ``HTTP_TIMEOUT_S`` must still leave
+            # a full cooldown behind it.
+            _DISCOVERY_FAILURES[config.issuer] = _now() + DISCOVERY_FAILURE_TTL_S
         raise
     with _LOCK:
         _DISCOVERY[config.issuer] = (now, endpoints)
@@ -542,7 +560,16 @@ def _refuse(
 
 
 def _client_key(request: Request) -> str:
-    """Who to count a request against: the peer address, nothing else."""
+    """Who to count a request against: the peer address, nothing else.
+
+    The peer address is the proxy in front of the dashboard, not the end user,
+    unless the deployment preserves client addresses - so ``MAX_AUTH_REQUESTS``
+    can behave as one global cap rather than a per-user one. That is the safe
+    direction (it throttles rather than over-admits), and the pending map stays
+    bounded either way: an attacker who does fill ``MAX_PENDING_LOGINS``
+    entries from one or two addresses only makes ``/auth/login`` answer 429 for
+    a while, never unboundedly large.
+    """
     return request.client.host if request.client is not None else "unknown"
 
 
@@ -556,13 +583,14 @@ def _rate_limited(key: str, now: float) -> bool:
         if not limited:
             stamps.append(now)
         _RATE[key] = stamps
-        if len(_RATE) > MAX_PENDING_LOGINS:
-            for stale in [
-                other
-                for other, items in _RATE.items()
-                if not any(now - stamp < AUTH_RATE_WINDOW_S for stamp in items)
-            ]:
-                _RATE.pop(stale, None)
+        for stale in [
+            other
+            for other, items in _RATE.items()
+            if not any(now - stamp < AUTH_RATE_WINDOW_S for stamp in items)
+        ]:
+            _RATE.pop(stale, None)
+        while len(_RATE) > MAX_TRACKED_CLIENTS:
+            _RATE.pop(next(iter(_RATE)))
     return limited
 
 
@@ -634,8 +662,9 @@ def _begin_login(config: OidcLoginConfig, request: Request) -> Response:
             )
     if at_capacity:
         # Unauthenticated callers cannot make the pending map unbounded.
-        return _refuse(429, TOO_MANY_REQUESTS, "pending_logins_at_capacity",
-                       clear_state=False)
+        return _refuse(
+            429, TOO_MANY_REQUESTS, "pending_logins_at_capacity", clear_state=False
+        )
 
     logger.info("OIDC login started")
     location = _with_query(
@@ -754,9 +783,7 @@ def _finish_login(config: OidcLoginConfig, request: Request) -> Response:
         return _refuse(401, AUTHENTICATION_FAILED, "nonce_mismatch")
 
     session_id = _create_session(principal)
-    logger.info(
-        "OIDC login completed", extra={"principal_subject": principal.subject}
-    )
+    logger.info("OIDC login completed", extra={"principal_subject": principal.subject})
     response = RedirectResponse("/", status_code=302)
     response.set_cookie(
         SESSION_COOKIE,
@@ -784,9 +811,7 @@ def _end_session(request: Request) -> Response:
         session = _SESSIONS.pop(session_id, None) if session_id else None
     logger.info(
         "OIDC logout completed",
-        extra={
-            "principal_subject": session.principal.subject if session else None
-        },
+        extra={"principal_subject": session.principal.subject if session else None},
     )
     response = RedirectResponse("/", status_code=302)
     response.delete_cookie(

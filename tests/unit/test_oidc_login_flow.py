@@ -625,7 +625,10 @@ def _state_cookie(response) -> str:
 def test_login_binds_state_to_the_browser(client, idp):
     response = client.get("/auth/login", follow_redirects=False)
 
-    params = {k: v[0] for k, v in parse_qs(urlsplit(response.headers["location"]).query).items()}
+    params = {
+        k: v[0]
+        for k, v in parse_qs(urlsplit(response.headers["location"]).query).items()
+    }
     cookie = [
         header
         for header in response.headers.get_list("set-cookie")
@@ -714,9 +717,7 @@ def test_callback_clears_the_binding_cookie_on_failure(client, idp, clock):
     assert value.strip('"') == "", "clearing must empty the binding cookie"
 
 
-def test_callback_rejects_a_non_ascii_nonce_without_a_server_error(
-    client, idp, clock
-):
+def test_callback_rejects_a_non_ascii_nonce_without_a_server_error(client, idp, clock):
     params = _login_params(client)
     idp.nonce = "nonce-with-a-\u00e9-character"
 
@@ -769,9 +770,174 @@ def test_pending_logins_are_capped(client, idp, monkeypatch):
     monkeypatch.setattr(oidc_login, "MAX_PENDING_LOGINS", 3)
 
     codes = [
-        client.get("/auth/login", follow_redirects=False).status_code
-        for _ in range(5)
+        client.get("/auth/login", follow_redirects=False).status_code for _ in range(5)
     ]
 
     assert codes.count(302) == 3
     assert codes[-1] == 429
+
+
+# --------------------------------------------------------------------------
+# Per-client rate limit on the unauthenticated routes
+# --------------------------------------------------------------------------
+
+
+def test_login_is_rate_limited_and_recovers_after_the_window(
+    client, idp, clock, monkeypatch
+):
+    monkeypatch.setattr(oidc_login, "MAX_AUTH_REQUESTS", 2)
+    clock.now = 0.0
+    assert [
+        client.get("/auth/login", follow_redirects=False).status_code for _ in range(2)
+    ] == [302, 302]
+
+    limited = client.get("/auth/login", follow_redirects=False)
+
+    assert limited.status_code == 429
+    assert limited.json() == {"error": "too_many_requests"}
+    clock.now = oidc_login.AUTH_RATE_WINDOW_S - 0.1
+    assert client.get("/auth/login", follow_redirects=False).status_code == 429
+    # The window is half-open: a stamp from exactly one window ago is spent.
+    clock.now = oidc_login.AUTH_RATE_WINDOW_S
+    assert client.get("/auth/login", follow_redirects=False).status_code == 302
+
+
+def test_a_rate_limited_request_is_not_counted(client, idp, clock, monkeypatch):
+    monkeypatch.setattr(oidc_login, "MAX_AUTH_REQUESTS", 1)
+    clock.now = 0.0
+    assert client.get("/auth/login", follow_redirects=False).status_code == 302
+
+    clock.now = 5.0
+    assert client.get("/auth/login", follow_redirects=False).status_code == 429
+
+    stamps = [stamp for bucket in oidc_login._RATE.values() for stamp in bucket]
+    assert stamps == [0.0], "a refused request must not extend the window"
+
+
+def test_callback_is_rate_limited_and_recovers_after_the_window(
+    client, idp, clock, monkeypatch
+):
+    monkeypatch.setattr(oidc_login, "MAX_AUTH_REQUESTS", 1)
+    clock.now = 0.0
+    assert _callback(client, "unknown-state").status_code == 400
+
+    limited = _callback(client, "unknown-state")
+
+    assert limited.status_code == 429
+    assert limited.json() == {"error": "too_many_requests"}
+    assert idp.exchange_calls == 0, "a refused request must not reach the IdP"
+    clock.now = oidc_login.AUTH_RATE_WINDOW_S
+    assert _callback(client, "unknown-state").status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Discovery-failure cooldown
+# --------------------------------------------------------------------------
+
+
+def _discovery_stub(monkeypatch, *, failures: int | None) -> list[str]:
+    """Replace the discovery fetch: the first ``failures`` probes fail.
+
+    ``None`` means every probe fails, which is what an identity provider that
+    stays down does.
+    """
+    document = {
+        "issuer": ISSUER,
+        "authorization_endpoint": AUTHORIZATION_ENDPOINT,
+        "token_endpoint": TOKEN_ENDPOINT,
+        "jwks_uri": JWKS_URI,
+    }
+    probes: list[str] = []
+
+    def fetch_json(url: str, *, allow_private: bool = False) -> dict:
+        probes.append(url)
+        if failures is None or len(probes) <= failures:
+            raise oidc_login.OidcLoginError("discovery unreachable")
+        return dict(document)
+
+    monkeypatch.setattr(oidc_login, "_fetch_json", fetch_json)
+    return probes
+
+
+def test_discovery_failure_is_not_reprobed_inside_the_cooldown(
+    config, clock, monkeypatch
+):
+    browser = _browser(config)
+    probes = _discovery_stub(monkeypatch, failures=None)
+    clock.now = 0.0
+
+    first = browser.get("/auth/login", follow_redirects=False)
+
+    assert first.status_code == 503
+    assert first.json() == {"error": "authentication_unavailable"}
+    assert probes == [DISCOVERY_URL]
+    assert oidc_login._DISCOVERY_FAILURES[config.issuer] == (
+        oidc_login.DISCOVERY_FAILURE_TTL_S
+    )
+
+    clock.now = oidc_login.DISCOVERY_FAILURE_TTL_S - 1
+    second = browser.get("/auth/login", follow_redirects=False)
+
+    assert second.status_code == 503
+    assert probes == [DISCOVERY_URL], "the cooldown must skip the doomed probe"
+
+    clock.now = oidc_login.DISCOVERY_FAILURE_TTL_S
+    third = browser.get("/auth/login", follow_redirects=False)
+
+    assert third.status_code == 503
+    assert len(probes) == 2, "the cooldown must end at its deadline"
+
+
+def test_discovery_success_clears_the_failure_marker(config, clock, monkeypatch):
+    browser = _browser(config)
+    probes = _discovery_stub(monkeypatch, failures=1)
+    clock.now = 0.0
+    assert browser.get("/auth/login", follow_redirects=False).status_code == 503
+    assert config.issuer in oidc_login._DISCOVERY_FAILURES
+
+    clock.now = oidc_login.DISCOVERY_FAILURE_TTL_S
+    recovered = browser.get("/auth/login", follow_redirects=False)
+
+    assert recovered.status_code == 302
+    assert len(probes) == 2
+    assert config.issuer not in oidc_login._DISCOVERY_FAILURES
+    assert config.issuer in oidc_login._DISCOVERY
+
+
+# --------------------------------------------------------------------------
+# Secret file hardening
+# --------------------------------------------------------------------------
+
+
+def _secret_file_message(tmp_path: Path, path: Path) -> str:
+    with pytest.raises(oidc_login.OidcLoginConfigError) as refused:
+        oidc_login.load_config(
+            _env(tmp_path, **{oidc_login.ENV_CLIENT_SECRET_FILE: str(path)})
+        )
+    message = str(refused.value)
+    assert oidc_login.ENV_CLIENT_SECRET_FILE in message
+    assert CLIENT_SECRET not in message, "the failure must not echo the secret"
+    return message
+
+
+def test_symlinked_secret_file_refuses_startup(tmp_path):
+    target = tmp_path / "real_secret"
+    target.write_text(CLIENT_SECRET, encoding="utf-8")
+    target.chmod(0o600)
+    link = tmp_path / "linked_secret"
+    link.symlink_to(target)
+
+    message = _secret_file_message(tmp_path, link)
+
+    assert "must not be a symbolic link" in message
+
+
+def test_secret_file_owned_by_another_user_refuses_startup(tmp_path, monkeypatch):
+    secret_file = tmp_path / "oidc_client_secret"
+    secret_file.write_text(CLIENT_SECRET, encoding="utf-8")
+    secret_file.chmod(0o600)
+    monkeypatch.setattr(oidc_login.os, "geteuid", lambda: secret_file.stat().st_uid + 1)
+
+    message = _secret_file_message(tmp_path, secret_file)
+
+    assert "must be owned by the user running the dashboard" in message

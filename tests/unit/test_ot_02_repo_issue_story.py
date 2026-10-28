@@ -84,6 +84,15 @@ def test_store_holds_exactly_one_record_for_the_key(repo_root):
     )
 
 
+def test_store_has_no_suffixed_or_timestamped_variants(repo_root):
+    """A dated/suffixed re-file grows the backlog silently; an upsert does not."""
+    variants = sorted(p.name for p in (repo_root / "stories").glob(f"{STORY_KEY}*"))
+    assert variants == [Path(STORY_PATH).name], (
+        f"expected exactly one store file for {STORY_KEY}, found {variants}: "
+        "re-filing must upsert in place, never add a dated or suffixed sibling"
+    )
+
+
 def test_record_is_valid_against_the_story_schema(repo_root):
     _, record = _story(repo_root)
     assert set(record) <= SCHEMA_KEYS, f"non-schema keys: {sorted(set(record) - SCHEMA_KEYS)}"

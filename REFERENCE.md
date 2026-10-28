@@ -883,6 +883,8 @@ Actions recorded today:
 - `plan:pause` — the authorization check for pause *and* resume.
 - `plan:dispatch` — the authorization check for dispatching a story and
   claiming it with `mark_story_in_progress`.
+- `plan:ingest` — the authorization check for ingesting a plan and for saving a
+  plan file.
 - `story:patch` — the authorization check for a status change; checkpoint
   denials only.
 - `story:merge` / `story:mark_done` — the authorization checks for merging and for
@@ -2156,9 +2158,9 @@ actor's policy:
 | `plan:approve` | approving a plan |
 | `plan:reject` | rejecting a plan |
 | `plan:pause` | both pausing and resuming a plan |
-| `plan:ingest` | ingesting a plan |
+| `plan:ingest` | ingesting a plan, and saving a plan file |
 | `plan:dispatch` | dispatching a story, and claiming it with `mark_story_in_progress` |
-| `story:patch` | patching a story, setting its status, and checkpointing it |
+| `story:patch` | patching a story, setting its status, checkpointing it, and requesting a decision |
 | `story:interrupt` | interrupting a running story |
 | `decision:answer` | answering a decision from the dashboard |
 | `config:write` | a plan's role config, `patch_plan`, and the host-wide role defaults |

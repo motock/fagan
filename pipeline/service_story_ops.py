@@ -1,6 +1,6 @@
-"""PipelineService.set_story_status and get_story_diff bodies, moved out of
-pipeline/service.py (line-count target). The methods keep their signatures and
-delegate here. Server-owned names are _ServerRef bindings, exactly as in
+"""PipelineService.set_story_status, get_story_diff and patch_story bodies, moved
+out of pipeline/service.py (line-count target). The methods keep their signatures
+and delegate here. Server-owned names are _ServerRef bindings, exactly as in
 pipeline.service, so tests patching pipeline.server still land.
 """
 
@@ -60,7 +60,9 @@ def _get_story_diff_impl(
     return worktree_diff.collect_file_diff(worktree, base_sha, path, allowed_paths)
 
 
-def _patch_story_impl(self, plan_name, story_key, fields):
+def _patch_story_impl(
+    self, plan_name: str, story_key: str, fields: dict[str, Any]
+) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
     from .authorization import authorize

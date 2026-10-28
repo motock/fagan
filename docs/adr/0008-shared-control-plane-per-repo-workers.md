@@ -1,7 +1,12 @@
 # 0008. Enterprise topology is a shared control plane with per-repo workers
 
-- **Status:** Proposed (direction agreed 2026-10-25; revisit before implementation)
+- **Status:** Accepted (direction agreed 2026-10-25; accepted 2026-10-28)
 - **Date:** 2026-10-25
+- **Implementation status (2026-10-28):** stage 0, stage 1 except for the
+  tools that three in-flight plans still gate
+  (`enterprise-enforcement-closeout`, `decision-routing`,
+  `system-principals`), and every Tier 1 prep item are implemented. Stage 2a
+  is drafted as the `control-plane-store` plan. Stages 2b–4 are not started.
 
 ## Context
 
@@ -73,14 +78,39 @@ that a single plane can safely hold all repositories' plans and briefs.
 ### Staging
 
 0. Plan lifecycle and approval in the current single-instance code, implemented
-   against `PipelineService` and `Store` (ADR 0007).
+   against `PipelineService` and `Store` (ADR 0007). Landed.
 1. Verified caller identity at the gateway, RBAC and ownership records,
    authorization enforced in `PipelineService`, per-principal notifications.
-2. A DB-backed `Store`; per-repo namespacing for plans, worktrees, and branches;
-   a server-side `repo_root` allowlist (never trust the caller's path).
+   Substantially landed: OIDC verification, the `Action` enum, ownership
+   records and the audit chain are in; the three enforcement plans close the
+   remaining tools.
+2. Server-mode persistence, in two parts:
+   - **2a. A single-host database `Store`.** `PIPELINE_STORE` selects it,
+     defaulting to `file` and failing closed on an unknown value, plus the
+     Tier 1 namespacing already shipped. It keeps the existing
+     single-writer `transaction()` contract, and the process globals listed
+     above stay valid — which is what the one-repo server mode needs.
+   - **2b. A database `Store` with distributed locks** (Postgres), adopted
+     together with stage 3's remote workers, when more than one process
+     writes the same repository's state.
 3. A work queue and worker registration: the control plane decides readiness,
    workers report capacity and heartbeats.
 4. Generic or ephemeral workers, and federation per trust boundary.
+
+**System of record.** The split is by kind of state, not by convenience:
+
+- The **repository** is the system of record for code — commits, branches,
+  worktrees and merges live in git and are read from git.
+- The **store** is the system of record for plan and control state —
+  manifests, story lifecycle and status, decisions, approvals, plan owner and
+  delegates, per-plan configuration, and the authorization and audit records.
+
+A value is authoritative on exactly one side; neither is written through to
+the other. In stage 2a that means manifests and decisions move into the
+database while the journal, notification and audit sidecars stay authoritative
+on disk, and there is no migration from `FileStore`: a repository switching
+`PIPELINE_STORE` starts from the plans it already has on disk through normal
+ingest.
 
 ## Prep list: low-hanging fruit that preserves local behavior
 
@@ -103,22 +133,24 @@ today's behavior exactly, and (b) it pays for itself today, ideally by closing
 an existing hazard. Anything that fails either test is the server
 implementation, not prep.
 
-### Tier 1 — behavior-preserving, also closes a current hazard
+### Tier 1 — behavior-preserving, also closes a current hazard (shipped)
 
-- **Optional repo-root allowlist.** `validate_workspace` applies a deny list
-  (`pipeline/workspace.py:451`) but no allow list; only `create_workspace`
-  does (`:515`). Any existing git repository outside the deny list is a valid
-  plan target. Add `PIPELINE_ALLOWED_REPO_ROOTS`; unset means today's
-  behavior, set means fail closed. This preps multi-user and closes a
-  prompt-injection path-targeting hole.
-- **Worktree path namespacing.** Branch namespacing already shipped as opt-in
-  (`pipeline/branch_names.py`, `PIPELINE_BRANCH_NAMESPACE`, default
-  `agent/<key>`); worktrees have no equivalent (`pipeline/dispatch.py:137` is
-  still `WORKTREE_ROOT / story_key`). Add an optional
-  `PIPELINE_WORKTREE_NAMESPACE` with the same default-preserving shape.
-- **Surface effective topology in health.** Add `plan_dir`, `repo_root`,
-  `branch_namespace`, and `worktree_namespace` to the scheduler health file
-  and `/api/health`. Pure additive.
+All three shipped before this record was accepted.
+
+- **Optional repo-root allowlist (shipped).** `validate_workspace`
+  (`pipeline/workspace.py`) applies a deny list but no allow list; only
+  `create_workspace` does. Any existing git repository outside the deny list is
+  a valid plan target. `PIPELINE_ALLOWED_REPO_ROOTS` now applies an allow list;
+  unset means today's behavior, set means fail closed. It closes a
+  prompt-injection path-targeting hole and is the boundary stage 3 needs —
+  see the allowlist note under Consequences.
+- **Worktree path namespacing (shipped).** Branch namespacing shipped as
+  opt-in (`pipeline/branch_names.py`, `PIPELINE_BRANCH_NAMESPACE`, default
+  `agent/<key>`); worktrees had no equivalent. `PIPELINE_WORKTREE_NAMESPACE`
+  now has the same default-preserving shape.
+- **Surface effective topology in health (shipped).** `plan_dir`, `repo_root`,
+  `branch_namespace`, and `worktree_namespace` are reported in the scheduler
+  health file and `/api/health`. Pure additive.
 
 These three are behavior-preserving and may be registered independently of
 this record; none of them implements T3.
@@ -130,13 +162,13 @@ this record; none of them implements T3.
   sidecar, which would add `list_plans` noise). Ingest ignores unknown
   top-level keys. Preps ADR 0007 without implementing the gate.
 - **Store factory:** `PIPELINE_STORE=file`, with an unknown value failing
-  closed, replacing `_store = FileStore()` at `pipeline/server.py:573`. A
-  one-line seam with no behavior change.
+  closed, replacing `_store = FileStore()` in `pipeline/server.py`. A one-line
+  seam with no behavior change. Stage 2a builds on it.
 
 ### Not prep — these cross the fork
 
-Request-scoped repo/config, replacing `_scoped_repo_root`; a database-backed
-`Store` with distributed locks; a queue, worker registration, and heartbeats
+Request-scoped repo/config, replacing `_scoped_repo_root`; a database `Store`
+with distributed locks (stage 2b); a queue, worker registration, and heartbeats
 replacing pid liveness; AuthN/AuthZ and HTTP transport; plan-name scoping per
 owner/tenant and row-level repo authorization.
 
@@ -162,9 +194,12 @@ that reports success while it is off.
 - **Cost — distributed operations.** Pid-based liveness becomes heartbeats and
   leases; the scheduler flock becomes leader election; `.pipeline.env`
   precedence becomes per-repo configuration from the control plane.
+- **The repo-root allowlist becomes load-bearing.** It is optional today
+  (unset means no allow list). It must become mandatory as soon as a shared
+  server accepts plan writes, because from then on `repo_root` is
+  caller-supplied and a deny list is not a boundary.
 - Not decided: how many trust boundaries or control planes; generic versus
-  repo-pinned workers; the control plane's HA and failure domain; whether the
-  control plane or the repository is the system of record.
+  repo-pinned workers; the control plane's HA and failure domain.
 - Do not build the network transport before identity and ownership exist
   (ADR 0006 and this record), and do not implement the approval gate as
   filesystem-local logic. Both would be rebuilt.

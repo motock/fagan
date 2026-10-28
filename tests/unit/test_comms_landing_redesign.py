@@ -78,7 +78,12 @@ _UNCHANGED_JS_SHA256 = {
     # Re-pinned for the dashboard sidebar settings move (SIDEBAR-1): main.js
     # now routes the sidebar's Workspace/Config items through initPlanList
     # callbacks and no longer creates the orphan nav items.
-    MAIN_JS: "11c4405f510f3d640ceadcd58d5c4c6b6f9ad0f7a4a39db30be7876e134b8859",
+    # Re-pinned for the browser-login story (LG-03, 2026-10-28): that story's
+    # job includes a sign-out control in the dashboard header, which it renders
+    # from main.js only when GET /auth/status reports login. main.js is
+    # therefore legitimately no longer byte-identical to this story's
+    # pre-implementation baseline. This story never touched main.js itself.
+    MAIN_JS: "e4fd9fca7c6ed6c804e59f643bd5377b05800e19a0334c5058a75f1fb167d42b",
 }
 
 EXPECTED_CHIP_MESSAGES = {

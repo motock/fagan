@@ -28,62 +28,6 @@ MAIN_JS = STATIC / "app" / "main.js"
 # it is markup/CSS only, so any drift here means a JS file was touched.
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
-    # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
-    # subtitle...") legitimately added the updateCommsSubtitle() call to
-    # main.js after this story's own pre-implementation baseline was
-    # captured. This story never touched main.js itself.
-    # Re-pinned again alongside the COMMS_JS pin above: resetCommsThread
-    # added to main.js's import-from-comms.js line and re-export block so
-    # the reset-clears-history regression test can call it.
-    # Re-pinned for the maturity-panel story (a3-maturity-metrics,
-    # 1f9f2c46): that story legitimately added the one-line
-    # `import { renderMaturityPanel } from "./render/maturity.js";`
-    # registration to main.js, so the pre-story pin no longer matched the
-    # committed file. This story never touched main.js itself.
-    # Re-pinned for the workspace-picker-wiring story (3c5e36b4, 2026-09-06):
-    # that story's whole job was to wire the workspace picker into main.js
-    # (import fetchWorkspaces/selectWorkspace/fetchActiveWorkspace/
-    # renderWorkspacePicker from workspace.js; extend _applyActiveView and
-    # selectOverview/selectComms/selectPlan for state.workspaceActive; add
-    # loadWorkspaceView()/wireWorkspaceView()), so main.js is legitimately no
-    # longer byte-identical to this story's pre-implementation baseline.
-    # See test_main_js_untouched's own updated assertion below.
-    # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that
-    # story's whole job was to make every dashboard fetch carry the
-    # X-Pipeline-Api-Key header, so main.js's three raw fetch sites
-    # (/api/config/providers GET, role-config POST, story /patch POST) now
-    # build their headers with the shared secret (Content-Type preserved).
-    # main.js is legitimately no longer byte-identical to this story's
-    # pre-implementation baseline.
-    # Re-pinned for the roles provider→model dropdown-cascade story
-    # (eb8b1ac6, 2026-09-08): that story's whole job was to make the Model
-    # dropdown in the Roles table Edit row repopulate when the Provider
-    # dropdown changes, so main.js gained the top-level
-    # buildModelOptionsHtml() helper (exported for the node-eval harness),
-    # renderRoleEdit() now delegates its Model-select markup to it, and
-    # _renderConfigRoles() wires a change listener on each .edit-provider
-    # select. main.js is legitimately no longer byte-identical to this
-    # story's pre-implementation baseline.
-    # Re-pinned for the config-mismatch banner story (CFG-E4, 962fbde):
-    # that story's whole job was to surface a dashboard/scheduler config
-    # divergence in the UI, so main.js gained the fetchHealth import plus a
-    # self-contained checkConfigMismatch() helper (guarded, fail-soft) and
-    # one boot-sequence call. No Comms-related code was touched.
-    # Re-pinned for the patch review/apply UI wiring story (WAP-14): that
-    # story's whole job was to wire the WAP-13 patch module into the
-    # dashboard UI, so main.js gained the applyPatch/fetchPatchRecord/
-    # renderPatchRecord import from ./patch.js, the initPatchReview()/
-    # openPatchReview() panel wiring (server-record review + human Apply
-    # control) and their exports. No Comms-related code was touched.
-    # Re-pinned for the dashboard sidebar settings move (SIDEBAR-1): main.js
-    # now routes the sidebar's Workspace/Config items through initPlanList
-    # callbacks and no longer creates the orphan nav items.
-    # Re-pinned for the browser-login story (LG-03, 2026-10-28): that story's
-    # job includes a sign-out control in the dashboard header, which it renders
-    # from main.js only when GET /auth/status reports login. main.js is
-    # therefore legitimately no longer byte-identical to this story's
-    # pre-implementation baseline. This story never touched main.js itself.
-    MAIN_JS: "e4fd9fca7c6ed6c804e59f643bd5377b05800e19a0334c5058a75f1fb167d42b",
 }
 
 EXPECTED_CHIP_MESSAGES = {
@@ -444,9 +388,21 @@ def test_app_js_untouched():
     )
 
 
-def test_main_js_untouched():
-    assert MAIN_JS.exists(), "static/app/main.js must exist"
-    assert _sha256(MAIN_JS) == _UNCHANGED_JS_SHA256[MAIN_JS], (
-        "static/app/main.js must be byte-identical to before this story "
-        "(markup/CSS only)"
-    )
+def test_main_js_keeps_the_comms_landing_wiring():
+    # Sibling UI stories legitimately edit main.js; only the comms wiring is durable.
+    source = MAIN_JS.read_text(encoding="utf-8")
+
+    marker = 'from "./comms.js";'
+    assert marker in source
+    clause = source[source.rindex("import", 0, source.index(marker)):source.index(marker)]
+    for helper in (
+        "renderToolTraceHtml",
+        "appendCommsMessage",
+        "sendCommsMessage",
+        "updateCommsSubtitle",
+        "resetCommsThread",
+    ):
+        assert helper in clause, f"comms import dropped {helper}"
+
+    assert "updateCommsSubtitle();" in source, "comms subtitle refresh call removed"
+    assert "resetCommsThread," in source, "comms thread re-export removed"

@@ -270,7 +270,10 @@ def verify_audit() -> dict[str, Any]:
     were not removed, so truncation of the tail verifies intact. When
     ``PIPELINE_AUDIT_ANCHOR`` names a sink, the answer gains an ``anchor``
     mapping from the same chain names to this tool's tamper verdict for each
-    one, which is what catches a cut tail.
+    one, which is what catches a cut tail. If the anchor log itself cannot be
+    read, that mapping holds a single ``*`` entry with an ``anchor log
+    unreadable`` verdict: the anchors are unknown, so no chain is reported
+    clean.
     """
     probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
     suffix = probe.name

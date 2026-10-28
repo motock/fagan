@@ -152,7 +152,10 @@ test-only. The notification channel layer is the template for the rest.
   the highest `seq` ever recorded stands, and at equal `seq` the hash recorded
   first, so cutting a tail or rewriting an anchored record is not laundered by the
   next tick — it keeps failing verification until an operator resolves it, because
-  an append-only log cannot un-anchor a head and a WORM sink cannot be edited. It
+  an append-only log cannot un-anchor a head and a WORM sink cannot be edited. A
+  log that cannot be read is reported as `anchor log unreadable` and the tick
+  appends nothing, so a broken sink can neither clear a verdict nor re-anchor the
+  head it hides. It
   is off by default, and the only sink is `file:<absolute path>`: worth anything
   only where the pipeline host cannot rewrite that path (a WORM or object-lock
   mount, another host's append-only NFS export) — on local disk a forger who can
@@ -254,8 +257,11 @@ mutating MCP tools outside the enum (`save_plan`, `set_story_status`,
 `record_security_audit` and others) are not, and reads are not tenant-scoped.
 Plan ownership is stored and enforced for `plan:approve`, `plan:reject` and
 `story:merge`, but decisions are not yet routed to the owner. The audit
-stream of allow/deny decisions exists locally (hash-chained per plan); what it
-still lacks is the external anchor that would make tail truncation detectable.
+stream of allow/deny decisions exists locally (hash-chained per plan), and the
+external anchor that makes tail truncation detectable exists but is opt-in and
+`file:`-only, so while `PIPELINE_AUDIT_ANCHOR` is unset — or set to a path the
+pipeline host can rewrite — truncation stays undetectable and a clean
+verification only means that no record in the middle was altered.
 
 ---
 

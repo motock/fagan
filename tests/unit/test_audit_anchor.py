@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -384,8 +386,177 @@ def test_unreadable_stream_does_not_abort_the_anchor_pass(plan_dir: Path, anchor
 
     assert appended == 1
     assert [line["chain"] for line in _anchor_lines(anchor_file)].count("p") == 2
+    assert [line["chain"] for line in _anchor_lines(anchor_file)].count("p") == 2
 
 
+# --------------------------------------------------------------------------
+# An unreadable anchor log fails closed
+# --------------------------------------------------------------------------
+
+
+@contextmanager
+def _refuse_reads(monkeypatch: pytest.MonkeyPatch, path: Path) -> Iterator[None]:
+    """Make opening *path* raise for the duration of the ``with`` block.
+
+    A permission change cannot be simulated with ``chmod`` on an append-only
+    mount, and root ignores the mode bits, so the refusal is injected instead;
+    the file's bytes stay exactly as they were.
+    """
+    real_open = Path.open
+
+    def _refuse(self: Path, *args: object, **kwargs: object):
+        if self == path:
+            raise PermissionError(13, "permission denied")
+        return real_open(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", _refuse)
+        yield
+
+
+def test_unreadable_anchor_log_reports_tampered_not_clean(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A log that cannot be read must not read as "nothing was anchored"."""
+    _record()
+    audit_anchor.anchor_heads()
+
+    with _refuse_reads(monkeypatch, anchor_file):
+        verdict = audit_anchor.verify_against_anchor("p")
+        report = audit_anchor.anchor_report()
+
+    assert verdict == "anchor log unreadable: PermissionError"
+    assert report
+    assert all(value is not None for value in report.values())
+
+
+def test_unreadable_anchor_log_keeps_the_previous_tamper_verdict(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    _truncate(_stream(plan_dir), keep=1)
+    assert audit_anchor.verify_against_anchor("p") == "truncated below anchored seq 1"
+
+    with _refuse_reads(monkeypatch, anchor_file):
+        verdict = audit_anchor.verify_against_anchor("p")
+
+    assert verdict == "anchor log unreadable: PermissionError"
+
+
+def test_unreadable_anchor_log_appends_nothing(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass that cannot read the anchors must not re-anchor the current head.
+
+    Re-anchoring here would record a head below the cut and launder the
+    truncation, so the pass is skipped and the log stays byte-identical.
+    """
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    _truncate(_stream(plan_dir), keep=1)
+    before = anchor_file.read_bytes()
+
+    with _refuse_reads(monkeypatch, anchor_file):
+        appended = audit_anchor.anchor_heads()
+
+    assert appended == 0
+    assert anchor_file.read_bytes() == before
+    assert audit_anchor.verify_against_anchor("p") == "truncated below anchored seq 1"
+
+
+def test_a_directory_in_place_of_the_anchor_log_is_reported(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    """The real-filesystem shape of the same failure: a path that cannot be read."""
+    _record()
+    audit_anchor.anchor_heads()
+    anchor_file.unlink()
+    anchor_file.mkdir()
+
+    verdict = audit_anchor.verify_against_anchor("p")
+
+    assert verdict is not None
+    assert verdict.startswith("anchor log unreadable:")
+    assert audit_anchor.anchor_heads() == 0
+
+
+def test_unreadable_anchor_log_never_stops_the_scan(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _record()
+    _make_plan_with_marker(plan_dir, "alpha")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="pipeline.audit_anchor"),
+        _refuse_reads(monkeypatch, anchor_file),
+    ):
+        events = watchers.scan_all_plans(_FakeBus())
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert events is not None
+    assert "PermissionError" in messages
+    assert str(anchor_file) not in messages
+    assert str(plan_dir) not in messages
+
+
+def test_anchor_record_with_a_traversing_chain_name_is_not_followed(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    """A hand-written chain name cannot steer the read outside ``PLAN_DIR``."""
+    outside = plan_dir.parent / "outside.jsonl"
+    outside.write_text(json.dumps({"seq": 0, "hash": "abc"}) + "\n")
+    anchor_file.write_text(json.dumps({"chain": "../outside", "seq": 0, "hash": "abc"}) + "\n")
+
+    assert audit_anchor.verify_against_anchor("../outside") is None
+    assert audit_anchor.anchor_report() == {}
+
+
+def test_verify_audit_reports_an_unreadable_anchor_log_as_tampered(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool's answer must never look clean just because the sink broke."""
+    from pipeline import server_tools_lifecycle
+
+    _record()
+    audit_anchor.anchor_heads()
+
+    with _refuse_reads(monkeypatch, anchor_file):
+        anchor = server_tools_lifecycle.verify_audit()["anchor"]
+
+    assert anchor
+    assert all(value is not None for value in anchor.values())
+
+
+def test_a_read_that_fails_mid_log_is_not_a_partial_anchor_set(
+    plan_dir: Path, anchor_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A half-read anchor set must not be used as if it were the whole one."""
+    _record()
+    _record()
+    audit_anchor.anchor_heads()
+    _record()
+    audit_anchor.anchor_heads()
+    _truncate(_stream(plan_dir), keep=1)
+    before = anchor_file.read_bytes()
+    real_parsed = audit_anchor._parsed
+
+    def _breaks_after_first(handle):
+        for index, record in enumerate(real_parsed(handle)):
+            if index == 1:
+                raise OSError(5, "input/output error")
+            yield record
+
+    with monkeypatch.context() as patch:
+        patch.setattr(audit_anchor, "_parsed", _breaks_after_first)
+        appended = audit_anchor.anchor_heads()
+        verdict = audit_anchor.verify_against_anchor("p")
+
+    assert appended == 0
+    assert anchor_file.read_bytes() == before
+    assert verdict == "anchor log unreadable: OSError"
 # --------------------------------------------------------------------------
 # Fail closed on an unusable sink
 # --------------------------------------------------------------------------

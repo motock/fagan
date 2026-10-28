@@ -919,6 +919,13 @@ the then-current heads.
 seq N"` when that record was edited. The map is keyed by chain, so a plan whose
 stream vanished is still named in the report.
 
+A log that exists but cannot be read — a mode or ACL change, a broken export, a
+read that fails part-way through — is not read as an empty one. `verify_audit()`
+reports `{"*": "anchor log unreadable: <error type>"}` (an empty map would look
+like a clean verdict), and the tick appends nothing rather than re-anchoring the
+current head, which would record a head below the anchored one and launder a
+truncation. A missing log *is* an empty log: anchoring has simply not started yet.
+
 The sink is only worth anything where the pipeline host cannot rewrite it: a WORM
 or object-lock mount, or a separate host's NFS export with append-only
 permissions. A plain file on the same host raises the bar — a forger must edit the

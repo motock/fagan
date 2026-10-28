@@ -36,6 +36,7 @@ provider to `claude`, which skips the preflight gate.
 | 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Done, stacked on plan 8; 0 conflicts | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) (Proposed) |
 | 9 | [`CONTROL_PLANE_STORE_PLAN.json`](CONTROL_PLANE_STORE_PLAN.json) | `control-plane-store` | ST-01..03 | Done; 0 conflicts | ADR 0008 accepted 2026-10-28; ST-01 waits on ENF-03 |
 | 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Done; 0 conflicts (no Docker daemon here) | AA-01, RMH-02, LG-02, BR-04 (on DK-03) |
+| 11 | [`SCHEDULER_THROUGHPUT_PLAN.json`](SCHEDULER_THROUGHPUT_PLAN.json) | `scheduler-throughput` | TP-01..05 | Done on `0fe77d6`; 0 conflicts | SYS-02 (on TP-01); implements [ADR 0011](../adr/0011-scheduler-scale-out-leased-plan-advancement.md) S0 |
 
 `blocked_by` entries use the plan names in the third column, so ingest each
 plan under exactly that name. Plans 1–3 finish ADR 0008 stage 1. Plans 4–6
@@ -43,6 +44,14 @@ harden what Phase 6 shipped. Plans 7, 8 and 8b are observability, broker prep an
 Plan 9 is ADR 0008 stage 2a (single-host database `Store`; 2b is Postgres
 with distributed locks, adopted with stage 3). Plan 10 is the deployable smoke stack. Within a plan, the
 stories are chained by `dependencies` because most of them edit the same files.
+
+Plan 11 (added 2026-10-28, preflighted on `master` `0fe77d6`) fixes scheduler
+throughput when several plans run at once: each plan's reconcile advance runs
+in its own child process from a bounded pool (`PIPELINE_ADVANCE_WORKERS`), the
+merge-gate re-verify becomes a detached job, and the dispatch baseline suite
+runs once per commit. TP-03 and TP-05 have no prerequisites and can run now.
+It is stage S0 of [ADR 0011](../adr/0011-scheduler-scale-out-leased-plan-advancement.md),
+which sets the target for hundreds of plans on one control plane.
 
 Every story is `risk: high` (security-engineer pass, held for human review)
 except the behavior-preserving or non-auth ones, which are marked `low` or
@@ -146,6 +155,10 @@ They pass on a normal host and are not conflicts.
   time).** First diagnose what today's code does with an overlord ruling that
   escalates to a human. `_request_decision_impl` parks only on the fail-open
   path.
+- **ADR 0011 stages S1–S3:** an event-triggered advance queue with
+  long-lived advancers, leases in the store with more than one scheduler
+  process, CI webhooks, and fair-share dispatch admission. Not drafted; S2
+  depends on ADR 0008 stage 2b and the broker.
 - **ADR 0008 stages 3–4:** a work queue, worker registration and heartbeats,
   generic workers, and federation. Not drafted, because they depend on stage 2
   and on the worker-identity design.

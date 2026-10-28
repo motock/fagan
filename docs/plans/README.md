@@ -20,6 +20,7 @@ update this index in the same change.
 |---|---|---|---|---|
 | 1 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
 | 2 | [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) | Drafted and preflighted | Eleven plans finishing enterprise readiness, in dependency order; plan 1 (`enterprise-enforcement-closeout`) gates the last unchecked mutating tools. | Ingest plan 1; re-run a plan's impact check if master has moved before its turn. |
+| 2b | [`SCHEDULER_THROUGHPUT_PLAN.json`](SCHEDULER_THROUGHPUT_PLAN.json) | Drafted and preflighted (2026-10-28, `0fe77d6`) | Stories crawl when several plans run at once: the reconcile pass advances every plan serially and runs test suites inline. ADR 0011 stage S0. | Ingest as `scheduler-throughput`; TP-03 and TP-05 can start now, TP-01 waits on SYS-02. |
 | 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Enterprise platform readiness (assessed 2026-10-25):**

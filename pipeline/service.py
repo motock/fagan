@@ -907,6 +907,12 @@ class PipelineService(PlanApprovalMixin):
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
+        from .authorization import authorize
+        # Reviewing a story is the review half of driving a plan forward, so it
+        # is decided as plan:dispatch.
+        refusal = authorize("plan:dispatch", plan_name=plan_name, story_key=story_key)
+        if refusal is not None:
+            return refusal
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
@@ -917,6 +923,13 @@ class PipelineService(PlanApprovalMixin):
             return _original_review_story(plan_name, story_key)
     def advance_pipeline(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
+        from .authorization import authorize
+        # The advance tick runs for every plan on every scheduler tick (roughly
+        # every 60s), so its allowed decisions would bury the audit chain; its
+        # denials are still recorded in full.
+        refusal = authorize("plan:dispatch", plan_name=plan_name, record_allowed=False)
+        if refusal is not None:
+            return refusal
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {

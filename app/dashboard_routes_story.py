@@ -98,6 +98,7 @@ def patch_story_route(
 def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.review_story(plan_name, story_key)."""
     result = _service.review_story(plan_name, story_key)
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,

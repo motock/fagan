@@ -869,6 +869,13 @@ The same walk verifies the host-scoped stream, `<PLAN_DIR>/.audit.host.jsonl`
 (written by `append_host_audit` for events that have no plan to belong to, such as
 host config writes), through `verify_host_audit_chain()`.
 
+Which driver lands where: `review_story`'s `plan:dispatch` decision is recorded in
+the plan's stream. The advance tick — `advance_pipeline`, and therefore
+`advance_all_plans` once per plan — also runs on every scheduler tick (roughly every
+60s per plan), so it records denials only: an allowed tick appends nothing, and a
+denied tick appends one `denied` record. `record_security_audit`'s `config:write`
+decision has no plan to scope a record to, so it goes to the host chain.
+
 The `verify_audit()` MCP tool runs both over the whole plan directory and returns
 `{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad seq>}`. Every
 plan with an audit file appears, keyed by its bare name; a plan with no audit file
@@ -2221,11 +2228,11 @@ actor's policy:
 | `plan:reject` | rejecting a plan |
 | `plan:pause` | both pausing and resuming a plan |
 | `plan:ingest` | ingesting a plan, and saving a plan file |
-| `plan:dispatch` | dispatching a story, and claiming it with `mark_story_in_progress` |
+| `plan:dispatch` | dispatching a story, claiming it with `mark_story_in_progress`, reviewing a story; advancing a plan (each scheduler tick) |
 | `story:patch` | patching a story, setting its status, checkpointing it, and requesting a decision |
 | `story:interrupt` | interrupting a running story |
 | `decision:answer` | answering a decision from the dashboard |
-| `config:write` | a plan's role config, `patch_plan`, and the host-wide role defaults |
+| `config:write` | a plan's role config, `patch_plan`, the host-wide role defaults, and recording a security audit |
 
 A refusal is not an exception: the call returns `{"ok": false, "error": ...}`
 and an `authorization_denied` record is appended to the plan's notification

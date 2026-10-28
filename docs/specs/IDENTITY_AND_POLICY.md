@@ -155,7 +155,7 @@ Imports `app.identity` only — never `app.auth` (an adapter concern) and never
 | `Action` | `str` enum of the eleven mutating actions ADR 0009 authorizes: `plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`. |
 | `Resource` | Frozen dataclass for the ADR 0009 scope chain: `tenant`, `team`, `repo`, `plan`, `story`, plus the plan's ownership — `owner` (a subject, `""` when the plan has none) and `delegates` (a tuple of subjects, empty by default). Ownership is empty for every plan written before OWN-01. |
 | `Authorizer` | Protocol for `allow(principal, action, resource) -> bool`. |
-| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything. A plan's ownership is an **additional** authority for exactly the three actions its owner governs — `plan:approve`, `plan:reject`, `story:merge` — where `resource.owner` and any subject in `resource.delegates` are allowed those three actions even with no role at all. Ownership is never a subtraction: every principal the role rules already allow stays allowed, a plan with no owner (`owner == ""`) and no delegates falls through to the role rule unchanged, and the ownership grant is scoped to those three actions only. Every other principal is denied every other action, with one exception: a reserved `system:` subject (the scheduler and worker principals `app/identity.py` defines) is decided by its row of `SYSTEM_PRINCIPAL_GRANTS` before ownership is read, so it holds exactly those actions and a manifest naming it `owner` or `delegate` never widens them. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
+| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything. A plan's ownership is an **additional** authority for exactly the four actions its owner governs — `plan:approve`, `plan:reject`, `story:merge`, `decision:answer` — where `resource.owner` and any subject in `resource.delegates` are allowed those four actions even with no role at all. Ownership is never a subtraction: every principal the role rules already allow stays allowed, a plan with no owner (`owner == ""`) and no delegates falls through to the role rule unchanged, and the ownership grant is scoped to those four actions only. Every other principal is denied every other action, with one exception: a reserved `system:` subject (the scheduler and worker principals `app/identity.py` defines) is decided by its row of `SYSTEM_PRINCIPAL_GRANTS` before ownership is read, so it holds exactly those actions and a manifest naming it `owner` or `delegate` never widens them. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
 | `default_authorizer()` | Returns the authorizer for this deployment — `LocalPolicy()` today. |
 | `is_allowed(authorizer, principal, action, resource)` | The wrapper every future call site uses: asks the authorizer and **fails closed** on any error, logging a warning that names the action and the principal subject. A policy that raises lands denied, never propagates. |
 
@@ -488,9 +488,9 @@ worth having.
 | `config:write` | enforced for `set_plan_role_config` and `patch_plan` (`pipeline/service.py`), and for `set_role_default` through `refusal_for_host_config`, which decides against an empty resource and records in `<PLAN_DIR>/.audit.host.jsonl` because the model registry belongs to the host, not to a plan |
 
 `LocalPolicy` allows the local operator every action. A plan's `owner` and its
-`delegates` are additionally allowed `plan:approve`, `plan:reject` and
-`story:merge` on that plan; ownership grants nothing else, and a plan with no
-owner grants nothing to anyone but the local operator.
+`delegates` are additionally allowed `plan:approve`, `plan:reject`,
+`story:merge` and `decision:answer` on that plan; ownership grants nothing else,
+and a plan with no owner grants nothing to anyone but the local operator.
 
 **Dashboard responses.** A dashboard route whose service call is refused answers
 `403` with the detail `not authorized: <action>` (the action only, never the
@@ -602,9 +602,9 @@ The remaining work, in dependency order:
    row). The one deliberate exception is `decompose_plan`, which writes no
    state.
 2. **Ownership records.** Landed in part: a plan's manifest records an `owner`
-   and `delegates`, and they may approve, reject and merge that plan's work
-   (§2, "Enforcement"). What remains is giving `request_decision` the owner as
-   its routing target (ADR 0006).
+   and `delegates`, and they may approve, reject, merge and answer decisions on
+   that plan's work (§2, "Enforcement"). What remains is giving
+   `request_decision` the owner as its routing target (ADR 0006).
 3. **System principals.** Defined: `system:scheduler` and `system:worker` are
    distinct, narrowly scoped principals, defined in `app/identity.py` with the
    reserved `system:` subject prefix and auth method `system`. Their grants are

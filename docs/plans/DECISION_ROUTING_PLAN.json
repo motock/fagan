@@ -18,7 +18,8 @@
             "docs/adr/0009-tenancy-and-authorization-model.md"
           ],
           "blocked_by": [
-            "enterprise-enforcement-closeout:ENF-03"
+            "enterprise-enforcement-closeout:ENF-03",
+            "system-principals:SYS-01"
           ]
         },
         {

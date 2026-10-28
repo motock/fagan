@@ -75,7 +75,8 @@
             "REFERENCE.md"
           ],
           "blocked_by": [
-            "eventing-broker-prep:EV-02"
+            "eventing-broker-prep:EV-02",
+            "system-principals:SYS-02"
           ]
         },
         {
@@ -95,7 +96,8 @@
             "REFERENCE.md"
           ],
           "blocked_by": [
-            "eventing-broker-prep:EV-02"
+            "eventing-broker-prep:EV-02",
+            "control-plane-store:ST-01"
           ]
         }
       ]

@@ -22,10 +22,13 @@ one during startup, and 401-ing it would prevent the app from booting). An
 ``websocket``, is closed without reaching the wrapped app -- a WebSocket route
 on the mounted app would otherwise be reachable unauthenticated.
 
-Rate limiting is not implemented here. The gate is the mount point for it, and
-``app.oidc.verify_token`` bounds JWKS refetches, so a future implementer should
-keep that bound in place rather than dropping it: an unauthenticated endpoint
-that refetches keys per request is a denial-of-service amplifier.
+Two token buckets bound the gate (``pipeline.rate_limit``): a failed-auth bucket
+per client address, checked *before* token verification so a blocked client
+costs no JWKS work, and a request bucket per authenticated subject. Going over
+either answers ``429`` with ``Retry-After``. Both live in process memory, so a
+multi-replica deployment needs a shared limiter. The JWKS refetch bound in
+``app.oidc.verify_token`` stays in place: an unauthenticated endpoint that
+refetches keys per request is a denial-of-service amplifier.
 """
 
 from __future__ import annotations
@@ -42,6 +45,16 @@ from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provide
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 from .audit import append_host_audit
 from .authorization import enforcement_enabled
+from .rate_limit import (
+    AUTH_FAIL_ENV,
+    DEFAULT_AUTH_FAIL_PER_MIN,
+    DEFAULT_REQUESTS_PER_MIN,
+    REQUESTS_ENV,
+    TRUSTED_PROXIES_ENV,
+    RateLimiter,
+    parse_count,
+    parse_trusted_proxies,
+)
 from .remote_tool_policy import remote_tool_policy
 
 logger = logging.getLogger("pipeline.remote_transport")
@@ -74,29 +87,60 @@ def _client_ip(scope: dict[str, Any]) -> str:
     return ""
 
 
+def build_rate_limiter(
+    *, clock: Any = None, environ: dict[str, str] | None = None
+) -> RateLimiter:
+    """Build the gate's limiter from the environment, or refuse to start.
+
+    A malformed counter or proxy list raises ``ValueError`` naming the variable,
+    so ``serve()`` never binds a socket with a limiter that silently fell back to
+    a default. Buckets are in-process memory; a multi-replica deployment needs a
+    shared limiter instead.
+    """
+    env = os.environ if environ is None else environ
+    auth_fail = parse_count(AUTH_FAIL_ENV, DEFAULT_AUTH_FAIL_PER_MIN, env)
+    requests = parse_count(REQUESTS_ENV, DEFAULT_REQUESTS_PER_MIN, env)
+    trusted = parse_trusted_proxies(env.get(TRUSTED_PROXIES_ENV), env)
+    return RateLimiter(auth_fail, requests, clock=clock, trusted_proxies=trusted)
+
+
 def _logged_path(scope: dict[str, Any]) -> str:
     """Return a bounded, log-safe copy of the request path."""
     path = scope.get("path") or ""
     return str(path)[:_MAX_LOGGED_PATH]
 
 
-async def _send_unauthorized(send: Any, correlation: str) -> None:
-    """Send the fixed 401 body. The credential is never echoed."""
+async def _send_unauthorized(
+    send: Any, correlation: str, retry_after: int | None = None
+) -> None:
+    """Send the fixed rejection body. The credential is never echoed.
+
+    With *retry_after* set this is the gate's 429: the same JSON body and
+    correlation header, plus ``Retry-After``. Neither form carries a limit
+    value, a subject, a client address or a credential, so a throttled caller
+    learns only that it must wait.
+    """
     body = b'{"detail":"Unauthorized"}'
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode("ascii")),
+        (b"x-correlation-id", correlation.encode("latin-1")),
+    ]
+    if retry_after is None:
+        # RFC 6750 3: a bearer-protected resource must challenge, and
+        # MCP clients use this header to discover the authorization
+        # server, so omitting it blocks a conformant client's bootstrap.
+        headers.append((b"www-authenticate", b"Bearer"))
+    else:
+        headers.append(
+            (b"retry-after", str(max(1, int(retry_after))).encode("ascii"))
+        )
+    headers.append((b"cache-control", b"no-store"))
     await send(
         {
             "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("ascii")),
-                (b"x-correlation-id", correlation.encode("latin-1")),
-                # RFC 6750 3: a bearer-protected resource must challenge, and
-                # MCP clients use this header to discover the authorization
-                # server, so omitting it blocks a conformant client's bootstrap.
-                (b"www-authenticate", b"Bearer"),
-                (b"cache-control", b"no-store"),
-            ],
+            "status": 401 if retry_after is None else 429,
+            "headers": headers,
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -108,11 +152,20 @@ class BearerAuthMiddleware:
     Every HTTP request to the mounted app must carry exactly one
     ``Authorization: Bearer <token>`` header. A rejected request gets the same
     401 body the dashboard uses, so a client cannot tell which process it spoke
-    to, plus a ``WWW-Authenticate: Bearer`` challenge. ``lifespan`` scopes pass
-    through untouched; every other scope type is closed without reaching the app.
+    to, plus a ``WWW-Authenticate: Bearer`` challenge. A request over either
+    rate limit gets that same body with ``429`` and ``Retry-After`` instead.
+    ``lifespan`` scopes pass through untouched; every other scope type is
+    closed without reaching the app.
     """
 
-    def __init__(self, app: Any, provider: OidcProvider) -> None:
+    def __init__(
+        self,
+        app: Any,
+        provider: OidcProvider,
+        *,
+        clock: Any = None,
+        environ: dict[str, str] | None = None,
+    ) -> None:
         if not isinstance(provider, OidcProvider):
             raise TypeError(
                 "remote mcp transport requires an OidcProvider; refusing to serve "
@@ -120,6 +173,7 @@ class BearerAuthMiddleware:
             )
         self._app = app
         self._provider = provider
+        self._limiter = build_rate_limiter(clock=clock, environ=environ)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
@@ -131,6 +185,18 @@ class BearerAuthMiddleware:
             return
 
         correlation = request_correlation_id(_header(scope, "x-correlation-id"))
+        client_ip = self._limiter.client_ip(scope)
+        blocked = self._limiter.peek_failed_auth(client_ip)
+        if not blocked.allowed:
+            await self._reject_rate_limited(
+                correlation,
+                blocked.retry_after,
+                send,
+                kind="client",
+                key=client_ip,
+                first=self._limiter.note_rejection(client_ip),
+            )
+            return
         credential, reason = self._credential(scope)
         principal = self._authenticate(credential, reason)
         if principal is None:
@@ -140,7 +206,20 @@ class BearerAuthMiddleware:
                 outcome="denied",
                 detail=reason or "credential rejected",
             )
+            self._limiter.record_failed_auth(client_ip)
             await _send_unauthorized(send, correlation)
+            return
+
+        admission = self._limiter.check_request(principal.subject)
+        if not admission.allowed:
+            await self._reject_rate_limited(
+                correlation,
+                admission.retry_after,
+                send,
+                kind="subject",
+                key=principal.subject,
+                first=admission.audit_key is not None,
+            )
             return
 
         self._audit(scope, correlation, outcome="authenticated", subject=principal.subject)
@@ -178,6 +257,44 @@ class BearerAuthMiddleware:
         if scheme.lower() != "bearer":
             return None, "not a bearer credential"
         return token.strip(), None
+
+    async def _reject_rate_limited(
+        self,
+        correlation: str,
+        retry_after: int,
+        send: Any,
+        *,
+        kind: str,
+        key: str,
+        first: bool,
+    ) -> None:
+        """Answer an over-limit request with the gate's 429.
+
+        Only the first rejection of a window reaches the host audit chain, so a
+        sustained flood cannot flood the chain itself.
+        """
+        if first:
+            self._audit_rate_limited(kind, key, correlation)
+        await _send_unauthorized(send, correlation, retry_after=retry_after)
+
+    def _audit_rate_limited(self, kind: str, key: str, correlation: str) -> None:
+        """Record one rate-limit rejection in the host audit chain.
+
+        The record names the action, the bucket kind and the caller only -- a
+        client address or a principal subject -- never a credential, payload,
+        path or exception text.
+        """
+        detail: dict[str, Any] = {"bucket": kind, kind: key}
+        logger.warning(
+            "remote mcp rate limited",
+            extra={"outcome": "rate_limited", "correlation_id": correlation, **detail},
+        )
+        try:
+            append_host_audit(
+                action="mcp:rate_limited", outcome="rate_limited", detail=detail
+            )
+        except OSError:
+            logger.warning("host audit append failed for rate_limited")
 
     def _audit(
         self,
@@ -296,7 +413,7 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
         if transport == "streamable-http"
         else mcp.sse_app(host=host, transport_security=security)
     )
-    gated = BearerAuthMiddleware(app, provider)
+    gated = BearerAuthMiddleware(app, provider, environ=env)
 
     import uvicorn  # imported here so stdio users never need it
 

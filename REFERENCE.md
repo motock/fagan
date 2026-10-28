@@ -2240,6 +2240,9 @@ configured.
 | `PIPELINE_MCP_HOST` | `127.0.0.1` | Interface the endpoint binds to. The loopback default keeps the server off the network unless you change it. |
 | `PIPELINE_MCP_PORT` | `8000` | Port the endpoint binds to. Must be an integer in `1`–`65535`, otherwise the process stops at startup. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | *(unset)* | Comma-separated list of `Host` values the endpoint accepts. Unset means the MCP SDK's own loopback-only check, which is all a loopback bind needs. Set it to a name such as `mcp.example.com` (or `mcp.example.com:*` to accept any port) when a reverse proxy forwards a public name: DNS-rebinding protection stays on, restricted to this list. |
+| `PIPELINE_MCP_AUTH_FAIL_PER_MIN` | `10` | Failed authentications allowed per client address per minute before the gate answers `429`. `0` disables the bucket. Any other non-positive or non-integer value stops the transport at startup. |
+| `PIPELINE_MCP_REQUESTS_PER_MIN` | `120` | Requests allowed per authenticated subject per minute before the gate answers `429`. `0` disables the bucket. Any other non-positive or non-integer value stops the transport at startup. |
+| `PIPELINE_MCP_TRUSTED_PROXIES` | *(unset)* | Comma-separated IPs or CIDRs of the reverse proxies in front of the endpoint, e.g. `10.0.0.0/8,192.0.2.7`. When the ASGI peer is one of them, the client address used for the failed-auth bucket is the right-most `X-Forwarded-For` entry that is not itself trusted. Unset means the peer is the client, and `X-Forwarded-For` is ignored. A malformed entry stops the transport at startup. |
 
 A network transport refuses to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`.
 The check runs before any socket is opened, so a misconfiguration produces a
@@ -2285,12 +2288,33 @@ all of it:
 - `BearerAuthMiddleware` refuses to be constructed with anything that is not an
   `OidcProvider` — it raises `TypeError` — so the default `SharedSecretProvider`
   cannot be wired in by accident.
-- There is **no rate limiting** at the gate. A stream of unauthenticated
-  requests is answered `401` indefinitely; the only outbound bound in this path
-  is the JWKS refetch limit in `app.oidc` (an unknown `kid` triggers at most one
-  refetch per 10 seconds, so bogus tokens cannot become a stream of outbound
-  requests). Nothing throttles or locks out a caller, and a valid token
-  presented after several `401`s is served normally rather than answered `429`.
+- The gate is rate limited in two places, both in process memory. A
+  **failed-authentication** token bucket is keyed on the client address and
+  checked *before* token verification, so a blocked client costs no JWKS work;
+  ten failed authentications per minute from one client (the default) is
+  answered `429` without the token ever being examined. A **request** token
+  bucket is keyed on the authenticated subject and checked before the tool
+  runs; 120 requests per minute per subject is the default. Both limits answer
+  `429` with `Retry-After` and the correlation-id header, in the same JSON body
+  the `401` path uses, and the body names no limit value, subject or client
+  address. `PIPELINE_MCP_AUTH_FAIL_PER_MIN` and `PIPELINE_MCP_REQUESTS_PER_MIN`
+  set the two capacities, `0` disables a bucket, and any other non-positive or
+  non-integer value stops the transport at startup. The first rejection of a
+  window is recorded in the host audit chain as `mcp:rate_limited`; later
+  rejections of the same window are not. Because the buckets are per process,
+  a multi-replica deployment needs a shared limiter instead — replicas do not
+  agree on a caller's budget. Separately, the JWKS refetch limit in
+  `app.oidc` still bounds outbound key requests (an unknown `kid` triggers at
+  most one refetch per 10 seconds).
+- The client address those buckets use is the ASGI peer, unless
+  `PIPELINE_MCP_TRUSTED_PROXIES` names the reverse proxies in front of the
+  endpoint. Then, and only when the peer is itself a trusted address, the
+  client is the right-most `X-Forwarded-For` entry that is not a trusted proxy.
+  Keying on the peer alone behind a proxy would put every client in one bucket,
+  where a single attacker's failures could lock everyone out; honouring
+  `X-Forwarded-For` from an untrusted peer would let anyone mint fresh buckets.
+  A malformed or empty header falls back to the peer, and a malformed entry in
+  `PIPELINE_MCP_TRUSTED_PROXIES` stops the transport at startup.
 
 **The remote transport denies by default.** The gate proves who the caller is;
 it does not decide what they may call. So `serve()` installs a second

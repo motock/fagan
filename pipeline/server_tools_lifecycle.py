@@ -16,7 +16,7 @@ import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from . import paths, security_audit
+from . import audit, paths, security_audit
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -256,6 +256,28 @@ def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, A
     return {"ok": True, **state}
 
 
+def verify_audit() -> dict[str, Any]:
+    """Verify every audit chain and report where each one first breaks.
+
+    Read-only: nothing is appended, rewritten or repaired. The answer is
+    ``{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad
+    seq>}``. A plan appears only when it has an audit file; the value is the
+    ``seq`` of its first altered record, or ``None`` when the chain is intact.
+    The host-scoped chain — events with no plan to belong to, such as a host
+    config write — is verified the same way and reported under ``host``.
+
+    A chain with no externally recorded head cannot prove that trailing records
+    were not removed, so truncation of the tail verifies intact.
+    """
+    probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
+    suffix = probe.name
+    plans: dict[str, int | None] = {}
+    for path in sorted(probe.parent.glob(f"*{suffix}")):
+        plan_name = path.name.removesuffix(suffix)
+        plans[plan_name] = audit.verify_audit_chain(plan_name)
+    return {"ok": True, "plans": plans, "host": audit.verify_host_audit_chain()}
+
+
 # The tools this module provides, in registration order. pipeline.server
 # iterates this tuple to register each one on its FastMCP instance and to
 # re-export it under the same name, so adding a tool here is the only edit
@@ -272,4 +294,5 @@ TOOLS = (
     record_security_audit,
     approve_plan,
     reject_plan,
+    verify_audit,
 )

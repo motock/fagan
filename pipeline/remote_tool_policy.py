@@ -60,6 +60,7 @@ REMOTE_READ = frozenset(
         "list_decisions",
         "list_plans",
         "list_ready_stories",
+        "verify_audit",
     }
 )
 

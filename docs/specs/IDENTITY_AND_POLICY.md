@@ -480,6 +480,15 @@ enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function ret
 before it consults the policy — so an `allowed` record always corresponds to a real
 check of that action for that principal.
 
+Alongside the per-plan streams there is one host-scoped stream,
+`PLAN_DIR/.audit.host.jsonl`, for events that have no plan to belong to (a host
+config write, for example). It is written by `append_host_audit`, hash-chained the
+same way, and verified by the same walk: `verify_audit` reports the first altered
+`seq` for the host chain and for every plan chain in the directory, so the whole
+directory can be checked in one read-only call. What no verifier here can detect is
+truncation of a chain's tail — without a recorded head, a shortened chain still
+verifies intact.
+
 The approval and merge transitions carry their own records rather than relying on
 the authorization record: the decision is written as `plan.approved` or
 `plan.changes_requested` (outcome `allowed`, or `refused` when the canonical digest

@@ -442,7 +442,7 @@ carrying the action and the principal subject, so an operator sees who was
 turned away and from what. The same denial is also appended to the plan's audit
 stream (§2, "Audit stream").
 
-**What is enforced today.** Five actions, four of them plus pause/resume:
+**What is enforced today.** Every action in the `Action` enum:
 
 | Action | Status |
 | --- | --- |
@@ -451,17 +451,22 @@ stream (§2, "Audit stream").
 | `plan:approve` | enforced (`pipeline/plan_approval.py`) |
 | `plan:reject` | enforced (`pipeline/plan_approval.py`) |
 | `plan:pause` | enforced for both pause and resume (`pipeline/merge.py`) |
+| `plan:ingest` | enforced (`pipeline/service.py`, `ingest_plan`) |
+| `plan:dispatch` | enforced (`pipeline/dispatch.py`) |
+| `story:patch` | enforced (`pipeline/service.py`, `patch_story`) |
+| `story:interrupt` | enforced (`pipeline/service.py`, `interrupt_story`) |
+| `decision:answer` | enforced on the dashboard decision route (`app/dashboard.py`) |
+| `config:write` | enforced for `set_plan_role_config` and `patch_plan` (`pipeline/service.py`), and for `set_role_default` through `refusal_for_host_config`, which decides against an empty resource and records in `<PLAN_DIR>/.audit.host.jsonl` because the model registry belongs to the host, not to a plan |
 
-**What is still unenforced.** These actions exist in the `Action` enum but no
-service path asks `authorize` for them, so `LocalPolicy` cannot block them
-today: `plan:ingest`, `plan:dispatch`, `story:patch`, `story:interrupt`,
-`decision:answer`, `config:write`.
+`LocalPolicy` allows the local operator every action. A plan's `owner` and its
+`delegates` are additionally allowed `plan:approve`, `plan:reject` and
+`story:merge` on that plan; ownership grants nothing else, and a plan with no
+owner grants nothing to anyone but the local operator.
 
 **Audit stream.** Every decision this module makes is also appended to the plan's
 audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
 [REFERENCE.md](../../REFERENCE.md)): `action` is the enforced label
-(`story:merge`, `story:mark_done`, `plan:approve`, `plan:reject`, `plan:pause`),
-`outcome` is `allowed` or `denied`, `target` carries the plan and story, and
+from the table above, `outcome` is `allowed` or `denied`, `target` carries the plan and story, and
 `detail` carries the principal subject. Records are written **only when
 enforcement is on** — with `PIPELINE_POLICY_ENFORCE` disabled the function returns
 before it consults the policy — so an `allowed` record always corresponds to a real
@@ -502,9 +507,9 @@ before this plan:
 This is ADR 0009 section 7 ("local mode is unchanged") and the first part of
 ADR 0008 staging step 1 ("verified caller identity at the gateway, RBAC and
 ownership records, authorization enforced in `PipelineService`"). The
-identity-at-the-gateway piece and service-layer enforcement for the actions in
-§2 have landed; the RBAC/ownership records and enforcement for the remaining
-actions in §4 are the follow-up in §6. Enforcement was added together with a
+identity-at-the-gateway piece, service-layer enforcement for every action in
+the `Action` enum and the plan ownership records have landed; RBAC roles and
+the mutating tools outside the enum (§4) are the follow-up in §6. Enforcement was added together with a
 `LOCAL_OPERATOR`-allows-everything policy, so it changes no local behavior while
 the seam is adopted incrementally.
 
@@ -518,7 +523,7 @@ Do not mistake any row of this table for a control that exists.
 | **Plan owner / author / delegate records** | A plan's manifest now records an `owner` and `delegates`, but `ROLE_OWNER`, `ROLE_AUTHOR` and `ROLE_DELEGATE` are defined without being assigned to any principal, and `request_decision` has no owner to route to. Ownership is chosen at ingest, not authored: on a first ingest (no prior manifest) only the local operator may set an `owner` that differs from the caller, defaulting to the ingester, and `delegates`, defaulting to none; any other first-ingest caller owns the plan they created, has its delegates dropped, and its ignored naming is audited as `plan:ownership_change` with outcome `ignored`. On every later ingest — including a wholesale-replace (`overwrite=True`) re-ingest — the manifest's existing ownership is the starting point; the plan's `owner` replaces it only when the plan names one and the plan's `delegates` replace them only when that key is present, and nothing is recorded when the result is unchanged. Any such change is accepted only when the ingester is the local operator or the plan's current non-empty owner — a delegate cannot change ownership, and anyone else is refused with no manifest written. A manifest written before ownership existed stays owner-less on re-ingest unless the local operator names an owner. Every attempted change, allowed or denied, is recorded as `plan:ownership_change` in the plan's audit stream with the from/to owner and whether the delegates changed. |
 | **System principals** | `system:scheduler` and `system:worker` do not exist. The scheduler and worker act with no principal at all, and `LocalPolicy` would deny them if they did. |
 | **OIDC in the browser** | The `OidcProvider` itself has landed (§2, "OIDC provider"): JWT/JWKS verification, the issuer/audience/expiry checks and the group-to-role mapping all exist. What does not is a login flow: the bundled dashboard mints no token, so under `PIPELINE_IDENTITY_PROVIDER=oidc` its pages load but every `/api/` call is a `401` unless the client sends a bearer token. OIDC authenticates API clients, not the UI. |
-| **Remote MCP transport hardening** | The transport itself has landed (§2, "Remote MCP transport"): an OIDC-gated HTTP endpoint that verifies a token and binds a `Principal`. What is missing is everything an internet-facing endpoint wants — **no rate limiting at the gate** (the only outbound bound is the JWKS refetch limit), **no TLS** (put a reverse proxy in front), no tenant scoping on the allowlist that does exist — remote principals are limited to an explicit tool allowlist (`pipeline/remote_tool_policy.py`): only the ten enforced tools consult `authorize`, the six allowed read tools are not tenant-scoped, and every other tool is refused before its handler runs, while a local caller still reaches the unchecked tools in the row above — and **no configurable host allowlist** (behind a reverse proxy the SDK's loopback DNS-rebinding check answers `421` unless the proxy sets `Host` to the loopback address). Authentication attempts are recorded in the host-scoped hash-chained stream (`<PLAN_DIR>/.audit.host.jsonl`), which has no verifier yet. |
+| **Remote MCP transport hardening** | The transport itself has landed (§2, "Remote MCP transport"): an OIDC-gated HTTP endpoint that verifies a token and binds a `Principal`. What is missing is everything an internet-facing endpoint wants — **no rate limiting at the gate** (the only outbound bound is the JWKS refetch limit), **no TLS** (put a reverse proxy in front), no tenant scoping on the allowlist that does exist — remote principals are limited to an explicit tool allowlist (`pipeline/remote_tool_policy.py`): only the ten enforced tools consult `authorize`, the six allowed read tools are not tenant-scoped, and every other tool is refused before its handler runs, while a local caller still reaches the unchecked tools in the row above. A proxied public host name is accepted through `PIPELINE_MCP_ALLOWED_HOSTS`, and the HTTP transports refuse to start when `PIPELINE_POLICY_ENFORCE` disables enforcement. Authentication attempts are recorded in the host-scoped hash-chained stream (`<PLAN_DIR>/.audit.host.jsonl`), which has no verifier yet. |
 | **Audit stream durability** | The stream itself exists (§2, "Audit stream"): ADR 0009 section 8's `{actor, action, target, outcome, correlation_id, at}` records are appended, hash-chained, per plan. What is missing is an external anchor — the head hash is never shipped off-box — so truncation of the tail is undetectable and a record cannot be proven against a third-party witness. |
 | **Actor on the remaining mutations** | Ingest (`ingested_by`), plan approval (`decided_by`/`role`) and dashboard decisions (`actor`) record an actor; nothing else does. Dispatch, story status changes, pause/resume and decision answers record no actor at all. `Principal.roles` is recorded but never checked — enforcement reads the subject and the resource, not the roles. |
 
@@ -538,16 +543,18 @@ This is why the dashboard — not `app/auth.py` — imports the provider: the
 
 ## 6. Follow-up
 
-The seam is established and enforced for five actions; the rest is still prep.
+The seam is established and enforced for every action in the `Action` enum;
+the rest is still prep.
 The remaining work, in dependency order:
 
-1. **Enforcement on the remaining actions** (ADR 0009 section 2). Landed for
-   `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and
-   `plan:pause` through `pipeline/authorization.py` (§2, "Enforcement"). What is
-   left is the other six in §4: each mutating path calls `authorize()` so a
-   denied principal blocks it. Until then, §4's first row stands.
-2. **Ownership records.** Persist plan owner/author/delegate so the roles in
-   §2 mean something and `request_decision` has a routing target (ADR 0006).
+1. **Enforcement on the remaining mutations** (ADR 0009 section 2). Landed for
+   every action in the `Action` enum through `pipeline/authorization.py` (§2,
+   "Enforcement"). What is left is the mutating MCP tools outside the enum
+   listed in §4's first row; until each calls `authorize()`, that row stands.
+2. **Ownership records.** Landed in part: a plan's manifest records an `owner`
+   and `delegates`, and they may approve, reject and merge that plan's work
+   (§2, "Enforcement"). What remains is giving `request_decision` the owner as
+   its routing target (ADR 0006).
 3. **System principals.** Add `system:scheduler` and `system:worker` as
    distinct, narrowly scoped principals that are audited like a human and
    cannot approve a plan (ADR 0009 section 6).
@@ -561,9 +568,10 @@ The remaining work, in dependency order:
    remote MCP transport (§2, "Remote MCP transport") verifies the same token
    and yields the same `Principal` for the shared server — naming an HTTP
    `PIPELINE_MCP_TRANSPORT` and `PIPELINE_IDENTITY_PROVIDER=oidc` makes a
-   remote client authenticated. What remains open is only the audit gap: an
-   authentication attempt is written to the application log, not to the
-   per-plan hash-chained stream.
+   remote client authenticated. Authentication attempts are recorded in the
+   host-scoped hash-chained stream (`<PLAN_DIR>/.audit.host.jsonl`). What
+   remains open is a verifier for that stream and the hardening in §4's
+   remote-transport row.
 
 Steps 1–3 are the multi-tenant implementation ADR 0008 calls "not prep"; step 4
 has landed as far as the local stream goes; step 5 is the provider swap the seam

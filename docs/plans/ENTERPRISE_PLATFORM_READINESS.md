@@ -20,7 +20,7 @@
 | Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
 | Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident, but unanchored** | External anchor/WORM shipping so tail truncation is detectable; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for five actions, every enforced decision audited; an OIDC-gated remote MCP transport serves the same tools behind the same principal | **Seam, not a control** | Ownership records beyond the plan `team`; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own, no rate limiting at the gate, and logs authentication attempts rather than auditing them |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Seam, not a control** | Mutating tools outside the `Action` enum are unchecked; reads are not tenant-scoped; decisions are not routed to the plan owner; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own and no rate limiting at the gate |
 
 ---
 
@@ -181,8 +181,7 @@ head hash somewhere the pipeline cannot rewrite it.
 - A `Principal` / `IdentityProvider` / `Authorizer` seam exists
   (`app/identity.py`, `app/policy.py`, wired into the dashboard middleware), and
   the gate is in the service: `pipeline/authorization.py` enforces it,
-  deny-by-default, for `story:merge`, `story:mark_done`, `plan:approve`,
-  `plan:reject` and `plan:pause` (both pause and resume).
+  deny-by-default, for every action in the `Action` enum.
   `PIPELINE_POLICY_ENFORCE` is the operator's kill switch; see
   [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md).
   `app/role_registry.py` still holds **model** roles, not user roles; keep that
@@ -234,14 +233,17 @@ The remote MCP transport has landed too: `PIPELINE_MCP_TRANSPORT=streamable-http
 (or `sse`) serves the same tools over HTTP behind the same `OidcProvider`,
 yielding the same `Principal` and binding it to the request. It refuses to start
 without `PIPELINE_IDENTITY_PROVIDER=oidc`. What it does not have is TLS (put a
-reverse proxy in front), rate limiting at the gate, per-tool authorization for
-remote callers, or a configurable host allowlist — see
+reverse proxy in front) or rate limiting at the gate. Remote callers are limited
+to an explicit tool allowlist (`pipeline/remote_tool_policy.py`), a proxied host
+name is accepted through `PIPELINE_MCP_ALLOWED_HOSTS`, and the transport
+refuses to start with policy enforcement off — see
 [REFERENCE.md](../../REFERENCE.md#remote-mcp-transport).
 
 **Still outstanding.** Every action in the `Action` enum is enforced, but
-mutating MCP tools outside the enum (`save_plan`, `patch_plan`,
-`set_story_status`, `record_security_audit` and others) are not, and reads are
-not tenant-scoped. Plan ownership is stored but not yet enforced. The audit
+mutating MCP tools outside the enum (`save_plan`, `set_story_status`,
+`record_security_audit` and others) are not, and reads are not tenant-scoped.
+Plan ownership is stored and enforced for `plan:approve`, `plan:reject` and
+`story:merge`, but decisions are not yet routed to the owner. The audit
 stream of allow/deny decisions exists locally (hash-chained per plan); what it
 still lacks is the external anchor that would make tail truncation detectable.
 
@@ -258,7 +260,7 @@ These are behavior-preserving candidates for a later Tier 1-style plan. Items 1,
 | 2 | Opt-in JSON log formatter | `PIPELINE_LOG_FORMAT=json`; unset keeps the current plain output. | Closes the dropped-`extra` gap; prerequisite for a log pipeline. | **Shipped** — `pipeline/log_format.py`, wired into `app/pipeline_mcp_server.py`, `run_daemon`, and the dashboard startup preflight. Off by default. |
 | 3 | Optional event-envelope fields | Add `event_id`, `schema_version`, `idempotency_key` only when supplied; the legacy dict shape is unchanged. | Preps a broker without changing today's semantics. | `pipeline/events.py` has room; tests pin only the no-optional-args shape. |
 | 4 | Event bus factory | `PIPELINE_EVENT_BUS=inprocess`, unknown fails closed. | Makes a broker adapter selectable. | Cosmetic until a second bus exists; pair with #3 (ADR 0004's warning about invisible gates). |
-| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). Service-layer enforcement landed afterwards for `story:merge`, `story:mark_done`, `plan:approve`, `plan:reject` and `plan:pause` (ADR 0009 §2), with `PIPELINE_POLICY_ENFORCE` as the kill switch; the remaining actions are still unenforced and are listed as outstanding in §4. |
+| 5 | `IdentityProvider` / `Principal` seam | Wrap the existing shared-secret check in a Protocol with a `SharedSecretProvider`; behavior identical. | Creates the IDP seam. | **Shipped** — see [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md). Service-layer enforcement landed afterwards for every action in the `Action` enum (ADR 0009 §2), with `PIPELINE_POLICY_ENFORCE` as the kill switch; the mutating tools outside the enum are listed as outstanding in §4. |
 
 ### Not low-hanging (the fork)
 

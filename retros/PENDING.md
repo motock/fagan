@@ -60,3 +60,5 @@ if a precise date is needed when writing one of these up.
 - remote-mcp — completed 2026-10-27, 3 stories
 - post-phase6-hardening — completed 2026-10-27, 3 stories
 - ownership-and-ingest-followups — completed 2026-10-27, 2 stories
+- remote-mcp-hardening — completed 2026-10-28, 2 stories
+- config-write-guards — completed 2026-10-28, 2 stories

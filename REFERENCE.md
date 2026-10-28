@@ -2240,6 +2240,10 @@ configured.
 | `PIPELINE_MCP_HOST` | `127.0.0.1` | Interface the endpoint binds to. The loopback default keeps the server off the network unless you change it. |
 | `PIPELINE_MCP_PORT` | `8000` | Port the endpoint binds to. Must be an integer in `1`–`65535`, otherwise the process stops at startup. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | *(unset)* | Comma-separated list of `Host` values the endpoint accepts. Unset means the MCP SDK's own loopback-only check, which is all a loopback bind needs. Set it to a name such as `mcp.example.com` (or `mcp.example.com:*` to accept any port) when a reverse proxy forwards a public name: DNS-rebinding protection stays on, restricted to this list. |
+| `PIPELINE_MCP_AUTH_FAIL_PER_MIN` | `10` | Failed authentications allowed per client address per minute before the gate answers `429`. The key is the address resolved under `PIPELINE_MCP_TRUSTED_PROXIES`, never a wider network block: carrier NAT and corporate `/24`s put unrelated callers in one block, so a block key would let one caller throttle its neighbours. `0` disables the bucket. Any other value — negative, non-integer, or non-canonical such as `+10` — stops the transport at startup. |
+| `PIPELINE_MCP_REQUESTS_PER_MIN` | `120` | Requests allowed per authenticated subject per minute before the gate answers `429`. `0` disables the bucket. Any other value — negative, non-integer, or non-canonical such as `+120` — stops the transport at startup. |
+| `PIPELINE_MCP_MAX_BUCKETS` | `4096` | Maximum live buckets kept per limiter. Past the bound, refilled buckets are dropped and new keys are left untracked — never refused, so filling the map cannot deny service to other callers. Raise it for a deployment with more distinct clients per minute than this. Must be a positive integer: `0` is refused at startup, as is any non-integer or non-canonical value. |
+| `PIPELINE_MCP_TRUSTED_PROXIES` | *(unset)* | Comma-separated IPs or CIDRs of the reverse proxies in front of the endpoint, e.g. `10.0.0.0/8,192.0.2.7`. When the ASGI peer is one of them, the client address used for the failed-auth bucket is the right-most `X-Forwarded-For` entry that is not itself trusted; a hop that is not an IP address is skipped. Unset means the peer is the client, and `X-Forwarded-For` is ignored. A malformed entry, or a CIDR with host bits set (`10.0.0.5/8`), stops the transport at startup. |
 
 A network transport refuses to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`.
 The check runs before any socket is opened, so a misconfiguration produces a
@@ -2285,12 +2289,60 @@ all of it:
 - `BearerAuthMiddleware` refuses to be constructed with anything that is not an
   `OidcProvider` — it raises `TypeError` — so the default `SharedSecretProvider`
   cannot be wired in by accident.
-- There is **no rate limiting** at the gate. A stream of unauthenticated
-  requests is answered `401` indefinitely; the only outbound bound in this path
-  is the JWKS refetch limit in `app.oidc` (an unknown `kid` triggers at most one
-  refetch per 10 seconds, so bogus tokens cannot become a stream of outbound
-  requests). Nothing throttles or locks out a caller, and a valid token
-  presented after several `401`s is served normally rather than answered `429`.
+- The gate is rate limited in two places, both in process memory. A
+  **failed-authentication** token bucket is keyed on the client address (as
+  resolved under `PIPELINE_MCP_TRUSTED_PROXIES`, below) and checked *before*
+  token verification, so a blocked client costs no JWKS work; ten failed
+  authentications per minute from one address (the default) is answered `429`
+  without the token ever being examined. The key is the address itself, never a
+  wider block: carrier NAT and corporate `/24`s put unrelated callers behind one
+  block, so a `/24` or `/64` key would let ten failures per minute from one
+  caller answer `429` to every other caller in the block, including one holding
+  a valid token. A **request** token bucket is keyed on the authenticated
+  subject and checked before the tool runs; 120 requests per minute per subject
+  is the default. Both limits answer `429` with `Retry-After` and the
+  correlation-id header, in the same JSON body
+  the `401` path uses, and the body names no limit value, subject or client
+  address. `PIPELINE_MCP_AUTH_FAIL_PER_MIN` and `PIPELINE_MCP_REQUESTS_PER_MIN`
+  set the two capacities, `0` disables a bucket, and any other value — a
+  negative or non-integer, or a non-canonical form such as `+10` or ` 10` —
+  stops the transport at startup. The first rejection of a window is recorded
+  in the host audit chain as `mcp:rate_limited`; later rejections of the same
+  window are not. Because the buckets are per process, a multi-replica
+  deployment needs a shared limiter instead — replicas do not agree on a
+  caller's budget. Separately, the JWKS refetch limit in `app.oidc` still bounds
+  outbound key requests (an unknown `kid` triggers at most one refetch per 10
+  seconds).
+- The bucket maps are bounded, because the keys are not all chosen by the
+  server: a client address is attacker-supplied, and rotating addresses would
+  otherwise mint buckets without limit and turn the anti-DoS control into a
+  memory-exhaustion one. A full map first drops buckets that have refilled —
+  they behave exactly like fresh ones — and then stops *tracking* new keys.
+  It never refuses them: refusing would let whoever fills the map deny service
+  to every other client on the process, which is a far cheaper outage than the
+  memory growth the bound prevents, so a saturated map degrades to "not
+  throttled" instead. `PIPELINE_MCP_MAX_BUCKETS` sets the bound and must be a
+  positive integer: a bound of `0` would leave every key untracked, so it is
+  refused at startup rather than honoured. The host audit chain
+  `mcp:rate_limited` rejections are recorded in is the host-scoped
+  `.audit.host.jsonl` in the persistence directory: created `0600`, appended
+  under an exclusive lock and hash-chained. It records the client address or
+  subject that was throttled, so it is as sensitive as any other audit data and
+  follows the deployment's audit retention and file-permission policy.
+- The client address those buckets use is the ASGI peer, unless
+  `PIPELINE_MCP_TRUSTED_PROXIES` names the reverse proxies in front of the
+  endpoint. Then, and only when the peer is itself a trusted address, the
+  client is the right-most `X-Forwarded-For` entry that is not a trusted proxy.
+  Keying on the peer alone behind a proxy would put every client in one bucket,
+  where a single attacker's failures could lock everyone out; honouring
+  `X-Forwarded-For` from an untrusted peer would let anyone mint fresh buckets.
+  A hop in the header that is not an IP address is skipped, so a junk entry
+  cannot dump every client that sends one into the proxy's shared bucket, and
+  the peer is the key when no well-formed untrusted hop is left. Entries in
+  `PIPELINE_MCP_TRUSTED_PROXIES` must be canonical — host bits set (as in
+  `10.0.0.5/8`) are refused rather than silently widened to `10.0.0.0/8` — and
+  any malformed entry stops the transport at startup. The normalised set is
+  logged once at startup.
 
 **The remote transport denies by default.** The gate proves who the caller is;
 it does not decide what they may call. So `serve()` installs a second

@@ -32,6 +32,12 @@ PKCE, and each part below carries one invariant:
   at ``SESSION_ABSOLUTE_TIMEOUT_S`` regardless of activity, or at
   ``/auth/logout``; revoking it at the identity provider does not reach a live
   session, so the local deadlines (and re-authentication) are what bound it;
+* the session cookie is a credential the dashboard accepts in place of a bearer
+  token, which makes it *ambient*: the browser sends it on a request any page
+  can trigger. So a state-changing request authenticated by the cookie must also
+  prove it came from this site (``Sec-Fetch-Site: same-origin``, or an
+  ``Origin`` equal to the configured redirect URI's origin), and one that cannot
+  is refused before it reaches a route. A bearer token is exempt from that proof;
 * no code, verifier, token or secret is logged or echoed in an error body -
   every failure returns a fixed payload, and every log line names the action
   and (at most) the principal subject;
@@ -83,6 +89,9 @@ LOGIN_ENV = (ENV_CLIENT_ID, ENV_CLIENT_SECRET_FILE, ENV_REDIRECT_URI)
 #: with a ``Domain`` attribute and require ``Path=/`` over HTTPS, so a sibling
 #: subdomain cannot overwrite the session of this one.
 SESSION_COOKIE = "__Host-pipeline_session"
+
+#: Methods with nothing to forge, so the same-origin proof is not asked of them.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 #: One-shot cookie binding ``state`` to the browser that asked for it. Same
 #: ``__Host-`` rules, but ``SameSite=Lax``: the identity provider sends the
@@ -453,6 +462,15 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
             if not isinstance(value, str) or not value.startswith("https://"):
                 raise OidcLoginError("discovery document incomplete")
             endpoints[name] = value
+        # Optional: not every provider supports RP-initiated logout, and a value
+        # that is not an https URL is ignored rather than followed.
+        end_session = document.get("end_session_endpoint")
+        if isinstance(end_session, str) and end_session.startswith("https://"):
+            endpoints["end_session_endpoint"] = end_session
+        elif end_session is not None:
+            logger.warning(
+                "OIDC discovery end_session_endpoint ignored", extra={"reason": "not_https"}
+            )
     except OidcLoginError:
         with _LOCK:
             # Stamp the cooldown when the failure is known, not when the probe
@@ -532,6 +550,88 @@ def load_session(session_id: str | None) -> Session | None:
             return None
         session.last_seen = max(session.last_seen, now)
         return session
+
+
+def session_principal(request: Request) -> Principal | None:
+    """Return the principal of this request's session cookie, or None.
+
+    The cookie is only a *lookup key*: the deadlines and the principal behind it
+    stay server-side, so an expired or ended session resolves to None rather
+    than to a stale identity. This never authenticates a request on its own.
+    """
+    session = load_session(request.cookies.get(SESSION_COOKIE))
+    return session.principal if session is not None else None
+
+
+def allows_cookie_write(request: Request, config: OidcLoginConfig) -> bool:
+    """Whether a state-changing request carrying the session cookie may proceed.
+
+    A cookie is ambient: the browser attaches it to a request any page can
+    trigger, so authentication by cookie alone says nothing about who caused the
+    request. It must also prove same-origin, via ``Sec-Fetch-Site`` or an
+    ``Origin`` naming this site; ``same-site`` is refused, and read-only methods
+    are not asked. Deny by default: no proof is False.
+    """
+    if request.method in SAFE_METHODS:
+        return True
+    if not config.enabled:
+        return False
+    if request.headers.get("sec-fetch-site", "").strip().lower() == "same-origin":
+        return True
+    expected = urllib.parse.urlsplit(config.redirect_uri)
+    origin = urllib.parse.urlsplit(request.headers.get("origin", ""))
+    if not expected.netloc or not origin.netloc:
+        return False
+    return (origin.scheme.lower(), origin.netloc.lower()) == (
+        expected.scheme.lower(),
+        expected.netloc.lower(),
+    )
+
+
+class SessionRefused(Exception):
+    """An ``/api/`` request whose credential did not authenticate.
+
+    Carries the refusal the middleware returns; ``detail`` is fixed text.
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def authenticate_api_request(
+    request: Request, identity: oidc.OidcProvider, config: OidcLoginConfig
+) -> Principal:
+    """Return the principal for one ``/api/`` request, or raise ``SessionRefused``.
+
+    Order matters. An explicitly presented bearer token is authoritative: when
+    it is rejected the request is refused, never silently downgraded to the
+    browser's ambient session cookie, which would attribute the action to the
+    wrong principal. Only with no bearer token does the session cookie
+    authenticate, and then the request must also pass the same-origin proof a
+    cookie-driven write needs. A session counts only while login is configured:
+    otherwise there is no origin to compare against and no flow that could have
+    minted the cookie, so an unverifiable cookie is refused.
+    """
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    credential = token.strip() if scheme.lower() == "bearer" else None
+    if credential:
+        try:
+            return identity.authenticate(credential)
+        except IdentityError:
+            raise SessionRefused(401, "Unauthorized") from None
+    principal = session_principal(request) if config.enabled else None
+    if principal is None:
+        raise SessionRefused(401, "Unauthorized")
+    if not allows_cookie_write(request, config):
+        logger.warning(
+            "refused cross-site write",
+            extra={"principal_subject": principal.subject},
+        )
+        raise SessionRefused(403, "Forbidden")
+    return principal
 
 
 # ---------------------------------------------------------------------------
@@ -798,13 +898,33 @@ def _finish_login(config: OidcLoginConfig, request: Request) -> Response:
     return response
 
 
-def _end_session(request: Request) -> Response:
-    """Forget this browser's session and clear its cookie.
+def _end_session_url(config: OidcLoginConfig) -> str | None:
+    """The provider's RP-initiated logout URL, or None when it has none.
+
+    Discovery is best-effort: logout is local and must succeed even when the
+    provider is unreachable.
+    """
+    try:
+        return _discovery(config).get("end_session_endpoint")
+    except OidcLoginError:
+        logger.warning(
+            "OIDC logout metadata unavailable", extra={"reason": "discovery_failed"}
+        )
+        return None
+
+
+def _end_session(
+    config: OidcLoginConfig, request: Request, *, as_json: bool
+) -> Response:
+    """End this browser's session, clear its cookie, and answer the caller.
 
     Logout is local by design: the dashboard's sessions are its own, so ending
-    one here is immediate, while revoking the session at the identity provider
-    only bites at the next authorization (the session ends at its idle or
-    absolute deadline in any case).
+    one here is immediate, while revoking it at the identity provider only bites
+    at the next authorization. The deletion is what makes the call effective:
+    replaying the cookie afterwards resolves to no session. It sits outside the
+    middleware's ``/api/`` same-origin check, but a cross-site request cannot
+    reach it either - ``SameSite=Strict`` withholds the cookie. ``as_json`` adds
+    the provider's end-session URL for the UI to follow.
     """
     session_id = request.cookies.get(SESSION_COOKIE) or ""
     with _LOCK:
@@ -813,13 +933,13 @@ def _end_session(request: Request) -> Response:
         "OIDC logout completed",
         extra={"principal_subject": session.principal.subject if session else None},
     )
-    response = RedirectResponse("/", status_code=302)
+    response: Response = (
+        JSONResponse({"end_session_url": _end_session_url(config)})
+        if as_json
+        else RedirectResponse("/", status_code=302)
+    )
     response.delete_cookie(
-        SESSION_COOKIE,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="strict",
+        SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict"
     )
     return response
 
@@ -843,7 +963,11 @@ def mount_auth_routes(app: FastAPI, config: OidcLoginConfig) -> None:
 
     @app.get("/auth/logout")
     def logout(request: Request) -> Response:  # pragma: no cover - ditto
-        return _end_session(request)
+        return _end_session(config, request, as_json=False)
+
+    @app.post("/auth/logout")
+    def logout_post(request: Request) -> Response:  # pragma: no cover - ditto
+        return _end_session(config, request, as_json=True)
 
 
 __all__ = [
@@ -855,6 +979,7 @@ __all__ = [
     "LOGIN_SCOPE",
     "LOGIN_STATE_COOKIE",
     "MAX_PENDING_LOGINS",
+    "SAFE_METHODS",
     "SESSION_ABSOLUTE_TIMEOUT_S",
     "SESSION_COOKIE",
     "SESSION_IDLE_TIMEOUT_S",
@@ -863,9 +988,13 @@ __all__ = [
     "OidcLoginConfigError",
     "OidcLoginError",
     "Session",
+    "SessionRefused",
+    "allows_cookie_write",
+    "authenticate_api_request",
     "load_config",
     "load_session",
     "mount_auth_routes",
     "pkce_challenge",
     "reset_state",
+    "session_principal",
 ]

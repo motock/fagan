@@ -178,14 +178,15 @@ async def _enforce_api_key(request: Request, call_next):
     if not auth.host_is_allowed(request.headers.get("host"), server[0] if server else None):
         return _tagged(JSONResponse(status_code=403, content={"detail": "Forbidden"}))
     if request.url.path.startswith("/api/") and isinstance(_identity, OidcProvider):
-        authorization = request.headers.get("authorization") or ""
-        scheme, _, token = authorization.partition(" ")
-        credential = token.strip() if scheme.lower() == "bearer" else None
         try:
-            request.state.principal = _identity.authenticate(credential)
-        except IdentityError:
+            request.state.principal = oidc_login.authenticate_api_request(
+                request, _identity, _oidc_login_config
+            )
+        except oidc_login.SessionRefused as refusal:
             return _tagged(
-                JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+                JSONResponse(
+                    status_code=refusal.status_code, content={"detail": refusal.detail}
+                )
             )
     elif request.url.path.startswith("/api/"):
         try:

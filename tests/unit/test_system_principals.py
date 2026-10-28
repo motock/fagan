@@ -44,7 +44,6 @@ KEY_ID = "sys01-key"
 SCHEDULER_GRANTED = (
     "plan:dispatch",
     "story:merge",
-    "story:mark_done",
     "story:interrupt",
 )
 
@@ -59,7 +58,6 @@ SYSTEM_DENIED = (
 
 #: The scheduler's reserved rights: neither is reachable from the tick.
 SCHEDULER_ONLY_DENIED = ("plan:pause", "story:patch")
-
 WORKER_DENIED = (
     "plan:dispatch",
     "story:merge",
@@ -139,6 +137,15 @@ def test_scheduler_granted_actions_hold_for_action_members(action):
 @pytest.mark.parametrize("action", SYSTEM_DENIED + SCHEDULER_ONLY_DENIED)
 def test_scheduler_denied_actions(action):
     assert _allowed(identity.SYSTEM_SCHEDULER, action, _manifest()) is False
+
+
+def test_scheduler_denied_story_mark_done():
+    """The tick's merge path writes ``status="done"`` itself.
+
+    ``story:mark_done`` is only ever asked for by the human ``mark_story_done``
+    tool, so the scheduler holds no grant for it.
+    """
+    assert _allowed(identity.SYSTEM_SCHEDULER, "story:mark_done", _manifest()) is False
 
 
 @pytest.mark.parametrize("action", ("plan:approve", "plan:reject"))

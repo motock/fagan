@@ -51,14 +51,15 @@ class Action(str, Enum):
 #:
 #: The rows are the actions the code those principals run actually reaches:
 #: the scheduler tick (``advance_all_plans``/``scan_all_plans``) dispatches
-#: (``plan:dispatch``), merges (``story:merge``), marks done
-#: (``story:mark_done``) and interrupts (``story:interrupt``); a dispatched
-#: worker only patches its own story (``story:patch``). ``plan:approve``,
-#: ``plan:reject``, ``plan:ingest``, ``config:write`` and ``decision:answer``
-#: appear in no row: a system principal never holds human authority, and ADR
-#: 0009 forbids a scheduler approving its own work. ``plan:pause`` (pause /
-#: resume tools) and the scheduler's ``story:patch`` are likewise absent
-#: because no system code path asks for them.
+#: (``plan:dispatch``), merges (``story:merge``) and interrupts
+#: (``story:interrupt``); a dispatched worker only patches its own story
+#: (``story:patch``). The tick's merge path writes ``status="done"`` itself, so
+#: ``story:mark_done`` — which only the human ``mark_story_done`` tool asks for
+#: — is absent, as are ``plan:approve``, ``plan:reject``, ``plan:ingest``,
+#: ``config:write`` and ``decision:answer``: a system principal never holds
+#: human authority, and ADR 0009 forbids a scheduler approving its own work.
+#: ``plan:pause`` (pause / resume tools) and the scheduler's ``story:patch`` are
+#: likewise absent because no system code path asks for them.
 #:
 #: Keyed by subject, not auth method: a reserved subject stays confined to its
 #: row whatever ``auth_method`` it arrives with. The values are frozensets, so
@@ -68,7 +69,6 @@ SYSTEM_PRINCIPAL_GRANTS: dict[str, frozenset[Action]] = {
         {
             Action.PLAN_DISPATCH,
             Action.STORY_MERGE,
-            Action.STORY_MARK_DONE,
             Action.STORY_INTERRUPT,
         }
     ),

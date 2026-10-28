@@ -98,7 +98,7 @@ from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService
-from pipeline.topology_identity import resolved_topology
+from pipeline.topology_identity import resolved_runtime, resolved_topology
 from pipeline.usage import collect_backend_status
 
 # Patched here by tests; the moved get_plan route resolves them via this module.
@@ -326,6 +326,12 @@ def health() -> dict[str, Any]:
     ``topology`` is additive and observational: the process's resolved
     ``plan_dir`` / ``repo_root`` / branch and worktree namespaces, read live
     per request by :func:`pipeline.topology_identity.resolved_topology`.
+
+    ``runtime`` is the cumulative block of runtime selections, read live per
+    request by :func:`pipeline.topology_identity.resolved_runtime`; today it
+    carries ``event_bus`` (the bus ``PIPELINE_EVENT_BUS`` selects). It is
+    returned as produced, so keys added there show up here without touching
+    this endpoint.
     """
     plan_dir = str(PLAN_DIR)
     scheduler: Any = None
@@ -356,6 +362,10 @@ def health() -> dict[str, Any]:
         "scheduler": scheduler,
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),
+        # Cumulative runtime wiring (event bus today; other stories add their
+        # own selections here). Merged from resolved_runtime(), never rebuilt
+        # as a literal, so later keys survive.
+        "runtime": resolved_runtime(),
     }
 
 

@@ -70,3 +70,34 @@ def resolved_topology() -> dict[str, str | None]:
         "branch_namespace": _namespace(branch_names.NAMESPACE_ENV),
         "worktree_namespace": _namespace(WORKTREE_NAMESPACE_ENV),
     }
+
+
+def resolved_runtime() -> dict[str, str]:
+    """Return the runtime wiring this process actually selected.
+
+    Keys so far (the block is cumulative — later work adds its own):
+
+    * ``event_bus`` — ``pipeline.event_wiring.selected_event_bus_name()``, i.e.
+      the bus ``PIPELINE_EVENT_BUS`` selects: ``"inprocess"`` (default) or
+      ``"jsonl"``.
+
+    Read live on every call and free of side effects: the environment is not
+    written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
+    keeps meaning "inprocess" rather than freezing that choice into the process.
+
+    Raises
+    ------
+    ValueError
+        When ``PIPELINE_EVENT_BUS`` holds an unsupported value. Failing closed
+        is the point: reporting a bus name for a setting the pipeline refused to
+        honour would misdescribe the process.
+
+    ``resolved_topology()`` deliberately does not gain these keys — it stays
+    pinned to its four documented topology fields.
+    """
+    # Imported inside the function: this module's reads are late-bound so a
+    # caller that re-imports or re-patches ``pipeline.event_wiring`` is still
+    # observed, and the import graph stays free of a cycle at module load.
+    from pipeline.event_wiring import selected_event_bus_name
+
+    return {"event_bus": selected_event_bus_name()}

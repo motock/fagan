@@ -73,3 +73,4 @@ if a precise date is needed when writing one of these up.
 - observability-otel — completed 2026-10-28, 5 stories
 - flake-and-followup-fixes — completed 2026-10-29, 4 stories
 - system-principals — completed 2026-10-29, 2 stories
+- scheduler-throughput — completed 2026-10-29, 5 stories

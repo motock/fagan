@@ -572,3 +572,31 @@ def _observe_capacity_in_use(options: Any = None) -> Iterator[Any]:
     if snapshot is None:
         return
     yield Observation(snapshot[1], {})
+
+
+def flush(timeout_millis: int = 5000) -> None:
+    """Force-flush and shut down any providers this module built.
+
+    A short-lived process (one plan advance) exits as soon as its work is done,
+    so spans and metrics still buffered in a batch exporter would be dropped.
+    Flushing and shutting the providers down here makes the export happen
+    before the interpreter goes away.
+
+    No-op when nothing is configured (``PIPELINE_OTEL_ENDPOINT`` unset), and
+    never raises: telemetry must not be able to fail a run, so a provider error
+    is logged by exception class only (the message can carry paths). The module
+    globals keep their providers so a second call flushes just as effectively.
+    """
+    for provider in (_PROVIDER, _METER_PROVIDER):
+        if provider is None:
+            continue
+        _flush_provider(provider, timeout_millis)
+
+
+def _flush_provider(provider: Any, timeout_millis: int) -> None:
+    """Force-flush then shut down one provider, isolating their failures."""
+    for call in (lambda: provider.force_flush(timeout_millis), provider.shutdown):
+        try:
+            call()
+        except Exception as exc:  # noqa: BLE001 - telemetry never fails a run
+            logger.warning("telemetry flush failed: %s", type(exc).__name__)

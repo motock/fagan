@@ -52,6 +52,21 @@ _NOTIFY_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="pytest-notify-config-")
 _NO_NOTIFY_CONFIG = str(Path(_NOTIFY_CONFIG_DIR.name) / "no-such-notifications.json")
 os.environ["PIPELINE_NOTIFY_CONFIG_PATH"] = _NO_NOTIFY_CONFIG
 
+# Usage-state isolation: USAGE_STATE_PATH defaults to the developer's live
+# ~/.claude/usage_state.json, which the usage poller rewrites every minute. A
+# test that reads that default therefore passes or fails on whatever the live
+# session/week spend happens to be at that instant - once the session window
+# crosses the pause threshold the usage gate pauses dispatch and every test that
+# advances a plan sees a paused (empty) summary instead of the work it asserts.
+# tests/unit/_pipeline_mcp_server_test_helpers.py isolates this per test; the
+# integration tests have no such fixture, so isolate it for the whole session
+# here, the same way notification config is isolated above. The path never
+# exists, which reads as "not paused"; a test that wants a real reading points
+# the variable at its own tmp_path and still wins.
+_USAGE_STATE_DIR = tempfile.TemporaryDirectory(prefix="pytest-usage-state-")
+_NO_USAGE_STATE = str(Path(_USAGE_STATE_DIR.name) / "no-such-usage-state.json")
+os.environ["USAGE_STATE_PATH"] = _NO_USAGE_STATE
+
 
 @pytest.fixture(autouse=True)
 def _isolate_environ():

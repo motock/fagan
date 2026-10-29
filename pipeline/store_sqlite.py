@@ -228,12 +228,12 @@ class SqliteStore:
         ``get_manifest`` about which plans exist: a plan the database records is
         present even when its projection was never written. It fails open only
         where a document is not safely readable -- no row and no projection, or
-        a stored document or projection that does not parse -- because those
-        callers treat an unreadable manifest as "no manifest".
+        a stored document or projection that is not valid JSON text -- because
+        those callers treat an unreadable manifest as "no manifest".
         """
         try:
             return self._resolved_document(plan_name)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     # -- transactions ------------------------------------------------------

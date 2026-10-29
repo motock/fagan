@@ -390,6 +390,14 @@ def test_read_inside_a_transaction_sees_the_uncommitted_save(store):
     assert store.get_manifest(PLAN)["stories"]["S1"]["status"] == "running"
 
 
+def test_get_manifest_or_none_fails_open_on_undecodable_projection(store):
+    """Bytes that are not text read as absent, like any other damage."""
+    store.save_manifest(PLAN, {"a": 1})
+    store.manifest_path(PLAN).write_bytes(b"\xff\xfe\x00")
+
+    assert store.get_manifest_or_none(PLAN) is None
+
+
 def test_get_manifest_or_none_fails_open_on_a_damaged_row(store, db_path):
     """An unparsable stored document reads as absent, never as an exception."""
     with sqlite3.connect(db_path) as probe:

@@ -15,7 +15,7 @@ import stat
 import time
 from datetime import UTC, datetime
 
-from . import audit_anchor, cross_plan, paths, security_audit
+from . import audit_anchor, cross_plan, paths, security_audit, wake
 from .events import make_event
 from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
@@ -368,6 +368,12 @@ def scan_all_plans(bus):
       ``{"reason": "blocked_by_done"}`` for a plan whose ``blocked_by`` names
       a story that just became ``done`` (see :func:`newly_done`).
 
+    After the manifest loop it also drains the cross-process wake markers
+    (see :func:`pipeline.wake.claim_wakes`), publishing one
+    ``{"reason": "requested"}`` ``reconcile`` event per claimed plan. That is
+    how an operator action taken in the MCP server or the dashboard -- on a bus
+    this scheduler never sees -- reaches the scan.
+
     A wake only enqueues the plan: the advance re-reads the manifest and
     decides everything from it. A wake pass that raises is logged at WARNING
     and changes neither the sweep nor this function's return value.
@@ -438,6 +444,19 @@ def scan_all_plans(bus):
         repo_root = manifest.get("repo_root")
         if repo_root and os.path.isdir(repo_root):
             repo_plans.setdefault(repo_root, plan_name)
+    # Cross-process operator wakes (approve, resume, ingest, set status, patch,
+    # mark done) arrive as one marker file per plan written by the MCP server or
+    # dashboard; nothing in-process crosses to this scheduler on the default bus.
+    # The claim is a rename, so a wake is delivered once even with a concurrent
+    # pass. Wrapped: a broken wake must not stop the sweep or change its result.
+    try:
+        for woken_plan in wake.claim_wakes():
+            event = make_event("reconcile", woken_plan, payload={"reason": "requested"})
+            bus.publish(event)
+            events.append(event)
+            logger.info("woke plan: operator requested", extra={"plan": woken_plan})
+    except Exception as exc:  # noqa: BLE001 - one broken wake must not stop the sweep
+        logger.warning("requested wake pass failed: %s", type(exc).__name__)
     if transitions:
         try:
             wakes = _blocked_by_wakes(manifests, transitions)

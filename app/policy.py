@@ -159,12 +159,19 @@ class LocalPolicy:
                 principal.subject, frozenset()
             )
 
-        if resolved_action is Action.PLAN_INGEST and isinstance(principal, Principal):
+        # ADR 0006 makes the *authenticated* caller a plan's owner at ingest.
+        # `ANONYMOUS` is a Principal too (auth_method "none"), and it is not an
+        # owner-in-waiting: an unauthenticated caller may never create a plan.
+        if (
+            resolved_action is Action.PLAN_INGEST
+            and isinstance(principal, Principal)
+            and principal.auth_method not in ("", "none")
+        ):
             if principal.subject == LOCAL_OPERATOR_SUBJECT:
                 return True
             if resource is None or not resource.owner:
-                # No manifest yet, or a legacy ownerless plan: ADR 0006 makes the
-                # authenticated caller the owner at ingest.
+                # No manifest yet, or a legacy ownerless plan: the caller becomes
+                # its owner (resolve_ownership).
                 return True
             return principal.subject == resource.owner
 

@@ -108,11 +108,7 @@ def test_non_local_principal_is_denied_for_every_action() -> None:
 
     allowed = {action for action in Action if policy.allow(system_principal, action)}
 
-    # DK-05 exception: ingest of a plan with no owner yet is the one action a
-    # non-operator principal holds, because ADR 0006 makes the authenticated
-    # caller the owner at ingest -- so the caller must be able to create it.
-    # Every other action stays denied.
-    assert allowed == {Action.PLAN_INGEST}
+    assert allowed == set()
 
 
 def test_non_local_principal_is_denied_plan_approve() -> None:
@@ -162,11 +158,7 @@ def test_empty_resource_does_not_change_any_decision() -> None:
     for action in Action:
         assert policy.allow(LOCAL_OPERATOR, action, empty) is True
         assert policy.allow(None, action, empty) is False
-        # DK-05 exception: an authenticated caller may ingest a plan with no
-        # owner yet (ADR 0006); every other action on an empty resource stays
-        # denied for a non-operator principal.
-        expected = action is Action.PLAN_INGEST
-        assert policy.allow(system_principal, action, empty) is expected
+        assert policy.allow(system_principal, action, empty) is False
 
     assert policy.allow(LOCAL_OPERATOR, "plan:nuke", empty) is False
     assert policy.allow(LOCAL_OPERATOR, None, empty) is False
@@ -210,6 +202,22 @@ def test_ingest_of_plan_owned_by_someone_else_is_denied() -> None:
 def test_unauthenticated_principal_cannot_ingest() -> None:
     assert LocalPolicy().allow(None, Action.PLAN_INGEST, Resource(owner="")) is False
     assert LocalPolicy().allow(None, Action.PLAN_INGEST, None) is False
+
+
+def test_anonymous_principal_cannot_ingest() -> None:
+    # `ANONYMOUS` is a Principal too; "none" is not an identity to own a plan.
+    anonymous = Principal(subject="anonymous", auth_method="none")
+
+    assert LocalPolicy().allow(anonymous, Action.PLAN_INGEST, Resource(owner="")) is False
+
+
+def test_principal_without_an_auth_method_cannot_ingest() -> None:
+    unauthenticated = Principal(subject="system-agent")
+
+    assert (
+        LocalPolicy().allow(unauthenticated, Action.PLAN_INGEST, Resource(owner=""))
+        is False
+    )
 
 
 def test_system_scheduler_cannot_ingest() -> None:

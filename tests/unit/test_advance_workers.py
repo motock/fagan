@@ -181,7 +181,7 @@ def test_timeout_kills_child_counts_and_next_plan_respawns(
         try:
             assert _wait_for(lambda: pool.stats()["timeouts"] == 1)
             first = list(spawned)
-            assert first and first[0].poll() is not None
+            assert _wait_for(lambda: first and first[0].poll() is not None)
             queue.request("fast1")
             assert _wait_for(lambda: pool.stats()["advances"] == 1)
         finally:

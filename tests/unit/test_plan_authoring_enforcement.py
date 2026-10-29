@@ -353,3 +353,116 @@ def test_dashboard_save_route_still_answers_400_for_allowed_invalid_json(
 
     assert res.status_code == 400
     assert "Invalid JSON" in res.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# FU-01: the advance_all route answers a refusal with 403, not the generic 400
+# --------------------------------------------------------------------------- #
+def _seed_advance_all_plans(plan_dir, count=3):
+    """Write *count* manifests, each holding one story that has not advanced."""
+    names = []
+    for index in range(count):
+        name = PLAN if index == 0 else f"{PLAN}{index}"
+        (plan_dir / f"{name}.manifest.json").write_text(
+            json.dumps(
+                {"epics": {}, "stories": {STORY: {"summary": "s", "status": "todo"}}}
+            )
+        )
+        names.append(name)
+    return names
+
+
+def _advance_counts(plan_dir, names):
+    """(advanced, unadvanced) across *names*, by the seeded story's status."""
+    advanced = unadvanced = 0
+    for name in names:
+        manifest = json.loads((plan_dir / f"{name}.manifest.json").read_text())
+        if manifest["stories"][STORY]["status"] == "todo":
+            unadvanced += 1
+        else:
+            advanced += 1
+    return advanced, unadvanced
+
+
+def test_dashboard_advance_all_route_answers_403_for_a_refused_caller(
+    client, plan_dir, monkeypatch
+):
+    from app import dashboard as d
+    from pipeline import service as pservice
+    from pipeline.actor import LOCAL_OPERATOR
+    from pipeline.authorization import authorize
+
+    monkeypatch.delenv(ENFORCE_ENV, raising=False)
+    names = _seed_advance_all_plans(plan_dir, 3)
+    actor = {"current": ANONYMOUS}
+
+    def fake_advance_pipeline(plan_name):
+        path = plan_dir / f"{plan_name}.manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["stories"][STORY]["status"] = "in_progress"
+        path.write_text(json.dumps(manifest))
+        return {"ok": True, "plan": plan_name}
+
+    monkeypatch.setattr(pservice, "advance_pipeline", fake_advance_pipeline)
+
+    def gated_advance_all():
+        # The tick asks plan:dispatch before it touches a plan, exactly as the
+        # per-plan advance_pipeline gate does.
+        with bind_principal(actor["current"]):
+            refusal = authorize("plan:dispatch", plan_name=PLAN, record_allowed=False)
+            if refusal is not None:
+                return refusal
+        return pservice.PipelineService().advance_all_plans()
+
+    monkeypatch.setattr(d._service, "advance_all_plans", gated_advance_all)
+
+    refused = client.post("/api/plans/advance_all")
+
+    assert refused.status_code == 403
+    assert "not authorized: plan:dispatch" in refused.text
+    assert _advance_counts(plan_dir, names) == (0, 3)
+
+    # Same store, allowed caller: the tick still advances every seeded plan, so
+    # nothing about the refusal lingered in route or store state.
+    actor["current"] = LOCAL_OPERATOR
+    allowed = client.post("/api/plans/advance_all")
+
+    assert allowed.status_code == 200
+    assert _advance_counts(plan_dir, names) == (3, 0)
+
+
+def test_dashboard_advance_all_route_keeps_400_for_a_genuine_failure(
+    client, plan_dir, monkeypatch
+):
+    from app import dashboard as d
+
+    monkeypatch.delenv(ENFORCE_ENV, raising=False)
+    monkeypatch.setattr(
+        d._service, "advance_all_plans", lambda: {"ok": False, "error": "boom"}
+    )
+
+    res = client.post("/api/plans/advance_all")
+
+    assert res.status_code == 400
+    assert "boom" in res.text
+
+
+def test_dashboard_advance_pipeline_route_still_answers_403_for_a_refused_caller(
+    client, plan_dir, monkeypatch
+):
+    from app import dashboard as d
+
+    monkeypatch.delenv(ENFORCE_ENV, raising=False)
+    _write_manifest(plan_dir, {STORY: {"summary": "s", "status": "todo"}})
+
+    def refusing_advance_pipeline(plan_name):
+        with bind_principal(ANONYMOUS):
+            return p.PipelineService().advance_pipeline(plan_name)
+
+    monkeypatch.setattr(d._service, "advance_pipeline", refusing_advance_pipeline)
+
+    res = client.post(f"/api/plans/{PLAN}/advance")
+
+    assert res.status_code == 403
+    assert "not authorized: plan:dispatch" in res.json()["detail"]
+    assert _read_manifest(plan_dir)["stories"][STORY]["status"] == "todo"

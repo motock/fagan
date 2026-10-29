@@ -78,6 +78,7 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
 def advance_all_plans() -> dict[str, Any]:
     """Delegates to _service.advance_all_plans()."""
     result = _service.advance_all_plans()
+    raise_if_forbidden(result)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

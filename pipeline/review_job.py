@@ -85,6 +85,36 @@ def _source_root() -> Path:
 # Start / poll / cancel
 # ---------------------------------------------------------------------------
 
+_INVALID_JOB_DIR = "invalid review job directory"
+
+
+def _checked_review_job_dir(state_root: Path | str, story_key: str) -> Path:
+    """Resolve the job directory under *state_root* and refuse a path escape.
+
+    Defense in depth behind ``_validate_key``: should that rule ever be
+    loosened, ``"."`` resolves to the shared ``review_job`` root and ``".."`` to
+    the state root itself - both outside the one directory a review job owns.
+    Only a direct child of ``<state_root>/review_job`` is accepted. The error
+    never echoes a path.
+    """
+    review_root = (Path(state_root) / "review_job").resolve()
+    job_dir = (review_root / story_key).resolve()
+    if job_dir.parent != review_root:
+        raise ValueError(_INVALID_JOB_DIR)
+    return job_dir
+
+
+def _checked_story_key(story_key: str) -> None:
+    """Refuse a dot-only *story_key*, independently of ``_validate_key``.
+
+    ``main`` builds no job directory of its own - the child only writes the
+    result path it is handed - so the equivalent defense there is on the key: a
+    dot-only name puts that result at the ``review_job`` root or the state root.
+    The error never echoes a path.
+    """
+    if story_key and set(story_key) <= {"."}:
+        raise ValueError(_INVALID_JOB_DIR)
+
 
 def start_review_job(plan_name: str, story_key: str, state_root: Path) -> dict:
     """Spawn the detached job and return its handle.
@@ -105,7 +135,7 @@ def start_review_job(plan_name: str, story_key: str, state_root: Path) -> dict:
     except ValueError:
         raise ValueError("invalid story_key") from None
 
-    job_dir = (Path(state_root) / "review_job" / story_key).resolve()
+    job_dir = _checked_review_job_dir(state_root, story_key)
     job_dir.mkdir(parents=True, exist_ok=True)
     # mkdir's mode is filtered by the process umask and does not re-tighten an
     # existing directory, so chmod it explicitly: the result and the log carry
@@ -309,6 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _validate_key(plan_name)
         _validate_key(story_key)
+        # Defense in depth: this process builds no job directory, so refuse a
+        # dot-only key here too - before anything is read or written.
+        _checked_story_key(story_key)
     except ValueError:
         return 2
 

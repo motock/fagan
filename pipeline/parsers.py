@@ -296,9 +296,12 @@ def _validate_key(name: str) -> None:
 
     plan_name and story_key flow into filesystem paths; this boundary check
     rejects anything containing path separators, null bytes, or characters
-    outside the safe alphanumeric-plus-symbols set.
+    outside the safe alphanumeric-plus-symbols set. Dot-only names (``"."``,
+    ``".."``, ``"..."``) are rejected as well: the character class allows the
+    dot so a version such as ``"v1.2.3"`` stays valid, but a name made only of
+    dots is a path component, not a key.
     """
-    if not _KEY_RE.match(name):
+    if not _KEY_RE.match(name) or set(name) <= {"."}:
         raise ValueError(f"invalid plan/story key {name!r}: only [A-Za-z0-9._-] allowed")
 
 

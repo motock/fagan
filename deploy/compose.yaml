@@ -267,7 +267,16 @@ services:
   # ---------------------------------------------------------------------------
   nats:
     image: nats:2.10.22
-    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "127.0.0.1:8222"]
+    # `-m` (`--http_port`) takes a port number only. Handing it a
+    # `host:port` value makes nats-server print its usage and exit instead of
+    # serving, which takes the whole stack down with it: the pipeline's event
+    # bus and the monitoring endpoint deploy/smoke/smoke.sh polls for
+    # JetStream consumer counts (`/jsz?consumers=true`) both disappear. The
+    # monitor therefore binds 0.0.0.0 *inside this container's network
+    # namespace*, which is the pipeline container's own namespace; the pipeline
+    # service publishes no host port, so 8222 stays reachable only from inside
+    # the stack.
+    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
     network_mode: "service:pipeline"
     depends_on:
       pipeline:

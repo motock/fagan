@@ -328,13 +328,34 @@ def test_publish_refuses_an_invalid_plan_before_sending(bus, fake_nats):
     # The JSONL bus owns the plan rules; the broker bus must not restate them.
     invalid_plan = "Bad/Plan"
     with pytest.raises(ValueError):
-        JsonlEventBus._validate_plan(invalid_plan)
+        JsonlEventBus._validate_plan(None, invalid_plan)
 
     with pytest.raises(ValueError):
         bus.publish(_event(plan=invalid_plan))
 
     assert fake_nats.js.publish_calls == [], (
         "an event whose plan is not a valid identifier must never reach the broker"
+    )
+
+
+def test_publish_reuses_the_jsonl_bus_plan_rules(bus, fake_nats, monkeypatch):
+    """The broker bus applies the JSONL bus's rules; it does not copy them."""
+    validated: list[str] = []
+
+    def recording_validate(_self, plan: str) -> str:
+        validated.append(plan)
+        return plan
+
+    monkeypatch.setattr(JsonlEventBus, "_validate_plan", recording_validate)
+
+    bus.publish(_event(plan="shared-rules-plan"))
+
+    assert validated == ["shared-rules-plan"], (
+        "NatsEventBus must validate plans through JsonlEventBus._validate_plan, "
+        "so the two buses cannot drift apart"
+    )
+    assert fake_nats.js.publish_calls[0]["subject"] == (
+        f"pipeline.{EVENT_TYPE}.shared-rules-plan"
     )
 
 

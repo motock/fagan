@@ -387,7 +387,12 @@ class NatsEventBus(EventBus):
             raise ValueError("Event must contain a non-empty 'plan' key")
         # Reuse the JSONL bus's rules rather than restating them here, so the
         # two buses can never disagree about what a plan identifier is.
-        return JsonlEventBus._validate_plan(plan)
+        # ``JsonlEventBus._validate_plan`` reads no instance state -- it is a
+        # pure function of the plan string -- so the unbound function is called
+        # directly: a broker bus owns no JSONL append-log and must not build one
+        # just to validate a name. The reuse is pinned by
+        # test_publish_reuses_the_jsonl_bus_plan_rules.
+        return JsonlEventBus._validate_plan(None, plan)
 
     @staticmethod
     def _subject(event_type: str, plan: str) -> str:

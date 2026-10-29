@@ -166,7 +166,15 @@ def _apply(
             extra={"plan": plan_name, "story": story_key},
         )
         return
-    summary.setdefault("advanced", []).append({story_key: result.get("status")})
+    status = result.get("status")
+    if result.get("skipped") or status is None:
+        # A `done` result that ran no review, e.g. review_story's "locked" or
+        # "unchanged_since_last_review" skip. The inline path keys off
+        # `rv.get("skipped")` the same way: record the skip, never claim this
+        # tick advanced a story it did not review.
+        summary.setdefault("skipped", []).append(story_key)
+        return
+    summary.setdefault("advanced", []).append({story_key: status})
     if result.get("deferred") == "rate_limited":
         summary.setdefault("review_deferred", []).append(story_key)
 

@@ -230,6 +230,45 @@ class TestTickDispatch:
         assert summary["review_started"] == [_KEY]
         assert summary["advanced"] == []
 
+    def test_tick_cancels_a_live_job_whose_story_an_operator_moved(
+        self, monkeypatch, tmp_path
+    ):
+        """The tick, not just the helper, must cancel: a story an operator moved
+        out of ``tests_passed`` while its job ran still has to reach
+        ``review_or_collect``, or the orphan child runs on forever."""
+        path = _write_manifest(
+            tmp_path, {_KEY: _story(status="pr_open", review_job=_job())}
+        )
+        notifications = []
+        _seed_tick(monkeypatch, path, notifications)
+        monkeypatch.setattr(review_job, "detached_enabled", lambda: True)
+        cancelled = []
+        monkeypatch.setattr(
+            review_job, "cancel_review_job", lambda job: cancelled.append(job)
+        )
+
+        def _never_collect(job, timeout):
+            raise AssertionError("a moved story's job must not be collected")
+
+        def _never_start(*args, **kwargs):
+            raise AssertionError("a moved story must not start a new job")
+
+        monkeypatch.setattr(review_job, "collect_review_job", _never_collect)
+        monkeypatch.setattr(review_job, "start_review_job", _never_start)
+        reviewed = []
+        monkeypatch.setattr(
+            advance_module,
+            "review_story",
+            lambda plan, key: reviewed.append(key) or {"ok": True, "status": "pr_open"},
+        )
+
+        summary = _run_tick()
+
+        assert cancelled == [_job()]
+        assert "review_job" not in _stories(path)[_KEY]
+        assert reviewed == []
+        assert summary["advanced"] == []
+
 
 # ---------------------------------------------------------------------------
 # review_or_collect: start / pending / done / error / operator move
@@ -370,6 +409,55 @@ class TestCollect:
         # Only the job field is dropped: the child's own status write stands.
         assert stored["status"] == "pr_open"
         assert notifications == []
+
+    def test_done_result_without_a_status_is_recorded_as_skipped(
+        self, monkeypatch, tmp_path
+    ):
+        """A `done` result that ran no review is a skip, never an advance this
+        tick did not perform - even when review_story stamped a status on it."""
+        path = _write_manifest(tmp_path, {_KEY: _story(review_job=_job())})
+        story = _stories(path)[_KEY]
+        monkeypatch.setattr(
+            review_job,
+            "collect_review_job",
+            lambda job, timeout: {"state": "done", "skipped": "locked"},
+        )
+        monkeypatch.setattr(advance_module, "_notify_user", lambda *a, **k: None)
+        summary = {}
+
+        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+
+        assert summary["skipped"] == [_KEY]
+        assert summary.get("advanced", []) == []
+        stored = _stories(path)[_KEY]
+        assert "review_job" not in stored
+        assert stored["status"] == "tests_passed"
+
+    def test_skipped_done_result_with_a_status_is_still_a_skip(
+        self, monkeypatch, tmp_path
+    ):
+        """review_story's unchanged_since_last_review skip reports the story's
+        own ``tests_passed`` status alongside ``skipped``; the inline path
+        records that under ``skipped``, so the detached path must too."""
+        path = _write_manifest(tmp_path, {_KEY: _story(review_job=_job())})
+        story = _stories(path)[_KEY]
+        monkeypatch.setattr(
+            review_job,
+            "collect_review_job",
+            lambda job, timeout: {
+                "state": "done",
+                "status": "tests_passed",
+                "skipped": "unchanged_since_last_review",
+            },
+        )
+        monkeypatch.setattr(advance_module, "_notify_user", lambda *a, **k: None)
+        summary = {}
+
+        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+
+        assert summary["skipped"] == [_KEY]
+        assert summary.get("advanced", []) == []
+        assert "review_job" not in _stories(path)[_KEY]
 
     def test_rate_limited_done_result_is_also_recorded_as_deferred(
         self, monkeypatch, tmp_path

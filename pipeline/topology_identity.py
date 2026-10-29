@@ -29,6 +29,7 @@ See ``docs/specs/TOPOLOGY_HEALTH.md`` for the ``/api/health`` surface.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from pipeline import branch_names
 
@@ -72,7 +73,7 @@ def resolved_topology() -> dict[str, str | None]:
     }
 
 
-def resolved_runtime() -> dict[str, str]:
+def resolved_runtime() -> dict[str, Any]:
     """Return the runtime wiring this process actually selected.
 
     Keys so far (the block is cumulative — later work adds its own):
@@ -86,10 +87,18 @@ def resolved_runtime() -> dict[str, str]:
       unsupported value. Reported by
       ``pipeline.store.reported_store_kind()``; the kind is read without
       constructing a store, so a health probe never touches the plan directory.
+    * ``broker`` — present **only** when ``event_bus`` is ``"nats"``, because
+      only then is there a broker to report on. It is
+      :func:`pipeline.events_nats_consumer.consumer_status()` verbatim: per
+      durable consumer the ``pending`` backlog, the ``redelivered`` count and
+      the ``dead_lettered`` count, or ``{"reachable": False}`` when the broker
+      cannot be queried.
 
-    Read live on every call and free of side effects: the environment is not
-    written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
-    keeps meaning "inprocess" rather than freezing that choice into the process.
+    Read live on every call: the environment is not written to, and no
+    selection is cached. An unset ``PIPELINE_EVENT_BUS`` therefore keeps
+    meaning "inprocess" rather than freezing that choice into the process. The
+    one outbound read is ``broker``, and it is a read-only JetStream query
+    whose result ``consumer_status()`` caches for 30 s.
 
     A selection the wiring cannot honour is always reported as ``"invalid"``,
     never raised: both :func:`pipeline.event_wiring.build_bus` and
@@ -109,10 +118,20 @@ def resolved_runtime() -> dict[str, str]:
     # Imported inside the function: this module's reads are late-bound so a
     # caller that re-imports or re-patches ``pipeline.event_wiring`` is still
     # observed, and the import graph stays free of a cycle at module load.
-    from pipeline.event_wiring import reported_event_bus_name
+    from pipeline.event_wiring import EVENT_BUS_NATS, reported_event_bus_name
     from pipeline.store import reported_store_kind
 
-    return {
+    runtime = {
         "event_bus": reported_event_bus_name(),
         "store": reported_store_kind(),
     }
+    if runtime["event_bus"] == EVENT_BUS_NATS:
+        # Imported here for the same reason, and because only a NATS-selected
+        # process has a broker to ask: a process on the in-process bus never
+        # imports the consumer module at all. ``consumer_status()`` never
+        # raises and caches its answer, so a broker that is down or slow
+        # degrades this key instead of the health probe.
+        from pipeline.events_nats_consumer import consumer_status
+
+        runtime["broker"] = consumer_status()
+    return runtime

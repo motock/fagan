@@ -259,7 +259,26 @@ services:
           }
         }
         CADDYFILE
-        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+        # Caddy writes its internal-CA root 0600 as root, and the pipeline runs
+        # as uid 10001: it cannot read the file it must trust for the `https`
+        # JWKS fetch, so the fetch dies with PermissionError. Make the root
+        # readable here, where it is generated and owned. Caddy runs in the
+        # background only until the file appears, then this shell waits on it,
+        # so the container's lifetime and signals still belong to caddy.
+        caddy run --config /tmp/Caddyfile --adapter caddyfile &
+        pid=$$!
+        cert=/data/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -f "$$cert" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "the internal CA did not appear within 60s" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        chmod 0644 "$$cert"
+        wait "$$pid"
     ports:
       - "8443:443"
     volumes:

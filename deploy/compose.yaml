@@ -132,8 +132,9 @@ services:
           # providers.<provider>.models. This registry declares the scripted
           # models and maps every role onto them. It is written from scratch (a
           # missing registry is not an error), so it never depends on the
-          # provider list the image ships.
-          registry=/var/lib/pipeline/model_registry.scripted.json
+          # provider list the image ships. /tmp, for the same reason as the OIDC
+          # secret: the volume root is root-owned on a Linux engine.
+          registry=/tmp/model_registry.scripted.json
           printf '%s\n' '{"providers": {"lmstudio": {"models": {
             "scripted-dispatch": {"tag": "scripted-dispatch"},
             "scripted-review": {"tag": "scripted-review"},

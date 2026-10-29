@@ -759,6 +759,9 @@ class PipelineService(PlanApprovalMixin):
             "story_count": story_count,
         }
     def advance_all_plans(self) -> dict[str, Any]:
+        from .advance_pool import advance_all_plans_pooled, pooled_advance_enabled
+        if pooled_advance_enabled():
+            return advance_all_plans_pooled()
         plans = {}
         for plan_name in _store.list_manifests():
             try:

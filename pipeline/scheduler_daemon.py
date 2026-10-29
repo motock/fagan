@@ -976,7 +976,9 @@ def run_daemon() -> int:
 
     # Resolved at call time (not at module load) so tests patching
     # ``pipeline.server.advance_all_plans`` land on this call site.
-    from .server import advance_all_plans
+    from .server import advance_all_plans  # noqa: I001  -- must stay first
+    from .advance_runtime import build_runtime
+    advance_all_plans, stop_runtime = build_runtime(bus, advance_all_plans)
 
     daemon = SchedulerDaemon(
         reconcile_fn=advance_all_plans,
@@ -986,6 +988,7 @@ def run_daemon() -> int:
         health_path=health_path,
     )
     daemon.run_forever(threading.Event())
+    stop_runtime()
     stop_consumers()
     return 0
 

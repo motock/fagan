@@ -46,7 +46,9 @@ set -euo pipefail
 STEP="startup"
 # Name the failing step and stop. The trap is set before any step runs, so an
 # unexpected `set -e` exit inside a step is still attributed to that step.
-trap 'echo "FAILED: ${STEP}" >&2; exit 1' ERR
+# The line number, never $BASH_COMMAND: a failing curl may carry a secret in
+# its arguments, and the trap output goes to the job log.
+trap 'echo "FAILED: ${STEP} (line ${LINENO})" >&2; exit 1' ERR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/deploy/compose.yaml}"

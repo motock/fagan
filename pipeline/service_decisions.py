@@ -5,12 +5,22 @@ pipeline.service, so tests patching pipeline.server still land.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 
 from app.identity import LOCAL_OPERATOR
 
 from .actor import actor_id
 from .authorization import _load_manifest
+
+#: A routing subject: one line, 1-64 characters, no control characters. This
+#: mirrors ``actor.CORRELATION_ID_RE`` at a larger bound because a subject is
+#: interpolated into the line-oriented notifications log (log forging).
+SUBJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}")
+
+#: Cap on the delegates a manifest may route to, so a hostile list cannot bury
+#: neighbouring records or grow the routing record without bound.
+MAX_DELEGATES = 64
 
 #: Parsed ACTION values that mean a human must answer: the overlord parks the
 #: story for one. A ruling with a truthy ``notify_user`` escalates too - the
@@ -29,6 +39,23 @@ def _escalates_to_human(ruling: dict) -> bool:
     return ruling.get("action") in _ESCALATING_ACTIONS or bool(ruling.get("notify_user"))
 
 
+def _valid_subject(value: object) -> str | None:
+    """Return *value* as a routing subject, or ``None`` when it is not one.
+
+    A subject is a single line of ``SUBJECT_RE``. The raw value is checked for
+    newlines, carriage returns and ANSI escapes *before* stripping, because
+    ``"alice\\n"`` would otherwise be accepted as ``"alice"`` and ``$``/``strip``
+    both hide a trailing newline. Non-strings are rejected outright rather than
+    coerced: ``str()`` would turn ``123`` into a routable ``"123"``.
+    """
+    if not isinstance(value, str):
+        return None
+    if "\n" in value or "\r" in value or "\x1b" in value:
+        return None
+    candidate = value.strip()
+    return candidate if SUBJECT_RE.fullmatch(candidate) else None
+
+
 def _routing_target(plan_name: str) -> dict:
     """Return who must answer a decision escalated to a human (ADR 0006).
 
@@ -40,6 +67,13 @@ def _routing_target(plan_name: str) -> dict:
     An unreadable manifest must not turn a routable escalation into a tool
     error, so any read failure yields the local-operator default. Only the plan
     name is logged - never the exception text or a path (Secure-by-Design).
+
+    The same holds for an owner that is not a subject: this value is
+    interpolated into the line-oriented notifications log, so a newline would
+    forge a line there and an unbounded value would bury neighbouring records.
+    A value that is not a subject falls back to the local operator - the same
+    deny-to-safe-default as an unreadable manifest - and the notification is
+    still sent.
     """
     default = {"owner": LOCAL_OPERATOR.subject, "delegates": []}
     try:
@@ -51,11 +85,21 @@ def _routing_target(plan_name: str) -> dict:
         return default
     if not isinstance(manifest, dict):
         return default
-    owner = manifest.get("owner")
-    delegates = manifest.get("delegates")
+    raw_delegates = manifest.get("delegates")
+    delegates: list[str] = []
+    if isinstance(raw_delegates, list):
+        # Filter first, then cap, so a hostile entry never consumes a slot; the
+        # manifest's list is never mutated.
+        for item in raw_delegates:
+            subject = _valid_subject(item)
+            if subject is None:
+                continue
+            delegates.append(subject)
+            if len(delegates) == MAX_DELEGATES:
+                break
     return {
-        "owner": str(owner).strip() if owner else LOCAL_OPERATOR.subject,
-        "delegates": [str(d) for d in delegates if d] if isinstance(delegates, list) else [],
+        "owner": _valid_subject(manifest.get("owner")) or LOCAL_OPERATOR.subject,
+        "delegates": delegates,
     }
 
 

@@ -19,16 +19,34 @@ import contextlib
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from pipeline.store import build_store
 
-# How long SQLite retries a contended lock before ``transaction()`` gives up and
-# yields ``False``. Bounded on purpose: the ``Store`` contract is non-blocking
-# (a contended acquire is refused, not waited on), so a caller that must wait
-# belongs in its own retry loop where it can log the decision.
+# How long ``transaction()`` keeps retrying a contended write lock before it
+# gives up and yields ``False``. Bounded on purpose: the ``Store`` contract is
+# non-blocking (a contended acquire is refused, not waited on), so a caller that
+# must wait belongs in its own retry loop where it can log the decision.
 BUSY_TIMEOUT_MS = 250
+
+# SQLite's own busy handler sleeps for growing intervals, so the timeout it is
+# given is a floor rather than a ceiling: asking for 250ms was measured blocking
+# for over a second on a contended database. Each attempt therefore uses a short
+# handler and the loop below owns the real deadline, which keeps a refusal
+# inside BUSY_TIMEOUT_MS however the handler happens to back off.
+_BUSY_ATTEMPT_TIMEOUT_MS = 10
+_BUSY_RETRY_S = _BUSY_ATTEMPT_TIMEOUT_MS / 1000
+
+
+def _is_lock_conflict(exc: sqlite3.OperationalError) -> bool:
+    """True when a statement lost the race for the database's write lock."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is None:
+        message = str(exc).lower()
+        return "locked" in message or "busy" in message
+    return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS story_manifests ("
@@ -75,11 +93,11 @@ class SqliteStore:
         self._conn = sqlite3.connect(
             str(target),
             isolation_level=None,
-            timeout=BUSY_TIMEOUT_MS / 1000,
+            timeout=_BUSY_ATTEMPT_TIMEOUT_MS / 1000,
             check_same_thread=False,
         )
         with self._guard:
-            self._conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            self._conn.execute(f"PRAGMA busy_timeout={_BUSY_ATTEMPT_TIMEOUT_MS}")
             # WAL lets a reader (the dashboard) proceed while a writer holds the
             # write lock, and must be set outside any transaction.
             self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
@@ -167,6 +185,33 @@ class SqliteStore:
         return self._files.get_manifest_or_none(plan_name)
 
     # -- transactions ------------------------------------------------------
+    def _begin_immediate(self) -> bool:
+        """Start ``BEGIN IMMEDIATE`` within ``BUSY_TIMEOUT_MS``, or refuse.
+
+        SQLite's busy handler treats its timeout as a floor rather than a
+        ceiling, so the loop owns the deadline: each attempt waits only
+        ``_BUSY_ATTEMPT_TIMEOUT_MS`` and the store stops retrying once
+        ``BUSY_TIMEOUT_MS`` has passed, which keeps a refusal bounded.
+
+        A refused attempt must leave the connection out of a transaction --
+        every later acquire from this store depends on a clean connection, and a
+        half-open one fails with "cannot start a transaction within a
+        transaction" instead of reporting a refusal.
+        """
+        deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+        while True:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                return True
+            except sqlite3.OperationalError as exc:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                if not _is_lock_conflict(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    return False
+            time.sleep(_BUSY_RETRY_S)
+
     @contextlib.contextmanager
     def transaction(self, plan_name: str):
         """Acquire this plan's write transaction, or report it was refused.
@@ -193,13 +238,8 @@ class SqliteStore:
                 finally:
                     self._depth -= 1
                 return
-            try:
-                self._conn.execute("BEGIN IMMEDIATE")
-            except sqlite3.OperationalError:
-                # Contended for longer than the busy timeout. Leave nothing
-                # open: the next attempt must start from a clean connection.
-                if self._conn.in_transaction:
-                    self._conn.execute("ROLLBACK")
+            acquired = self._begin_immediate()
+            if not acquired:
                 yield False
                 return
             self._depth = 1

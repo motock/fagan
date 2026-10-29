@@ -29,8 +29,8 @@ import pytest
 # pipeline.server loads before any other pipeline module (import cycle).
 import pipeline.server as p
 from pipeline import concurrency as pcon
+from pipeline import paths, plan_approval, wake
 from pipeline import persistence as ppers
-from pipeline import plan_approval, wake
 from pipeline import plan_completion as pcomp
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.plan_approval import canonical_digest
@@ -46,13 +46,20 @@ PR = "https://github.com/example/repo/pull/7"
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Point every PLAN_DIR binding at a throwaway directory."""
+    """Point every PLAN_DIR binding at a throwaway directory.
+
+    ``pipeline.paths`` is included because :func:`pipeline.wake.request_wake`
+    resolves its marker directory from ``paths.PLAN_DIR`` at call time: without
+    this patch an unpatched ``request_wake`` would write a marker into the
+    developer's (or the CI runner's) real plans directory.
+    """
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.setattr(pcomp, "PLAN_DIR", d)
+    monkeypatch.setattr(paths, "PLAN_DIR", d)
     return d
 
 
@@ -212,6 +219,26 @@ def test_approve_plan_requests_one_wake(plan_dir, wakes, monkeypatch) -> None:
 
     assert result["ok"] is True, result
     assert wakes == [(PLAN, "approve_plan")]
+
+
+def test_successful_action_reaches_the_real_wake_writer(plan_dir, monkeypatch) -> None:
+    """The call site wakes through ``request_wake`` itself, not only the helper.
+
+    ``request_wake`` is left unpatched here, so this pins the marker the
+    scheduler actually scans: one file per plan, under the plan directory, with
+    the method name as its recorded reason.
+    """
+    monkeypatch.setenv(plan_approval.APPROVAL_ENV, "on")
+    _write_approvable_manifest(plan_dir)
+
+    with bind_principal(None):
+        result = PipelineService().approve_plan(PLAN)
+
+    assert result["ok"] is True, result
+    marker = plan_dir / wake.WAKE_DIR_NAME / PLAN
+    assert marker.is_file()
+    assert json.loads(marker.read_text())["reason"] == "approve_plan"
+    assert [path.name for path in (plan_dir / wake.WAKE_DIR_NAME).iterdir()] == [PLAN]
 
 
 # --------------------------------------------------------------------------- #

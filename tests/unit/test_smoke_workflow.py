@@ -122,6 +122,20 @@ def _grants_packages_write(permissions):
     return isinstance(permissions, dict) and permissions.get("packages") == "write"
 
 
+def test_stack_job_is_advisory_and_publish_is_not_gated_by_it():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "if: vars.ENABLE_SMOKE_CI == 'true'" in text, (
+        "the stack job must be gated on ENABLE_SMOKE_CI: the compose stack does "
+        "not yet boot on a Linux engine, and a red smoke check on every pull "
+        "request would block every merge. Remove this assertion when the stack "
+        "boots and the gate comes off."
+    )
+    assert "if: always() && github.event_name == 'push'" in text, (
+        "the publish job must still run when the stack job is skipped, or the "
+        "image stops shipping on every push to master"
+    )
+
+
 def test_actions_are_pinned_to_full_sha():
     offenders = []
     for _, body in _entries():

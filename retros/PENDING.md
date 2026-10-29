@@ -64,3 +64,11 @@ if a precise date is needed when writing one of these up.
 - config-write-guards — completed 2026-10-28, 2 stories
 - one-repo-server-remainder — completed 2026-10-28, 8 stories
 - dashboard-refusals-followups — completed 2026-10-28, 3 stories
+- audit-anchor — completed 2026-10-28, 2 stories
+- eventing-broker-prep — completed 2026-10-28, 2 stories
+- remote-mcp-hardening-2 — completed 2026-10-28, 2 stories
+- service-py-headroom — completed 2026-10-28, 1 story
+- enterprise-enforcement-closeout — completed 2026-10-28, 4 stories
+- dashboard-oidc-login — completed 2026-10-28, 4 stories
+- observability-otel — completed 2026-10-28, 5 stories
+- flake-and-followup-fixes — completed 2026-10-29, 4 stories

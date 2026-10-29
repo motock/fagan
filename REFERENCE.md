@@ -232,8 +232,9 @@ tool never raises to the calling agent:
   the record also carries `requested_by` (the acting principal's subject) and
   `routed_to` (`{"owner": <manifest owner or "local-operator">, "delegates":
   [...]}`), the same two fields an escalated ruling gets;
-- it notifies the operator with a message ending `(routed to <owner>)`, naming
-  who the answer now belongs to;
+- it notifies the operator with a message ending
+  `see decisions log (routed to <owner>)`, naming who the answer now belongs
+  to;
 - it parks the story with `parked_reason: "overlord failure: <ClassName>"`;
 - it returns the single-line message `decision escalated to human: story parked,
   see decisions log` — a plain `str`, not the usual ruling `dict`, so callers

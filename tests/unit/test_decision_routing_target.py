@@ -181,7 +181,7 @@ def test_fail_open_records_routing_target_and_notifies_owner(plan_dir, agents_di
     assert message == "decision escalated to human: story parked, see decisions log"
     assert sent, "the fail-open park must reach the operator"
     text = sent[0][1]
-    assert "(routed to alice)" in text
+    assert "see decisions log (routed to alice)" in text
     # Secure-by-Design: a name, never the raw routing dict or exception text.
     assert "delegates" not in text
 

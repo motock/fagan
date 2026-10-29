@@ -134,8 +134,8 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
             # no payload data - and the owner is a name, never the raw target.
             _notify_user(
                 plan_name,
-                f"request_decision failed open for {story_key}: {summary} "
-                f"(routed to {routed_to['owner']})",
+                f"request_decision failed open for {story_key}: {summary}; "
+                f"see decisions log (routed to {routed_to['owner']})",
                 story_key=story_key,
                 severity="warning",
                 event="overlord_failure",

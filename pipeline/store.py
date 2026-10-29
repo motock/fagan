@@ -15,8 +15,10 @@ intentionally not imported here (a module-load copy would freeze the real
 
 Store selection lives here too: ``build_store()`` is the only place a
 ``FileStore`` is constructed, so ``PIPELINE_STORE`` governs every call site,
-and ``store_kind()`` reports the selected kind without constructing a store
-(for the ``/api/health`` ``runtime`` block). Neither is listed in ``__all__``,
+``store_kind()`` resolves the selected kind, and ``reported_store_kind()``
+renders it for observation (``/api/health``'s ``runtime`` block) without ever
+raising -- an unsupported selection is reported as ``STORE_INVALID`` while
+``build_store()`` stays fail-closed. None of them are listed in ``__all__``,
 which is pinned by ``tests/unit/test_live_ref.py``.
 """
 
@@ -400,6 +402,9 @@ class FileStore:
             raise
 
 
+STORE_INVALID = "invalid"
+
+
 def store_kind(environ=None) -> str:
     """Return the selected Store kind without constructing a store.
 
@@ -429,3 +434,19 @@ def build_store(environ=None) -> Store:
     """
     store_kind(environ)
     return FileStore()
+
+
+def reported_store_kind(environ=None) -> str:
+    """Return the selected store kind for *observation*, never raising.
+
+    Read-only reporting (``/api/health``'s ``runtime.store``) must not turn a
+    health check into a 500 because of one mistyped environment variable, so an
+    unsupported value is reported as :data:`STORE_INVALID` instead of raising.
+    The rejected value is never echoed -- it may be a path or a secret.
+    :func:`build_store` remains fail-closed: the pipeline still refuses to run
+    with a selection it cannot honour; only the report degrades.
+    """
+    try:
+        return store_kind(environ)
+    except ValueError:
+        return STORE_INVALID

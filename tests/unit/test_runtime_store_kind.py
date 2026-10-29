@@ -115,16 +115,29 @@ def test_resolved_runtime_degrades_an_unsupported_selection(monkeypatch):
 
 
 def test_health_reports_an_invalid_store_without_500(health_client, monkeypatch):
-    """A health check must never 500, and must not echo the rejected value."""
-    rejected = "/tmp/not-a-store-kind"
-    monkeypatch.setenv(STORE_ENV, rejected)
+    """A health check must never 500, and must not echo the rejected value.
+
+    With ``PIPELINE_STORE=sqlite`` the selector raises ``ValueError``; observed
+    through ``/api/health`` that must still be an HTTP 200 carrying the
+    ``invalid`` marker (exactly like an unsupported ``PIPELINE_EVENT_BUS``),
+    and the rejected value must not appear anywhere in the body.
+
+    The follow-up call in the same test pins that the guard leaves nothing
+    cached behind: a rejected selection must not sticky-poison the next probe.
+    """
+    monkeypatch.setenv(STORE_ENV, "sqlite")
 
     res = health_client.get("/api/health")
 
     assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["runtime"]["store"] == "invalid"
-    assert rejected not in res.text
+    assert res.json()["runtime"]["store"] == "invalid"
+    assert "sqlite" not in res.text
+
+    monkeypatch.setenv(STORE_ENV, "file")
+    follow_up = health_client.get("/api/health")
+
+    assert follow_up.status_code == 200, follow_up.text
+    assert follow_up.json()["runtime"]["store"] == "file"
 
 
 def test_health_still_reports_the_other_runtime_keys(health_client, monkeypatch):

@@ -83,9 +83,9 @@ def resolved_runtime() -> dict[str, str]:
       ``pipeline.event_wiring.reported_event_bus_name()``.
     * ``store`` — the store kind ``PIPELINE_STORE`` selects: ``"file"``
       (default), or the marker ``"invalid"`` when the variable holds an
-      unsupported value. Reported by ``pipeline.store.store_kind()``; the kind
-      is read without constructing a store, so a health probe never touches the
-      plan directory.
+      unsupported value. Reported by
+      ``pipeline.store.reported_store_kind()``; the kind is read without
+      constructing a store, so a health probe never touches the plan directory.
 
     Read live on every call and free of side effects: the environment is not
     written to, and nothing is cached. An unset ``PIPELINE_EVENT_BUS`` therefore
@@ -110,15 +110,9 @@ def resolved_runtime() -> dict[str, str]:
     # caller that re-imports or re-patches ``pipeline.event_wiring`` is still
     # observed, and the import graph stays free of a cycle at module load.
     from pipeline.event_wiring import reported_event_bus_name
-    from pipeline.store import store_kind
+    from pipeline.store import reported_store_kind
 
-    # The selector's ValueError is deliberately not propagated: this is a
-    # read-only report, so a rejected selection degrades to ``"invalid"``
-    # (exactly like an unsupported bus name) instead of turning /api/health
-    # into a 500. Fail-closed enforcement lives in ``build_store()``.
-    try:
-        selected_store = store_kind()
-    except ValueError:
-        selected_store = "invalid"
-
-    return {"event_bus": reported_event_bus_name(), "store": selected_store}
+    return {
+        "event_bus": reported_event_bus_name(),
+        "store": reported_store_kind(),
+    }

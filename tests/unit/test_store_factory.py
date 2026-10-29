@@ -106,3 +106,34 @@ def test_rejected_selection_does_not_poison_later_calls():
 
     assert type(_build_store({})) is store.FileStore
     assert type(_build_store({STORE_ENV: "file"})) is store.FileStore
+
+
+# ---------------------------------------------------------------------------
+# observation vs enforcement: reported_store_kind degrades, build_store raises
+# ---------------------------------------------------------------------------
+def _reported_kind(environ=None):
+    """Call ``reported_store_kind`` so a missing definition fails on an assertion."""
+    fn = getattr(store, "reported_store_kind", None)
+    assert fn is not None, "pipeline.store.reported_store_kind is not defined"
+    return fn(environ)
+
+
+def test_reported_kind_reports_the_selected_kind():
+    assert _reported_kind({}) == "file"
+    assert _reported_kind({STORE_ENV: "file"}) == "file"
+
+
+@pytest.mark.parametrize("rejected", ["sqlite", "", "SQLITE"])
+def test_reported_kind_degrades_an_unsupported_selection(rejected):
+    """Observation never raises, and never echoes the rejected value."""
+    marker = getattr(store, "STORE_INVALID", None)
+    assert marker is not None, "pipeline.store.STORE_INVALID is not defined"
+
+    assert _reported_kind({STORE_ENV: rejected}) == marker
+    assert marker == "invalid"
+
+
+def test_enforcement_still_raises_for_the_value_observation_tolerates():
+    """The marker belongs to the report only: ``build_store`` stays fail-closed."""
+    with pytest.raises(ValueError):
+        _build_store({STORE_ENV: "sqlite"})

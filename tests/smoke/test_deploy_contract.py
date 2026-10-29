@@ -19,10 +19,10 @@ assert the invariants that must hold for *every* revision of the stack:
   dashboard client and the client-credentials client -- and no literal secret;
 * the event bus is NATS JetStream with the creds file mounted read-only, and
   no forge is configured, so the merge loop parks at "reviewed";
-* the pipeline service's startup shim seeds the ``git-origin`` volume
-  idempotently (the guard precedes ``git init --bare``) and then ``exec``s the
-  image's own entrypoint, so a restart keeps the refs a story pushed and
-  signals reach the server;
+* the pipeline service's startup shim never creates the ``git-origin`` volume's
+  contents -- ``origin-seed`` in ``deploy/smoke/smoke.sh`` makes them once, as
+  root -- and then ``exec``s the image's own entrypoint, so a restart keeps the
+  refs a story pushed and signals reach the server;
 * the stack's single-command setup and its single-command test run are
   documented, because a stack nobody can start is not a smoke stack.
 
@@ -203,8 +203,8 @@ def test_dockerfile_runs_as_non_root_and_never_returns_to_root() -> None:
 
 # ---------------------------------------------------------------------------
 # deploy/compose.yaml -- the pipeline service's startup shim, which is where the
-# stack-specific wiring lives: the seeding that must survive a restart and the
-# hand-off to the image's own entrypoint.
+# stack-specific wiring lives: the OIDC secret file, the scripted-model registry
+# and the scheduler daemon, then the hand-off to the image's own entrypoint.
 # ---------------------------------------------------------------------------
 
 
@@ -218,7 +218,7 @@ def _pipeline_entrypoint_script() -> str:
     block = raw.split("    entrypoint:", 1)
     assert len(block) == 2, (
         "the pipeline service must declare an `entrypoint:` shim: the stack's "
-        "wiring (origin seed, scripted registry, scheduler daemon) has to run "
+        "wiring (scripted registry, scheduler daemon) has to run "
         "before the image's own entrypoint"
     )
     script = block[1].split("    volumes:", 1)[0]

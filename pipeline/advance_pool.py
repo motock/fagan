@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import pipeline
-from pipeline import actor
+from pipeline import actor, plan_activity
 from pipeline.scheduler_timeouts import _reconcile_join_timeout_seconds
 
 __all__ = ["advance_plan_subprocess"]
@@ -311,7 +311,9 @@ def advance_all_plans_pooled() -> dict[str, Any]:
 
     Returns ``{"ok": True, "plans": {name: result}}`` with an entry for every
     plan listed at call time. One plan's failure is recorded against that plan
-    only; it never costs another plan its tick.
+    only; it never costs another plan its tick. A plan with no work to do (see
+    ``pipeline.plan_activity.is_inert``) gets ``{"ok": True, "skipped": "inert"}``
+    without a child being spawned.
 
     The plan list is read from the live store inside the function: a top-level
     ``pipeline.server`` import would close an import cycle, and the list has to
@@ -326,18 +328,37 @@ def advance_all_plans_pooled() -> dict[str, Any]:
         _log_pass(0, _advance_workers(), 0.0, 0, 0)
         return {"ok": True, "plans": {}}
 
+    # Skip the plans with no dispatch, review or merge work before rotating:
+    # each child pays the cost of importing the pipeline, so an inert plan is a
+    # second of CPU for nothing. Filtering first also keeps the rotation
+    # meaningful -- rotating a list of inert plans would hand every pass the
+    # same inert head and starve the plans that do need a tick. A manifest the
+    # store cannot produce is not inert: that child reports the missing manifest
+    # exactly as it did before this filter existed.
+    results: dict[str, Any] = {}
+    live: list[str] = []
+    for name in plans:
+        if plan_activity.is_inert(server._store.get_manifest_or_none(name)):
+            results[name] = {"ok": True, "skipped": "inert"}
+        else:
+            live.append(name)
+
     # Rotate by one plan per pass so the plan advanced last pass is advanced
     # first next pass: the tail of the window is where the deadline bites.
-    # ``plans`` is a fresh list (the store may hand back its own), so the
+    # ``live`` is a fresh list (the store may hand back its own), so the
     # slice-and-concat rotation cannot permute state other callers read.
-    start = _rotation % len(plans)
-    ordered = plans[start:] + plans[:start]
+    start = _rotation % len(live) if live else 0
+    ordered = live[start:] + live[:start]
     _rotation += 1
 
     workers = min(_advance_workers(), len(ordered))
     deadline = _deadline()
     started = time.monotonic()
-    results: dict[str, Any] = {}
+
+    # Every listed plan inert (or none at all): no pool, no workers to size.
+    if not ordered:
+        _log_pass(0, _advance_workers(), time.monotonic() - started, 0, 0)
+        return {"ok": True, "plans": results}
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {

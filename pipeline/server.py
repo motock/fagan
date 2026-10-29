@@ -396,6 +396,14 @@ from .triage import run_triage_sweep
 # threshold constants and USAGE_STATE_PATH (Option B); the autouse
 # _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and
 # pipeline_usage.USAGE_STATE_PATH.
+# Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
+# threshold constants and USAGE_STATE_PATH (Option B); the autouse
+# _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and
+# pipeline_usage.USAGE_STATE_PATH.
+# Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
+# threshold constants and USAGE_STATE_PATH (Option B); the autouse
+# _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and
+# pipeline_usage.USAGE_STATE_PATH.
 from .usage import (  # noqa: F401
     _check_usage_impl,
     _parse_usage_output,

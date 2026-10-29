@@ -1,17 +1,9 @@
 # Releasing
 
 How a release is cut in this repo. This is a manual procedure, written down so
-the next release does not depend on anyone's memory. Releases are cut by hand
-with `git`, `gh` and `mcp-publisher`; GitHub Actions does not tag, bump versions
-or cut releases. Two workflows run, and neither of them releases:
-
-- `ci.yml` - the test suite, on every change.
-- `smoke.yml` - builds `deploy/Dockerfile`, starts `deploy/compose.yaml`, runs
-  `deploy/smoke/smoke.sh`, and uploads the compose logs as an artifact. On a
-  push to `master` it also publishes the image to
-  `ghcr.io/<owner>/fagan` tagged with the commit SHA and `master`, with SBOM and
-  provenance attestations. That image is a build artifact, not a release: the
-  version comes from the `vX.Y.Z` tag below.
+the next release does not depend on anyone's memory. There is no release
+automation: the only GitHub Actions workflow is `ci.yml`, and releases are made
+by hand with `git`, `gh` and `mcp-publisher`.
 
 Like the project itself, this is a single-maintainer research project rather
 than a maintained product with an SLA: releases happen when there is something
@@ -40,12 +32,8 @@ inventing a new version scheme.
 
 Work through this checklist before touching the tag. All four must be true.
 
-- [ ] **master CI is green.** Two workflows run on `master` (`ci.yml` and
-      `smoke.yml`), so the bare `gh run list --branch master --limit 1` can
-      report either one; scope it per workflow with `--workflow`, running
-      `gh run list --workflow ci.yml --branch master --limit 1` and
-      `gh run list --workflow smoke.yml --branch master --limit 1`, and confirm
-      each most recent run on `master` shows `completed` / `success` —
+- [ ] **master CI is green.** Run `gh run list --branch master --limit 1` and
+      confirm the most recent run on `master` shows `completed` / `success` —
       not merely absent, not queued, not in progress. CLAUDE.md's
       **Definition of Done** is explicit that a local test run is not a
       substitute for confirmed-green CI; the same standard applies to a

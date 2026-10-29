@@ -121,6 +121,20 @@ def start_merge_reverify(
                 str(result_path),
             ],
             cwd=Path(pipeline.__file__).resolve().parent.parent,
+            # Give the grading child its own bytecode cache.  The worktree it
+            # grades is rebased in place and reused across commits, and CPython
+            # validates a .pyc on the source's mtime truncated to whole seconds
+            # plus its size - so a rebase that rewrites a test to the same byte
+            # length inside one second leaves the worktree's __pycache__ entry
+            # acceptable and the child would run the previous commit's compiled
+            # test, reporting "pass" for a red suite while naming the new sha.
+            # A fresh per-job prefix (removed with the job directory) can never
+            # hold an earlier job's pyc, so the child always compiles the bytes
+            # actually checked out.
+            env={
+                **os.environ,
+                "PYTHONPYCACHEPREFIX": str(job_dir / "pycache"),
+            },
             start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=log_file,

@@ -6,10 +6,13 @@ tower." hero copy plus four suggestion-chip buttons, and restyles
 static/style.css to match. It also updates the message input's placeholder
 and relabels the send button to "TRANSMIT".
 
-MARKUP AND CSS ONLY: static/app/comms.js, static/app/main.js, and
-static/app.js must not change at all (a dependent follow-up story wires the
-chip clicks). These tests read static/index.html and static/style.css as
-plain text (no browser needed), following the pattern already used in
+MARKUP AND CSS ONLY: this story must not change static/app.js, and its
+static/app/comms.js import wiring must survive - but static/app/main.js is
+not frozen, because every sibling dashboard UI story legitimately edits it.
+Only static/app.js is pinned by digest; main.js is asserted structurally
+(the comms helpers it imports, the subtitle refresh call, the re-export).
+These tests read static/index.html and static/style.css as plain text (no
+browser needed), following the pattern already used in
 tests/unit/test_dashboard_comms_markup.py.
 """
 import hashlib
@@ -23,9 +26,11 @@ STYLE_CSS = STATIC / "style.css"
 APP_JS = STATIC / "app.js"
 MAIN_JS = STATIC / "app" / "main.js"
 
-# Hashes captured from the pre-implementation state of this branch (commit
-# 0d6b8a1). These three files must stay byte-identical through this story -
-# it is markup/CSS only, so any drift here means a JS file was touched.
+# Hash captured from the pre-implementation state of this branch (commit
+# 0d6b8a1). static/app.js must stay byte-identical through this story - it is
+# markup/CSS only, so any drift here means a JS file was touched. main.js is
+# deliberately not pinned: sibling UI stories edit it, so only its comms
+# wiring is asserted (test_main_js_keeps_the_comms_landing_wiring).
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
 }
@@ -388,13 +393,32 @@ def test_app_js_untouched():
     )
 
 
+def _comms_import_clause(lines, marker):
+    """The `import ... from "./comms.js"` statement as text, or None.
+
+    The import may be multi-line, so walk back from the marker's line to the
+    line that opens the statement rather than searching the whole source for
+    the word "import" (a comment above it can contain that word).
+    """
+    marker_line = next((i for i, line in enumerate(lines) if marker in line), None)
+    if marker_line is None:
+        return None
+    start = next(
+        (i for i in range(marker_line, -1, -1) if lines[i].lstrip().startswith("import")),
+        None,
+    )
+    if start is None:
+        return None
+    return "\n".join(lines[start : marker_line + 1])
+
+
 def test_main_js_keeps_the_comms_landing_wiring():
     # Sibling UI stories legitimately edit main.js; only the comms wiring is durable.
+    assert MAIN_JS.exists(), "static/app/main.js must exist"
     source = MAIN_JS.read_text(encoding="utf-8")
 
-    marker = 'from "./comms.js";'
-    assert marker in source
-    clause = source[source.rindex("import", 0, source.index(marker)):source.index(marker)]
+    clause = _comms_import_clause(source.splitlines(), 'from "./comms.js";')
+    assert clause is not None, 'static/app/main.js must import from "./comms.js"'
     for helper in (
         "renderToolTraceHtml",
         "appendCommsMessage",

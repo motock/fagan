@@ -73,6 +73,59 @@ fail() {
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
 # ---------------------------------------------------------------------------
+# The git origin bootstrap
+# ---------------------------------------------------------------------------
+
+# Create the bare origin and its working clone exactly once.
+#
+# Two properties matter, and both are why this is not in the service's own
+# entrypoint: Docker creates a fresh named volume root-owned, so the non-root
+# process the pipeline image runs as cannot write the first object into it; and
+# a restart must keep the refs a story pushed, which an unconditional re-seed
+# (rm -rf, or clone --bare every time) would drop - the refs would fall back to
+# the single seed branch and the loss would look like a dropped event.
+#
+# So: guard first, seed once, then hand the volume back to the service uid.
+seed_origin_if_missing() {
+    local uid
+    STEP="origin-seed"
+    uid="$(_pipeline_uid)"
+    if compose run --rm --no-deps -T --user 0:0 --entrypoint /bin/bash pipeline -c "
+        set -euo pipefail
+        if [ -e /git-origin/sample.git/HEAD ]; then
+            echo 'smoke: sample origin already seeded; keeping its refs'
+            chown -R ${uid}:${uid} /git-origin
+            exit 0
+        fi
+        install -d -m 0750 /git-origin
+        git init --bare /git-origin/sample.git >/dev/null
+        git init -b main /git-origin/work >/dev/null
+        printf '# sample origin\n\nThe bare repository the smoke run pushes story branches to.\n' > /git-origin/work/README.md
+        git -C /git-origin/work add -A
+        git -C /git-origin/work -c user.name='pipeline smoke' -c user.email='smoke@example.invalid' commit -q -m 'chore: seed the sample repository'
+        git -C /git-origin/work remote add origin /git-origin/sample.git
+        git -C /git-origin/work push -q --set-upstream origin main
+        chown -R ${uid}:${uid} /git-origin
+    "; then
+        log "git origin is seeded"
+    else
+        fail "could not seed the git origin"
+    fi
+}
+
+# The uid the pipeline image runs as, read from the image rather than assumed.
+_pipeline_uid() {
+    local uid
+    uid="$(compose images --format '{{.ID}}' pipeline 2>/dev/null | head -1)"
+    [ -n "$uid" ] || uid="$(compose ps -q pipeline 2>/dev/null | head -1)"
+    if [ -n "$uid" ]; then
+        docker image inspect --format '{{.Config.User}}' "$uid" 2>/dev/null | cut -d: -f1 \
+            | grep -E '^[0-9]+$' && return 0
+    fi
+    echo "10001"
+}
+
+# ---------------------------------------------------------------------------
 # Transport helpers
 # ---------------------------------------------------------------------------
 
@@ -482,6 +535,7 @@ main() {
     compose ps --status running --format '{{.Service}}' | grep -qx pipeline \
         || fail "the pipeline service is not running; bring the stack up first"
     resolve_ca
+    seed_origin_if_missing
 
     step_token
     TOKEN_OWNER="$(user_token owner "${PIPELINE_SMOKE_OWNER_PASSWORD:?set PIPELINE_SMOKE_OWNER_PASSWORD}")"

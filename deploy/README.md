@@ -169,24 +169,59 @@ the stack at a real (or emulated) GitHub or GitLab endpoint by setting
 `PIPELINE_FORGE` and the matching token, and expect the run to merge instead of
 parking.
 
-### What the smoke stack depends on outside `deploy/`
+### Bringing the stack up and asserting against it
 
-Four artifacts live outside this directory because the stack cannot work without
-them, and each is owned by the story that introduced it:
+Two commands, and neither needs anything but a docker daemon:
 
-- `deploy/entrypoint.sh` seeds the `git-origin` volume idempotently. The guard
-  tests for `/git-origin/sample.git/HEAD` before `git init --bare`, so a
-  `docker compose restart pipeline` preserves the refs the smoke run pushed.
-  Seeding unconditionally on every start would drop `story/1` and make the
-  restart assertion read like a lost notification when the broker was healthy.
-- `deploy/smoke/sample-repo/` is the source the bare origin is seeded from. It
-  carries no `test_*.py`, so a bare `pytest` in the repository collects nothing
-  new from it.
-- `.github/workflows/smoke.yml` is the only place `docker compose up` actually
-  runs. Every `uses:` is pinned to a full 40-hex commit SHA, permissions are
-  minimal, and the log dump runs under `if: always()` so a failed run is
-  diagnosable.
-- `tests/smoke/scripted_model_server.py` is the deterministic model the `model`
-  service runs. It speaks the provider wire protocol and consumes its scripted
-  replies in order; the smoke run never relies on a reply being replayed.
+```sh
+export PIPELINE_MCP_CLIENT_SECRET=... PIPELINE_DASHBOARD_CLIENT_SECRET=... \
+       PIPELINE_SMOKE_OWNER_PASSWORD=... PIPELINE_SMOKE_STRANGER_PASSWORD=... \
+       PIPELINE_SMOKE_USER_CLIENT_SECRET=... KEYCLOAK_ADMIN_PASSWORD=...
+docker compose -f deploy/compose.yaml up -d --wait
+bash deploy/smoke/smoke.sh
+docker compose -f deploy/compose.yaml down -v
+```
+
+Those variables are throwaway values for a disposable stack: they belong to one
+run, are read from the environment (`compose.yaml` refuses to start without
+them), and never appear in a file. `deploy/smoke/smoke.sh` exits non-zero naming
+the step that failed, so a red run says which invariant broke: `token`,
+`list_plans`, `ingest`, `approve`, `dispatch`, `poll-reviewed`,
+`stranger-denied`, `stranger-no-plans`, `verify_audit`, `auth-fail-429`,
+`broker-once` or `restart-no-loss`.
+
+### How the pipeline container is wired
+
+The stack-specific startup lives in the `pipeline` service's `entrypoint:` in
+`deploy/compose.yaml`, which runs before, and then `exec`s, the image's own
+`deploy/entrypoint.sh`:
+
+1. it materialises the OIDC client-secret file that the image entrypoint refuses
+   to start without (verification itself is JWKS-only), mode 600, from the client
+   secret the IdP was given;
+2. it writes a model registry that maps every model role onto the scripted
+   server, because selecting a model is a registry fact the pipeline validates,
+   not an environment-only switch;
+3. it starts the scheduler daemon, the only durable event-bus consumer
+   (ADR 0010), then `exec`s the image entrypoint, so signals and exit status pass
+   through unchanged.
+
+The git origin is the one piece of state that must survive a restart, and its
+bootstrap deliberately lives in `deploy/smoke/smoke.sh` (`origin-seed`) rather
+than in the shim: Docker hands a fresh named volume to the container root-owned,
+so the image's non-root user cannot write the first object into it. The step runs
+once, guarded on `/git-origin/sample.git/HEAD`, and hands the volume back to the
+service uid; a restart therefore keeps the refs a story pushed, and the smoke
+run's `restart-no-loss` assertion measures the broker rather than a reseeded
+repository.
+
+`tests/smoke/scripted_model_server.py` is the deterministic model the `model`
+service runs. It speaks the provider wire protocol and consumes its scripted
+replies in order; the smoke run never relies on a reply being replayed.
+
+`docker compose up` is not part of `pytest`: the unit-test container has the
+docker client but no daemon, so the stack is asserted statically by
+`tests/smoke/test_deploy_contract.py` and exercised for real by the two commands
+above. Wiring those into a CI job belongs to the CI definition, which has to pass
+the same throwaway values.
 

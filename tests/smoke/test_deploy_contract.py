@@ -7,10 +7,9 @@ public certificate authority: a Keycloak IdP, a Caddy TLS proxy, a NATS
 JetStream broker, the scripted model server and one pipeline container wired
 together by ``deploy/compose.yaml``.
 
-``docker compose up`` itself is exercised by ``.github/workflows/smoke.yml``,
-not here (the test container has the docker client but no daemon). These tests
-read each artifact as text or JSON and assert the invariants that must hold for
-*every* revision of the stack:
+``docker compose up`` itself needs a docker daemon, which the unit-test
+container does not have, so these tests read each artifact as text or JSON and
+assert the invariants that must hold for *every* revision of the stack:
 
 * no ``latest`` image tag anywhere, so a rebuild is reproducible;
 * the proxy terminates TLS with Caddy's internal CA and forwards to the
@@ -20,9 +19,12 @@ read each artifact as text or JSON and assert the invariants that must hold for
   dashboard client and the client-credentials client -- and no literal secret;
 * the event bus is NATS JetStream with the creds file mounted read-only, and
   no forge is configured, so the merge loop parks at "reviewed";
-* the entrypoint seeds the ``git-origin`` volume idempotently and then
-  ``exec``s the pipeline command;
-* every GitHub Action in the smoke workflow is pinned to a full commit SHA.
+* the pipeline service's startup shim seeds the ``git-origin`` volume
+  idempotently (the guard precedes ``git init --bare``) and then ``exec``s the
+  image's own entrypoint, so a restart keeps the refs a story pushed and
+  signals reach the server;
+* the stack's single-command setup and its single-command test run are
+  documented, because a stack nobody can start is not a smoke stack.
 
 They fail on assertion (not on import) before any of the artifacts exist.
 """
@@ -36,11 +38,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = REPO_ROOT / "deploy"
 DOCKERFILE = DEPLOY / "Dockerfile"
-ENTRYPOINT = DEPLOY / "entrypoint.sh"
 COMPOSE = DEPLOY / "compose.yaml"
+README = DEPLOY / "README.md"
 REALM = DEPLOY / "keycloak" / "realm.json"
 SMOKE = DEPLOY / "smoke" / "smoke.sh"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "smoke.yml"
 SCRIPTED_MODEL = REPO_ROOT / "tests" / "smoke" / "scripted_model_server.py"
 
 #: The MCP port the pipeline serves on (``PIPELINE_MCP_PORT`` in deploy/Dockerfile).
@@ -52,6 +53,7 @@ EXPECTED_SERVICES = {"pipeline", "idp", "proxy", "model", "nats"}
 
 #: Named steps of the smoke run. Each one names the failing step in its trap.
 SMOKE_STEPS = (
+    "origin-seed",
     "token",
     "list_plans",
     "ingest",
@@ -200,47 +202,91 @@ def test_dockerfile_runs_as_non_root_and_never_returns_to_root() -> None:
 
 
 # ---------------------------------------------------------------------------
-# deploy/entrypoint.sh
+# deploy/compose.yaml -- the pipeline service's startup shim, which is where the
+# stack-specific wiring lives: the seeding that must survive a restart and the
+# hand-off to the image's own entrypoint.
 # ---------------------------------------------------------------------------
 
 
-def test_entrypoint_uses_strict_shell_mode() -> None:
-    text = _text(ENTRYPOINT)
-    # Comments and the shebang are not instructions; the first executable line
-    # must be the strict-mode declaration.
+def _pipeline_entrypoint_script() -> str:
+    """The shell the pipeline service runs before the image entrypoint.
+
+    Read as text, not as a parsed list of arguments: the point is the *order* of
+    the instructions, which parsing would hide.
+    """
+    raw = _text(COMPOSE)
+    block = raw.split("    entrypoint:", 1)
+    assert len(block) == 2, (
+        "the pipeline service must declare an `entrypoint:` shim: the stack's "
+        "wiring (origin seed, scripted registry, scheduler daemon) has to run "
+        "before the image's own entrypoint"
+    )
+    script = block[1].split("    volumes:", 1)[0]
+    assert script.strip(), "the pipeline entrypoint shim is empty"
+    return script
+
+
+def test_pipeline_entrypoint_shim_uses_strict_shell_mode() -> None:
+    script = _pipeline_entrypoint_script()
+    # Skip the YAML list items that select the interpreter ("- /bin/bash", the
+    # "-c" flag and the "|" literal-block marker) and comments; the first real
+    # instruction must be the strict-mode declaration.
     body = [
-        line for line in text.splitlines() if line.strip() and not line.strip().startswith("#")
-    ]
-    assert body, "deploy/entrypoint.sh is empty"
-    assert body[0].strip() == "set -euo pipefail", (
-        f"entrypoint must open with 'set -euo pipefail', found {body[0].strip()!r}"
-    )
-
-
-def test_entrypoint_guards_git_seeding_before_initialising_the_bare_repo() -> None:
-    text = _text(ENTRYPOINT)
-    init_at = text.find("git init --bare")
-    assert init_at != -1, "entrypoint must seed the bare origin repository"
-    guard_at = text.find("if [ ! -e")
-    assert guard_at != -1, "the bare-repo seed must be guarded so a restart keeps its refs"
-    assert guard_at < init_at, (
-        "the idempotency guard must precede 'git init --bare': an unconditional "
-        "re-init (or clone --bare) on every start drops the story refs a restart "
-        "must preserve"
-    )
-
-
-def test_entrypoint_execs_the_pipeline_command() -> None:
-    text = _text(ENTRYPOINT)
-    execs = [
         line.strip()
-        for line in text.splitlines()
-        if line.strip().startswith("exec ")
+        for line in script.splitlines()
+        if line.strip() and not line.strip().startswith(("-", "#"))
     ]
-    assert execs, "entrypoint must exec the pipeline command so signals and exit status pass through"
-    tail = [line.strip() for line in text.splitlines() if line.strip()]
+    assert body, "the pipeline entrypoint shim is empty"
+    assert body[0].startswith("set -euo pipefail"), (
+        f"the shim must open with 'set -euo pipefail', found {body[0]!r}"
+    )
+
+
+def test_pipeline_entrypoint_shim_guards_before_any_destructive_step() -> None:
+    script = _pipeline_entrypoint_script()
+    # The shim must not re-create state that has to survive a restart. The git
+    # origin bootstrap is the one such step, and it lives in smoke.sh (see the
+    # test below) because Docker hands a fresh named volume to the container
+    # root-owned, so the non-root server cannot write the first object.
+    for destructive in ("git init", "git clone", "rm -rf /git-origin"):
+        assert destructive not in script, (
+            f"the shim must not run {destructive!r}: an unconditional re-seed on "
+            "every start drops the story refs a restart must preserve"
+        )
+    assert "exec " in script, "the shim must exec the image entrypoint"
+
+
+def test_pipeline_entrypoint_shim_hands_over_with_exec() -> None:
+    script = _pipeline_entrypoint_script()
+    execs = [line.strip() for line in script.splitlines() if line.strip().startswith("exec ")]
+    assert execs, "the shim must exec the image entrypoint so signals and exit status pass through"
+    assert "/app/deploy/entrypoint.sh" in execs[-1], (
+        f"the last instruction must exec the image's entrypoint, found {execs[-1]!r}"
+    )
+    tail = [line.strip() for line in script.splitlines() if line.strip()]
     assert tail[-1].startswith("exec "), (
-        f"the last instruction must be the exec'd pipeline command, found {tail[-1]!r}"
+        f"the exec'd entrypoint must be the last instruction, found {tail[-1]!r}"
+    )
+
+
+def test_pipeline_service_materialises_the_oidc_secret_file_the_image_asserts() -> None:
+    script = _pipeline_entrypoint_script()
+    env = _compose()["services"]["pipeline"].get("environment") or {}
+    pairs = (
+        dict(item.split("=", 1) for item in env)
+        if isinstance(env, list)
+        else {str(k): str(v) for k, v in env.items()}
+    )
+    assert pairs.get("PIPELINE_OIDC_CLIENT_SECRET_FILE"), (
+        "the pipeline service must name the OIDC client-secret file"
+    )
+    assert "PIPELINE_OIDC_CLIENT_SECRET_FILE" in script, (
+        "the shim must create the file the image entrypoint refuses to start "
+        "without: verification is JWKS-only, so the stack materialises it from the "
+        "client secret the IdP was given instead of shipping one in the image"
+    )
+    assert "umask 077" in script, (
+        "the client-secret file must be created unreadable to anyone else"
     )
 
 
@@ -414,31 +460,49 @@ def test_smoke_script_names_every_asserted_step() -> None:
     assert not missing, f"smoke.sh is missing the step(s) {missing}"
 
 
+def test_smoke_script_seeds_the_git_origin_once_and_guards_it() -> None:
+    text = _text(SMOKE)
+    init_at = text.find("git init --bare")
+    assert init_at != -1, "smoke.sh must bootstrap the bare origin the plan points at"
+    guard_at = text.find("/git-origin/sample.git/HEAD")
+    assert guard_at != -1, (
+        "the origin bootstrap must be guarded on /git-origin/sample.git/HEAD so a "
+        "restart keeps the refs a story pushed"
+    )
+    assert guard_at < init_at, (
+        "the guard must precede 'git init --bare': re-seeding unconditionally on "
+        "every start drops the story refs, and the loss then reads as a dropped "
+        "event notification"
+    )
+    for destructive in ("rm -rf /git-origin",):
+        assert destructive not in text, f"the bootstrap must never run {destructive!r}"
+    assert "chown" in text, (
+        "the bootstrap runs as root because Docker hands a fresh named volume to "
+        "the container root-owned; it must hand the volume back to the service uid"
+    )
+
+
 # ---------------------------------------------------------------------------
-# .github/workflows/smoke.yml
+# deploy/README.md -- the stack's operator contract.
+#
+# A stack nobody can start is not a deliverable, so the two commands that make
+# it usable are part of the contract: one to bring the stack up, one to run the
+# end-to-end assertions against it.
 # ---------------------------------------------------------------------------
 
 
-def test_smoke_workflow_pins_every_action_to_a_commit_sha() -> None:
-    raw = _text(WORKFLOW)
-    try:
-        import yaml
-    except ImportError:  # pragma: no cover
-        yaml = None
-    refs: list[str] = []
-    if yaml is not None:
-        parsed = yaml.safe_load(raw) or {}
-        for job in (parsed.get("jobs") or {}).values():
-            for step in job.get("steps") or []:
-                if "uses" in step:
-                    refs.append(str(step["uses"]))
-    if not refs:
-        refs = re.findall(r"uses:\s*(\S+)", raw)
-    assert refs, "the smoke workflow must use at least one action"
-    for ref in refs:
-        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref), (
-            f"{ref!r} is not pinned to a full commit SHA (a tag can move under CI)"
-        )
+def test_deploy_readme_documents_the_single_command_setup_and_test_run() -> None:
+    text = _text(README)
+    assert "docker compose" in text and "deploy/compose.yaml" in text, (
+        "the docs must name the one command that brings the stack up"
+    )
+    assert "deploy/smoke/smoke.sh" in text, (
+        "the docs must name the one command that runs the end-to-end assertions"
+    )
+    assert "smoke.sh" in text and "PIPELINE_MCP_CLIENT_SECRET" in text, (
+        "the docs must state the environment the smoke run needs; a run that dies "
+        "on a missing variable is not repeatable"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -19,9 +19,9 @@ import os
 from typing import Any
 
 from .review_refs import _ServerRef
+from .story_commit import commit_story
 
 _notify_user = _ServerRef("_notify_user")
-_atomic_write_json = _ServerRef("_atomic_write_json")
 
 REVIEW_DEFER_PARK_AFTER_DEFAULT = 30
 
@@ -70,5 +70,5 @@ def park_rate_limited_review(
         f"{story_key} parked: {story['parked_reason']}.",
         **cid_kwargs,
     )
-    _atomic_write_json(manifest_path, manifest)
+    commit_story(plan_name, story_key, story, manifest_path)
     return {"ok": False, "status": "parked", "deferred": "rate_limited"}

@@ -25,6 +25,8 @@ from pipeline.events import EventBus
 from pipeline.paths import PLAN_DIR
 from pipeline.watchers import scan_all_plans
 
+from .actor import SYSTEM_SCHEDULER, bind_principal
+
 logger = logging.getLogger(__name__)
 
 # Upstream revisions already announced as stale (story SSA-1). Module-level so
@@ -491,7 +493,8 @@ class SchedulerDaemon:
 
         def _worker():
             try:
-                box["result"] = fn()
+                with bind_principal(SYSTEM_SCHEDULER):
+                    box["result"] = fn()
             except BaseException as exc:  # noqa: BLE001 - re-raised by caller
                 box["error"] = exc
 

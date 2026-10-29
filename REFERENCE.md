@@ -2288,6 +2288,11 @@ sidecar, so the denial is visible next to the notifications it refused to
 trigger. Checkpoint records denials only: its denied decisions are written to
 the audit stream, its allowed decisions are not.
 
+The scheduler daemon's tick is attributed to the `system:scheduler` principal
+rather than to the local operator, so every action it dispatches is decided
+against that principal's grants; `PIPELINE_POLICY_ENFORCE` remains the kill
+switch for all of them.
+
 A caller arriving through the dashboard's chat-stream `k-` pass-through carries
 no identity. Such a caller is refused these actions — that is intended, not a
 bug: without an identity there is nothing to authorize against.

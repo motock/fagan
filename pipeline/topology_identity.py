@@ -83,8 +83,8 @@ def resolved_runtime() -> dict[str, Any]:
       holds an unsupported value. Reported by
       ``pipeline.event_wiring.reported_event_bus_name()``.
     * ``store`` — the store kind ``PIPELINE_STORE`` selects: ``"file"``
-      (default), or the marker ``"invalid"`` when the variable holds an
-      unsupported value. Reported by
+      (default), ``"sqlite"``, or the marker ``"invalid"`` when the variable
+      holds an unsupported value. Reported by
       ``pipeline.store.reported_store_kind()``; the kind is read without
       constructing a store, so a health probe never touches the plan directory.
     * ``broker`` — present **only** when ``event_bus`` is ``"nats"``, because

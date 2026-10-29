@@ -46,8 +46,9 @@ class Store(Protocol):
 
     Every manifest / decisions / journal access in this module goes through a
     Store, so the on-disk JSON layout stops being spelled out at ~20 call
-    sites. ``FileStore`` below is the only implementation today; see
-    docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
+    sites. ``FileStore`` (JSON files in the plans directory) and
+    ``pipeline.store_sqlite.SqliteStore`` (a single-host database) implement it;
+    see docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
     """
 
     def manifest_path(self, plan_name: str) -> Path: ...
@@ -408,11 +409,13 @@ STORE_INVALID = "invalid"
 def store_kind(environ=None) -> str:
     """Return the selected Store kind without constructing a store.
 
-    ``PIPELINE_STORE`` unset, or exactly ``file``, selects the JSON-files
-    ``FileStore``. Every other value -- including the empty string -- raises,
-    because a store selection an operator cannot be given must never fall back
-    silently to a different one. Nothing is cached: the variable is read on
-    every call, so a later change is observed.
+    ``PIPELINE_STORE`` unset, or exactly ``file``, selects the JSON-files file
+    store; exactly ``sqlite`` selects the database store and requires an
+    absolute ``PIPELINE_STORE_PATH``. Every other value -- including the empty
+    string, and ``sqlite`` without a usable path -- raises, because a store
+    selection an operator cannot be given must never fall back silently to a
+    different one. Nothing is cached: the variable is read on every call, so a
+    later change is observed.
 
     ``environ`` defaults to the live process environment; passing a mapping
     reads that instead, which is how callers state a selection explicitly.
@@ -421,8 +424,21 @@ def store_kind(environ=None) -> str:
     raw = source.get("PIPELINE_STORE")
     if raw is None or raw == "file":
         return "file"
+    if raw == "sqlite":
+        # A selection that cannot name its database is not a usable selection:
+        # two processes would otherwise each create their own file in whatever
+        # directory they started from. Refused here, so an unconfigured
+        # database selection is reported as STORE_INVALID like any other.
+        target = source.get("PIPELINE_STORE_PATH")
+        if not target or not Path(target).is_absolute():
+            raise ValueError(
+                "PIPELINE_STORE_PATH must name an absolute database path when "
+                "PIPELINE_STORE selects the database store; leave "
+                "PIPELINE_STORE unset (or 'file') for the JSON file store"
+            )
+        return "sqlite"
     raise ValueError(
-        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file')"
+        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file', 'sqlite')"
     )
 
 
@@ -430,9 +446,16 @@ def build_store(environ=None) -> Store:
     """Select the configured Store; validates before any filesystem work.
 
     The kind is resolved first, so a rejected configuration raises without
-    constructing a ``FileStore`` -- i.e. without touching the plan directory.
+    constructing a store -- i.e. without touching the plan directory.
     """
-    store_kind(environ)
+    source = os.environ if environ is None else environ
+    kind = store_kind(environ)
+    if kind == "sqlite":
+        # Function-local: ``pipeline.store_sqlite`` imports the file store from
+        # this module, so a module-level import here would be circular.
+        from pipeline.store_sqlite import SqliteStore
+
+        return SqliteStore(source["PIPELINE_STORE_PATH"])
     return FileStore()
 
 

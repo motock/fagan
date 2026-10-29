@@ -25,6 +25,7 @@ import pipeline.persistence
 # tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 from pipeline.store import FileStore
+from pipeline.store_sqlite import SqliteStore
 
 PLAN = "contract-plan"
 
@@ -39,8 +40,8 @@ def _plans_dir(store):
     return store.manifest_path(PLAN).parent
 
 
-@pytest.fixture(params=["file"], ids=["file"])
-def store_factory(tmp_path, monkeypatch):
+@pytest.fixture(params=["file", "sqlite"], ids=["file", "sqlite"])
+def store_factory(tmp_path, monkeypatch, request):
     """A fresh Store per call, backed by an empty plans directory.
 
     Parametrized so additional Store implementations can be registered by
@@ -57,7 +58,10 @@ def store_factory(tmp_path, monkeypatch):
     created = []
 
     def _make():
-        store = FileStore()
+        if request.param == "sqlite":
+            store = SqliteStore(str(tmp_path / "contract.db"))
+        else:
+            store = FileStore()
         created.append(store)
         return store
 

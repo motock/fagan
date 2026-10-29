@@ -136,9 +136,92 @@ The probe is deliberately shallow: it starts the container healthy only after
 
 - It is not a sandbox for agent tool calls; worktrees it writes are real git
   worktrees in the mounted volume.
-- It does not run the scheduler daemon or the MCP transport over stdio. Those
-  are separate processes in the operator's host deployment.
+- It does not serve MCP over stdio. `ENTRYPOINT` starts the streamable-http
+  transport (the exec'd foreground process), the dashboard, and the scheduler
+  daemon; set `PIPELINE_SCHEDULER_DAEMON=0` to run the daemon outside the
+  container.
 - It carries no secrets. The OIDC client secret is a mounted file, and
   bearer-token verification is JWKS-only; the image only asserts that the
   mount exists so a missing credential fails at start rather than at the first
   token exchange.
+
+## The smoke stack and the merge park
+
+`deploy/compose.yaml` brings up a complete, disposable stack: this image, a
+Keycloak IdP in dev mode with `deploy/keycloak/realm.json` imported, a Caddy
+proxy terminating TLS with its internal CA in front of the MCP port (the
+transport has no TLS of its own), a NATS JetStream broker the scheduler daemon
+consumes from, and the scripted model server from
+`tests/smoke/scripted_model_server.py`. `deploy/smoke/smoke.sh` then drives a
+real run against it: a client-credentials token, a plan ingested and approved by
+`owner`, one story dispatched and reviewed, a stranger refused, the audit chains
+verified, exactly one notification across the broker, and the same assertion
+surviving a `docker compose restart pipeline`.
+
+**`PIPELINE_FORGE` is deliberately unset in that stack, and the smoke run stops
+at "reviewed, merge parked".** The merge loop needs a code host:
+`pipeline/forge.py` supports GitHub and GitLab, and an explicit `PIPELINE_FORGE`
+selects one of them. A stack with no forge, no `gh`/`glab` CLI and no API token
+therefore cannot merge, and this stack does not pretend to: the story reaches
+`reviewed`, the merge stays parked, and `deploy/smoke/smoke.sh` asserts that
+parked state rather than a merge. To exercise the merge loop end to end, point
+the stack at a real (or emulated) GitHub or GitLab endpoint by setting
+`PIPELINE_FORGE` and the matching token, and expect the run to merge instead of
+parking.
+
+### Bringing the stack up and asserting against it
+
+Two commands, and neither needs anything but a docker daemon:
+
+```sh
+export PIPELINE_MCP_CLIENT_SECRET=... PIPELINE_DASHBOARD_CLIENT_SECRET=... \
+       PIPELINE_SMOKE_OWNER_PASSWORD=... PIPELINE_SMOKE_STRANGER_PASSWORD=... \
+       PIPELINE_SMOKE_USER_CLIENT_SECRET=... KEYCLOAK_ADMIN_PASSWORD=...
+docker compose -f deploy/compose.yaml up -d --wait
+bash deploy/smoke/smoke.sh
+docker compose -f deploy/compose.yaml down -v
+```
+
+Those variables are throwaway values for a disposable stack: they belong to one
+run, are read from the environment (`compose.yaml` refuses to start without
+them), and never appear in a file. `deploy/smoke/smoke.sh` exits non-zero naming
+the step that failed, so a red run says which invariant broke: `token`,
+`list_plans`, `ingest`, `approve`, `dispatch`, `poll-reviewed`,
+`stranger-denied`, `stranger-no-plans`, `verify_audit`, `auth-fail-429`,
+`broker-once` or `restart-no-loss`.
+
+### How the pipeline container is wired
+
+The stack-specific startup lives in the `pipeline` service's `entrypoint:` in
+`deploy/compose.yaml`, which runs before, and then `exec`s, the image's own
+`deploy/entrypoint.sh`:
+
+1. it materialises the OIDC client-secret file that the image entrypoint refuses
+   to start without (verification itself is JWKS-only), mode 600, from the client
+   secret the IdP was given;
+2. it writes a model registry that maps every model role onto the scripted
+   server, because selecting a model is a registry fact the pipeline validates,
+   not an environment-only switch;
+3. it starts the scheduler daemon, the only durable event-bus consumer
+   (ADR 0010), then `exec`s the image entrypoint, so signals and exit status pass
+   through unchanged.
+
+The git origin is the one piece of state that must survive a restart, and its
+bootstrap deliberately lives in `deploy/smoke/smoke.sh` (`origin-seed`) rather
+than in the shim: Docker hands a fresh named volume to the container root-owned,
+so the image's non-root user cannot write the first object into it. The step runs
+once, guarded on `/git-origin/sample.git/HEAD`, and hands the volume back to the
+service uid; a restart therefore keeps the refs a story pushed, and the smoke
+run's `restart-no-loss` assertion measures the broker rather than a reseeded
+repository.
+
+`tests/smoke/scripted_model_server.py` is the deterministic model the `model`
+service runs. It speaks the provider wire protocol and consumes its scripted
+replies in order; the smoke run never relies on a reply being replayed.
+
+`docker compose up` is not part of `pytest`: the unit-test container has the
+docker client but no daemon, so the stack is asserted statically by
+`tests/smoke/test_deploy_contract.py` and exercised for real by the two commands
+above. Wiring those into a CI job belongs to the CI definition, which has to pass
+the same throwaway values.
+

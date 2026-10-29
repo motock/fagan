@@ -1,0 +1,264 @@
+# Smoke stack: pipeline + Keycloak + Caddy + NATS JetStream + a scripted model.
+#
+# Everything here exists to make one end-to-end run possible without a vendor
+# model, a real code host or a public certificate authority. It is NOT a
+# production deployment: Keycloak runs in dev mode (in-memory, wiped on restart)
+# and Caddy issues certificates from its own internal CA, which is why
+# deploy/smoke/smoke.sh passes --cacert / -k equivalents against https://proxy.
+#
+# Every image tag is exact (no `latest`): a stack that silently picks up a new
+# broker or IdP version mid-investigation is not reproducible.
+#
+# Secrets: nothing in this file is a literal credential. Values that the IdP and
+# the pipeline must agree on are read from the environment (`${VAR:?...}`
+# refuses to start without them); a caller supplies throwaway values that are
+# valid only inside one run (see deploy/README.md).
+#
+# The stack is self-contained: `docker compose -f deploy/compose.yaml up -d
+# --wait` is the whole local setup, and deploy/smoke/smoke.sh is the whole test
+# run against it. Wiring the pair into CI belongs to the CI definition, not to
+# this file.
+
+name: pipeline-smoke
+
+services:
+  # ---------------------------------------------------------------------------
+  # The pipeline server image (deploy/Dockerfile): dashboard on 8000, remote MCP
+  # on 8080, scheduler daemon in the same container.
+  #
+  # PIPELINE_FORGE is deliberately NOT set.
+  #
+  # The merge loop needs a code host: pipeline/forge.py knows only GitHub and
+  # GitLab, and `auto` resolves from the origin remote's hostname. This stack
+  # has no forge and no forge CLI, so a dispatched story stops at "reviewed,
+  # merge parked" - it does not merge, and no merge is faked. That parked state
+  # is what deploy/smoke/smoke.sh asserts; a stack that appeared to merge would
+  # be lying about having a code host it does not have.
+  # ---------------------------------------------------------------------------
+  pipeline:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pipeline-smoke:pinned
+    depends_on:
+      idp:
+        condition: service_started
+      nats:
+        condition: service_started
+      model:
+        condition: service_started
+    environment:
+      # Event bus (ADR 0010). The scheduler daemon inside this container is the
+      # only durable consumer; MCP servers and the dashboard only publish.
+      PIPELINE_EVENT_BUS: nats
+      # `nats` shares this container's network namespace (see the nats service),
+      # so the broker IS loopback. pipeline/events_nats.py accepts a plaintext
+      # URL only for a loopback host: anything routable must be tls:// or carry
+      # PIPELINE_NATS_TLS_CA_FILE. Keeping the broker off every other container's
+      # network is the least-privilege choice, and it means no broker credential
+      # has to exist at all. An operator-supplied JWT creds file is still honored
+      # through PIPELINE_NATS_CREDS_FILE when one is mounted.
+      PIPELINE_NATS_URL: nats://127.0.0.1:4222
+      # Identity: bearer tokens are verified against the IdP's JWKS. The issuer
+      # is the in-network URL, which is what the tokens carry.
+      PIPELINE_IDENTITY_PROVIDER: oidc
+      PIPELINE_OIDC_ISSUER: http://idp:8080/realms/pipeline
+      PIPELINE_OIDC_AUDIENCE: pipeline-mcp
+      PIPELINE_OIDC_JWKS_URL: http://idp:8080/realms/pipeline/protocol/openid-connect/certs
+      # Verification is JWKS-only: the pipeline never signs a token, so it never
+      # reads this file. The image's entrypoint still refuses to start unless the
+      # named file is readable (a deployment contract assertion), so the shim in
+      # `entrypoint` materialises it from the client secret the IdP was given,
+      # inside the state volume, mode 600. No credential is baked into the image
+      # and none is passed inside a command line.
+      PIPELINE_OIDC_CLIENT_SECRET_FILE: /var/lib/pipeline/oidc_client_secret
+      PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
+      PIPELINE_POLICY_ENFORCE: "1"
+      # The auth-fail bucket is charged per client address (pipeline/rate_limit.py
+      # failed_auth_key), and every caller here arrives from the same address, so
+      # the limit is low and explicit: smoke.sh asserts the 429 that follows.
+      PIPELINE_MCP_AUTH_FAIL_PER_MIN: "10"
+      # Every model role resolves to the scripted server. Selecting a model is a
+      # registry fact, not an environment-only switch (the pipeline validates a
+      # model name against providers.<provider>.models), so the shim writes a
+      # registry that declares the scripted models and exports its path.
+      PIPELINE_SCRIPTED_MODEL: "1"
+      PIPELINE_LOCAL_ENDPOINT_LMSTUDIO: http://model:8080
+      PIPELINE_SCHEDULER_DAEMON: "1"
+    # No published port: the MCP transport is reachable only through the TLS
+    # proxy. Publishing 8080 would hand out a plaintext path around it.
+    expose:
+      - "8080"
+    # Stack-specific startup, then the image's own entrypoint via `exec`:
+    #
+    #   1. materialise the OIDC client-secret file the image entrypoint asserts;
+    #   2. write the scripted-model registry and point the pipeline at it;
+    #   3. start the scheduler daemon, the only durable event-bus consumer
+    #      (ADR 0010), and hand over with `exec` so signals and exit status
+    #      reach the image entrypoint unchanged.
+    #
+    # The git origin is *not* seeded here: Docker creates a fresh named volume
+    # root-owned, so a process running as the image's non-root uid cannot write
+    # the first object into it. deploy/smoke/smoke.sh does that one-shot
+    # bootstrap as root and hands the result back to the service's uid, which
+    # keeps the running server non-root (see its `origin-seed` step).
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        umask 077
+        printf '%s' "${PIPELINE_MCP_CLIENT_SECRET:-}" > "$PIPELINE_OIDC_CLIENT_SECRET_FILE"
+        if [ "${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
+          # Selecting a model is a registry fact, not an environment-only switch:
+          # the pipeline validates a role's model name against
+          # providers.<provider>.models. This registry declares the scripted
+          # models and maps every role onto them. It is written from scratch (a
+          # missing registry is not an error), so it never depends on the
+          # provider list the image ships.
+          registry=/var/lib/pipeline/model_registry.scripted.json
+          printf '%s\n' '{"providers": {"lmstudio": {"models": {
+            "scripted-dispatch": {"tag": "scripted-dispatch"},
+            "scripted-review": {"tag": "scripted-review"},
+            "scripted-overlord": {"tag": "scripted-overlord"},
+            "scripted-decompose": {"tag": "scripted-decompose"}}}},
+            "roles": {
+            "dispatch": {"provider": "lmstudio", "model": "scripted-dispatch"},
+            "review": {"provider": "lmstudio", "model": "scripted-review"},
+            "security_review": {"provider": "lmstudio", "model": "scripted-review"},
+            "overlord": {"provider": "lmstudio", "model": "scripted-overlord"},
+            "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$registry"
+          export PIPELINE_MODEL_REGISTRY_PATH="$registry"
+        fi
+        if [ "${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
+          echo "compose: starting the scheduler daemon (the only durable event-bus consumer)"
+          python -m pipeline.scheduler_daemon &
+        fi
+        exec /app/deploy/entrypoint.sh
+    volumes:
+      - pipeline-state:/var/lib/pipeline
+      - git-origin:/git-origin
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # IdP: Keycloak in dev mode, realm imported from deploy/keycloak/realm.json.
+  # Dev mode keeps everything in memory, so a restart re-imports the realm - the
+  # smoke run only ever restarts the pipeline, never the IdP.
+  # ---------------------------------------------------------------------------
+  idp:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8080
+      - --hostname-strict=false
+      - --health-enabled=true
+    environment:
+      # Admin bootstrap only; the smoke run never uses this account.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-smoke-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      # Values the realm file references through ${env.*} placeholders.
+      PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET}
+      PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
+      PIPELINE_SMOKE_OWNER_PASSWORD: ${PIPELINE_SMOKE_OWNER_PASSWORD:?set PIPELINE_SMOKE_OWNER_PASSWORD}
+      PIPELINE_SMOKE_STRANGER_PASSWORD: ${PIPELINE_SMOKE_STRANGER_PASSWORD:?set PIPELINE_SMOKE_STRANGER_PASSWORD}
+    volumes:
+      - ./keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # TLS in front of the MCP transport, which has no TLS of its own. Caddy's
+  # internal CA signs the certificate, so the stack needs no public DNS name.
+  # The configuration is inline: the Caddyfile is small enough that a separate
+  # mounted file would only add a piece of state to keep in sync.
+  # ---------------------------------------------------------------------------
+  proxy:
+    image: caddy:2.8.4-alpine
+    command:
+      - sh
+      - -c
+      - |
+        cat >/tmp/Caddyfile <<'CADDYFILE'
+        {
+          admin off
+          auto_https disable_redirects
+        }
+        :443 {
+          tls internal
+          handle /realms/* {
+            reverse_proxy idp:8080
+          }
+          handle {
+            reverse_proxy pipeline:8080
+          }
+        }
+        CADDYFILE
+        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+    ports:
+      - "8443:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      pipeline:
+        condition: service_started
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # The scripted model (tests/smoke/scripted_model_server.py): answers the
+  # OpenAI chat-completions requests the lmstudio provider makes, from a fixed
+  # script, so a dispatch and a review need no vendor model or API key.
+  # ---------------------------------------------------------------------------
+  model:
+    image: python:3.12-slim
+    command:
+      - python
+      - /opt/scripted/scripted_model_server.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    volumes:
+      - ../tests/smoke/scripted_model_server.py:/opt/scripted/scripted_model_server.py:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # NATS JetStream. `-js` enables the durable stream the scheduler daemon
+  # consumes from; the `nats` CLI's `-js` flag also switches the durable-consumer
+  # contract (ack after handler return, redelivery with backoff) on.
+  #
+  # The broker shares the pipeline container's network namespace and is therefore
+  # loopback-only. Two reasons, both structural rather than stylistic:
+  #
+  #   * pipeline/events_nats.py refuses a plaintext nats:// URL that names
+  #     anything but a loopback host, so a broker on the compose network would
+  #     need TLS material nobody in this stack can issue;
+  #   * a broker no other container can reach is the least-privilege enforcement
+  #     of ADR 0010 §6 ("exactly one consuming process per deployment").
+  #
+  # A routable deployment authenticates the publisher with a NATS operator-issued
+  # credentials file, named by PIPELINE_NATS_CREDS_FILE and mounted read-only;
+  # pipeline/events_nats.py also requires that file to be mode 600. Nothing in
+  # this stack can mint such a file, so a credential is not fabricated here: the
+  # broker has no account to authenticate against, and the loopback bind is what
+  # keeps that safe.
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:2.10.22
+    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
+    network_mode: "service:pipeline"
+    depends_on:
+      pipeline:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  # Mutable server state: plans, manifests, worktrees, the audit chain.
+  pipeline-state:
+  # The git origin: the bare repository the stack pushes story branches to,
+  # plus the working clone plan.json's repo_root points at. Neither is created
+  # by the pipeline service: the `origin-seed` step in deploy/smoke/smoke.sh
+  # makes both once, as root, and hands the volume back to the service uid, so
+  # a restart keeps the refs a story already pushed.
+  git-origin:
+  # Caddy's internal CA and the certificates it issues.
+  caddy-data:

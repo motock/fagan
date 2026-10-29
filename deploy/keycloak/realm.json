@@ -1,0 +1,128 @@
+{
+  "realm": "pipeline",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 300,
+  "clients": [
+    {
+      "clientId": "pipeline-dashboard",
+      "name": "Pipeline dashboard login",
+      "description": "Confidential browser client for the read-only dashboard. Redirect URIs are the proxy host, because the dashboard is only reachable through it.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${env.PIPELINE_DASHBOARD_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "https://localhost:8443/*",
+        "https://proxy/*"
+      ],
+      "webOrigins": [
+        "https://localhost:8443",
+        "https://proxy"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://localhost:8443/*##https://proxy/*",
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "pipeline-mcp",
+      "name": "Pipeline MCP smoke client",
+      "description": "Client-credentials client the smoke run uses to call the remote MCP tools. No browser flow: a service account only.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${env.PIPELINE_MCP_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "access.token.lifespan": "300"
+      }
+    },
+    {
+      "clientId": "pipeline-smoke-user",
+      "name": "Pipeline smoke operator login",
+      "description": "Confidential client used only by deploy/smoke/smoke.sh to obtain a direct-grant token for the owner and stranger principals. Direct grants are how a scripted client signs in as a named human without a browser, so this client carries no browser flow and no service account.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${env.PIPELINE_SMOKE_USER_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "access.token.lifespan": "300"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "owner",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Plan",
+      "lastName": "Owner",
+      "email": "owner@example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${env.PIPELINE_SMOKE_OWNER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-pipeline"
+      ]
+    },
+    {
+      "username": "stranger",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Unrelated",
+      "lastName": "Caller",
+      "email": "stranger@example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${env.PIPELINE_SMOKE_STRANGER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-pipeline"
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "default-roles-pipeline",
+        "description": "Every authenticated principal. Authorization is decided by the pipeline's own policy table, not by Keycloak roles.",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "offline_access",
+            "uma_authorization"
+          ]
+        },
+        "clientRole": false
+      }
+    ]
+  }
+}

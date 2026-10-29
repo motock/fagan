@@ -223,7 +223,6 @@ def test_start_spawns_detached_job_from_the_source_root(tmp_path, monkeypatch):
     assert job["result_path"] == str(result_path)
     assert job["log_path"] == str(log_path)
     started = datetime.fromisoformat(job["started_at"])
-    started = datetime.fromisoformat(job["started_at"])
     assert started.tzinfo is not None
     assert started.utcoffset() == timedelta(0)
 
@@ -268,22 +267,31 @@ def test_start_preserves_the_inherited_environment_for_the_child(tmp_path, monke
     assert "PYTHONPYCACHEPREFIX" not in os.environ
 
 
-def test_each_job_gets_its_own_cache_so_no_run_inherits_another(tmp_path, monkeypatch):
-    """Two jobs for the same story must not share a bytecode cache directory."""
+def test_start_purges_the_previous_jobs_bytecode_cache_before_spawning(tmp_path, monkeypatch):
+    """A back-to-back job for the same story must not inherit the last cache.
+
+    The job directory is keyed by story, so two jobs for ``S-1`` share it.  What
+    protects the second job is not a *different* prefix - it is this purge: the
+    previous job's ``.pyc`` files are deleted before the child starts, exactly
+    like the stale ``result.json`` unlink.  A prefix left behind could still hold
+    a ``.pyc`` whose mtime-and-size stamp matches the commit being graded.
+    """
+    calls = _fake_popen(monkeypatch)
     worktree = tmp_path / "wt"
     worktree.mkdir()
+    state_root = tmp_path / "sr"
+    stale = state_root / "merge_reverify" / "S-1" / "pycache"
+    stale_pyc = stale / "deadbeef" / "test_sample.cpython-311.pyc"
+    stale_pyc.parent.mkdir(parents=True)
+    stale_pyc.write_bytes(b"stale bytecode from the previous job")
 
-    calls = _fake_popen(monkeypatch)
-    mr.start_merge_reverify("P", "S-1", str(worktree), tmp_path / "sr")
-    first = calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"]
+    mr.start_merge_reverify("P", "S-1", str(worktree), state_root)
 
-    calls = _fake_popen(monkeypatch)
-    mr.start_merge_reverify("P", "S-1", str(worktree), tmp_path / "sr")
-    prefixes = [first, calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"]]
-    # Whatever the job directory holds is discarded with it: the prefix is the
-    # job dir's own subtree, never a fixed shared location.
-    assert Path(prefixes[0]).name == "pycache"
-    assert Path(prefixes[0]).parent == tmp_path / "sr" / "merge_reverify" / "S-1"
+    # The prefix is this job's own subtree, and nothing from the earlier job
+    # survives in it.
+    assert calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"] == str(stale)
+    assert not stale_pyc.exists()
+    assert not stale.exists()
 
 
 def test_start_makes_the_cache_prefix_absolute_for_a_relative_state_root(tmp_path, monkeypatch):

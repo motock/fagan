@@ -142,6 +142,25 @@ def test_real_job_reports_pass_then_fail(tmp_path, monkeypatch):
     assert failed["sha"]
     assert failed["sha"] != passed["sha"]
 
+    # Deterministic stale-bytecode guard.  Round 1 and round 2 differ inside one
+    # line ("== 2" vs "== 3"), i.e. the two revisions have the SAME byte length,
+    # and a rebase can land them inside the same wall-clock second.  CPython
+    # validates a .pyc on (mtime truncated to seconds, size), so a cache taken
+    # from the worktree's own ``__pycache__`` would satisfy both and the child
+    # would grade round 1's compiled test again: either reporting "pass" for
+    # this red suite or, at best, quoting round 1's green output.  Assert this
+    # verdict's evidence is round 2's RED suite, so a regression that lets the
+    # child grade stale bytecode fails deterministically instead of in roughly
+    # one run out of three.
+    evidence = failed["error"]
+    assert "1 failed" in evidence, evidence
+    assert "1 passed" not in evidence, evidence
+    assert "test_one_plus_one" in evidence, evidence
+    # And the child must not have populated the graded worktree's own cache at
+    # all - the point of the per-job prefix is that the worktree's bytecode can
+    # never be consulted again.
+    assert not (worktree / "__pycache__").exists()
+
     # The job is read-only with respect to the manifest: only TP-04's caller
     # copies the reported last_test_check back under the plan lock.
     assert manifest.read_bytes() == manifest_before

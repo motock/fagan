@@ -6,6 +6,7 @@ from pathlib import Path
 from . import telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
+from .events_nats import NatsEventBus
 from .notification_outbox import outbox_sink
 from .notification_sinks import file_log_sink
 from .paths import PLAN_DIR
@@ -18,8 +19,10 @@ EVENT_BUS_ENV = "PIPELINE_EVENT_BUS"
 EVENT_BUS_INPROCESS = "inprocess"
 #: Accepted value: the append-log bus.
 EVENT_BUS_JSONL = "jsonl"
+#: Accepted value: the NATS JetStream bus (durable, cross-process delivery).
+EVENT_BUS_NATS = "nats"
 #: Every accepted value, in the order the error message lists them.
-ALLOWED_EVENT_BUSES = (EVENT_BUS_INPROCESS, EVENT_BUS_JSONL)
+ALLOWED_EVENT_BUSES = (EVENT_BUS_INPROCESS, EVENT_BUS_JSONL, EVENT_BUS_NATS)
 #: Reported by :func:`reported_event_bus_name` when the variable is unset to an
 #: unsupported value. Deliberately not a bus name: it says "this process's
 #: selection could not be honoured" without echoing the rejected value.
@@ -175,6 +178,11 @@ def build_bus() -> EventBus:
       its natural root; ``JsonlEventBus``'s own tests pin only the
       ``<root>/<plan>.events.jsonl`` shape and root it at a per-test temporary
       directory.
+    * ``"nats"`` -- a :class:`~pipeline.events_nats.NatsEventBus` publishing to
+      the JetStream server named by ``PIPELINE_NATS_URL``, with the same
+      handlers subscribed. Its construction validates that configuration and
+      the stream, and raises rather than degrading to a local bus, so a
+      deployment that asked for durable delivery gets it or fails loudly.
     * anything else, including the empty string -- ``ValueError`` from
       :func:`selected_event_bus_name`.
 
@@ -184,6 +192,11 @@ def build_bus() -> EventBus:
     """
     if selected_event_bus_name() == EVENT_BUS_JSONL:
         return _subscribe_handlers(DispatchingJsonlEventBus(PLAN_DIR))
+    if selected_event_bus_name() == EVENT_BUS_NATS:
+        # Constructed before subscribing: a bus whose configuration or broker is
+        # unusable raises here, so the caller never gets a half-wired bus and no
+        # local fallback quietly takes over a deployment that asked for NATS.
+        return _subscribe_handlers(NatsEventBus())
     return _subscribe_handlers(InProcessEventBus())
 
 

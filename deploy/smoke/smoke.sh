@@ -365,7 +365,9 @@ step_ingest() {
     STEP="ingest"
     # The plan file has to exist inside the pipeline container's PLAN_DIR, which
     # is the volume the MCP server reads.
-    compose cp "$REPO_ROOT/deploy/smoke/plan.json" \
+    # `docker cp`, not `compose cp`: `-q` yields a container id, and
+    # `compose cp` reads its first argument as a *service* name.
+    docker cp "$REPO_ROOT/deploy/smoke/plan.json" \
         "$(compose ps -q pipeline):${PLAN_DIR_IN_CONTAINER}/${SMOKE_PLAN_NAME}.json" \
         || fail "could not copy the plan into the pipeline container"
     local result

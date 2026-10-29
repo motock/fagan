@@ -98,6 +98,25 @@ jobs:
         # cannot serve.
         run: docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 600
 
+      - name: Wait for the IdP to import the realm
+        # `--wait` only covers the containers' running state: Keycloak is up as
+        # soon as its JVM starts and finishes installing the realm import
+        # seconds later. smoke.sh's first assertion is a client-credentials
+        # grant, which the IdP refuses until then, so bound the wait here.
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -sk -o /dev/null -w '%{http_code}' \
+                 https://localhost:8443/realms/pipeline/.well-known/openid-configuration \
+               | grep -q '^200$'; then
+              echo "the IdP is serving the pipeline realm"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the IdP did not serve the pipeline realm within 120s" >&2
+          exit 1
+
       - name: Run the smoke assertions
         run: bash deploy/smoke/smoke.sh
 

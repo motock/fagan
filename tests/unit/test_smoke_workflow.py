@@ -99,6 +99,7 @@ def _jobs():
         members = _block(entries, index)
         permissions = None
         uses = []
+        job_if = ""
         permission_indices = [
             member
             for member in members
@@ -107,11 +108,28 @@ def _jobs():
         if permission_indices:
             shallowest = min(permission_indices, key=lambda member: entries[member][0])
             permissions = _permissions(entries, shallowest)
+        # A job-level `if:` is what lets a job be skipped, so it is reported
+        # here rather than inferred from the raw text. Only the job body's own
+        # keys count: `steps:` children (`if: always()` on a diagnostic step)
+        # sit deeper and must not be mistaken for a job condition.
+        body_indent = min(
+            (entries[member][0] for member in members), default=indent + 1
+        )
+        for member in members:
+            if entries[member][0] != body_indent:
+                continue
+            key, value = _key(entries[member][1])
+            if key == "if":
+                job_if = value
         for member in members:
             key, value = _key(entries[member][1])
             if key == "uses":
                 uses.append(value)
-        jobs[_key(body)[0]] = {"permissions": permissions, "uses": uses}
+        jobs[_key(body)[0]] = {
+            "permissions": permissions,
+            "uses": uses,
+            "job_if": job_if,
+        }
     return jobs
 
 
@@ -122,17 +140,32 @@ def _grants_packages_write(permissions):
     return isinstance(permissions, dict) and permissions.get("packages") == "write"
 
 
-def test_stack_job_is_advisory_and_publish_is_not_gated_by_it():
+def test_stack_job_runs_on_pull_request_and_master_push():
+    """The stack job is the story's deliverable, so nothing may opt it out.
+
+    A skipped check reads as neutral, not as a failure: gating this job on a
+    repository variable turned a red smoke run into a silent green one and left
+    deploy/Dockerfile and deploy/compose.yaml unexercised on every change.
+    """
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "if: vars.ENABLE_SMOKE_CI == 'true'" in text, (
-        "the stack job must be gated on ENABLE_SMOKE_CI: the compose stack does "
-        "not yet boot on a Linux engine, and a red smoke check on every pull "
-        "request would block every merge. Remove this assertion when the stack "
-        "boots and the gate comes off."
+    assert "ENABLE_SMOKE_CI" not in text, (
+        "the stack job must not be gated on a repository variable: an unset "
+        "variable skips it, and a skipped check does not block a merge"
     )
-    assert "if: always() && github.event_name == 'push'" in text, (
-        "the publish job must still run when the stack job is skipped, or the "
-        "image stops shipping on every push to master"
+
+    triggers = text.split("\njobs:", 1)[0]
+    assert "pull_request" in triggers, (
+        f"the workflow must run on pull_request, triggers were {triggers!r}"
+    )
+    assert re.search(r"push:\s*\n\s+branches:\s*\[?master\]?", triggers), (
+        f"the workflow must run on a push to master, triggers were {triggers!r}"
+    )
+
+    job = _jobs().get("build-and-smoke")
+    assert job is not None, f"expected a build-and-smoke job, found {sorted(_jobs())}"
+    assert job["job_if"] == "", (
+        "build-and-smoke must carry no job-level `if:`, which would let the "
+        f"stack job be skipped, found {job['job_if']!r}"
     )
 
 

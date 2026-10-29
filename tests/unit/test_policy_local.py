@@ -180,13 +180,44 @@ OIDC_BOB_SUBJECT = "oidc:bob"
 SYSTEM_SCHEDULER_PRINCIPAL = Principal(subject="system:scheduler", auth_method="system")
 
 
+def test_plan_ingest_with_none_resource_is_denied_for_non_operator() -> None:
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, None) is False
+
+
+def test_plan_ingest_with_omitted_resource_is_denied_for_non_operator() -> None:
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST) is False
+
+
+def test_plan_ingest_with_none_resource_is_allowed_for_operator() -> None:
+    assert LocalPolicy().allow(LOCAL_OPERATOR, Action.PLAN_INGEST, None) is True
+
+
+def test_plan_ingest_with_ownerless_present_resource_is_allowed() -> None:
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner="")) is True
+
+
+def test_plan_ingest_reingest_of_owned_plan_is_allowed() -> None:
+    assert (
+        LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner=OIDC_ALICE.subject))
+        is True
+    )
+
+
+def test_plan_ingest_plan_owned_by_someone_else_is_denied() -> None:
+    assert (
+        LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner="someone-else"))
+        is False
+    )
+
+
 def test_first_ingest_is_allowed_for_non_operator_principal() -> None:
     # No manifest yet: the resource has no owner, so the caller becomes owner.
     assert (
         LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner="")) is True
     )
-    # `authorize` passes `resource=None` when there is no manifest at all.
-    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, None) is True
+    # A real caller always passes a resource: `authorize` builds one with
+    # `resource_for`, which yields an empty owner when there is no manifest.
+    # `resource=None` is therefore denied — see the tests above.
 
 
 def test_reingest_of_owned_plan_is_allowed_for_owner() -> None:

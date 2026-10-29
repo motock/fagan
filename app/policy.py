@@ -143,10 +143,13 @@ class LocalPolicy:
     The third exception is ``plan:ingest``, which is how a plan acquires an
     owner in the first place (ADR 0006). An *authenticated* principal — one
     whose ``auth_method`` is neither empty nor ``"none"``, so never
-    ``ANONYMOUS`` — may ingest a plan that has no manifest yet or a legacy plan
-    with no owner, and becomes its owner; the same principal may re-ingest a
-    plan it already owns. A plan owned by someone else stays closed to it, and
-    nothing here widens any action beyond ``plan:ingest``.
+    ``ANONYMOUS`` — may ingest a plan with a present resource and no owner, and
+    becomes its owner; the same principal may re-ingest a plan it already owns.
+    A missing resource is denied: ``resource is None`` is not evidence that the
+    plan is new, so a call site that forgets the resource is refused rather than
+    silently granted. The local operator is unaffected, because the operator
+    check runs first. A plan owned by someone else stays closed, and nothing
+    here widens any action beyond ``plan:ingest``.
     """
 
     def allow(
@@ -183,9 +186,12 @@ class LocalPolicy:
         ):
             if principal.subject == LOCAL_OPERATOR_SUBJECT:
                 return True
-            if resource is None or not resource.owner:
-                # No manifest yet, or a legacy ownerless plan: the caller becomes
-                # its owner (resolve_ownership).
+            if resource is None:
+                # A missing resource is not evidence that the plan is new.
+                return False
+            if not resource.owner:
+                # A present resource with no owner: a legacy ownerless plan, so
+                # the caller becomes its owner (resolve_ownership).
                 return True
             return principal.subject == resource.owner
 

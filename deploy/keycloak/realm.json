@@ -113,14 +113,7 @@
     "realm": [
       {
         "name": "default-roles-pipeline",
-        "description": "Every authenticated principal. Authorization is decided by the pipeline's own policy table, not by Keycloak roles.",
-        "composite": true,
-        "composites": {
-          "realm": [
-            "offline_access",
-            "uma_authorization"
-          ]
-        },
+        "description": "Every authenticated principal. Non-composite on purpose: referencing Keycloak's built-in offline_access/uma_authorization at import aborts the realm. Authorization is the pipeline's own policy table, not Keycloak roles.",
         "clientRole": false
       }
     ]

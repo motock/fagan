@@ -511,8 +511,8 @@ def test_realm_carries_no_literal_secret() -> None:
         )
 
 
-def test_realm_client_descriptions_fit_keycloaks_column() -> None:
-    """Keycloak stores CLIENT.DESCRIPTION as VARCHAR(255).
+def test_realm_descriptions_fit_keycloaks_column() -> None:
+    """Keycloak stores CLIENT and KEYCLOAK_ROLE descriptions as VARCHAR(255).
 
     A longer description does not truncate: it aborts the realm import and
     Keycloak exits, so the whole stack never serves - which is invisible until
@@ -520,13 +520,35 @@ def test_realm_client_descriptions_fit_keycloaks_column() -> None:
     """
     realm = _realm()
     too_long = {
-        client.get("clientId"): len(client.get("description") or "")
+        f"client {client.get('clientId')}": len(client.get("description") or "")
         for client in realm.get("clients", [])
         if len(client.get("description") or "") > 255
     }
-    assert too_long == {}, (
-        f"client descriptions over 255 characters abort the realm import: {too_long}"
+    too_long.update(
+        {
+            f"role {role.get('name')}": len(role.get("description") or "")
+            for role in (realm.get("roles") or {}).get("realm", [])
+            if len(role.get("description") or "") > 255
+        }
     )
+    assert too_long == {}, (
+        f"descriptions over 255 characters abort the realm import: {too_long}"
+    )
+
+
+def test_realm_default_role_is_not_composite() -> None:
+    """A composite here aborts the import before Keycloak creates its built-ins.
+
+    The realm's own default role must stay flat: naming Keycloak's built-in
+    ``offline_access`` / ``uma_authorization`` in ``composites`` fails the
+    import with "Unable to find composite realm role", and Keycloak exits.
+    """
+    realm = _realm()
+    for role in (realm.get("roles") or {}).get("realm", []):
+        assert not role.get("composite") and not role.get("composites"), (
+            f"realm role {role.get('name')!r} declares a composite; the realm "
+            "import cannot resolve Keycloak's built-in roles and aborts"
+        )
 
 
 # ---------------------------------------------------------------------------

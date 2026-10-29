@@ -191,6 +191,86 @@ def _rev_parses(worktree: Path, rev: str) -> bool:
     return r.returncode == 0
 
 
+def _rev_sha(worktree: Path, rev: str) -> str:
+    """The commit sha ``rev`` names in this repo, or ``""`` when it does not.
+
+    Non-raising sibling of :func:`_rev_parses`: it answers *what* a ref points
+    at so a caller can materialise it elsewhere. An unreadable repo is ``""``
+    (unknown), never a guess.
+    """
+    if not rev:
+        return ""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
+            check=False, cwd=str(worktree), capture_output=True, text=True,
+        )
+    except OSError:
+        return ""
+    return (r.stdout or "").strip() if r.returncode == 0 else ""
+
+
+# A branch name we are willing to write as refs/heads/<name>. Anything else
+# (empty, blank, a leading "-", a rev expression such as "main~3", a refspec
+# with "..") is rejected as unresolved: this name reaches `git update-ref`.
+_BASE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def resolve_base(worktree: Path, base_branch: str) -> str | None:
+    """The commit to diff against in THIS worktree, or ``None`` if unknowable.
+
+    Story ``ST-01-repo-issue``. A dispatched worktree often knows the base
+    branch only as ``origin/<base>``: ``_default_branch()`` answers ``main``
+    while the worktree was cloned with a ``master`` default, so no local
+    ``main`` ref exists. Every probe then compared nothing and triage rendered
+    ``BASE BRANCH main UNRESOLVED in this worktree; new-commits check
+    INCONCLUSIVE``, so a green, committed branch could not be corroborated and
+    stayed parked as unmerged.
+
+    Behaviour, in order:
+
+    1. ``base_branch`` already resolves locally -> return its sha. This is the
+       idempotent path and it deliberately does NOT move the ref, so three
+       commits later the base is still the original fork point (a
+       ``git branch -f main HEAD`` / ``git checkout -B main`` implementation
+       would silently move the base to the tip, make the diff empty and
+       re-fail the story as "no new commits").
+    2. Only ``origin/<base>`` resolves -> create ``refs/heads/<base>`` at that
+       sha and return the sha. The create uses git's "old value must not
+       exist" form, so it happens exactly once and can never clobber a ref
+       created by a concurrent caller; on a lost race we return whatever the
+       existing ref points at, still without moving it.
+    3. Neither resolves -> ``None``. The explicit unresolved signal: callers
+       must render "INCONCLUSIVE" rather than fall back to ``HEAD`` (a HEAD
+       fallback makes the branch trivially "ahead" of itself, the false
+       ``yes``/``0`` fact this contract exists to prevent).
+
+    Nothing is memoised: a ``None`` must not stick, because a later
+    ``git fetch origin <base>`` makes the very next call resolvable.
+    """
+    name = base_branch.strip() if isinstance(base_branch, str) else ""
+    if not _BASE_NAME_RE.match(name):
+        return None
+    try:
+        local = _rev_sha(worktree, name)
+        if local:
+            return local
+        remote = _rev_sha(worktree, f"origin/{name}")
+        if not remote:
+            return None
+        created = subprocess.run(
+            ["git", "update-ref", f"refs/heads/{name}", remote, "0" * 40],
+            check=False, cwd=str(worktree), capture_output=True, text=True,
+        )
+        if created.returncode == 0:
+            return remote
+        # Another caller created the ref between our two probes: never move
+        # it, just report where it points ("" -> None if it vanished).
+        return _rev_sha(worktree, name) or None
+    except OSError:
+        return None
+
+
 def _resolve_base_branch(worktree: Path, base_branch: str) -> str:
     """The branch to diff against, resolved in THIS worktree's own repo.
 
@@ -202,13 +282,15 @@ def _resolve_base_branch(worktree: Path, base_branch: str) -> str:
     repo root, resolved ``main`` for a worktree whose base is ``master``, and
     reported "0 new commits" for a branch carrying five).
 
-    So: prefer ``base_branch`` when it resolves here, else the worktree's own
-    ``origin/HEAD``. Returns "" when neither resolves, and ``base_branch``
-    unchanged when git cannot be consulted at all — every caller must treat
-    both as "unknown", never as "no commits".
+    So: prefer ``base_branch`` when it resolves here — including when it only
+    exists as ``origin/<base>``, which :func:`resolve_base` materialises as a
+    local ref exactly once — else the worktree's own ``origin/HEAD``. Returns
+    "" when neither resolves, and ``base_branch`` unchanged when git cannot be
+    consulted at all — every caller must treat both as "unknown", never as
+    "no commits".
     """
     try:
-        if _rev_parses(worktree, base_branch):
+        if resolve_base(worktree, base_branch):
             return base_branch
         r = subprocess.run(
             ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],

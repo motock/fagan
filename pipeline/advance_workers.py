@@ -379,14 +379,11 @@ class AdvanceWorkerPool:
             "advance worker timed out",
             extra={"plan": plan, "timeout_s": timeout_s},
         )
+        with self._lock:
+            self._timeouts += 1
         child.close_input()
         child.terminate()
         child.close()
-        # Count only once the child is reaped: ``timeouts`` is a published
-        # counter, so a reader that sees it incremented must also see the
-        # process dead (``poll() is not None``), not merely signalled.
-        with self._lock:
-            self._timeouts += 1
 
     def _recycle(self, child: _Child, plan: str) -> None:
         """Reap a child that died or recycled itself, and drop it.

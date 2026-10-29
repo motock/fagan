@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -554,5 +555,45 @@ def test_a_dialling_broker_is_bounded_by_the_publish_timeout(clean_env, fake_nat
     assert elapsed < 10.0, f"publish waited {elapsed:.1f}s past its 0.2s budget"
     assert EVENT_TYPE in str(excinfo.value)
     assert PAYLOAD_MARKER not in str(excinfo.value)
+
+
+def _workflow_step(workflow: str, name: str) -> str:
+    """Return the YAML text of the single CI step called *name*.
+
+    Steps are the only entries indented six spaces under ``steps:``, so the
+    next ``      - name:`` line ends the block without needing a YAML parser
+    (which is not a declared dependency of this repo).
+    """
+    marker = f"      - name: {name}\n"
+    assert marker in workflow, f"ci.yml has no step named {name!r}"
+    start = workflow.index(marker) + len(marker)
+    end = workflow.find("\n      - name:", start)
+    return workflow[start:] if end == -1 else workflow[start:end]
+
+
+def test_every_ci_leg_installs_the_broker_its_test_step_requires():
+    """A leg that requires the broker suite must have a broker to run it.
+
+    The ``Run tests`` step sets ``PIPELINE_REQUIRE_NATS_TESTS=1`` for every
+    matrix leg, which turns a missing ``nats-server`` into errors rather than
+    skips. Gating the install or start step to one runner OS therefore fails
+    the other leg with no broker to test against, so both stay unconditional.
+    """
+    workflow_path = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    )
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    run_tests = _workflow_step(workflow, "Run tests")
+    assert 'PIPELINE_REQUIRE_NATS_TESTS: "1"' in run_tests, (
+        "the CI test step must require the broker suite so it cannot skip"
+    )
+
+    for step_name in ("Install nats-server", "Start nats-server"):
+        step = _workflow_step(workflow, step_name)
+        assert "\n        if:" not in f"\n{step}", (
+            f"the {step_name!r} step carries a step-level condition; every leg "
+            "that sets PIPELINE_REQUIRE_NATS_TESTS needs the binary installed"
+        )
 
 

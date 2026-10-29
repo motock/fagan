@@ -72,19 +72,46 @@ jobs:
         # a real broker. Pinned release, verified against the checksum that
         # release publishes, so a swapped or truncated tarball fails the job
         # instead of quietly changing what the publish path is tested against.
-        # The Linux build only: this step is skipped on the macOS leg below.
-        if: runner.os == 'Linux'
+        # Every matrix leg installs the broker: the "Run tests" step sets
+        # PIPELINE_REQUIRE_NATS_TESTS=1, which turns a missing binary into a
+        # failure, so a leg without it fails the job by design. Platform and
+        # architecture are mapped to the matching release asset with its own
+        # pinned checksum.
         env:
           NATS_SERVER_VERSION: "2.10.22"
-          NATS_SERVER_SHA256: "db0b3ccbe4cbdd3872ae7486ec4f6b0f85824632a0789f4da2e0a8518390483e"
+          NATS_SHA256_LINUX_AMD64: "db0b3ccbe4cbdd3872ae7486ec4f6b0f85824632a0789f4da2e0a8518390483e"
+          NATS_SHA256_DARWIN_AMD64: "e99eb01a886b5de05972445e362e48cf8ad10b45e4cd5a5592475b184f8f81c9"
+          NATS_SHA256_DARWIN_ARM64: "93ce74f61a49d8fa9dfbf420e5a844e25309e429c5c8e27b54b3283d0712fcff"
         run: |
           set -euo pipefail
-          tarball="nats-server-v${NATS_SERVER_VERSION}-linux-amd64.tar.gz"
+          case "$(uname -s)" in
+            Linux) os=linux ;;
+            Darwin) os=darwin ;;
+            *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            arm64|aarch64) arch=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          key="NATS_SHA256_$(echo "${os}_${arch}" | tr '[:lower:]' '[:upper:]')"
+          expected="${!key:-}"
+          if [ -z "$expected" ]; then
+            echo "no pinned checksum for ${os}/${arch} (${key})" >&2
+            exit 1
+          fi
+          stem="nats-server-v${NATS_SERVER_VERSION}-${os}-${arch}"
+          tarball="${stem}.tar.gz"
           curl -fsSL -o "$tarball" \
             "https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/${tarball}"
-          echo "${NATS_SERVER_SHA256}  ${tarball}" | sha256sum -c -
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "${expected}  ${tarball}" | sha256sum -c -
+          else
+            # macOS ships shasum, not sha256sum.
+            echo "${expected}  ${tarball}" | shasum -a 256 -c -
+          fi
           tar xzf "$tarball"
-          echo "${PWD}/nats-server-v${NATS_SERVER_VERSION}-linux-amd64" >> "$GITHUB_PATH"
+          echo "${PWD}/${stem}" >> "$GITHUB_PATH"
 
       - name: Start nats-server
         # A JetStream broker for the publish path. The broker-backed tests start
@@ -93,20 +120,25 @@ jobs:
         # PIPELINE_REQUIRE_NATS_TESTS makes a missing broker binary FAIL those
         # tests rather than skip them: a broker suite that silently skips in CI
         # cannot catch a broken publish path.
-        if: runner.os == 'Linux'
         env:
           PIPELINE_REQUIRE_NATS_TESTS: "1"
         run: |
           set -euo pipefail
           nats-server -js -a 127.0.0.1 -p 4222 \
             -sd "$RUNNER_TEMP/nats-js-store" >"$RUNNER_TEMP/nats-server.log" 2>&1 &
+          # Portable readiness probe: /dev/tcp is a bash-only extension and the
+          # macOS runner's default shell has it disabled, so ask Python (already
+          # set up by an earlier step) whether the port accepts connections.
           for _ in $(seq 1 100); do
-            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then
+            if python -c 'import socket,sys; s=socket.socket(); s.settimeout(0.2); sys.exit(0 if s.connect_ex(("127.0.0.1", 4222)) == 0 else 1)'; then
               echo "nats-server is listening on 127.0.0.1:4222"
               exit 0
             fi
             sleep 0.1
           done
+          cat "$RUNNER_TEMP/nats-server.log"
+          echo "nats-server did not start" >&2
+          exit 1
           cat "$RUNNER_TEMP/nats-server.log"
           echo "nats-server did not start" >&2
           exit 1

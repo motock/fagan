@@ -63,6 +63,10 @@ services:
       # has to exist at all. An operator-supplied JWT creds file is still honored
       # through PIPELINE_NATS_CREDS_FILE when one is mounted.
       PIPELINE_NATS_URL: nats://127.0.0.1:4222
+      # This stack owns its broker, so the bus may create the stream; without
+      # it the scheduler daemon refuses to start ("stream 'PIPELINE' does not
+      # exist") and nothing consumes the plan events the smoke run asserts.
+      PIPELINE_NATS_MANAGE_STREAM: "1"
       # Identity: bearer tokens are verified against the IdP's JWKS.
       #
       # The issuer is the URL the tokens are minted for - the proxy origin on

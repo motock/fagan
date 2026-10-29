@@ -182,6 +182,31 @@ jobs:
           fi
           compose exec -T idp /opt/keycloak/bin/kcadm.sh get users -r pipeline \
             --fields username --format csv --noquotes | tr -d '\r' || true
+          echo "--- token claims the pipeline judges ---"
+          token="$(curl -sk -X POST \
+            https://localhost:8443/realms/pipeline/protocol/openid-connect/token \
+            -d grant_type=client_credentials -d client_id=pipeline-mcp \
+            --data-urlencode "client_secret=${PIPELINE_MCP_CLIENT_SECRET}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
+          python3 - "$token" <<'PY'
+          import base64, json, sys
+          token = sys.argv[1]
+          def part(segment):
+              segment += "=" * (-len(segment) % 4)
+              return json.loads(base64.urlsafe_b64decode(segment))
+          if not token:
+              print("no token minted")
+              raise SystemExit
+          header = part(token.split(".")[0])
+          claims = part(token.split(".")[1])
+          print("token header alg/kid:", header.get("alg"), header.get("kid"))
+          for name in ("aud", "azp", "iss", "sub", "typ"):
+              print(f"token {name}:", claims.get(name))
+          PY
+          echo "--- JWKS kids the pipeline would load ---"
+          curl -sk https://localhost:8443/realms/pipeline/protocol/openid-connect/certs \
+            | python3 -c 'import json,sys; print([k.get("kid") for k in json.load(sys.stdin).get("keys",[])])' || true
+          grep -A1 'PIPELINE_OIDC_AUDIENCE' "$COMPOSE_FILE" | head -2 || true
 
       - name: Collect compose logs
         # Before teardown: `down -v` removes the containers, and `docker compose

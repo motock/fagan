@@ -445,3 +445,93 @@ def test_main_rejects_a_bad_argument_count(tmp_path):
     result_path = tmp_path / "result.json"
     assert rj.main(["P", "S-1"]) == 2
     assert not result_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Dot-only keys: the story key names the job directory, so a name made only of
+# dots must be refused before it reaches a filesystem path.  "." resolves to
+# the shared ``review_job`` root and ".." to the state root itself, which would
+# chmod, unlink and write in a directory shared with co-tenants.
+# ---------------------------------------------------------------------------
+
+
+def _shared_state_root(tmp_path: Path) -> Path:
+    """A 0755 state root, as co-tenants see it, holding an unrelated result."""
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    state_root.chmod(0o755)
+    (state_root / "result.json").write_text('{"ok": true}')
+    return state_root
+
+
+def _assert_state_root_untouched(state_root: Path) -> None:
+    assert (state_root.stat().st_mode & 0o777) == 0o755
+    assert (state_root / "result.json").read_text() == '{"ok": true}'
+    assert not (state_root / "review_job").exists()
+
+
+@pytest.mark.parametrize(
+    ("plan_name", "story_key"),
+    [(".", "SQ-01"), ("..", "SQ-01"), ("P", "."), ("P", "..")],
+)
+def test_start_rejects_a_dot_only_key_before_spawning(tmp_path, monkeypatch, plan_name, story_key):
+    calls = _fake_popen(monkeypatch)
+    state_root = _shared_state_root(tmp_path)
+
+    with pytest.raises(ValueError):
+        rj.start_review_job(plan_name, story_key, state_root)
+
+    assert calls == {}
+    _assert_state_root_untouched(state_root)
+
+
+@pytest.mark.parametrize("story_key", [".", ".."])
+def test_start_rejects_a_dot_only_dictionary_without_the_key_rule(
+    tmp_path, monkeypatch, story_key
+):
+    """Defense in depth: the job-dir guard holds even if ``_validate_key`` loosens."""
+    _fake_popen(monkeypatch)
+    monkeypatch.setattr(rj, "_validate_key", lambda name: None)
+    state_root = _shared_state_root(tmp_path)
+
+    with pytest.raises(ValueError) as excinfo:
+        rj.start_review_job("P", story_key, state_root)
+
+    # Never echo a resolved path back at the caller.
+    assert str(state_root) not in str(excinfo.value)
+    _assert_state_root_untouched(state_root)
+
+
+def test_start_still_accepts_a_key_with_a_dot_inside_it(tmp_path, monkeypatch):
+    _fake_popen(monkeypatch)
+    state_root = _shared_state_root(tmp_path)
+    with pytest.raises(ValueError):
+        rj.start_review_job("P", "..", state_root)
+
+    job = rj.start_review_job("P", "v1.2.3", state_root)
+
+    job_dir = state_root / "review_job" / "v1.2.3"
+    assert Path(job["result_path"]) == job_dir / "result.json"
+    assert job_dir.is_dir()
+    assert (state_root.stat().st_mode & 0o777) == 0o755
+    assert (state_root / "result.json").read_text() == '{"ok": true}'
+
+
+@pytest.mark.parametrize("story_key", [".", ".."])
+def test_main_refuses_a_dot_only_story_key(tmp_path, story_key):
+    state_root = _shared_state_root(tmp_path)
+
+    rc = rj.main(["P", story_key, str(state_root / "result.json")])
+
+    assert rc == 2
+    _assert_state_root_untouched(state_root)
+
+
+def test_main_refuses_a_dot_only_story_key_without_the_key_rule(tmp_path, monkeypatch):
+    monkeypatch.setattr(rj, "_validate_key", lambda name: None)
+    state_root = _shared_state_root(tmp_path)
+
+    rc = rj.main(["P", "..", str(state_root / "result.json")])
+
+    assert rc == 2
+    _assert_state_root_untouched(state_root)

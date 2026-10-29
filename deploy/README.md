@@ -169,3 +169,24 @@ the stack at a real (or emulated) GitHub or GitLab endpoint by setting
 `PIPELINE_FORGE` and the matching token, and expect the run to merge instead of
 parking.
 
+### What the smoke stack depends on outside `deploy/`
+
+Four artifacts live outside this directory because the stack cannot work without
+them, and each is owned by the story that introduced it:
+
+- `deploy/entrypoint.sh` seeds the `git-origin` volume idempotently. The guard
+  tests for `/git-origin/sample.git/HEAD` before `git init --bare`, so a
+  `docker compose restart pipeline` preserves the refs the smoke run pushed.
+  Seeding unconditionally on every start would drop `story/1` and make the
+  restart assertion read like a lost notification when the broker was healthy.
+- `deploy/smoke/sample-repo/` is the source the bare origin is seeded from. It
+  carries no `test_*.py`, so a bare `pytest` in the repository collects nothing
+  new from it.
+- `.github/workflows/smoke.yml` is the only place `docker compose up` actually
+  runs. Every `uses:` is pinned to a full 40-hex commit SHA, permissions are
+  minimal, and the log dump runs under `if: always()` so a failed run is
+  diagnosable.
+- `tests/smoke/scripted_model_server.py` is the deterministic model the `model`
+  service runs. It speaks the provider wire protocol and consumes its scripted
+  replies in order; the smoke run never relies on a reply being replayed.
+

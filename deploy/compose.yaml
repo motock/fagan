@@ -103,6 +103,9 @@ services:
       # Read by the shim below and written to the dashboard login client's
       # secret file; never passed on a command line and never logged.
       PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET}
+      # The image entrypoint defaults this to 1; stated here because this file
+      # is the documented interface, and policy enforcement is not optional.
+      PIPELINE_POLICY_ENFORCE: "1"
       # The auth-fail bucket is charged per client address (pipeline/rate_limit.py
       # failed_auth_key), and every caller here arrives from the same address, so
       # the limit is low and explicit: smoke.sh asserts the 429 that follows.

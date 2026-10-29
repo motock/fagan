@@ -449,3 +449,169 @@ class TestPooledPass:
         advance_all_plans_pooled()
 
         assert spawn_calls == [("alpha", 600.0)]
+
+
+# --------------------------------------------------------------------------
+# FU-02: the pass summary separates the two truncations it can cause
+# --------------------------------------------------------------------------
+
+
+def _pass_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The per-pass summary records, in emission order."""
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "pooled advance pass complete" in record.getMessage()
+    ]
+
+
+def _only_pass_record(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+    records = _pass_records(caplog)
+    assert len(records) == 1, [record.getMessage() for record in records]
+    return records[0]
+
+
+def _timed_out_payload() -> dict:
+    """Exactly what ``advance_plan_subprocess`` returns for a killed child."""
+    return {"ok": False, "error": "advance timed out", "timed_out": True}
+
+
+class TestPassSummaryCounting:
+    """A deadline SKIP and a per-plan TIMEOUT point an operator at different knobs.
+
+    ``skipped`` means the pass window (the reconcile join timeout) was too
+    small; ``timed_out`` means ``PIPELINE_ADVANCE_PLAN_TIMEOUT_SECONDS`` was.
+    Reporting one under the other's name sends the operator to the wrong knob.
+    """
+
+    def test_a_real_plan_timeout_is_counted_not_a_skip(
+        self, monkeypatch, plans, caplog
+    ):
+        monkeypatch.setenv(WORKERS_ENV, "3")
+        plans(["alpha", "beta", "gamma"])
+
+        def _spawn(plan_name: str, timeout_s: float) -> dict:
+            if plan_name == "beta":
+                return _timed_out_payload()
+            return {"ok": True}
+
+        monkeypatch.setattr(advance_pool, "advance_plan_subprocess", _spawn)
+        caplog.set_level(logging.INFO)
+
+        result = advance_all_plans_pooled()
+
+        # Per-plan payloads stay faithful: callers read ``timed_out`` there.
+        assert result["plans"]["beta"] == {
+            "ok": False,
+            "error": "advance timed out",
+            "timed_out": True,
+        }
+        assert result["plans"]["alpha"] == {"ok": True}
+        assert result["plans"]["gamma"] == {"ok": True}
+
+        record = _only_pass_record(caplog)
+        message = record.getMessage()
+        assert "plans=3" in message
+        assert "skipped=0" in message
+        assert "timed_out=1" in message
+        assert getattr(record, "skipped", None) == 0
+        assert getattr(record, "timed_out", None) == 1
+
+    def test_a_deadline_skip_and_a_real_timeout_are_counted_apart(
+        self, monkeypatch, plans, caplog
+    ):
+        # One worker so the plans run in submission order and the fake clock
+        # hands its readings out deterministically.
+        monkeypatch.setenv(WORKERS_ENV, "1")
+        plans(["alpha", "beta"])
+        monkeypatch.setattr(
+            advance_pool, "_reconcile_join_timeout_seconds", lambda: 900.0
+        )
+        # reading 1 = _deadline (1000 + max(30, 900-60) = 1840),
+        # reading 2 = pass start, reading 3 = alpha's remaining (+840: spawns),
+        # reading 4 = beta's remaining (-3160: deadline-skipped).
+        readings = iter([1000.0, 1000.0, 1000.0, 5000.0])
+
+        def _fake_monotonic() -> float:
+            return next(readings, 5000.0)
+
+        monkeypatch.setattr(advance_pool.time, "monotonic", _fake_monotonic)
+
+        def _spawn(plan_name: str, timeout_s: float) -> dict:
+            assert plan_name == "alpha", "a plan past the deadline must not spawn"
+            return _timed_out_payload()
+
+        monkeypatch.setattr(advance_pool, "advance_plan_subprocess", _spawn)
+        caplog.set_level(logging.INFO)
+
+        result = advance_all_plans_pooled()
+
+        assert result["plans"]["alpha"]["timed_out"] is True
+        assert result["plans"]["beta"] == {"ok": True, "skipped": "deadline"}
+
+        record = _only_pass_record(caplog)
+        message = record.getMessage()
+        assert "plans=2" in message
+        assert "skipped=1" in message
+        assert "timed_out=1" in message
+        assert getattr(record, "skipped", None) == 1
+        assert getattr(record, "timed_out", None) == 1
+
+    def test_an_exception_failure_counts_as_neither(
+        self, monkeypatch, plans, caplog
+    ):
+        monkeypatch.setenv(WORKERS_ENV, "2")
+        plans(["alpha", "beta"])
+
+        def _spawn(plan_name: str, timeout_s: float) -> dict:
+            if plan_name == "beta":
+                raise RuntimeError("boom")
+            return {"ok": True}
+
+        monkeypatch.setattr(advance_pool, "advance_plan_subprocess", _spawn)
+        caplog.set_level(logging.INFO)
+
+        result = advance_all_plans_pooled()
+
+        failure = result["plans"]["beta"]
+        assert failure == {"ok": False, "error": "advance raised RuntimeError"}
+        assert "timed_out" not in failure
+
+        record = _only_pass_record(caplog)
+        message = record.getMessage()
+        assert "skipped=0" in message
+        assert "timed_out=0" in message
+        assert getattr(record, "skipped", None) == 0
+        assert getattr(record, "timed_out", None) == 0
+
+    def test_counts_are_per_pass_and_do_not_accumulate(
+        self, monkeypatch, plans, caplog
+    ):
+        monkeypatch.setenv(WORKERS_ENV, "2")
+        caplog.set_level(logging.INFO)
+
+        def _spawn(plan_name: str, timeout_s: float) -> dict:
+            if plan_name in {"beta", "delta"}:
+                return _timed_out_payload()
+            return {"ok": True}
+
+        monkeypatch.setattr(advance_pool, "advance_plan_subprocess", _spawn)
+
+        plans(["alpha", "beta"])
+        advance_all_plans_pooled()
+        plans(["gamma", "delta"])
+        advance_all_plans_pooled()
+
+        records = _pass_records(caplog)
+        assert len(records) == 2, [record.getMessage() for record in records]
+        for record in records:
+            assert "plans=2" in record.getMessage()
+        # Local per call: the second pass must not report the first's timeout
+        # as well (1 -> 2) nor mistake the skipped count for a timeout.
+        assert [getattr(record, "skipped", None) for record in records] == [0, 0]
+        assert [getattr(record, "timed_out", None) for record in records] == [1, 1]
+        for record in records:
+            message = record.getMessage()
+            assert "skipped=0" in message
+            assert "timed_out=1" in message

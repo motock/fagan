@@ -273,23 +273,34 @@ def _advance_one_pooled(plan_name: str, deadline: float) -> dict[str, Any]:
     return advance_plan_subprocess(plan_name, min(_plan_timeout_seconds(), remaining))
 
 
-def _log_pass(plans: int, workers: int, elapsed_s: float, timed_out: int) -> None:
+def _log_pass(
+    plans: int, workers: int, elapsed_s: float, skipped: int, timed_out: int
+) -> None:
     """Log one reconcile pass: the counts an operator needs to tune the pool.
 
+    ``skipped`` and ``timed_out`` are different truncations with different
+    knobs: a skip means no window remained when the plan's turn came, so the
+    reconcile join timeout is too small; a timeout means a child was killed at
+    its own ``PIPELINE_ADVANCE_PLAN_TIMEOUT_SECONDS``. Reporting one under the
+    other's name points the operator at the wrong knob.
+
     The key=value pairs sit in the message so a plain ``grep 'timed_out='`` on
-    the daemon log finds every truncated pass, and they are repeated as
-    structured ``extra`` fields for log processors that read the record.
+    the daemon log finds every pass that killed a child, and they are repeated
+    as structured ``extra`` fields for log processors that read the record.
     """
     logger.info(
-        "pooled advance pass complete plans=%d workers=%d elapsed_s=%.3f timed_out=%d",
+        "pooled advance pass complete plans=%d workers=%d elapsed_s=%.3f"
+        " skipped=%d timed_out=%d",
         plans,
         workers,
         elapsed_s,
+        skipped,
         timed_out,
         extra={
             "plans": plans,
             "workers": workers,
             "elapsed_s": round(elapsed_s, 3),
+            "skipped": skipped,
             "timed_out": timed_out,
         },
     )
@@ -312,7 +323,7 @@ def advance_all_plans_pooled() -> dict[str, Any]:
 
     plans = list(server._store.list_manifests())
     if not plans:
-        _log_pass(0, _advance_workers(), 0.0, 0)
+        _log_pass(0, _advance_workers(), 0.0, 0, 0)
         return {"ok": True, "plans": {}}
 
     # Rotate by one plan per pass so the plan advanced last pass is advanced
@@ -350,9 +361,15 @@ def advance_all_plans_pooled() -> dict[str, Any]:
                     "error": f"advance raised {type(exc).__name__}",
                 }
 
-    timed_out = sum(
+    skipped = sum(
         1 for result in results.values()
         if isinstance(result, dict) and result.get("skipped") == "deadline"
     )
-    _log_pass(len(ordered), workers, time.monotonic() - started, timed_out)
+    timed_out = sum(
+        1 for result in results.values()
+        if isinstance(result, dict) and result.get("timed_out") is True
+    )
+    _log_pass(
+        len(ordered), workers, time.monotonic() - started, skipped, timed_out
+    )
     return {"ok": True, "plans": results}

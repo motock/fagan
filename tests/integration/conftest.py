@@ -31,13 +31,19 @@ import pytest
 import pipeline.server as _server
 from pipeline import paths as _paths
 from pipeline import usage as _usage
+from pipeline import usage_cooldown as _usage_cooldown
 
 #: Every module that binds ``USAGE_STATE_PATH`` at import time and is read
-#: afterwards by the dispatch gate (the unit tier patches both of these too).
+#: afterwards by the dispatch gate: ``pipeline.paths`` is the source,
+#: ``pipeline.usage`` reads it when it derives a pause, ``pipeline.server``
+#: re-exports it to in-process callers, and ``pipeline.usage_cooldown`` binds
+#: it separately to place its latch file beside the usage state, so a latched
+#: cooldown would otherwise still be read from the developer's live meter.
 _USAGE_STATE_BINDINGS = (
     (_server, "USAGE_STATE_PATH"),
     (_paths, "USAGE_STATE_PATH"),
     (_usage, "USAGE_STATE_PATH"),
+    (_usage_cooldown, "USAGE_STATE_PATH"),
 )
 
 

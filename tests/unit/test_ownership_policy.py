@@ -1,8 +1,9 @@
 """Ownership as an additional authority in the local policy (OWN-02).
 
 A plan's ``owner`` and ``delegates`` reach :class:`app.policy.LocalPolicy`
-through :class:`app.policy.Resource`. They grant exactly the three actions a
-plan's owner governs -- ``plan:approve``, ``plan:reject`` and ``story:merge`` --
+through :class:`app.policy.Resource`. They grant exactly the five actions a
+plan's owner governs -- ``plan:approve``, ``plan:reject``, ``plan:dispatch``,
+``story:merge`` and ``decision:answer`` --
 and never take anything away: every principal the role rules allowed before is
 still allowed, and a plan with no owner (every plan written before OWN-01)
 behaves exactly as it does today.
@@ -31,8 +32,14 @@ ACTIONS = (
     "config:write",
 )
 
-#: The three actions a plan's owner governs.
-OWNER_GATED = ("plan:approve", "plan:reject", "story:merge")
+#: The five actions a plan's owner governs.
+OWNER_GATED = (
+    "plan:approve",
+    "plan:reject",
+    "plan:dispatch",
+    "story:merge",
+    "decision:answer",
+)
 
 #: A plan owned by alice, with one delegate.
 OWNED = Resource(owner="alice", delegates=("bob",))
@@ -95,11 +102,15 @@ def test_unowned_plan_denies_a_roleless_principal_for_every_action(
     assert _decide(principal, action, Resource(owner="", delegates=())) is False
 
 
-@pytest.mark.parametrize("action", ["plan:dispatch", "story:patch"])
-def test_delegate_is_not_allowed_beyond_the_three_owner_gated_actions(
+@pytest.mark.parametrize("action", ["story:patch"])
+def test_delegate_is_not_allowed_beyond_the_owner_gated_actions(
     action: str,
 ) -> None:
     assert _decide(Principal(subject="bob", roles=()), action, OWNED) is False
+
+
+def test_delegate_may_dispatch_the_plan_it_is_delegated() -> None:
+    assert _decide(Principal(subject="bob", roles=()), "plan:dispatch", OWNED) is True
 
 
 def test_resource_for_populates_the_plans_ownership_from_the_manifest() -> None:

@@ -48,10 +48,16 @@ from app.policy import LocalPolicy, Resource
 POLICY = LocalPolicy()
 
 #: Actions a plan's ownership governs.
-OWNED_ACTIONS = ("plan:approve", "plan:reject", "story:merge", "decision:answer")
+OWNED_ACTIONS = (
+    "plan:approve",
+    "plan:reject",
+    "plan:dispatch",
+    "story:merge",
+    "decision:answer",
+)
 
 #: Actions ownership must never reach.
-NOT_OWNED_ACTIONS = ("story:patch", "plan:dispatch", "plan:ingest", "config:write")
+NOT_OWNED_ACTIONS = ("story:patch", "plan:ingest", "config:write")
 
 #: Plans.
 PLAN_A = Resource(owner="alice", delegates=("bob",))

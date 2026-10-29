@@ -5,20 +5,13 @@ pipeline.service, so tests patching pipeline.server still land.
 """
 
 import logging
-import re
 from datetime import UTC, datetime
 
 from app.identity import LOCAL_OPERATOR
 
 from .actor import actor_id
 from .authorization import _load_manifest
-
-#: A routing subject: one line, 1-64 characters, no control characters. This is
-#: the same 1-64 character bound and one-line intent as
-#: ``actor.CORRELATION_ID_RE``, with a wider charset because a subject may be an
-#: email address or ``ops:oncall``. A subject is interpolated into the
-#: line-oriented notifications log, so a newline there would forge a line.
-SUBJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}")
+from .ownership import subject_or_none
 
 #: Cap on the delegates a manifest may route to, so a hostile list cannot bury
 #: neighbouring records or grow the routing record without bound.
@@ -39,23 +32,6 @@ def _escalates_to_human(ruling: dict) -> bool:
     settled itself.
     """
     return ruling.get("action") in _ESCALATING_ACTIONS or bool(ruling.get("notify_user"))
-
-
-def _valid_subject(value: object) -> str | None:
-    """Return *value* as a routing subject, or ``None`` when it is not one.
-
-    A subject is a single line of ``SUBJECT_RE``. The raw value is checked for
-    newlines, carriage returns and ANSI escapes *before* stripping, because
-    stripping would otherwise hide a trailing newline and accept ``"alice\n"``
-    as ``"alice"``. Non-strings are rejected outright rather than coerced:
-    ``str()`` would turn ``123`` into a routable ``"123"``.
-    """
-    if not isinstance(value, str):
-        return None
-    if "\n" in value or "\r" in value or "\x1b" in value:
-        return None
-    candidate = value.strip()
-    return candidate if SUBJECT_RE.fullmatch(candidate) else None
 
 
 def _routing_target(plan_name: str) -> dict:
@@ -96,14 +72,14 @@ def _routing_target(plan_name: str) -> dict:
         # Filter first, then cap, so a hostile entry never consumes a slot; the
         # manifest's list is never mutated.
         for item in raw_delegates:
-            subject = _valid_subject(item)
+            subject = subject_or_none(item)
             if subject is None:
                 continue
             delegates.append(subject)
             if len(delegates) == MAX_DELEGATES:
                 break
     return {
-        "owner": _valid_subject(manifest.get("owner")) or LOCAL_OPERATOR.subject,
+        "owner": subject_or_none(manifest.get("owner")) or LOCAL_OPERATOR.subject,
         "delegates": delegates,
     }
 

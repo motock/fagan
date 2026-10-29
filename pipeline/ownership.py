@@ -19,7 +19,26 @@ from .audit import record_audit
 #: forge a line there. This is the same 1-64 character bound and one-line
 #: intent as ``actor.CORRELATION_ID_RE``, with a wider charset because a
 #: subject may be an email address or ``ops:oncall``.
+#:
+#: Defined here, once, and imported by ``pipeline.service_decisions``: both the
+#: ingest boundary and the routing read-back must accept exactly the same
+#: subjects, so the two copies must not drift apart.
 SUBJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}")
+
+#: Cap on an owner that is *not* held to ``SUBJECT_RE`` (the ingester default,
+#: an OIDC ``issuer#sub`` principal). Wide enough for any real issuer URL plus a
+#: subject claim, small enough that it cannot bury neighbouring log records.
+MAX_LENIENT_OWNER = 256
+
+#: Everything a line-oriented log must never see: C0 controls (which include
+#: ``\n``, ``\r`` and the ANSI escape), DEL, C1 controls, and the Unicode line
+#: and paragraph separators. Checked on the raw value, before stripping, because
+#: stripping would hide a trailing newline.
+_FORBIDDEN_CHARS = frozenset(
+    map(chr, range(0x20))  # C0 controls: \n \r \t \x1b and friends
+) | {"\x7f"}  # DEL
+_FORBIDDEN_CHARS |= frozenset(map(chr, range(0x80, 0xA0)))  # C1 controls: \x85
+_FORBIDDEN_CHARS |= {"\u2028", "\u2029"}  # LINE/PARAGRAPH SEPARATOR
 
 #: The refusal an invalid owner gets. It is the message ingest already returned
 #: for a non-string owner, reused verbatim because the ingest path turns exactly
@@ -28,12 +47,27 @@ OWNER_REFUSAL = "invalid owner: must be a non-empty string"
 
 
 def _single_line(value: str) -> bool:
-    """Return whether *value* carries no newline, carriage return or ANSI escape.
+    """Return whether *value* is safe to write as one line of a log.
 
-    Checked on the raw value, before any stripping, because stripping would hide
-    a trailing newline.
+    No C0/C1 control character, no DEL, no Unicode line separator - so a value
+    that passes cannot start a new record or steer a terminal. Checked on the
+    raw value, before any stripping, because stripping would hide a trailing
+    newline.
     """
-    return "\n" not in value and "\r" not in value and "\x1b" not in value
+    return not (_FORBIDDEN_CHARS & set(value))
+
+
+def subject_or_none(value: object) -> str | None:
+    """Return *value* as a routing subject, or ``None`` when it is not one.
+
+    The shared shape bound: a single line of ``SUBJECT_RE``. Non-strings are
+    rejected outright rather than coerced - ``str()`` would turn ``123`` into a
+    routable ``"123"``.
+    """
+    if not isinstance(value, str) or not _single_line(value):
+        return None
+    candidate = value.strip()
+    return candidate if SUBJECT_RE.fullmatch(candidate) else None
 
 
 def ownership_from_plan(plan: dict[str, Any], ingested_by: str) -> dict[str, Any]:
@@ -53,21 +87,23 @@ def ownership_from_plan(plan: dict[str, Any], ingested_by: str) -> dict[str, Any
     # ValueError.
     named_owner = plan.get("owner")
     if named_owner:
-        if not isinstance(named_owner, str) or not _single_line(named_owner):
-            raise ValueError(OWNER_REFUSAL)
-        if not SUBJECT_RE.fullmatch(named_owner.strip()):
+        if subject_or_none(named_owner) is None:
             raise ValueError(OWNER_REFUSAL)
         owner = named_owner
     else:
         # The ingester is not required to be a routing subject: an OIDC
         # principal is ``f"{issuer}#{sub}"``, and ``#`` and ``/`` are outside
         # SUBJECT_RE, so a shape bound here would break ingest for every
-        # authenticated OIDC caller. The ingester's value is still written to
-        # the log, so only the log-safety bound applies; routing guards a
-        # non-conforming owner when the record is read back.
+        # authenticated OIDC caller. The log-safety bound still applies - no
+        # control character, nothing a line-oriented record cannot hold, and a
+        # length cap - because this value is written to the notifications log
+        # too. Routing re-validates against SUBJECT_RE when the record is read
+        # back, so a non-conforming owner cannot reach the log twice over.
         if not isinstance(ingested_by, str) or not _single_line(ingested_by):
             raise ValueError(OWNER_REFUSAL)
         if not ingested_by.strip():
+            raise ValueError(OWNER_REFUSAL)
+        if len(ingested_by.strip()) > MAX_LENIENT_OWNER:
             raise ValueError(OWNER_REFUSAL)
         owner = ingested_by
     delegates = plan.get("delegates") or []

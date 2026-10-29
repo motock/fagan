@@ -273,3 +273,70 @@ def test_ingest_branch_does_not_change_other_actions() -> None:
     owned = Resource(plan="p1", owner=OIDC_ALICE.subject)
     assert policy.allow(OIDC_ALICE, Action.STORY_MERGE, owned) is True
     assert policy.allow(OIDC_ALICE, Action.DECISION_ANSWER, owned) is True
+
+
+# --- DK-06: a plan's owner may dispatch the plan it governs -----------------
+#
+# ADR 0009 makes the plan's owner the accountable party for that plan and lets
+# it approve its own plan, so starting the work it approved is the same
+# authority: `plan:dispatch` joins the ownership grant. `plan:pause` stays
+# outside it on purpose — nothing in the current stack asks an owner to pause
+# its own plan, and every action added to the grant widens authority.
+
+
+def test_owner_may_dispatch_the_plan_it_owns() -> None:
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_DISPATCH, resource) is True
+
+
+def test_delegate_may_dispatch_the_plan_it_is_delegated() -> None:
+    delegate = Principal(subject=OIDC_BOB_SUBJECT, auth_method="oidc")
+    resource = Resource(
+        plan="p1", owner=OIDC_ALICE.subject, delegates=(OIDC_BOB_SUBJECT,)
+    )
+
+    assert LocalPolicy().allow(delegate, Action.PLAN_DISPATCH, resource) is True
+
+
+def test_principal_without_role_or_ownership_cannot_dispatch() -> None:
+    stranger = Principal(subject="oidc:carol", auth_method="oidc")
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert LocalPolicy().allow(stranger, Action.PLAN_DISPATCH, resource) is False
+
+
+def test_owner_cannot_dispatch_a_plan_owned_by_someone_else() -> None:
+    resource = Resource(plan="p1", owner=OIDC_BOB_SUBJECT)
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_DISPATCH, resource) is False
+
+
+def test_subject_with_no_role_cannot_dispatch_an_ownerless_plan() -> None:
+    # `owner == ""` falls through to the role rule, which allows it nothing.
+    resource = Resource(plan="p1", owner="")
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_DISPATCH, resource) is False
+
+
+def test_unauthenticated_principal_cannot_dispatch() -> None:
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert LocalPolicy().allow(None, Action.PLAN_DISPATCH, resource) is False
+
+
+def test_system_scheduler_may_still_dispatch() -> None:
+    # Its `SYSTEM_PRINCIPAL_GRANTS` row is unchanged, and it is decided first.
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert (
+        LocalPolicy().allow(SYSTEM_SCHEDULER_PRINCIPAL, Action.PLAN_DISPATCH, resource)
+        is True
+    )
+
+
+def test_owner_still_cannot_pause_its_plan() -> None:
+    # The deliberate boundary: `plan:pause` stays outside the ownership grant.
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_PAUSE, resource) is False

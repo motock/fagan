@@ -128,12 +128,12 @@ class LocalPolicy:
 
     Every other principal is denied every action, with three exceptions. A plan's
     ``owner`` and its ``delegates`` are allowed ``plan:approve``,
-    ``plan:reject``, ``story:merge`` and ``decision:answer``; ownership is
-    additive only — it can allow a principal the role rule denies, never deny
-    one it allows — and a plan with no owner (every plan written before OWN-01)
-    falls through to the role rule unchanged. Ownership never applies to a
-    ``system:`` subject: ADR 0009 requires that a system principal never
-    approve its own plan.
+    ``plan:reject``, ``plan:dispatch``, ``story:merge`` and
+    ``decision:answer``; ownership is additive only — it can allow a principal
+    the role rule denies, never deny one it allows — and a plan with no owner
+    (every plan written before OWN-01) falls through to the role rule
+    unchanged. Ownership never applies to a ``system:`` subject: ADR 0009
+    requires that a system principal never approve its own plan.
 
     The second exception is the reserved ``system:`` principals, which hold
     exactly their row of :data:`SYSTEM_PRINCIPAL_GRANTS` and nothing else. That
@@ -195,7 +195,7 @@ class LocalPolicy:
                 return True
             return principal.subject == resource.owner
 
-        # Ownership is an ADDITIONAL authority for exactly the four actions a
+        # Ownership is an ADDITIONAL authority for exactly the five actions a
         # plan's owner governs: it can only allow a principal the role rules
         # below would deny, never deny one they would allow. The `resource.owner
         # and` guard keeps a plan with no owner behaving as it does today,
@@ -207,6 +207,7 @@ class LocalPolicy:
             in (
                 Action.PLAN_APPROVE,
                 Action.PLAN_REJECT,
+                Action.PLAN_DISPATCH,
                 Action.STORY_MERGE,
                 Action.DECISION_ANSWER,
             )

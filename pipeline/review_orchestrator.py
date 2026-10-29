@@ -35,6 +35,7 @@ from .review_logic import (
 )
 from .review_refs import _ServerRef
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
+from .story_commit import commit_story
 
 # Server-sourced names the moved body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -91,7 +92,6 @@ _extract_blocking_finding_files = _ServerRef("_extract_blocking_finding_files")
 _extract_suggested_commit_message = _ServerRef("_extract_suggested_commit_message")
 _post_pr_comment = _ServerRef("_post_pr_comment")
 _format_review_comment = _ServerRef("_format_review_comment")
-_atomic_write_json = _ServerRef("_atomic_write_json")
 detect_test_command = _ServerRef("detect_test_command")
 backend = _ServerRef("backend")
 subprocess = _ServerRef("subprocess")
@@ -184,7 +184,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                             **_cid_kwargs,
                         )
                         story["skip_notified_sha"] = current_sha
-                    _atomic_write_json(manifest_path, manifest)
+                    commit_story(plan_name, story_key, story, manifest_path)
                     return {
                         "ok": True,
                         "status": story["status"],
@@ -320,7 +320,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
             if _is_transient_backend_exception(e):
@@ -340,7 +340,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"failure ({type(e).__name__}); will retry next tick.",
                     **_cid_kwargs,
                 )
-                _atomic_write_json(manifest_path, manifest)
+                commit_story(plan_name, story_key, story, manifest_path)
                 return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
             # Defense in depth: a reviewer backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
@@ -411,7 +411,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
     # Transient backend error (HTTP 5xx / connection reset or refused / timed
@@ -462,7 +462,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             f"one retry (transient transport error); will retry next tick.",
             **_cid_kwargs,
         )
-        _atomic_write_json(manifest_path, manifest)
+        commit_story(plan_name, story_key, story, manifest_path)
         return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
 
     # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
@@ -504,7 +504,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
             if _is_transient_backend_exception(e):
@@ -523,7 +523,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"transport failure ({type(e).__name__}); will retry next tick.",
                     **_cid_kwargs,
                 )
-                _atomic_write_json(manifest_path, manifest)
+                commit_story(plan_name, story_key, story, manifest_path)
                 return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
             # Defense in depth: the security backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
@@ -543,7 +543,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{type(e).__name__}; will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "status": story["status"], "deferred": "backend_error"}
         security_verdict = _parse_verdict(security_output)
 
@@ -562,7 +562,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"verdict; will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "status": story["status"], "deferred": deferred_reason}
 
         story["security_review_verdict"] = security_verdict
@@ -618,7 +618,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         else:
             _notify_user(plan_name, f"{story_key} review inconclusive; will retry.", **_cid_kwargs)
-        _atomic_write_json(manifest_path, manifest)
+        commit_story(plan_name, story_key, story, manifest_path)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
     # T11: a REQUEST_CHANGES with no substantive findings text is not a
@@ -670,7 +670,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"REQUEST_CHANGES with no findings text; will retry.",
                 **_cid_kwargs,
             )
-        _atomic_write_json(manifest_path, manifest)
+        commit_story(plan_name, story_key, story, manifest_path)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
     story["review_inconclusive_count"] = 0
@@ -762,7 +762,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"({exc.__class__.__name__}); will retry next tick.",
                 **_cid_kwargs,
             )
-            _atomic_write_json(manifest_path, manifest)
+            commit_story(plan_name, story_key, story, manifest_path)
             return {"ok": True, "verdict": verdict, "status": story["status"]}
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
@@ -910,7 +910,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                                 f"without spending a rework attempt.",
                                 **_rework_kwargs,
                             )
-                            _atomic_write_json(manifest_path, manifest)
+                            commit_story(plan_name, story_key, story, manifest_path)
                             return {
                                 "ok": True,
                                 "verdict": verdict,
@@ -987,7 +987,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
                 except (subprocess.CalledProcessError, OSError) as exc:
                     _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.", **_rework_kwargs)
-    _atomic_write_json(manifest_path, manifest)
+    commit_story(plan_name, story_key, story, manifest_path)
     return {
         "ok": True,
         "verdict": verdict,

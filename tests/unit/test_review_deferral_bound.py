@@ -1,6 +1,8 @@
 # ruff: noqa: F811  (imported pytest fixtures are used only as parameters)
 """The bound on consecutive rate-limited review deferrals."""
 
+import json
+
 import pytest
 
 from app import backend
@@ -74,6 +76,7 @@ def _park(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     story = {"status": "tests_passed", "review_deferred_count": 7, "rework_attempts": 2}
     manifest = {"stories": {"S1": story}}
+    (tmp_path / "m.json").write_text(json.dumps(manifest))
     result = rd.park_rate_limited_review(
         "plan", "S1", story, manifest, tmp_path / "m.json")
     return result, story

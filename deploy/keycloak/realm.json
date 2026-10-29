@@ -55,7 +55,7 @@
     {
       "clientId": "pipeline-smoke-user",
       "name": "Pipeline smoke operator login",
-      "description": "Confidential client used only by deploy/smoke/smoke.sh to obtain a direct-grant token for the owner and stranger principals. Direct grants are how a scripted client signs in as a named human without a browser, so this client carries no browser flow and no service account.",
+      "description": "Confidential client used only by deploy/smoke/smoke.sh to obtain a direct-grant token for the owner and stranger principals: a scripted client signing in as a named human without a browser. No browser flow, no service account.",
       "enabled": true,
       "publicClient": false,
       "secret": "${env.PIPELINE_SMOKE_USER_CLIENT_SECRET}",

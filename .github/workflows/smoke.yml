@@ -117,27 +117,36 @@ jobs:
 
       - name: Diagnose IdP client credentials on failure
         # `invalid_client_credentials` means the secret the runner sends and the
-        # one the realm import stored disagree. Compare them without printing
-        # either, and list the realm's users, so the next run names the cause.
+        # one the realm import stored disagree. Classify the stored value
+        # without printing it, and prove the admin read itself worked, so the
+        # next run names the cause instead of another guess.
         if: failure()
         run: |
           set -uo pipefail
           compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
           compose exec -T idp env | grep -E '^PIPELINE_(MCP|DASHBOARD|SMOKE)' | sed 's/=.*$/=<set>/' || true
-          compose exec -T idp /opt/keycloak/bin/kcadm.sh config credentials \
-            --server http://localhost:8080 --realm master \
-            --user "${KEYCLOAK_ADMIN:-smoke-admin}" \
-            --password "${KEYCLOAK_ADMIN_PASSWORD}" >/dev/null 2>&1 || true
+          if compose exec -T idp /opt/keycloak/bin/kcadm.sh config credentials \
+               --server http://localhost:8080 --realm master \
+               --user "${KEYCLOAK_ADMIN:-smoke-admin}" \
+               --password "${KEYCLOAK_ADMIN_PASSWORD}" >/dev/null; then
+            echo "kcadm authenticated against the master realm"
+          else
+            echo "kcadm could NOT authenticate; the comparison below is unreliable"
+          fi
           stored="$(compose exec -T idp /opt/keycloak/bin/kcadm.sh get clients \
             -r pipeline -q clientId=pipeline-mcp --fields secret \
-            --format csv --noquotes 2>/dev/null | tr -d '\r' | tail -n 1)"
-          if [ "$stored" = "${PIPELINE_MCP_CLIENT_SECRET}" ]; then
+            --format csv --noquotes | tr -d '\r' | tail -n 1)"
+          if [ -z "$stored" ]; then
+            echo "no stored secret was read (kcadm returned nothing)"
+          elif [ "$stored" = "${PIPELINE_MCP_CLIENT_SECRET}" ]; then
             echo "pipeline-mcp secret MATCHES the runner's value"
+          elif [ "$stored" = '${env.PIPELINE_MCP_CLIENT_SECRET}' ]; then
+            echo "pipeline-mcp stored the LITERAL placeholder: the realm import did not substitute"
           else
-            echo "pipeline-mcp secret DIFFERS from the runner's value"
+            echo "pipeline-mcp secret DIFFERS (stored length ${#stored})"
           fi
           compose exec -T idp /opt/keycloak/bin/kcadm.sh get users -r pipeline \
-            --fields username --format csv --noquotes 2>/dev/null | tr -d '\r' || true
+            --fields username --format csv --noquotes | tr -d '\r' || true
 
       - name: Collect compose logs
         # Before teardown: `down -v` removes the containers, and `docker compose

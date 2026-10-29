@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 #: The subject of the local single-operator deployment's principal.
 LOCAL_OPERATOR_SUBJECT = LOCAL_OPERATOR.subject
 
+#: ``auth_method`` values that mean "nobody authenticated". ``pipeline.actor``
+#: defines ``ANONYMOUS`` this way, and this module may not import that one (the
+#: dependency runs the other way), so the rule is stated here: an unauthenticated
+#: caller may never create a plan, whatever subject it presents.
+UNAUTHENTICATED_AUTH_METHODS = frozenset({"", "none"})
+
 
 class Action(str, Enum):
     """The mutating actions ADR 0009 authorizes."""
@@ -120,7 +126,7 @@ def _coerce_action(action: Action | str) -> Action | None:
 class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
-    Every other principal is denied every action, with two exceptions. A plan's
+    Every other principal is denied every action, with three exceptions. A plan's
     ``owner`` and its ``delegates`` are allowed ``plan:approve``,
     ``plan:reject``, ``story:merge`` and ``decision:answer``; ownership is
     additive only — it can allow a principal the role rule denies, never deny
@@ -133,6 +139,14 @@ class LocalPolicy:
     exactly their row of :data:`SYSTEM_PRINCIPAL_GRANTS` and nothing else. That
     branch is decided before ownership is read, so naming a system subject as
     ``owner`` or ``delegate`` in a manifest grants it nothing.
+
+    The third exception is ``plan:ingest``, which is how a plan acquires an
+    owner in the first place (ADR 0006). An *authenticated* principal — one
+    whose ``auth_method`` is neither empty nor ``"none"``, so never
+    ``ANONYMOUS`` — may ingest a plan that has no manifest yet or a legacy plan
+    with no owner, and becomes its owner; the same principal may re-ingest a
+    plan it already owns. A plan owned by someone else stays closed to it, and
+    nothing here widens any action beyond ``plan:ingest``.
     """
 
     def allow(
@@ -158,6 +172,22 @@ class LocalPolicy:
             return resolved_action in SYSTEM_PRINCIPAL_GRANTS.get(
                 principal.subject, frozenset()
             )
+
+        # ADR 0006 makes the *authenticated* caller a plan's owner at ingest.
+        # `ANONYMOUS` is a Principal too (auth_method "none"), and it is not an
+        # owner-in-waiting: an unauthenticated caller may never create a plan.
+        if (
+            resolved_action is Action.PLAN_INGEST
+            and isinstance(principal, Principal)
+            and principal.auth_method not in UNAUTHENTICATED_AUTH_METHODS
+        ):
+            if principal.subject == LOCAL_OPERATOR_SUBJECT:
+                return True
+            if resource is None or not resource.owner:
+                # No manifest yet, or a legacy ownerless plan: the caller becomes
+                # its owner (resolve_ownership).
+                return True
+            return principal.subject == resource.owner
 
         # Ownership is an ADDITIONAL authority for exactly the four actions a
         # plan's owner governs: it can only allow a principal the role rules

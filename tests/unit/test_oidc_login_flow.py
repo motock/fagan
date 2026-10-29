@@ -941,3 +941,55 @@ def test_secret_file_owned_by_another_user_refuses_startup(tmp_path, monkeypatch
     message = _secret_file_message(tmp_path, secret_file)
 
     assert "must be owned by the user running the dashboard" in message
+
+
+# --------------------------------------------------------------------------
+# GET /auth/callback — return to the validated ``next`` path
+# --------------------------------------------------------------------------
+
+
+def _start_login(client: TestClient, next_value: str) -> dict[str, str]:
+    """Begin a login for ``next_value`` and return the minted auth-request
+    parameters (``state``, ``nonce``, ...) from the redirect's Location."""
+    response = client.get(
+        "/auth/login", params={"next": next_value}, follow_redirects=False
+    )
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["location"]).query)
+    return {name: values[0] for name, values in query.items()}
+
+
+def test_callback_redirects_to_the_validated_next(client, idp, clock):
+    """The browser is sent back to the page it asked for, not to the root.
+
+    ``validate_next_path`` is unit-tested on its own; this is the end-to-end
+    proof that the value it validated is the one the callback redirects to.
+    """
+    clock.now = 1000.0
+    params = _start_login(client, "/plans/x?tab=2")
+    idp.nonce = params["nonce"]
+
+    clock.now = 1001.0
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/plans/x?tab=2"
+    assert _session_cookie(response)
+
+
+def test_callback_redirects_to_root_for_a_rejected_next(client, idp, clock):
+    """A protocol-relative ``next`` is validated away before the redirect.
+
+    ``//evil.example`` is what a browser would resolve to https://evil.example,
+    so the whole flow must land on the dashboard root instead.
+    """
+    clock.now = 1002.0
+    params = _start_login(client, "//evil.example")
+    idp.nonce = params["nonce"]
+
+    clock.now = 1003.0
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/"
+    assert _session_cookie(response)

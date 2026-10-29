@@ -386,7 +386,12 @@ step_approve() {
     STEP="approve"
     local result
     result="$(mcp_tool "$TOKEN_OWNER" approve_plan "{\"plan_name\": \"${SMOKE_PLAN_NAME}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "approve_plan refused the plan for its owner"
+    # `if`, not `a | grep -q ... && fail`: under `set -o pipefail` a grep that
+    # finds nothing makes the pipeline fail, so the `&& fail` form kills the
+    # script exactly when the call succeeded.
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "approve_plan refused the plan for its owner: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_dispatch() {
@@ -394,7 +399,9 @@ step_dispatch() {
     local result
     result="$(mcp_tool "$TOKEN_OWNER" dispatch_story \
         "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"story_key\": \"${SMOKE_STORY_KEY}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "dispatch_story refused the story"
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "dispatch_story refused the story: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_poll_reviewed() {
@@ -502,7 +509,9 @@ step_restart_no_loss() {
     local result
     result="$(mcp_tool "$TOKEN_OWNER" dispatch_story \
         "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"story_key\": \"${SMOKE_STORY_TWO_KEY}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "the follow-up dispatch was refused"
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "the follow-up dispatch was refused: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
     wait_for "the second dispatch to be acked" consumer_settled
     local second
     second="$(jetstream_counts)"

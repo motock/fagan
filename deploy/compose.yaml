@@ -111,6 +111,10 @@ services:
       # The image entrypoint defaults this to 1; stated here because this file
       # is the documented interface, and policy enforcement is not optional.
       PIPELINE_POLICY_ENFORCE: "1"
+      # The smoke run exercises the approval gate (ingest -> approve ->
+      # dispatch); with this off, approve_plan is a no-op and the run's
+      # "approved by its owner" assertion proves nothing.
+      PIPELINE_PLAN_APPROVAL: "1"
       # The auth-fail bucket is charged per client address (pipeline/rate_limit.py
       # failed_auth_key), and every caller here arrives from the same address, so
       # the limit is low and explicit: smoke.sh asserts the 429 that follows.

@@ -148,7 +148,15 @@ jobs:
           exit 1
 
       - name: Run the smoke assertions
-        run: bash deploy/smoke/smoke.sh
+        # `-x` while the stack is being brought to green: a failing command
+        # inside a command substitution exits the script without the ERR trap
+        # firing, so the step log otherwise ends at the last named step. The
+        # trace is redacted - it carries bearer tokens and client secrets in
+        # curl arguments - and every line goes through sed before the log.
+        run: |
+          set -o pipefail
+          bash -x deploy/smoke/smoke.sh 2>&1 \
+            | sed -E 's/(Bearer )[^"]*/\1<redacted>/g; s/((client_)?secret|password)=[^ &"]*/\1=<redacted>/g'
 
       - name: Diagnose IdP client credentials on failure
         # `invalid_client_credentials` means the secret the runner sends and the

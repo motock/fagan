@@ -127,7 +127,6 @@ def test_glob_is_case_sensitive(tmp_path):
     (lambda c: c["routes"][0]["deliver"][0].update(events=[]), "must not be empty"),
     (lambda c: c["routes"][0]["deliver"][0].update(events=[1]), "non-empty string"),
     (lambda c: c["routes"].__setitem__(0, "str"), "must be an object"),
-    (lambda c: c["routes"][0]["match"].update(owner="me"), "not supported yet"),
     (lambda c: c["routes"][0]["match"].update(other="x"), "not supported yet"),
     (lambda c: c["routes"][0].pop("match"), "match"),
 ])

@@ -428,6 +428,14 @@ def test_compose_entrypoint_defers_shell_expansion_to_the_container() -> None:
             f"deploy/compose.yaml leaves {unescaped} unescaped; compose will "
             "interpolate it from the host environment before the container runs"
         )
+    # Comments inside the block scalar are part of its value, so compose
+    # interpolates them too: a `${VAR:?}` written in an explanatory comment
+    # fails the render before any container starts.
+    unescaped_braced = re.findall(r"(?<!\$)\$\{", _pipeline_entrypoint_script())
+    assert unescaped_braced == [], (
+        "every ${...} in the entrypoint shim, comments included, must be written "
+        "$${...}: compose interpolates the whole block scalar"
+    )
 
 
 def test_compose_declares_and_mounts_the_git_origin_volume() -> None:

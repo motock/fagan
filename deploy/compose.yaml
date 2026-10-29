@@ -151,8 +151,8 @@ services:
         # PIPELINE_DASHBOARD_CLIENT_SECRET).
         printf '%s' "$${PIPELINE_DASHBOARD_CLIENT_SECRET:-}" > "$$PIPELINE_OIDC_CLIENT_SECRET_FILE"
         # Fail fast rather than let smoke.sh's client-credentials grant be the
-        # first thing to discover an empty MCP client secret: compose's
-        # `${VAR:?}` only judges the *host* environment at render time.
+        # first thing to discover an empty MCP client secret: a `:?` guard on
+        # the host only judges the host environment, at render time.
         if [ -z "$${PIPELINE_MCP_CLIENT_SECRET:-}" ]; then
           echo "entrypoint: PIPELINE_MCP_CLIENT_SECRET is empty" >&2
           exit 1

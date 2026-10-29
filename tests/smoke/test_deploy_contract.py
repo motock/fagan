@@ -367,6 +367,26 @@ def test_compose_pipeline_selects_the_nats_bus() -> None:
     )
 
 
+def test_compose_pipeline_does_not_depend_on_the_broker_that_shares_its_network() -> None:
+    services = _compose()["services"]
+    depends_on = services["pipeline"].get("depends_on") or {}
+    assert "nats" not in depends_on, (
+        "nats joins the pipeline container's network namespace, so compose "
+        "already orders nats after pipeline; the reverse edge closes a cycle and "
+        "every compose command on this file fails with 'dependency cycle "
+        f"detected: nats -> pipeline -> nats' (pipeline depends_on={sorted(depends_on)})"
+    )
+
+
+def test_compose_nats_still_starts_after_the_pipeline_container() -> None:
+    services = _compose()["services"]
+    depends_on = services["nats"].get("depends_on") or {}
+    assert "pipeline" in depends_on, (
+        "the broker runs inside the pipeline container's network namespace, so it "
+        f"must still start after it (nats depends_on={sorted(depends_on)})"
+    )
+
+
 def test_compose_declares_and_mounts_the_git_origin_volume() -> None:
     compose = _compose()
     volumes = compose.get("volumes") or {}

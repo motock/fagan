@@ -536,6 +536,29 @@ def test_realm_descriptions_fit_keycloaks_column() -> None:
     )
 
 
+def test_realm_clients_add_the_mcp_audience() -> None:
+    """Keycloak defaults access-token ``aud`` to ``account``.
+
+    The pipeline requires ``PIPELINE_OIDC_AUDIENCE`` (``pipeline-mcp``) and
+    PyJWT rejects a token without it, with a message that does not name the
+    claim. Every client that can mint a token the MCP sees must declare the
+    audience mapper, or its calls are refused.
+    """
+    realm = _realm()
+    missing = []
+    for client in realm.get("clients", []):
+        mappers = client.get("protocolMappers") or []
+        if not any(
+            mapper.get("protocolMapper") == "oidc-audience-mapper"
+            and (mapper.get("config") or {}).get("included.custom.audience") == "pipeline-mcp"
+            for mapper in mappers
+        ):
+            missing.append(client.get("clientId"))
+    assert missing == [], (
+        f"clients without a pipeline-mcp audience mapper: {missing}"
+    )
+
+
 def test_realm_default_role_is_not_composite() -> None:
     """A composite here aborts the import before Keycloak creates its built-ins.
 

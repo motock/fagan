@@ -114,3 +114,24 @@ class SharedSecretProvider:
             raise IdentityError("invalid credential")
 
         return LOCAL_OPERATOR
+
+
+#: The ``system:`` prefix is reserved for the non-human principals this module
+#: defines. No identity provider may mint one: ``app/oidc.py`` refuses a token
+#: whose ``sub`` claims the prefix, so a caller can never authenticate as the
+#: scheduler or a worker (the subjects stay unforgeable by construction).
+SYSTEM_SUBJECT_PREFIX = "system:"
+
+#: The auth method of a principal the deployment itself acts as, rather than
+#: one a caller proved. Paired with the reserved prefix above.
+SYSTEM_AUTH_METHOD = "system"
+
+#: The scheduler daemon's own identity: it dispatches, merges, marks done and
+#: interrupts on the tick, and nothing else (see ``app.policy`` for the grants).
+SYSTEM_SCHEDULER = Principal(
+    subject="system:scheduler", auth_method=SYSTEM_AUTH_METHOD
+)
+
+#: A dispatched worker's own identity: it patches its own story, and nothing
+#: else (see ``app.policy`` for the grants).
+SYSTEM_WORKER = Principal(subject="system:worker", auth_method=SYSTEM_AUTH_METHOD)

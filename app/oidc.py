@@ -39,6 +39,7 @@ import jwt
 
 from .identity import (
     ROLES,
+    SYSTEM_SUBJECT_PREFIX,
     IdentityError,
     IdentityProvider,
     Principal,
@@ -46,6 +47,17 @@ from .identity import (
 )
 
 logger = logging.getLogger("pipeline.identity")
+
+
+class _ReservedSubjectError(IdentityError, ValueError):
+    """A token whose ``sub`` claims the reserved ``system:`` prefix.
+
+    Subclasses both: the ``IdentityProvider`` contract requires every rejected
+    credential to raise ``IdentityError``, and the prefix is a malformed value
+    the caller may well catch as a ``ValueError``. The message names the failure
+    kind only — never the token, its claims or the subject itself.
+    """
+
 
 #: Algorithms accepted from the token. Anything else - including ``none`` and
 #: every ``HS*`` - is refused before a key is even selected.
@@ -574,6 +586,12 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
         # what every configured issuer happens to mint.
         _log_rejection(settings, kid, "invalid token: unsupported subject")
         raise IdentityError("invalid token: unsupported subject")
+    if subject.startswith(SYSTEM_SUBJECT_PREFIX):
+        # ``system:`` is reserved for the principals the deployment itself acts
+        # as (the scheduler daemon, a dispatched worker). No token may claim one,
+        # so a system principal's authority is never reachable through the IdP.
+        _log_rejection(settings, kid, "invalid token: reserved subject")
+        raise _ReservedSubjectError("invalid token: reserved subject")
     # A ``sub`` is unique per issuer, never globally (RFC 9068 2.2), so it is
     # qualified by the issuer the token proved it came from. Without this, any
     # issuer whose users choose their own account name could mint a token whose

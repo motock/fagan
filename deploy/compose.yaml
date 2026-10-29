@@ -162,11 +162,6 @@ services:
       PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
       PIPELINE_SMOKE_OWNER_PASSWORD: ${PIPELINE_SMOKE_OWNER_PASSWORD:?set PIPELINE_SMOKE_OWNER_PASSWORD}
       PIPELINE_SMOKE_STRANGER_PASSWORD: ${PIPELINE_SMOKE_STRANGER_PASSWORD:?set PIPELINE_SMOKE_STRANGER_PASSWORD}
-      # Required, not optional: Keycloak's --import-realm only substitutes a
-      # placeholder whose variable exists, so an absent value would leave the
-      # literal string in realm.json as the client secret - a credential every
-      # reader of this repo would hold for the one direct-grant client.
-      PIPELINE_SMOKE_USER_CLIENT_SECRET: ${PIPELINE_SMOKE_USER_CLIENT_SECRET:?set PIPELINE_SMOKE_USER_CLIENT_SECRET}
     volumes:
       - ./keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
     restart: "no"
@@ -249,7 +244,7 @@ services:
   # ---------------------------------------------------------------------------
   nats:
     image: nats:2.10.22
-    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "127.0.0.1:8222"]
+    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
     network_mode: "service:pipeline"
     depends_on:
       pipeline:

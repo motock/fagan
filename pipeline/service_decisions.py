@@ -11,6 +11,11 @@ from app.identity import LOCAL_OPERATOR
 
 from .actor import actor_id
 from .authorization import _load_manifest
+from .ownership import subject_or_none
+
+#: Cap on the delegates a manifest may route to, so a hostile list cannot bury
+#: neighbouring records or grow the routing record without bound.
+MAX_DELEGATES = 64
 
 #: Parsed ACTION values that mean a human must answer: the overlord parks the
 #: story for one. A ruling with a truthy ``notify_user`` escalates too - the
@@ -40,6 +45,16 @@ def _routing_target(plan_name: str) -> dict:
     An unreadable manifest must not turn a routable escalation into a tool
     error, so any read failure yields the local-operator default. Only the plan
     name is logged - never the exception text or a path (Secure-by-Design).
+
+    The same holds for an owner that is not a subject: this value is
+    interpolated into the line-oriented notifications log, so a newline would
+    forge a line there and an unbounded value would bury neighbouring records.
+    A value that is not a subject falls back to the local operator - the same
+    deny-to-safe-default as an unreadable manifest - and the notification is
+    still sent. That includes a real owner whose subject is merely outside the
+    charset (a plus-addressed email, an OIDC ``issuer#sub``): it cannot be told
+    apart from a hostile value here, so the local operator answers instead
+    (ADR 0006).
     """
     default = {"owner": LOCAL_OPERATOR.subject, "delegates": []}
     try:
@@ -51,11 +66,21 @@ def _routing_target(plan_name: str) -> dict:
         return default
     if not isinstance(manifest, dict):
         return default
-    owner = manifest.get("owner")
-    delegates = manifest.get("delegates")
+    raw_delegates = manifest.get("delegates")
+    delegates: list[str] = []
+    if isinstance(raw_delegates, list):
+        # Filter first, then cap, so a hostile entry never consumes a slot; the
+        # manifest's list is never mutated.
+        for item in raw_delegates:
+            subject = subject_or_none(item)
+            if subject is None:
+                continue
+            delegates.append(subject)
+            if len(delegates) == MAX_DELEGATES:
+                break
     return {
-        "owner": str(owner).strip() if owner else LOCAL_OPERATOR.subject,
-        "delegates": [str(d) for d in delegates if d] if isinstance(delegates, list) else [],
+        "owner": subject_or_none(manifest.get("owner")) or LOCAL_OPERATOR.subject,
+        "delegates": delegates,
     }
 
 

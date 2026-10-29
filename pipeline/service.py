@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from pipeline import cross_plan, plan_activity
+from pipeline import cross_plan, plan_activity, wake
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.telemetry import record_dispatch_attempt
 from pipeline.workspace import (
@@ -256,7 +256,8 @@ class PipelineService(PlanApprovalMixin):
 
     def resume_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
-        return _set_plan_paused(plan_name, False)
+        result = _set_plan_paused(plan_name, False)
+        return wake.after(plan_name, "resume_plan", result)
 
 
     def list_decisions(self, plan_name: str) -> list[dict]:
@@ -568,7 +569,8 @@ class PipelineService(PlanApprovalMixin):
         refusal = authorize("plan:ingest", plan_name=plan_name)
         if refusal is not None:
             return refusal
-        return _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
+        result = _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
+        return wake.after(plan_name, "ingest_plan", result)
 
     def request_decision(self,
         plan_name: str,
@@ -843,7 +845,8 @@ class PipelineService(PlanApprovalMixin):
         refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
         if refusal is not None:
             return refusal
-        return _set_story_status_impl(self, plan_name, story_key, status)
+        result = _set_story_status_impl(self, plan_name, story_key, status)
+        return wake.after(plan_name, "set_story_status", result)
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     def patch_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
@@ -860,7 +863,8 @@ class PipelineService(PlanApprovalMixin):
         it. Only the fields above may be set; status transitions go through
         set_story_status, not this tool.
         """
-        return _patch_story_impl(self, plan_name, story_key, fields)
+        result = _patch_story_impl(self, plan_name, story_key, fields)
+        return wake.after(plan_name, "patch_story", result)
 
     def patch_plan(self, plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """
@@ -945,7 +949,8 @@ class PipelineService(PlanApprovalMixin):
                 }
             return _advance_pipeline_locked(plan_name)
     def mark_story_done(self, plan_name: str, story_key: str) -> dict[str, Any]:
-        return _mark_story_done_impl(plan_name, story_key)
+        result = _mark_story_done_impl(plan_name, story_key)
+        return wake.after(plan_name, "mark_story_done", result)
 
     def check_usage(self) -> dict[str, Any]:
         return _check_usage_impl()

@@ -14,7 +14,7 @@ import os
 import time
 from datetime import UTC, datetime
 
-from . import audit_anchor, paths, security_audit
+from . import audit_anchor, cross_plan, paths, security_audit
 from .events import make_event
 from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
@@ -194,8 +194,10 @@ def scan_all_plans(bus):
     The function iterates over every ``*.manifest.json`` file in the directory
     specified by :data:`pipeline.paths.PLAN_DIR`.  For each manifest it:
 
-    * Parses the JSON; if the file is missing or malformed a warning is logged
-      and the plan is skipped.
+    * Reads it through :func:`pipeline.cross_plan.read_manifest_cached`, so a
+      manifest whose file stamp is unchanged is not re-read or re-parsed on
+      every tick; a missing or malformed file is skipped.
+
     * Skips any manifest that has a truthy ``paused`` key.
     * Delegates to :func:`scan_done_markers` for the actual event publishing.
 
@@ -208,11 +210,11 @@ def scan_all_plans(bus):
     capacity_in_use = 0
     for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
-        try:
-            manifest_text = path.read_text()
-            manifest = json.loads(manifest_text)
-        except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - exercised via tests
-            logger.warning("Failed to read or parse %s: %s", path, exc)
+        manifest = cross_plan.read_manifest_cached(path)
+        if manifest is None:
+            logger.warning(
+                "Skipping unreadable manifest for plan %s", plan_name, extra={"plan": plan_name}
+            )
             continue
         if manifest.get("paused"):
             continue

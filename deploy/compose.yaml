@@ -43,6 +43,12 @@ services:
     depends_on:
       idp:
         condition: service_started
+      # `nats` is deliberately NOT listed here. It joins this container's
+      # network namespace (`network_mode: "service:pipeline"` on the nats
+      # service), which compose already models as nats depending on this
+      # service and orders accordingly. Declaring the reverse edge as well
+      # closes a cycle, and every compose command on this file then fails with
+      # `dependency cycle detected: nats -> pipeline -> nats`.
       model:
         condition: service_started
     environment:

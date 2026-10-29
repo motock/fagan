@@ -71,7 +71,11 @@ class SqliteStore:
     database therefore reconciles on read: a projection the database has not
     recorded -- or that differs from its row -- is imported before it is
     served, so a plan authored by such a writer is never lost and the next save
-    cannot write a stale row back over the file.
+    cannot write a stale row back over the file. That import is best-effort --
+    it is retried only within the store's bounded busy timeout and skipped when
+    another process holds the write lock -- so a read always serves the
+    projection whether or not the row could be updated, and the row is imported
+    by a later read.
 
     Reads that are natively filesystem objects are delegated to an internal
     file store: ``get_story_log``, ``get_worktree_file``, the recent and active
@@ -105,8 +109,12 @@ class SqliteStore:
         )
         with self._guard:
             self._conn.execute(f"PRAGMA busy_timeout={_BUSY_ATTEMPT_TIMEOUT_MS}")
-            # WAL lets a reader in another process (the dashboard) proceed while
-            # this store holds the database's write lock; in-process callers
+            # WAL lets a plain reader in another process (the dashboard) read a
+            # consistent snapshot while this store holds the write lock, so
+            # serving a recorded row never waits for a writer. A read that has
+            # to import a new projection is itself a write and can lose the
+            # race; that import is best-effort (see ``_import_row``), so the
+            # served document never depends on winning it. In-process callers
             # serialize on ``self._guard`` for the length of a transaction,
             # which matches SQLite allowing one writer per database. The mode
             # must be set outside any transaction.
@@ -161,6 +169,29 @@ class SqliteStore:
         except FileNotFoundError:
             return None
 
+    def _import_row(self, plan_name: str, document: dict[str, Any]) -> None:
+        """Record a projection in the database, or give up within the timeout.
+
+        The import is a write, and another process may hold the database's write
+        lock for as long as its own ``transaction()`` runs. It is therefore
+        best-effort rather than part of the read's contract: the caller serves
+        the projection either way, and a later read imports the row. Retrying
+        past ``BUSY_TIMEOUT_MS`` would make a dashboard read as slow as the
+        slowest writer, and letting the lock error escape would turn a readable
+        deployment into a failing read.
+        """
+        deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+        while True:
+            try:
+                self._write_row(plan_name, document)
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_lock_conflict(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    return
+            time.sleep(_BUSY_RETRY_S)
+
     def _resolved_document(self, plan_name: str) -> dict[str, Any] | None:
         """Return the manifest this store serves, reconciling the two records.
 
@@ -169,6 +200,10 @@ class SqliteStore:
         imported, which keeps ``get_manifest``, ``get_manifest_or_none`` and
         ``list_manifests`` reporting one deployment. With no projection the
         row is complete on its own. ``None`` means neither record exists.
+
+        A stored row that does not parse is not a record either: a projection
+        that reads is still served, and it replaces the damaged row, so damage
+        outside this store cannot hide a document the filesystem can.
 
         A manifest that this store saved inside the current transaction is the
         exception: its row is newer than the file, which is only projected when
@@ -179,11 +214,16 @@ class SqliteStore:
             # A damaged projection raises here, before either reader can serve
             # a record the filesystem contradicts.
             projected = self._projected_document(plan_name)
-            stored = self._stored_document(plan_name)
+            try:
+                stored = self._stored_document(plan_name)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if projected is None:
+                    raise
+                stored = None
             if plan_name in self._pending_projection or projected is None:
                 return stored
             if projected != stored:
-                self._write_row(plan_name, projected)
+                self._import_row(plan_name, projected)
             return projected
 
     def get_manifest(self, plan_name: str) -> dict[str, Any]:

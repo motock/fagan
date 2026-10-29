@@ -13,6 +13,7 @@ Two properties are pinned here at construction time:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import multiprocessing
 import sqlite3
@@ -30,6 +31,22 @@ from pipeline import store as store_module
 from pipeline.store_sqlite import SqliteStore
 
 PLAN = "s1"
+
+
+@contextlib.contextmanager
+def _probe(db_path):
+    """A connection to the store's database for out-of-band inspection.
+
+    ``with sqlite3.connect(...)`` only commits or rolls back its transaction;
+    the connection itself stays open until it is collected, so the probes here
+    close it explicitly.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @pytest.fixture()
@@ -74,7 +91,7 @@ def test_wal_mode_enabled(tmp_path):
     """The database is opened in WAL mode, visible from another connection."""
     created = SqliteStore(str(tmp_path / "s.db"))
     try:
-        with sqlite3.connect(str(tmp_path / "s.db")) as probe:
+        with _probe(str(tmp_path / "s.db")) as probe:
             mode = probe.execute("PRAGMA journal_mode").fetchone()[0]
     finally:
         created.close()
@@ -146,10 +163,11 @@ def test_injection_shaped_key_stored_literally(store, db_path):
 
     assert store.get_manifest(INJECTION_KEY) == manifest
     assert store.list_manifests() == [INJECTION_KEY]
-    survived = sqlite3.connect(db_path).execute(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
-        ("story_manifests",),
-    ).fetchone()[0]
+    with _probe(db_path) as probe:
+        survived = probe.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+            ("story_manifests",),
+        ).fetchone()[0]
     assert survived == 1, "the table must not have been dropped by the key"
 
 STORE_ENV = "PIPELINE_STORE"
@@ -303,6 +321,107 @@ def test_two_processes_never_both_acquire(store, db_path):
 
 
 # -- manifest authority: the database and the projection are one record -----
+# A reader in another process must serve the projection even while a writer
+# holds the write lock. The holder keeps it past the store's bounded busy
+# timeout on purpose, so an import attempted without a retry (or with sqlite's
+# own five-second timeout) shows up as either a lock error or a long block.
+_HOLD_FOR_READ_S = 1.0
+_READ_DEADLINE_S = 0.9
+
+
+def _hold_write_lock(db_path, plan_dir, entered, release):
+    """Hold the plan's write transaction until the parent has read once.
+
+    Module level on purpose: ``spawn`` pickles the target by reference. The
+    child opens its own store (a connection cannot cross processes) and points
+    ``pipeline.server.PLAN_DIR`` at the shared plans directory, because the file
+    store resolves that name at call time.
+    """
+    import pipeline.server
+    from pipeline.store_sqlite import SqliteStore
+
+    pipeline.server.PLAN_DIR = Path(plan_dir)
+    child_store = SqliteStore(db_path)
+    try:
+        with child_store.transaction(PLAN) as acquired:
+            assert acquired, "the holding process failed to take the write lock"
+            entered.set()
+            release.wait(timeout=30)
+    finally:
+        child_store.close()
+
+
+def test_read_under_contention_serves_the_projection(store, db_path):
+    """A read taken during another process's transaction still returns.
+
+    The reconciling import is a write, so it can lose the race for the database
+    lock. It is best-effort: the served document is the projection regardless,
+    and the row is imported by a later read.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    entered = ctx.Event()
+    release = ctx.Event()
+    plan_dir = str(store.manifest_path(PLAN).parent)
+    manifest = {"stories": {"S1": {"status": "parked"}}}
+    _write_projection(store, manifest)
+
+    holder = ctx.Process(
+        target=_hold_write_lock, args=(db_path, plan_dir, entered, release)
+    )
+    holder.start()
+    try:
+        assert entered.wait(timeout=30), "the holder never took the write lock"
+
+        started = time.monotonic()
+        served = store.get_manifest(PLAN)
+        elapsed = time.monotonic() - started
+        assert served == manifest, "the projection must be served under contention"
+
+        started = time.monotonic()
+        assert store.get_manifest_or_none(PLAN) == manifest
+        assert time.monotonic() - started < _READ_DEADLINE_S, (
+            "a contended read blocked past the bounded busy timeout"
+        )
+        assert elapsed < _HOLD_FOR_READ_S, (
+            "a contended read waited for the holding writer instead of serving"
+        )
+    finally:
+        release.set()
+        holder.join(30)
+
+    assert not holder.is_alive(), "the holding process hung"
+    assert holder.exitcode == 0, "the holding process failed"
+
+    # The failed import must not have poisoned the connection: a later read
+    # imports the projection the writer was blocking.
+    assert store.get_manifest(PLAN) == manifest
+    with _probe(db_path) as probe:
+        row = probe.execute(
+            "SELECT manifest_json FROM story_manifests WHERE plan_name = ?", (PLAN,)
+        ).fetchone()
+    assert row is not None and json.loads(row[0]) == manifest
+
+
+def test_a_readable_projection_survives_a_damaged_row(store, db_path):
+    """A row damaged outside the store must not hide a projection that reads.
+
+    The projection is the record a writer outside the store updated, so it is
+    still servable; the read repairs the row instead of raising.
+    """
+    manifest = {"stories": {"S1": {"status": "parked"}}}
+    _write_projection(store, manifest)
+    with _probe(db_path) as probe:
+        probe.execute(
+            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?) "
+            "ON CONFLICT(plan_name) DO UPDATE "
+            "SET manifest_json = excluded.manifest_json",
+            (PLAN, "{not json"),
+        )
+
+    assert store.get_manifest(PLAN) == manifest
+    assert store.get_manifest_or_none(PLAN) == manifest
+
+
 def _write_projection(store, manifest, plan=PLAN):
     """Write a plan's manifest file the way a writer that skips the store does.
 
@@ -329,7 +448,7 @@ def test_manifest_written_outside_the_store_is_served_and_listed(store, db_path)
         "an ingested plan must not be missing from the store's plan list"
     )
 
-    with sqlite3.connect(db_path) as probe:
+    with _probe(db_path) as probe:
         row = probe.execute(
             "SELECT manifest_json FROM story_manifests WHERE plan_name = ?", (PLAN,)
         ).fetchone()
@@ -400,7 +519,7 @@ def test_get_manifest_or_none_fails_open_on_undecodable_projection(store):
 
 def test_get_manifest_or_none_fails_open_on_a_damaged_row(store, db_path):
     """An unparsable stored document reads as absent, never as an exception."""
-    with sqlite3.connect(db_path) as probe:
+    with _probe(db_path) as probe:
         probe.execute(
             "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?)",
             (PLAN, "{not json"),
@@ -451,7 +570,7 @@ def test_update_story_stores_an_injection_shaped_key_literally(store, db_path):
     assert updated is not None
     assert updated["status"] == "running"
     assert store.get_manifest(PLAN)["stories"][INJECTION_KEY]["status"] == "running"
-    with sqlite3.connect(db_path) as probe:
+    with _probe(db_path) as probe:
         survived = probe.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
             ("story_manifests",),

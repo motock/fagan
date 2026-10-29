@@ -13,6 +13,7 @@ Two properties are pinned here at construction time:
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import sqlite3
 import time
@@ -71,10 +72,12 @@ def test_relative_path_refused(tmp_path, monkeypatch):
 
 def test_wal_mode_enabled(tmp_path):
     """The database is opened in WAL mode, visible from another connection."""
-    SqliteStore(str(tmp_path / "s.db"))
-
-    with sqlite3.connect(str(tmp_path / "s.db")) as probe:
-        mode = probe.execute("PRAGMA journal_mode").fetchone()[0]
+    created = SqliteStore(str(tmp_path / "s.db"))
+    try:
+        with sqlite3.connect(str(tmp_path / "s.db")) as probe:
+            mode = probe.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        created.close()
 
     assert mode == "wal"
 
@@ -178,10 +181,13 @@ def test_factory_builds_a_sqlite_store(store_env, isolated_plan_dir, tmp_path, m
 
     built = store_module.build_store()
 
-    assert type(built) is SqliteStore
-    built.save_manifest(PLAN, {"a": 1})
-    assert built.get_manifest(PLAN) == {"a": 1}
-    assert db_path.exists(), "the store must open the configured database"
+    try:
+        assert type(built) is SqliteStore
+        built.save_manifest(PLAN, {"a": 1})
+        assert built.get_manifest(PLAN) == {"a": 1}
+        assert db_path.exists(), "the store must open the configured database"
+    finally:
+        built.close()
 
 
 def test_factory_refuses_a_relative_sqlite_path(store_env, tmp_path, monkeypatch):
@@ -294,3 +300,152 @@ def test_two_processes_never_both_acquire(store, db_path):
         assert acquired is True, "the write lock must be free after both contenders"
         store.save_manifest(PLAN, {"after": "contention"})
     assert store.get_manifest(PLAN) == {"after": "contention"}
+
+
+# -- manifest authority: the database and the projection are one record -----
+def _write_projection(store, manifest, plan=PLAN):
+    """Write a plan's manifest file the way a writer that skips the store does.
+
+    ``pipeline/ingest.py``, ``pipeline/merge.py`` and
+    ``pipeline/review_orchestrator.py`` persist a manifest with
+    ``_atomic_write_json(manifest_path, manifest)``, so the projection can move
+    on without the store seeing it. The store must adopt that document rather
+    than serve a row the filesystem has left behind.
+    """
+    path = store.manifest_path(plan)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+def test_manifest_written_outside_the_store_is_served_and_listed(store, db_path):
+    """A plan that only exists as a projection is adopted, not reported absent."""
+    manifest = {"schema_version": 1, "stories": {"S1": {"status": "parked"}}}
+    _write_projection(store, manifest)
+
+    assert store.get_manifest(PLAN) == manifest
+    assert store.get_manifest_or_none(PLAN) == manifest
+    assert PLAN in store.list_manifests(), (
+        "an ingested plan must not be missing from the store's plan list"
+    )
+
+    with sqlite3.connect(db_path) as probe:
+        row = probe.execute(
+            "SELECT manifest_json FROM story_manifests WHERE plan_name = ?", (PLAN,)
+        ).fetchone()
+
+    assert row is not None, "the projection must be imported into the database"
+    assert json.loads(row[0]) == manifest
+
+
+def test_a_save_does_not_write_a_stale_row_back_over_the_projection(store):
+    """The next save extends the projection instead of reverting it."""
+    store.save_manifest(PLAN, {"stories": {"S1": {"status": "parked"}}})
+    _write_projection(
+        store, {"stories": {"S1": {"status": "parked", "review_verdict": "APPROVE"}}}
+    )
+
+    store.update_story(PLAN, "S1", {"status": "merged"})
+
+    served = store.get_manifest(PLAN)["stories"]["S1"]
+    assert served["review_verdict"] == "APPROVE", (
+        "a write that bypassed the store must survive the next save"
+    )
+    assert served["status"] == "merged"
+    projected = json.loads(store.manifest_path(PLAN).read_text())["stories"]["S1"]
+    assert projected == served, "the projection must agree with the database"
+
+
+def test_get_manifest_or_none_reads_the_row_when_the_projection_is_absent(store):
+    """Both readers agree that a plan the database records is present."""
+    store.save_manifest(PLAN, {"a": 1})
+    store.manifest_path(PLAN).unlink()
+
+    assert store.get_manifest_or_none(PLAN) == {"a": 1}
+    assert store.get_manifest(PLAN) == {"a": 1}
+
+
+def test_get_manifest_or_none_is_none_without_any_record(store):
+    """A plan in neither record reads as absent on both accessors."""
+    assert store.get_manifest_or_none("nobody") is None
+
+    with pytest.raises(FileNotFoundError):
+        store.get_manifest("nobody")
+
+
+def test_read_inside_a_transaction_sees_the_uncommitted_save(store):
+    """A read after a save in the same block returns the caller's own write.
+
+    The projection is only written when the transaction commits, so the row is
+    ahead of the file inside the block: importing the file there would revert
+    the save the caller just made.
+    """
+    store.save_manifest(PLAN, {"stories": {"S1": {"status": "parked"}}})
+
+    with store.transaction(PLAN) as acquired:
+        assert acquired is True
+        store.save_manifest(PLAN, {"stories": {"S1": {"status": "running"}}})
+        assert store.get_manifest(PLAN)["stories"]["S1"]["status"] == "running"
+
+    assert store.get_manifest(PLAN)["stories"]["S1"]["status"] == "running"
+
+
+def test_get_manifest_or_none_fails_open_on_a_damaged_row(store, db_path):
+    """An unparsable stored document reads as absent, never as an exception."""
+    with sqlite3.connect(db_path) as probe:
+        probe.execute(
+            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?)",
+            (PLAN, "{not json"),
+        )
+
+    assert store.get_manifest_or_none(PLAN) is None
+    with pytest.raises(json.JSONDecodeError):
+        store.get_manifest(PLAN)
+
+
+def test_rollback_leaves_no_readable_manifest(store):
+    """A rolled-back save is gone from the row and from the projection."""
+    with pytest.raises(RuntimeError), store.transaction(PLAN) as acquired:
+        assert acquired is True
+        store.save_manifest(PLAN, {"a": 1})
+        raise RuntimeError("caller failed mid-transaction")
+
+    with pytest.raises(FileNotFoundError):
+        store.get_manifest(PLAN)
+    assert store.get_manifest_or_none(PLAN) is None
+    assert not store.manifest_path(PLAN).exists(), (
+        "a rolled-back save must not project anything to disk"
+    )
+
+
+# -- configuration boundaries ----------------------------------------------
+@pytest.mark.parametrize("configured_path", [None, ""])
+def test_sqlite_selection_without_a_path_is_refused(
+    store_env, isolated_plan_dir, monkeypatch, configured_path
+):
+    """Selecting the database store without naming its database is refused."""
+    monkeypatch.setenv(STORE_ENV, "sqlite")
+    if configured_path is not None:
+        monkeypatch.setenv(PATH_ENV, configured_path)
+
+    with pytest.raises(ValueError) as excinfo:
+        store_module.build_store()
+
+    assert PATH_ENV in str(excinfo.value), "the refusal must name the setting"
+
+
+def test_update_story_stores_an_injection_shaped_key_literally(store, db_path):
+    """A key shaped like SQL is data for the write path, not a statement."""
+    store.save_manifest(PLAN, {"stories": {INJECTION_KEY: {"status": "planned"}}})
+
+    updated = store.update_story(PLAN, INJECTION_KEY, {"status": "running"})
+
+    assert updated is not None
+    assert updated["status"] == "running"
+    assert store.get_manifest(PLAN)["stories"][INJECTION_KEY]["status"] == "running"
+    with sqlite3.connect(db_path) as probe:
+        survived = probe.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+            ("story_manifests",),
+        ).fetchone()[0]
+    assert survived == 1, "the schema must not have been dropped by the key"

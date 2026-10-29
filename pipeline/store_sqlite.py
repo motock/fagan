@@ -66,6 +66,13 @@ class SqliteStore:
     whether it was acquired, so a contended writer is refused rather than
     blocked forever.
 
+    The pipeline also writes each manifest to its plan's manifest file, and
+    some writers write that file without going through this store. The
+    database therefore reconciles on read: a projection the database has not
+    recorded -- or that differs from its row -- is imported before it is
+    served, so a plan authored by such a writer is never lost and the next save
+    cannot write a stale row back over the file.
+
     Reads that are natively filesystem objects are delegated to an internal
     file store: ``get_story_log``, ``get_worktree_file``, the recent and active
     workspace records, and the manifest's on-disk projection
@@ -73,8 +80,8 @@ class SqliteStore:
 
     The notification, audit and journal sidecar files remain on disk under
     ``PLAN_DIR`` and are not represented in the database. ``SqliteStore``
-    performs no migration from file-store data: selecting it starts a
-    deployment from the plans it records from then on.
+    performs no migration from file-store data: plans that are already on disk
+    are adopted as they are read, and nothing else is imported.
     """
 
     def __init__(self, path: str):
@@ -98,8 +105,11 @@ class SqliteStore:
         )
         with self._guard:
             self._conn.execute(f"PRAGMA busy_timeout={_BUSY_ATTEMPT_TIMEOUT_MS}")
-            # WAL lets a reader (the dashboard) proceed while a writer holds the
-            # write lock, and must be set outside any transaction.
+            # WAL lets a reader in another process (the dashboard) proceed while
+            # this store holds the database's write lock; in-process callers
+            # serialize on ``self._guard`` for the length of a transaction,
+            # which matches SQLite allowing one writer per database. The mode
+            # must be set outside any transaction.
             self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
             self._conn.execute(_SCHEMA)
         # The filesystem half is always the file store, whatever PIPELINE_STORE
@@ -120,49 +130,85 @@ class SqliteStore:
     def manifest_path(self, plan_name: str) -> Path:
         return self._files.manifest_path(plan_name)
 
-    def get_manifest(self, plan_name: str) -> dict[str, Any]:
-        """Return the plan's manifest from the database record.
-
-        Every save also projects the manifest to the plan's manifest file, which
-        is what the dashboard and external tooling read. A projection that no
-        longer parses means the document was damaged outside this store, so the
-        read fails closed (``JSONDecodeError``) rather than serving a record the
-        filesystem contradicts; a projection that was never written is fine,
-        because the record is complete on its own.
-        """
+    def _stored_document(self, plan_name: str) -> dict[str, Any] | None:
+        """Return the database row's document, or ``None`` when it has none."""
         with self._guard:
             row = self._conn.execute(
                 "SELECT manifest_json FROM story_manifests WHERE plan_name = ?",
                 (plan_name,),
             ).fetchone()
             if row is None:
-                raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
-            document = json.loads(row[0])
+                return None
+            return json.loads(row[0])
+
+    def _write_row(self, plan_name: str, document: dict[str, Any]) -> None:
+        self._conn.execute(
+            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?) "
+            "ON CONFLICT(plan_name) DO UPDATE "
+            "SET manifest_json = excluded.manifest_json",
+            (plan_name, json.dumps(document, sort_keys=True)),
+        )
+
+    def _projected_document(self, plan_name: str) -> dict[str, Any] | None:
+        """Return the manifest's projection, or ``None`` when there is none.
+
+        A projection that exists but does not parse raises ``JSONDecodeError``:
+        the document was damaged outside this store, and neither reader may
+        report a record the filesystem contradicts.
+        """
         try:
-            self._files.get_manifest(plan_name)
+            return self._files.get_manifest(plan_name)
         except FileNotFoundError:
-            pass
+            return None
+
+    def _resolved_document(self, plan_name: str) -> dict[str, Any] | None:
+        """Return the manifest this store serves, reconciling the two records.
+
+        Writers that do not go through this store update only the projection,
+        so the projection wins when it differs from the database row and is
+        imported, which keeps ``get_manifest``, ``get_manifest_or_none`` and
+        ``list_manifests`` reporting one deployment. With no projection the
+        row is complete on its own. ``None`` means neither record exists.
+
+        A manifest that this store saved inside the current transaction is the
+        exception: its row is newer than the file, which is only projected when
+        the transaction commits, so importing the file there would silently
+        revert the caller's own write.
+        """
+        with self._guard:
+            # A damaged projection raises here, before either reader can serve
+            # a record the filesystem contradicts.
+            projected = self._projected_document(plan_name)
+            stored = self._stored_document(plan_name)
+            if plan_name in self._pending_projection or projected is None:
+                return stored
+            if projected != stored:
+                self._write_row(plan_name, projected)
+            return projected
+
+    def get_manifest(self, plan_name: str) -> dict[str, Any]:
+        """Return the plan's manifest, failing when neither record has it."""
+        document = self._resolved_document(plan_name)
+        if document is None:
+            raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
         return document
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
         with self._guard:
-            self._conn.execute(
-                "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?) "
-                "ON CONFLICT(plan_name) DO UPDATE "
-                "SET manifest_json = excluded.manifest_json",
-                (plan_name, json.dumps(manifest, sort_keys=True)),
-            )
+            self._write_row(plan_name, manifest)
             if self._conn.in_transaction:
                 self._pending_projection[plan_name] = manifest
             else:
                 self._files.save_manifest(plan_name, manifest)
 
     def list_manifests(self) -> list[str]:
+        """List every plan either record knows, so an ingest is never lost."""
         with self._guard:
             rows = self._conn.execute(
                 "SELECT plan_name FROM story_manifests ORDER BY plan_name"
             ).fetchall()
-        return [row[0] for row in rows]
+        recorded = {row[0] for row in rows}
+        return sorted(recorded | set(self._files.list_manifests()))
 
     def update_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
@@ -176,13 +222,19 @@ class SqliteStore:
         return story
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
-        """Fail-open manifest read, delegated to the file store's reader.
+        """Fail-open manifest read, served from the same records as the strict one.
 
-        It follows the manifest's on-disk projection: a damaged or missing
-        projection means the document is not safely readable, and callers of
-        this accessor treat that as "no manifest" rather than as an error.
+        The dashboard's manifest reads go through here, so it must agree with
+        ``get_manifest`` about which plans exist: a plan the database records is
+        present even when its projection was never written. It fails open only
+        where a document is not safely readable -- no row and no projection, or
+        a stored document or projection that does not parse -- because those
+        callers treat an unreadable manifest as "no manifest".
         """
-        return self._files.get_manifest_or_none(plan_name)
+        try:
+            return self._resolved_document(plan_name)
+        except json.JSONDecodeError:
+            return None
 
     # -- transactions ------------------------------------------------------
     def _begin_immediate(self) -> bool:

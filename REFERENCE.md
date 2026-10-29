@@ -218,6 +218,19 @@ has a dashboard HTTP route.
   backs the story modal's **Diff** section. HTTP:
   `GET /api/plans/{plan_name}/stories/{story_key}/diff?path=...`.
 
+### `advance_all_plans` skips plans with no work for it
+
+`advance_all_plans()` still returns an entry for every ingested plan, but a
+plan with no dispatch, review or merge work left is no longer advanced: it is
+reported as `{"ok": true, "skipped": "inert"}` in its own entry instead. That
+covers a plan whose stories are all `done`, a paused plan with no agent left to
+interrupt, and a plan not approved for activation — so a paused plan with
+nothing running reports `inert` rather than `plan_paused`, and an unapproved one
+reports `inert` rather than `plan_not_approved`. A paused plan that still holds
+an `in_progress` story with a `pid` is NOT inert: the advance pass has to run so
+the running agent is interrupted. Every other plan is advanced per plan, and
+each advance pass still reaches every plan in turn.
+
 ---
 
 ## Overlord decision fail-open

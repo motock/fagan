@@ -82,6 +82,31 @@ def test_unapproved_plan_is_inert(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plan_activity.is_inert(manifest) is True
 
 
+def test_paused_unapproved_with_live_agent_is_not_inert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pause branch interrupts agents, so it outranks the approval gate.
+
+    ``_advance_pipeline_locked_impl`` handles ``paused`` before it checks
+    approval; a plan paused after dispatch must still be advanced so its agent
+    is interrupted.
+    """
+    monkeypatch.setattr(plan_approval, "is_activatable", lambda manifest: False)
+    manifest = {
+        "paused": True,
+        "stories": {"a": {"status": "in_progress", "pid": 4242}},
+    }
+    assert plan_activity.is_inert(manifest) is False
+
+
+def test_paused_unapproved_without_live_agent_is_inert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(plan_approval, "is_activatable", lambda manifest: False)
+    manifest = {"paused": True, "stories": {"a": {"status": "todo"}}}
+    assert plan_activity.is_inert(manifest) is True
+
+
 @pytest.mark.parametrize("manifest", [None, "x", []])
 def test_non_dict_manifest_is_not_inert(manifest: object) -> None:
     assert plan_activity.is_inert(manifest) is False  # type: ignore[arg-type]

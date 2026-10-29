@@ -351,14 +351,15 @@ def advance_all_plans_pooled() -> dict[str, Any]:
     ordered = live[start:] + live[:start]
     _rotation += 1
 
-    workers = min(_advance_workers(), len(ordered))
     deadline = _deadline()
     started = time.monotonic()
 
     # Every listed plan inert (or none at all): no pool, no workers to size.
     if not ordered:
-        _log_pass(0, _advance_workers(), time.monotonic() - started, 0, 0)
+        _log_pass(0, 0, time.monotonic() - started, 0, 0)
         return {"ok": True, "plans": results}
+
+    workers = min(_advance_workers(), len(ordered))
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {

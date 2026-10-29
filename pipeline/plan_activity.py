@@ -60,9 +60,13 @@ def is_inert(manifest: dict) -> bool:
         stories = manifest.get("stories")
         if not isinstance(stories, dict) or not stories:
             return False
+        # Pause is decided before the approval gate: the advance pass interrupts
+        # a paused plan's running agents, and an unapproved plan paused after
+        # dispatch must still get that pass or its agent runs forever. A paused
+        # plan holding a live agent is therefore never inert.
+        if manifest.get("paused"):
+            return not _has_live_agent(stories)
         if not plan_approval.is_activatable(manifest):
-            return True
-        if manifest.get("paused") and not _has_live_agent(stories):
             return True
         return all(
             isinstance(story, dict) and story.get("status") == "done"

@@ -119,7 +119,9 @@ def test_pooled_pass_logs_only_submitted_plans(
 ) -> None:
     logged: list[tuple[int, int, float, int, int]] = []
 
-    def _fake_log_pass(plans: int, workers: int, elapsed_s: float, skipped: int, timed_out: int) -> None:
+    def _fake_log_pass(
+        plans: int, workers: int, elapsed_s: float, skipped: int, timed_out: int
+    ) -> None:
         logged.append((plans, workers, elapsed_s, skipped, timed_out))
 
     monkeypatch.setattr(advance_pool, "_log_pass", _fake_log_pass)
@@ -135,6 +137,39 @@ def test_pooled_pass_advances_every_plan_without_a_manifest(store, spawned) -> N
 
     assert set(result["plans"]) == {"alpha", "beta", "gamma", "delta"}
     assert "delta" in spawned
+    assert result["plans"]["delta"].get("skipped") != "inert"
+
+
+def test_pooled_pass_advances_paused_unapproved_plan_with_live_agent(
+    store, spawned, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent that must be interrupted outranks the approval gate."""
+    monkeypatch.setattr(plan_approval, "is_activatable", lambda manifest: False)
+    store._manifests["delta"] = {
+        "name": "delta",
+        "paused": True,
+        "stories": {"d": {"status": "in_progress", "pid": 4242}},
+    }
+
+    result = advance_pool.advance_all_plans_pooled()
+
+    assert "delta" in spawned
+    assert result["plans"]["delta"].get("skipped") != "inert"
+
+
+def test_serial_pass_advances_paused_unapproved_plan_with_live_agent(
+    store, advanced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plan_approval, "is_activatable", lambda manifest: False)
+    store._manifests["delta"] = {
+        "name": "delta",
+        "paused": True,
+        "stories": {"d": {"status": "in_progress", "pid": 4242}},
+    }
+
+    result = PipelineService().advance_all_plans()
+
+    assert "delta" in advanced
     assert result["plans"]["delta"].get("skipped") != "inert"
 
 

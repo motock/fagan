@@ -21,6 +21,18 @@ pythonpath = ["."]
 # remember the flag. The suite is xdist-safe (isolated tmp_path dirs,
 # ephemeral ports via _free_port(), monkeypatched env) - see 8822b38.
 addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
+# Marks the durable (broker-backed) half of the EventBus contract suite in
+# tests/contract/test_event_bus_contract.py. Registering it keeps
+# `pytest -W error` and the unknown-mark warning clean, and lets a run select
+# or deselect the durable tier with `-m durable_bus` / `-m "not durable_bus"`
+# without an nats-server on the machine.
+markers = [
+    "durable_bus: contract tests for durable broker-backed event buses, parametrized over durable implementations only",
+]
+# A test parametrized over an empty implementation list must collect without
+# failing: the durable tier's cases are written once and skipped, not deleted,
+# while the tree has no durable bus implementation to grade.
+empty_parameter_set_mark = "skip"
 
 [tool.ruff]
 # Matches the lowest Python version in the CI matrix (.github/workflows/ci.yml)

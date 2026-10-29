@@ -4,9 +4,9 @@
   service-layer enforcement for every action in the `Action` enum, OIDC token
   verification, the OIDC-gated remote MCP transport and the append-only,
   hash-chained audit stream are implemented; plan ownership is stored and
-  enforced for `plan:approve`, `plan:reject` and `story:merge` only. Tenant
-  scoping beyond the plan `team`, tenant-scoped reads, and
-  authorization of the MCP tools outside the enum are still unimplemented.
+  enforced for `plan:approve`, `plan:reject`, `story:merge` and
+  `decision:answer`. Tenant scoping beyond the plan `team`, tenant-scoped reads,
+  and authorization of the MCP tools outside the enum are still unimplemented.
 - **Date:** 2026-10-26
 
 **Implementation status.** `pipeline/authorization.py` enforces the policy in

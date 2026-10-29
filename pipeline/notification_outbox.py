@@ -59,7 +59,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import paths, persistence
+from . import paths, persistence, store
 from .notification_channels import as_sender, channel_outbox_path
 from .notification_routing import safe_load_notification_config
 
@@ -108,6 +108,27 @@ def _spool_legacy(plan: str, evt_name: str | None, line: str) -> None:
     _append_rotating(PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}", line)
 
 
+def _plan_owner(plan: str) -> str:
+    """Return the plan manifest's ``owner``, or ``""`` when it is unknown.
+
+    Read once per spool call so a route can be owner-scoped. Any failure to
+    read the manifest (missing file, bad JSON, unreadable) means "no owner":
+    the plan then matches only routes without an ``owner`` glob, which is the
+    deny-by-default direction. Only the error type is logged -- a manifest can
+    hold paths, so nothing from the failure or the manifest leaks into the log.
+    """
+    try:
+        manifest = store.build_store().get_manifest(plan)
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest means "no owner"
+        logger.warning(
+            "Could not read plan owner for notification routing: error_type=%s",
+            type(exc).__name__,
+        )
+        return ""
+    owner = manifest.get("owner") if isinstance(manifest, dict) else None
+    return owner if isinstance(owner, str) else ""
+
+
 def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
     """Append ``line`` to the queue of each instance the config routes it to.
 
@@ -128,7 +149,8 @@ def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
         config = safe_load_notification_config()
         if config is None:
             return
-        for name in config.resolve(plan, evt_name):
+        owner = _plan_owner(plan)
+        for name in config.resolve(plan, evt_name, owner):
             try:
                 _append_rotating(channel_outbox_path(plan, config.instances[name]), line)
             except Exception as exc:  # noqa: BLE001 - isolate one instance's failure

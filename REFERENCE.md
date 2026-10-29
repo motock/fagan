@@ -533,8 +533,8 @@ tick, so an edit takes effect on the next event or tick. It is limited to
 
 **Schema (version 1).** `instances` maps an instance name to its settings
 (`type` plus type-specific keys); `routes` is an ordered list of
-`{name, match: {plan: <glob>}, deliver: [{events: [...], to: [instances]}]}`.
-`events` holds event names or `"*"`.
+`{name, match: {plan: <glob>, owner: <glob>}, deliver: [{events: [...], to: [instances]}]}`.
+`events` holds event names or `"*"`; `match.owner` is optional.
 
 Worked example: team A gets plan completions by e-mail and parked/failed
 stories in Slack; team B gets everything by e-mail and nothing in Slack.
@@ -562,6 +562,25 @@ stories in Slack; team B gets everything by e-mail and nothing in Slack.
 }
 ```
 
+On a shared server, scope a route to one plan owner by adding an `owner`
+glob next to `plan`. This route sends a plan's `decision` and
+`overlord_failure` events to Alice's channel instance, and only for plans her
+manifest names as owned by her:
+
+```json
+{
+  "version": 1,
+  "instances": {
+    "alice-slack": {"type": "slack", "webhook_url_env": "ALICE_SLACK_WEBHOOK"}
+  },
+  "routes": [
+    {"name": "alice-owned-plans",
+     "match": {"plan": "*", "owner": "alice@example.com"},
+     "deliver": [{"events": ["decision", "overlord_failure"], "to": ["alice-slack"]}]}
+  ]
+}
+```
+
 Rules:
 
 - **First match wins.** The first route whose `match.plan` glob matches the
@@ -579,8 +598,13 @@ Rules:
 - **The routes are the event allowlist.** When a config file is present,
   `PIPELINE_NOTIFY_OUTBOX_EVENTS` no longer applies; only events a route
   lists are delivered.
-- **`match.owner` is reserved.** It is rejected at load until plans carry an
-  owner field; only `match.plan` is supported.
+- **`match.owner` is optional.** A route that carries an `owner` glob matches
+  only when BOTH the `plan` and `owner` globs match, compared with
+  `fnmatch.fnmatchcase`. The owner is the plan manifest's `owner` field; a
+  plan whose manifest names no owner (or cannot be read) never matches an
+  `owner` glob — deny by default. A route without `owner` matches any owner,
+  exactly as it did before the key existed. `owner`, when present, must be a
+  non-empty string; every other `match` key is rejected at load.
 
 Each instance has its own queue, `<plan>.outbox.<instance>.jsonl`, drained
 on the scheduler tick after the legacy e-mail outbox. The two drains run in

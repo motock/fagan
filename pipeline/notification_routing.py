@@ -4,8 +4,11 @@ The config file is JSON (version 1)::
 
     {"version": 1,
      "instances": {"<name>": {"type": "<type_name>", ...settings}},
-     "routes": [{"name": str, "match": {"plan": "<glob>"},
+     "routes": [{"name": str, "match": {"plan": "<glob>", "owner": "<glob>"},
                  "deliver": [{"events": ["<event>" | "*"], "to": ["<instance>"]}]}]}
+
+``match.owner`` is optional: a route carrying it matches only when both the
+plan and the plan owner globs match, and a plan with no owner never matches it.
 
 An ABSENT file means legacy mode: ``load_notification_config`` returns None.
 """
@@ -44,6 +47,7 @@ class _Route:
     name: str
     plan_glob: str
     deliver: tuple[tuple[frozenset[str], tuple[str, ...]], ...]
+    owner_glob: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,17 +55,26 @@ class NotificationConfig:
     instances: dict[str, Any] = field(default_factory=dict)
     routes: tuple[_Route, ...] = ()
 
-    def resolve(self, plan: str, event: str | None) -> list[str]:
+    def resolve(self, plan: str, event: str | None, owner: str = "") -> list[str]:
         """Return the instance names an event of ``plan`` is delivered to.
 
         The FIRST route whose ``match.plan`` glob (``fnmatch.fnmatchcase``)
-        matches ``plan`` wins. Within it, the result is the union of the ``to``
-        lists of every ``deliver`` entry listing ``event`` or ``*``. An event the
-        winning route does not list goes nowhere (deny by default), and so does
-        any plan no route matches.
+        matches ``plan`` -- and, when the route carries an ``owner`` glob, whose
+        ``owner`` glob also matches ``owner`` -- wins. Within it, the result is
+        the union of the ``to`` lists of every ``deliver`` entry listing
+        ``event`` or ``*``. An event the winning route does not list goes
+        nowhere (deny by default), and so does any plan no route matches.
+
+        An empty ``owner`` never matches an ``owner`` glob, so a plan whose
+        manifest names no owner is never delivered to an owner-scoped route.
+        Routes without ``owner`` match every owner, exactly as before.
         """
         for route in self.routes:
             if not fnmatch.fnmatchcase(plan, route.plan_glob):
+                continue
+            if route.owner_glob is not None and (
+                not owner or not fnmatch.fnmatchcase(owner, route.owner_glob)
+            ):
                 continue
             result: list[str] = []
             for events, targets in route.deliver:
@@ -136,11 +149,19 @@ def _build_route(raw: Any, index: int, instances: Mapping[str, Any]) -> _Route:
         raise _fail(f"{path}.name", "must be a non-empty string")
     match = _require_object(raw.get("match"), f"{path}.match")
     for key in match:
-        if key != "plan":
-            raise _fail(f"{path}.match.{key}", "not supported yet; only 'plan' is allowed")
+        if key not in ("plan", "owner"):
+            raise _fail(
+                f"{path}.match.{key}",
+                "not supported yet; only 'plan' and 'owner' are allowed",
+            )
     plan_glob = match.get("plan")
     if not isinstance(plan_glob, str) or not plan_glob:
         raise _fail(f"{path}.match.plan", "must be a non-empty string")
+    owner_glob = match.get("owner")
+    if "owner" in match and (not isinstance(owner_glob, str) or not owner_glob):
+        # The value may carry a credential-shaped string; the message names
+        # only the key path.
+        raise _fail(f"{path}.match.owner", "must be a non-empty string")
     deliver_raw = raw.get("deliver")
     if not isinstance(deliver_raw, list):
         raise _fail(f"{path}.deliver", "must be a list")
@@ -154,7 +175,9 @@ def _build_route(raw: Any, index: int, instances: Mapping[str, Any]) -> _Route:
             if target not in instances:
                 raise _fail(f"{epath}.to[{k}]", f"unknown instance {target!r}")
         deliver.append((frozenset(events), tuple(targets)))
-    return _Route(name=name, plan_glob=plan_glob, deliver=tuple(deliver))
+    return _Route(
+        name=name, plan_glob=plan_glob, deliver=tuple(deliver), owner_glob=owner_glob
+    )
 
 
 def _config_path(path: Path | str | None, env: Mapping[str, str]) -> Path:

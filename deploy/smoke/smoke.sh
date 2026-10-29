@@ -372,7 +372,12 @@ step_ingest() {
         || fail "could not copy the plan into the pipeline container"
     local result
     result="$(mcp_tool "$TOKEN_OWNER" ingest_plan "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"overwrite\": true}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "ingest_plan refused the plan"
+    # Name the refusal the server returned: the structured reason is the only
+    # thing that says *why* (authorization, malformed plan, missing repo_root),
+    # and a bare "refused" leaves the operator guessing.
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "ingest_plan refused the plan: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_approve() {

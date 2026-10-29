@@ -43,8 +43,6 @@ services:
     depends_on:
       idp:
         condition: service_started
-      nats:
-        condition: service_started
       model:
         condition: service_started
     environment:

@@ -11,4 +11,4 @@ opentelemetry-exporter-otlp-proto-http==1.45.1
 # NATS JetStream client for pipeline/events_nats.py (PIPELINE_EVENT_BUS=nats).
 # Pinned EXACT: the publish path (PubAck, Nats-Msg-Id dedup, JetStream stream
 # creation) is a graded behaviour and the client API moves between minors.
-nats-py==2.9.0
+nats-py==2.16.0

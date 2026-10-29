@@ -136,7 +136,7 @@ def build_runtime(bus, serial_fn):
     from .advance_pool import _advance_workers, _plan_timeout_seconds
     from .advance_queue import AdvanceQueue
     from .advance_workers import AdvanceWorkerPool
-    from .event_wiring import set_wake_hook
+    from .event_wiring import reconcile_handler, set_wake_hook
 
     queue = AdvanceQueue()
     pool = AdvanceWorkerPool(
@@ -147,6 +147,12 @@ def build_runtime(bus, serial_fn):
     # thread. ``request`` coalesces a plan that is already pending or in
     # flight, so a burst of events costs one advance.
     set_wake_hook(queue.request)
+    # The scan's manifest-derived wakes (a finished detached job, a blocker
+    # that became done) reach the queue the same way an agent_done event does.
+    # Subscribed here rather than in ``_subscribe_handlers``: that set is the
+    # process default and must stay agent_done + notification, and a process
+    # without a wake hook would only drop these events.
+    bus.subscribe("reconcile", reconcile_handler)
 
     def sweep() -> dict:
         """Queue every active plan whose last advance has gone stale.

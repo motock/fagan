@@ -534,7 +534,10 @@ def test_build_runtime_in_queue_mode_does_not_advance_at_construction(
     bus = RecordingBus()
     advance_runtime.build_runtime(bus, lambda: {"ok": True})
 
-    # The runtime only wires the queue up: nothing is requested or subscribed
-    # until an event arrives or the sweep runs.
+    # The runtime only wires the queue and the scan's wake path up: nothing is
+    # requested until an event arrives or the sweep runs. The ``reconcile``
+    # subscription is wiring, not an advance -- its handler enqueues on the
+    # delivering thread and never touches the pipeline.
     assert queue_runtime["queue"].requests == []
-    assert bus.subscriptions == []
+    subscribed = [event_type for event_type, _handler in bus.subscriptions]
+    assert "reconcile" in subscribed

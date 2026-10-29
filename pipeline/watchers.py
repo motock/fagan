@@ -11,6 +11,7 @@ touches any external processes.
 import json
 import logging
 import os
+import stat
 import time
 from datetime import UTC, datetime
 
@@ -188,6 +189,167 @@ def _manifest_status_counts(manifest: dict) -> dict[str, int]:
     return counts
 
 
+#: Story-field paths that point at a detached job's result file, in lookup
+#: order. Each entry is the path of keys inside one story dict, so
+#: ``("merge_reverify", "result_path")`` means ``story["merge_reverify"]
+#: ["result_path"]``. Cumulative: a new detached job appends its own path here.
+#: The scan wakes a story as soon as *any* of these files exists.
+JOB_RESULT_FIELDS: tuple[tuple[str, ...], ...] = (
+    ("grading_result_path",),
+    ("merge_reverify", "result_path"),
+)
+
+#: Result stamps already announced to the bus this process:
+#: ``(plan, story key, result path, st_mtime_ns)``. A rewritten result file has
+#: a new ``st_mtime_ns`` and therefore wakes the plan again; re-reading the
+#: same file on the next scan (about once a second) does not. Entries for
+#: stories a manifest no longer lists are dropped, so the set stays bounded by
+#: the number of live detached jobs.
+_PUBLISHED_JOB_RESULTS: set[tuple[str, str, str, int]] = set()
+
+#: Last observed ``{story key: status}`` map per plan, from the previous pass.
+#: The manifest cache in :mod:`pipeline.cross_plan` holds only the latest parse,
+#: so the transition *into* ``done`` can only be seen by keeping it here.
+_PREVIOUS_STATUS: dict[str, dict[str, str]] = {}
+
+
+def _stories(manifest: dict) -> dict:
+    """Return the manifest's ``stories`` mapping, or an empty one.
+
+    Defensive on purpose: this runs inside the scheduler's scan loop, where a
+    malformed neighbour manifest must never stop the sweep.
+    """
+    if not isinstance(manifest, dict):
+        return {}
+    stories = manifest.get("stories")
+    return stories if isinstance(stories, dict) else {}
+
+
+def _field_value(story: object, field_path: tuple[str, ...]):
+    """Return the value at *field_path* inside *story*, or ``None``.
+
+    A missing key or a non-dict value part-way down the path (a hand-edited
+    ``merge_reverify: "pending"``) yields ``None`` instead of raising.
+    """
+    value = story
+    for name in field_path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(name)
+    return value
+
+
+def _status_map(manifest: dict) -> dict[str, str]:
+    """Return ``{story key: status}`` for every well-formed story in *manifest*."""
+    return {
+        str(story_key): story["status"]
+        for story_key, story in _stories(manifest).items()
+        if isinstance(story, dict) and isinstance(story.get("status"), str)
+    }
+
+
+def job_results_ready(plan: str, manifest: dict) -> list[str]:
+    """Return the story keys whose detached job has a brand-new result file.
+
+    A story is ready when any path in :data:`JOB_RESULT_FIELDS` resolves to an
+    existing regular file. Only the first sighting of a
+    ``(plan, story, result path, st_mtime_ns)`` stamp is reported: the scan
+    runs about once a second and must not re-wake the same finished job. A
+    rewritten result file carries a new stamp and is reported again.
+
+    This is a hint, not a decision: the caller publishes a ``reconcile`` event
+    and the advance re-reads the manifest, including the result file, itself.
+    """
+    ready: list[str] = []
+    listed: set[str] = set()
+    for story_key, story in _stories(manifest).items():
+        key = str(story_key)
+        listed.add(key)
+        for field_path in JOB_RESULT_FIELDS:
+            result = _field_value(story, field_path)
+            if not isinstance(result, str) or not result:
+                continue
+            try:
+                info = os.stat(result)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            stamp = (plan, key, result, info.st_mtime_ns)
+            if stamp in _PUBLISHED_JOB_RESULTS:
+                continue
+            _PUBLISHED_JOB_RESULTS.add(stamp)
+            ready.append(key)
+            # One wake per story even if two of its result files appear at
+            # once: the advance re-reads the manifest and sees them both.
+            break
+    _PUBLISHED_JOB_RESULTS.difference_update(
+        {
+            stamp
+            for stamp in _PUBLISHED_JOB_RESULTS
+            if stamp[0] == plan and stamp[1] not in listed
+        }
+    )
+    return ready
+
+
+def newly_done(previous: dict[str, str] | None, current: dict) -> list[str]:
+    """Return the story keys that just became ``done``, in manifest order.
+
+    Parameters
+    ----------
+    previous:
+        ``{story key: status}`` from the previous scan of the same plan. ``None``
+        means this process has never scanned that plan (first sight, e.g. right
+        after a daemon restart): nothing is newly done, so a restart does not
+        wake every plan that depends on long-finished stories.
+    current:
+        The manifest as just read.
+    """
+    if previous is None:
+        return []
+    return [
+        str(story_key)
+        for story_key, story in _stories(current).items()
+        if isinstance(story, dict)
+        and story.get("status") == "done"
+        and previous.get(str(story_key)) != "done"
+    ]
+
+
+def _blocked_by_wakes(
+    manifests: dict[str, dict], transitions: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """Map each dependent plan to the ``"<plan>:<story>"`` blockers it waits on.
+
+    *manifests* is every manifest this pass read and *transitions* maps a plan
+    to the story keys that just became ``done`` in it. A dependent plan is
+    reported once however many of its blockers finished, so one pass wakes it
+    once.
+    """
+    finished = {
+        f"{plan}:{story_key}"
+        for plan, story_keys in transitions.items()
+        for story_key in story_keys
+    }
+    wakes: dict[str, list[str]] = {}
+    for dependent_plan, manifest in manifests.items():
+        for story in _stories(manifest).values():
+            if not isinstance(story, dict):
+                continue
+            blocked_by = story.get("blocked_by")
+            if not isinstance(blocked_by, list):
+                continue
+            hits = [
+                blocker
+                for blocker in blocked_by
+                if isinstance(blocker, str) and blocker in finished
+            ]
+            if hits:
+                wakes.setdefault(dependent_plan, []).extend(hits)
+    return wakes
+
+
 def scan_all_plans(bus):
     """Scan all plan manifests in :data:`PLAN_DIR` and publish events.
 
@@ -199,7 +361,16 @@ def scan_all_plans(bus):
       every tick; a missing or malformed file is skipped.
 
     * Skips any manifest that has a truthy ``paused`` key.
-    * Delegates to :func:`scan_done_markers` for the actual event publishing.
+    * Delegates to :func:`scan_done_markers` for the ``agent_done`` publishing.
+    * Wakes detached-job and blocked-plan work as a ``reconcile`` event:
+      ``{"reason": "job_result", "stories": [...]}`` for a plan with a
+      finished detached job (see :func:`job_results_ready`), and
+      ``{"reason": "blocked_by_done"}`` for a plan whose ``blocked_by`` names
+      a story that just became ``done`` (see :func:`newly_done`).
+
+    A wake only enqueues the plan: the advance re-reads the manifest and
+    decides everything from it. A wake pass that raises is logged at WARNING
+    and changes neither the sweep nor this function's return value.
 
     The returned list contains all events produced across every plan, flattened
     into a single list.
@@ -208,6 +379,11 @@ def scan_all_plans(bus):
     repo_plans: dict[str, str] = {}
     status_counts: dict[str, int] = {}
     capacity_in_use = 0
+    # Every manifest this pass read, plus the story keys that just became done
+    # in each: a dependent plan may sort before or after its blocker, so the
+    # blocked_by resolution runs after the loop over these two maps.
+    manifests: dict[str, dict] = {}
+    transitions: dict[str, list[str]] = {}
     for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         manifest = cross_plan.read_manifest_cached(path)
@@ -218,14 +394,68 @@ def scan_all_plans(bus):
             continue
         if manifest.get("paused"):
             continue
+        manifests[plan_name] = manifest
         counts = _manifest_status_counts(manifest)
         capacity_in_use += counts.get(CAPACITY_IN_USE_STATUS, 0)
         for status, count in counts.items():
             status_counts[status] = status_counts.get(status, 0) + count
         events.extend(scan_done_markers(manifest, plan_name, bus))
+        # A finished detached job is visible in this manifest alone. The wake
+        # is a hint: the advance re-reads the manifest and the result file.
+        try:
+            ready = job_results_ready(plan_name, manifest)
+        except Exception as exc:  # noqa: BLE001 - one broken wake must not stop the sweep
+            logger.warning(
+                "job_result wake pass failed: %s",
+                type(exc).__name__,
+                extra={"plan": plan_name},
+            )
+        else:
+            if ready:
+                event = make_event(
+                    "reconcile",
+                    plan_name,
+                    payload={"reason": "job_result", "stories": ready},
+                )
+                bus.publish(event)
+                events.append(event)
+        # Remember the statuses for the next pass; ``newly_done`` reports the
+        # transition into ``done`` that only a previous pass can reveal.
+        try:
+            just_done = newly_done(_PREVIOUS_STATUS.get(plan_name), manifest)
+        except Exception as exc:  # noqa: BLE001 - one broken wake must not stop the sweep
+            logger.warning(
+                "blocked_by wake pass failed: %s",
+                type(exc).__name__,
+                extra={"plan": plan_name},
+            )
+        else:
+            if just_done:
+                transitions[plan_name] = just_done
+        # Remember every status for the next pass, whatever this one concluded:
+        # the wake above only reports the transition, this map detects it.
+        _PREVIOUS_STATUS[plan_name] = _status_map(manifest)
         repo_root = manifest.get("repo_root")
         if repo_root and os.path.isdir(repo_root):
             repo_plans.setdefault(repo_root, plan_name)
+    if transitions:
+        try:
+            wakes = _blocked_by_wakes(manifests, transitions)
+        except Exception as exc:  # noqa: BLE001 - one broken wake must not stop the sweep
+            logger.warning("blocked_by resolution failed: %s", type(exc).__name__)
+        else:
+            for dependent_plan, blockers in wakes.items():
+                event = make_event(
+                    "reconcile", dependent_plan, payload={"reason": "blocked_by_done"}
+                )
+                bus.publish(event)
+                events.append(event)
+                logger.info(
+                    "woke plan %s: blocking stories finished (%d)",
+                    dependent_plan,
+                    len(blockers),
+                    extra={"plan": dependent_plan, "stories": len(blockers)},
+                )
     # Advisory check must never break the sweep or change its return value.
     try:
         _scan_security_audits(repo_plans)

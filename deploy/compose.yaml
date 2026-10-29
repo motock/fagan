@@ -70,14 +70,15 @@ services:
       # fetched over `https` through the proxy, because app/oidc.py refuses a
       # plaintext `jwks_url` outright and there is no plaintext path into the
       # IdP that satisfies it. That fetch therefore trusts the proxy's own CA
-      # (`SSL_CERT_FILE`, from the read-only caddy-data mount) and opts in to a
-      # private address, because `proxy` resolves to the compose network.
+      # (`SSL_CERT_FILE`: a 0644 copy the proxy publishes in `ca-public`, since
+      # Caddy's own storage tree is 0700) and opts in to a private address,
+      # because `proxy` resolves to the compose network.
       PIPELINE_IDENTITY_PROVIDER: oidc
       PIPELINE_OIDC_ISSUER: https://localhost:8443/realms/pipeline
       PIPELINE_OIDC_AUDIENCE: pipeline-mcp
       PIPELINE_OIDC_JWKS_URL: https://proxy/realms/pipeline/protocol/openid-connect/certs
       PIPELINE_OIDC_ALLOW_PRIVATE_JWKS: "1"
-      SSL_CERT_FILE: /caddy-ca/caddy/pki/authorities/local/root.crt
+      SSL_CERT_FILE: /caddy-ca/ca-public/root.crt
       # Verification is JWKS-only: the pipeline never signs a token, so it never
       # reads this file. The image's entrypoint still refuses to start unless the
       # named file is readable (a deployment contract assertion), so the shim in
@@ -277,7 +278,13 @@ services:
           fi
           sleep 1
         done
-        chmod 0644 "$$cert"
+        # Caddy's storage tree is 0700 as root, so a readable file alone is not
+        # enough: the pipeline cannot even traverse to it. Publish the root in a
+        # directory this shell owns, leaving Caddy's own storage closed.
+        mkdir -p /data/ca-public
+        chmod 0755 /data/ca-public
+        cp "$$cert" /data/ca-public/root.crt
+        chmod 0644 /data/ca-public/root.crt
         wait "$$pid"
     ports:
       - "8443:443"

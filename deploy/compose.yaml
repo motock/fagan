@@ -85,14 +85,24 @@ services:
       # mode 600. No credential is baked into the image and none is passed
       # inside a command line.
       #
+      # The same file is the dashboard login client's credential (it is the
+      # variable app/oidc_login.py reads), so it holds the *dashboard* client's
+      # secret and the three login variables below name that client. Setting
+      # the file path without them is refused at start-up rather than silently
+      # downgrading the dashboard to API-only mode.
+      #
       # `/tmp`, not the state volume: a Linux engine creates the named volume
       # root-owned, so the image's non-root uid cannot create a file inside it
       # (Docker Desktop on macOS maps the volume to the invoking user, which is
       # why this only fails on Linux). The file is rewritten on every start and
       # never persisted.
       PIPELINE_OIDC_CLIENT_SECRET_FILE: /tmp/oidc_client_secret
+      PIPELINE_OIDC_CLIENT_ID: pipeline-dashboard
+      PIPELINE_OIDC_REDIRECT_URI: https://localhost:8443/auth/callback
       PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
-      PIPELINE_POLICY_ENFORCE: "1"
+      # Read by the shim below and written to the dashboard login client's
+      # secret file; never passed on a command line and never logged.
+      PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET}
       # The auth-fail bucket is charged per client address (pipeline/rate_limit.py
       # failed_auth_key), and every caller here arrives from the same address, so
       # the limit is low and explicit: smoke.sh asserts the 429 that follows.
@@ -134,7 +144,19 @@ services:
       - |
         set -euo pipefail
         umask 077
-        printf '%s' "$${PIPELINE_MCP_CLIENT_SECRET:-}" > "$$PIPELINE_OIDC_CLIENT_SECRET_FILE"
+        # The dashboard login client's secret: app/oidc_login.py reads it from
+        # PIPELINE_OIDC_CLIENT_SECRET_FILE and requires mode 600, this uid as
+        # owner, and a non-empty file. The IdP holds the same value for the
+        # `pipeline-dashboard` client (realm.json takes it from
+        # PIPELINE_DASHBOARD_CLIENT_SECRET).
+        printf '%s' "$${PIPELINE_DASHBOARD_CLIENT_SECRET:-}" > "$$PIPELINE_OIDC_CLIENT_SECRET_FILE"
+        # Fail fast rather than let smoke.sh's client-credentials grant be the
+        # first thing to discover an empty MCP client secret: compose's
+        # `${VAR:?}` only judges the *host* environment at render time.
+        if [ -z "$${PIPELINE_MCP_CLIENT_SECRET:-}" ]; then
+          echo "entrypoint: PIPELINE_MCP_CLIENT_SECRET is empty" >&2
+          exit 1
+        fi
         if [ "$${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
           # Selecting a model is a registry fact, not an environment-only switch:
           # the pipeline validates a role's model name against

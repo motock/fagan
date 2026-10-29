@@ -63,12 +63,21 @@ services:
       # has to exist at all. An operator-supplied JWT creds file is still honored
       # through PIPELINE_NATS_CREDS_FILE when one is mounted.
       PIPELINE_NATS_URL: nats://127.0.0.1:4222
-      # Identity: bearer tokens are verified against the IdP's JWKS. The issuer
-      # is the in-network URL, which is what the tokens carry.
+      # Identity: bearer tokens are verified against the IdP's JWKS.
+      #
+      # The issuer is the URL the tokens are minted for - the proxy origin on
+      # the host, which is the URL the IdP is pinned to - and the JWKS is
+      # fetched over `https` through the proxy, because app/oidc.py refuses a
+      # plaintext `jwks_url` outright and there is no plaintext path into the
+      # IdP that satisfies it. That fetch therefore trusts the proxy's own CA
+      # (`SSL_CERT_FILE`, from the read-only caddy-data mount) and opts in to a
+      # private address, because `proxy` resolves to the compose network.
       PIPELINE_IDENTITY_PROVIDER: oidc
-      PIPELINE_OIDC_ISSUER: http://idp:8080/realms/pipeline
+      PIPELINE_OIDC_ISSUER: https://localhost:8443/realms/pipeline
       PIPELINE_OIDC_AUDIENCE: pipeline-mcp
-      PIPELINE_OIDC_JWKS_URL: http://idp:8080/realms/pipeline/protocol/openid-connect/certs
+      PIPELINE_OIDC_JWKS_URL: https://proxy/realms/pipeline/protocol/openid-connect/certs
+      PIPELINE_OIDC_ALLOW_PRIVATE_JWKS: "1"
+      SSL_CERT_FILE: /caddy-ca/caddy/pki/authorities/local/root.crt
       # Verification is JWKS-only: the pipeline never signs a token, so it never
       # reads this file. The image's entrypoint still refuses to start unless the
       # named file is readable (a deployment contract assertion), so the shim in
@@ -156,6 +165,10 @@ services:
     volumes:
       - pipeline-state:/var/lib/pipeline
       - git-origin:/git-origin
+      # Read-only: the proxy's internal CA, so the `https` JWKS fetch verifies
+      # the certificate the proxy presents (see SSL_CERT_FILE above). The
+      # pipeline never writes here, and the CA is regenerated with the stack.
+      - caddy-data:/caddy-ca:ro
     restart: "no"
 
   # ---------------------------------------------------------------------------
@@ -169,7 +182,12 @@ services:
       - start-dev
       - --import-realm
       - --http-port=8080
-      - --hostname-strict=false
+      # Pin the issuer to the URL callers actually use (the proxy origin on the
+      # host). Left to derive `iss` per request, the IdP minted one issuer for
+      # a direct in-network call and another for a call through the proxy, and
+      # the pipeline's exact-match issuer check then rejected every token.
+      - --hostname=https://localhost:8443
+      - --proxy-headers=xforwarded
       - --health-enabled=true
     environment:
       # Admin bootstrap only; the smoke run never uses this account.
@@ -206,7 +224,7 @@ services:
           admin off
           auto_https disable_redirects
         }
-        :443 {
+        https://localhost, https://proxy {
           tls internal
           handle /realms/* {
             reverse_proxy idp:8080

@@ -280,6 +280,15 @@ def test_pipeline_service_materialises_the_oidc_secret_file_the_image_asserts() 
     assert pairs.get("PIPELINE_OIDC_CLIENT_SECRET_FILE"), (
         "the pipeline service must name the OIDC client-secret file"
     )
+    # A Linux engine creates a named volume root-owned, so the image's non-root
+    # uid cannot create a file inside one. The shim must write somewhere the
+    # container user can already write; a state-volume path fails at startup on
+    # every Linux host (Docker Desktop on macOS masks it by mapping ownership).
+    secret_path = pairs["PIPELINE_OIDC_CLIENT_SECRET_FILE"]
+    assert secret_path.startswith("/tmp/"), (
+        "the shim runs as the image's non-root uid, which cannot write into a "
+        f"root-owned named volume; got {secret_path!r}"
+    )
     assert "PIPELINE_OIDC_CLIENT_SECRET_FILE" in script, (
         "the shim must create the file the image entrypoint refuses to start "
         "without: verification is JWKS-only, so the stack materialises it from the "
@@ -387,6 +396,48 @@ def test_compose_nats_still_starts_after_the_pipeline_container() -> None:
     )
 
 
+def test_compose_entrypoint_defers_shell_expansion_to_the_container() -> None:
+    """Compose interpolates `$VAR` in this file before any container starts.
+
+    An unescaped runtime reference is replaced from the operator's host
+    environment: `> "$PIPELINE_OIDC_CLIENT_SECRET_FILE"` becomes a redirect to
+    an empty path, the scripted-model branch never runs, and the client secret
+    is written into the rendered config. Every reference the container's shell
+    must expand is written `$$`.
+    """
+    text = _text(COMPOSE)
+    for escaped in (
+        "$$PIPELINE_OIDC_CLIENT_SECRET_FILE",
+        "$$registry",
+        "$${PIPELINE_MCP_CLIENT_SECRET:-}",
+        "$${PIPELINE_SCRIPTED_MODEL:-0}",
+        "$${PIPELINE_SCHEDULER_DAEMON:-0}",
+    ):
+        assert escaped in text, (
+            f"deploy/compose.yaml must escape {escaped!r} for the container shell; "
+            "compose interpolates a single-$ reference from the host environment"
+        )
+    for unescaped in (
+        '"$PIPELINE_OIDC_CLIENT_SECRET_FILE"',
+        '"$registry"',
+        '"${PIPELINE_MCP_CLIENT_SECRET:-}"',
+        '"${PIPELINE_SCRIPTED_MODEL:-0}"',
+        '"${PIPELINE_SCHEDULER_DAEMON:-0}"',
+    ):
+        assert unescaped not in text, (
+            f"deploy/compose.yaml leaves {unescaped} unescaped; compose will "
+            "interpolate it from the host environment before the container runs"
+        )
+    # Comments inside the block scalar are part of its value, so compose
+    # interpolates them too: a `${VAR:?}` written in an explanatory comment
+    # fails the render before any container starts.
+    unescaped_braced = re.findall(r"(?<!\$)\$\{", _pipeline_entrypoint_script())
+    assert unescaped_braced == [], (
+        "every ${...} in the entrypoint shim, comments included, must be written "
+        "$${...}: compose interpolates the whole block scalar"
+    )
+
+
 def test_compose_declares_and_mounts_the_git_origin_volume() -> None:
     compose = _compose()
     volumes = compose.get("volumes") or {}
@@ -457,6 +508,69 @@ def test_realm_carries_no_literal_secret() -> None:
         assert re.fullmatch(r"\$\{(env\.)?[A-Za-z0-9_]+\}", str(secret)), (
             f"client {client.get('clientId')!r} carries a literal secret; "
             "use a ${ENV_VAR} placeholder and inject it at deploy time"
+        )
+
+
+def test_realm_descriptions_fit_keycloaks_column() -> None:
+    """Keycloak stores CLIENT and KEYCLOAK_ROLE descriptions as VARCHAR(255).
+
+    A longer description does not truncate: it aborts the realm import and
+    Keycloak exits, so the whole stack never serves - which is invisible until
+    something actually runs `docker compose up`.
+    """
+    realm = _realm()
+    too_long = {
+        f"client {client.get('clientId')}": len(client.get("description") or "")
+        for client in realm.get("clients", [])
+        if len(client.get("description") or "") > 255
+    }
+    too_long.update(
+        {
+            f"role {role.get('name')}": len(role.get("description") or "")
+            for role in (realm.get("roles") or {}).get("realm", [])
+            if len(role.get("description") or "") > 255
+        }
+    )
+    assert too_long == {}, (
+        f"descriptions over 255 characters abort the realm import: {too_long}"
+    )
+
+
+def test_realm_clients_add_the_mcp_audience() -> None:
+    """Keycloak defaults access-token ``aud`` to ``account``.
+
+    The pipeline requires ``PIPELINE_OIDC_AUDIENCE`` (``pipeline-mcp``) and
+    PyJWT rejects a token without it, with a message that does not name the
+    claim. Every client that can mint a token the MCP sees must declare the
+    audience mapper, or its calls are refused.
+    """
+    realm = _realm()
+    missing = []
+    for client in realm.get("clients", []):
+        mappers = client.get("protocolMappers") or []
+        if not any(
+            mapper.get("protocolMapper") == "oidc-audience-mapper"
+            and (mapper.get("config") or {}).get("included.custom.audience") == "pipeline-mcp"
+            for mapper in mappers
+        ):
+            missing.append(client.get("clientId"))
+    assert missing == [], (
+        f"clients without a pipeline-mcp audience mapper: {missing}"
+    )
+
+
+def test_realm_default_role_is_not_composite() -> None:
+    """A composite here aborts the import before Keycloak creates its built-ins.
+
+    The realm's own default role must stay flat: naming Keycloak's built-in
+    ``offline_access`` / ``uma_authorization`` in ``composites`` fails the
+    import with "Unable to find composite realm role", and Keycloak exits.
+    """
+    realm = _realm()
+    for role in (realm.get("roles") or {}).get("realm", []):
+        assert not role.get("composite") and not role.get("composites"), (
+            f"realm role {role.get('name')!r} declares a composite; the realm "
+            "import cannot resolve Keycloak's built-in roles and aborts"
         )
 
 

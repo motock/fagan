@@ -63,21 +63,58 @@ services:
       # has to exist at all. An operator-supplied JWT creds file is still honored
       # through PIPELINE_NATS_CREDS_FILE when one is mounted.
       PIPELINE_NATS_URL: nats://127.0.0.1:4222
-      # Identity: bearer tokens are verified against the IdP's JWKS. The issuer
-      # is the in-network URL, which is what the tokens carry.
+      # This stack owns its broker, so the bus may create the stream; without
+      # it the scheduler daemon refuses to start ("stream 'PIPELINE' does not
+      # exist") and nothing consumes the plan events the smoke run asserts.
+      PIPELINE_NATS_MANAGE_STREAM: "1"
+      # Identity: bearer tokens are verified against the IdP's JWKS.
+      #
+      # The issuer is the URL the tokens are minted for - the proxy origin on
+      # the host, which is the URL the IdP is pinned to - and the JWKS is
+      # fetched over `https` through the proxy, because app/oidc.py refuses a
+      # plaintext `jwks_url` outright and there is no plaintext path into the
+      # IdP that satisfies it. That fetch therefore trusts the proxy's own CA
+      # (`SSL_CERT_FILE`: a 0644 copy the proxy publishes in `ca-public`, since
+      # Caddy's own storage tree is 0700) and opts in to a private address,
+      # because `proxy` resolves to the compose network.
       PIPELINE_IDENTITY_PROVIDER: oidc
-      PIPELINE_OIDC_ISSUER: http://idp:8080/realms/pipeline
+      PIPELINE_OIDC_ISSUER: https://localhost:8443/realms/pipeline
       PIPELINE_OIDC_AUDIENCE: pipeline-mcp
-      PIPELINE_OIDC_JWKS_URL: http://idp:8080/realms/pipeline/protocol/openid-connect/certs
+      PIPELINE_OIDC_JWKS_URL: https://proxy/realms/pipeline/protocol/openid-connect/certs
+      PIPELINE_OIDC_ALLOW_PRIVATE_JWKS: "1"
+      SSL_CERT_FILE: /caddy-ca/ca-public/root.crt
       # Verification is JWKS-only: the pipeline never signs a token, so it never
       # reads this file. The image's entrypoint still refuses to start unless the
       # named file is readable (a deployment contract assertion), so the shim in
       # `entrypoint` materialises it from the client secret the IdP was given,
-      # inside the state volume, mode 600. No credential is baked into the image
-      # and none is passed inside a command line.
-      PIPELINE_OIDC_CLIENT_SECRET_FILE: /var/lib/pipeline/oidc_client_secret
+      # mode 600. No credential is baked into the image and none is passed
+      # inside a command line.
+      #
+      # The same file is the dashboard login client's credential (it is the
+      # variable app/oidc_login.py reads), so it holds the *dashboard* client's
+      # secret and the three login variables below name that client. Setting
+      # the file path without them is refused at start-up rather than silently
+      # downgrading the dashboard to API-only mode.
+      #
+      # `/tmp`, not the state volume: a Linux engine creates the named volume
+      # root-owned, so the image's non-root uid cannot create a file inside it
+      # (Docker Desktop on macOS maps the volume to the invoking user, which is
+      # why this only fails on Linux). The file is rewritten on every start and
+      # never persisted.
+      PIPELINE_OIDC_CLIENT_SECRET_FILE: /tmp/oidc_client_secret
+      PIPELINE_OIDC_CLIENT_ID: pipeline-dashboard
+      PIPELINE_OIDC_REDIRECT_URI: https://localhost:8443/auth/callback
       PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
+      # Read by the shim below and written to the dashboard login client's
+      # secret file; never passed on a command line and never logged.
+      PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET}
+      # The image entrypoint defaults this to 1; stated here because this file
+      # is the documented interface, and policy enforcement is not optional.
       PIPELINE_POLICY_ENFORCE: "1"
+      # The smoke run exercises the approval gate (ingest -> approve ->
+      # dispatch); with this off, approve_plan is a no-op and the run's
+      # "approved by its owner" assertion proves nothing.
+      PIPELINE_PLAN_APPROVAL: "1"
       # The auth-fail bucket is charged per client address (pipeline/rate_limit.py
       # failed_auth_key), and every caller here arrives from the same address, so
       # the limit is low and explicit: smoke.sh asserts the 429 that follows.
@@ -106,21 +143,41 @@ services:
     # the first object into it. deploy/smoke/smoke.sh does that one-shot
     # bootstrap as root and hands the result back to the service's uid, which
     # keeps the running server non-root (see its `origin-seed` step).
+    #
+    # Every `$` below that the *container's* shell must expand is written `$$`.
+    # Compose interpolates `$VAR` in this file itself, before any container
+    # starts, so an unescaped reference is replaced from the operator's host
+    # environment - empty when they have not exported it, which turns
+    # `> "$FILE"` into a redirect to an empty path and puts a client secret
+    # into the rendered config.
     entrypoint:
       - /bin/bash
       - -c
       - |
         set -euo pipefail
         umask 077
-        printf '%s' "${PIPELINE_MCP_CLIENT_SECRET:-}" > "$PIPELINE_OIDC_CLIENT_SECRET_FILE"
-        if [ "${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
+        # The dashboard login client's secret: app/oidc_login.py reads it from
+        # PIPELINE_OIDC_CLIENT_SECRET_FILE and requires mode 600, this uid as
+        # owner, and a non-empty file. The IdP holds the same value for the
+        # `pipeline-dashboard` client (realm.json takes it from
+        # PIPELINE_DASHBOARD_CLIENT_SECRET).
+        printf '%s' "$${PIPELINE_DASHBOARD_CLIENT_SECRET:-}" > "$$PIPELINE_OIDC_CLIENT_SECRET_FILE"
+        # Fail fast rather than let smoke.sh's client-credentials grant be the
+        # first thing to discover an empty MCP client secret: a `:?` guard on
+        # the host only judges the host environment, at render time.
+        if [ -z "$${PIPELINE_MCP_CLIENT_SECRET:-}" ]; then
+          echo "entrypoint: PIPELINE_MCP_CLIENT_SECRET is empty" >&2
+          exit 1
+        fi
+        if [ "$${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
           # Selecting a model is a registry fact, not an environment-only switch:
           # the pipeline validates a role's model name against
           # providers.<provider>.models. This registry declares the scripted
           # models and maps every role onto them. It is written from scratch (a
           # missing registry is not an error), so it never depends on the
-          # provider list the image ships.
-          registry=/var/lib/pipeline/model_registry.scripted.json
+          # provider list the image ships. /tmp, for the same reason as the OIDC
+          # secret: the volume root is root-owned on a Linux engine.
+          registry=/tmp/model_registry.scripted.json
           printf '%s\n' '{"providers": {"lmstudio": {"models": {
             "scripted-dispatch": {"tag": "scripted-dispatch"},
             "scripted-review": {"tag": "scripted-review"},
@@ -131,10 +188,10 @@ services:
             "review": {"provider": "lmstudio", "model": "scripted-review"},
             "security_review": {"provider": "lmstudio", "model": "scripted-review"},
             "overlord": {"provider": "lmstudio", "model": "scripted-overlord"},
-            "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$registry"
-          export PIPELINE_MODEL_REGISTRY_PATH="$registry"
+            "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$$registry"
+          export PIPELINE_MODEL_REGISTRY_PATH="$$registry"
         fi
-        if [ "${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
+        if [ "$${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
           echo "compose: starting the scheduler daemon (the only durable event-bus consumer)"
           python -m pipeline.scheduler_daemon &
         fi
@@ -142,6 +199,10 @@ services:
     volumes:
       - pipeline-state:/var/lib/pipeline
       - git-origin:/git-origin
+      # Read-only: the proxy's internal CA, so the `https` JWKS fetch verifies
+      # the certificate the proxy presents (see SSL_CERT_FILE above). The
+      # pipeline never writes here, and the CA is regenerated with the stack.
+      - caddy-data:/caddy-ca:ro
     restart: "no"
 
   # ---------------------------------------------------------------------------
@@ -155,7 +216,12 @@ services:
       - start-dev
       - --import-realm
       - --http-port=8080
-      - --hostname-strict=false
+      # Pin the issuer to the URL callers actually use (the proxy origin on the
+      # host). Left to derive `iss` per request, the IdP minted one issuer for
+      # a direct in-network call and another for a call through the proxy, and
+      # the pipeline's exact-match issuer check then rejected every token.
+      - --hostname=https://localhost:8443
+      - --proxy-headers=xforwarded
       - --health-enabled=true
     environment:
       # Admin bootstrap only; the smoke run never uses this account.
@@ -192,7 +258,7 @@ services:
           admin off
           auto_https disable_redirects
         }
-        :443 {
+        https://localhost, https://proxy {
           tls internal
           handle /realms/* {
             reverse_proxy idp:8080
@@ -202,7 +268,32 @@ services:
           }
         }
         CADDYFILE
-        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+        # Caddy writes its internal-CA root 0600 as root, and the pipeline runs
+        # as uid 10001: it cannot read the file it must trust for the `https`
+        # JWKS fetch, so the fetch dies with PermissionError. Make the root
+        # readable here, where it is generated and owned. Caddy runs in the
+        # background only until the file appears, then this shell waits on it,
+        # so the container's lifetime and signals still belong to caddy.
+        caddy run --config /tmp/Caddyfile --adapter caddyfile &
+        pid=$$!
+        cert=/data/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -f "$$cert" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "the internal CA did not appear within 60s" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        # Caddy's storage tree is 0700 as root, so a readable file alone is not
+        # enough: the pipeline cannot even traverse to it. Publish the root in a
+        # directory this shell owns, leaving Caddy's own storage closed.
+        mkdir -p /data/ca-public
+        chmod 0755 /data/ca-public
+        cp "$$cert" /data/ca-public/root.crt
+        chmod 0644 /data/ca-public/root.crt
+        wait "$$pid"
     ports:
       - "8443:443"
     volumes:
@@ -253,7 +344,16 @@ services:
   # ---------------------------------------------------------------------------
   nats:
     image: nats:2.10.22
-    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "127.0.0.1:8222"]
+    # `-m` (`--http_port`) takes a port number only. Handing it a
+    # `host:port` value makes nats-server print its usage and exit instead of
+    # serving, which takes the whole stack down with it: the pipeline's event
+    # bus and the monitoring endpoint deploy/smoke/smoke.sh polls for
+    # JetStream consumer counts (`/jsz?consumers=true`) both disappear. The
+    # monitor therefore binds 0.0.0.0 *inside this container's network
+    # namespace*, which is the pipeline container's own namespace; the pipeline
+    # service publishes no host port, so 8222 stays reachable only from inside
+    # the stack.
+    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
     network_mode: "service:pipeline"
     depends_on:
       pipeline:

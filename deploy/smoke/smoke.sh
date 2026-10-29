@@ -46,7 +46,9 @@ set -euo pipefail
 STEP="startup"
 # Name the failing step and stop. The trap is set before any step runs, so an
 # unexpected `set -e` exit inside a step is still attributed to that step.
-trap 'echo "FAILED: ${STEP}" >&2; exit 1' ERR
+# The line number, never $BASH_COMMAND: a failing curl may carry a secret in
+# its arguments, and the trap output goes to the job log.
+trap 'echo "FAILED: ${STEP} (line ${LINENO})" >&2; exit 1' ERR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/deploy/compose.yaml}"
@@ -365,19 +367,31 @@ step_ingest() {
     STEP="ingest"
     # The plan file has to exist inside the pipeline container's PLAN_DIR, which
     # is the volume the MCP server reads.
-    compose cp "$REPO_ROOT/deploy/smoke/plan.json" \
+    # `docker cp`, not `compose cp`: `-q` yields a container id, and
+    # `compose cp` reads its first argument as a *service* name.
+    docker cp "$REPO_ROOT/deploy/smoke/plan.json" \
         "$(compose ps -q pipeline):${PLAN_DIR_IN_CONTAINER}/${SMOKE_PLAN_NAME}.json" \
         || fail "could not copy the plan into the pipeline container"
     local result
     result="$(mcp_tool "$TOKEN_OWNER" ingest_plan "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"overwrite\": true}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "ingest_plan refused the plan"
+    # Name the refusal the server returned: the structured reason is the only
+    # thing that says *why* (authorization, malformed plan, missing repo_root),
+    # and a bare "refused" leaves the operator guessing.
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "ingest_plan refused the plan: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_approve() {
     STEP="approve"
     local result
     result="$(mcp_tool "$TOKEN_OWNER" approve_plan "{\"plan_name\": \"${SMOKE_PLAN_NAME}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "approve_plan refused the plan for its owner"
+    # `if`, not `a | grep -q ... && fail`: under `set -o pipefail` a grep that
+    # finds nothing makes the pipeline fail, so the `&& fail` form kills the
+    # script exactly when the call succeeded.
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "approve_plan refused the plan for its owner: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_dispatch() {
@@ -385,7 +399,9 @@ step_dispatch() {
     local result
     result="$(mcp_tool "$TOKEN_OWNER" dispatch_story \
         "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"story_key\": \"${SMOKE_STORY_KEY}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "dispatch_story refused the story"
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "dispatch_story refused the story: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
 }
 
 step_poll_reviewed() {
@@ -493,7 +509,9 @@ step_restart_no_loss() {
     local result
     result="$(mcp_tool "$TOKEN_OWNER" dispatch_story \
         "{\"plan_name\": \"${SMOKE_PLAN_NAME}\", \"story_key\": \"${SMOKE_STORY_TWO_KEY}\"}")"
-    printf '%s' "$result" | grep -q '"ok": *false' && fail "the follow-up dispatch was refused"
+    if printf '%s' "$result" | grep -q '"ok": *false'; then
+        fail "the follow-up dispatch was refused: $(printf '%s' "$result" | tr -d '\n' | cut -c1-400)"
+    fi
     wait_for "the second dispatch to be acked" consumer_settled
     local second
     second="$(jetstream_counts)"
@@ -537,22 +555,30 @@ main() {
     resolve_ca
     seed_origin_if_missing
 
-    step_token
+    # Name each step as it starts: a failure inside a command substitution can
+    # exit without the ERR trap firing, and then the log says nothing at all.
+    run_step() {
+        STEP="$1"
+        log "step: ${STEP}"
+        "step_${STEP}"
+    }
+
+    run_step token
     TOKEN_OWNER="$(user_token owner "${PIPELINE_SMOKE_OWNER_PASSWORD:?set PIPELINE_SMOKE_OWNER_PASSWORD}")"
     TOKEN_STRANGER="$(user_token stranger "${PIPELINE_SMOKE_STRANGER_PASSWORD:?set PIPELINE_SMOKE_STRANGER_PASSWORD}")"
     NOTIFICATIONS_FILE="${PLAN_DIR_IN_CONTAINER}/${SMOKE_PLAN_NAME}.notifications.jsonl"
 
-    step_list_plans
-    step_ingest
-    step_approve
-    step_dispatch
-    step_poll_reviewed
-    step_stranger_denied
-    step_stranger_no_plans
-    step_verify_audit
-    step_broker_once
-    step_restart_no_loss
-    step_auth_fail_429
+    run_step list_plans
+    run_step ingest
+    run_step approve
+    run_step dispatch
+    run_step poll_reviewed
+    run_step stranger_denied
+    run_step stranger_no_plans
+    run_step verify_audit
+    run_step broker_once
+    run_step restart_no_loss
+    run_step auth_fail_429
 
     STEP="done"
     log "all assertions passed: reviewed with the merge parked, one notification, one ack"

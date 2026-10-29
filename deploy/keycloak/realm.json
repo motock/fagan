@@ -32,7 +32,20 @@
       "attributes": {
         "post.logout.redirect.uris": "https://localhost:8443/*##https://proxy/*",
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "pipeline-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "pipeline-mcp",
@@ -50,12 +63,25 @@
       "webOrigins": [],
       "attributes": {
         "access.token.lifespan": "300"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "pipeline-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "pipeline-smoke-user",
       "name": "Pipeline smoke operator login",
-      "description": "Confidential client used only by deploy/smoke/smoke.sh to obtain a direct-grant token for the owner and stranger principals. Direct grants are how a scripted client signs in as a named human without a browser, so this client carries no browser flow and no service account.",
+      "description": "Confidential client used only by deploy/smoke/smoke.sh to obtain a direct-grant token for the owner and stranger principals: a scripted client signing in as a named human without a browser. No browser flow, no service account.",
       "enabled": true,
       "publicClient": false,
       "secret": "${env.PIPELINE_SMOKE_USER_CLIENT_SECRET}",
@@ -68,7 +94,20 @@
       "webOrigins": [],
       "attributes": {
         "access.token.lifespan": "300"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "pipeline-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -113,14 +152,7 @@
     "realm": [
       {
         "name": "default-roles-pipeline",
-        "description": "Every authenticated principal. Authorization is decided by the pipeline's own policy table, not by Keycloak roles.",
-        "composite": true,
-        "composites": {
-          "realm": [
-            "offline_access",
-            "uma_authorization"
-          ]
-        },
+        "description": "Every authenticated principal. Non-composite on purpose: referencing Keycloak's built-in offline_access/uma_authorization at import aborts the realm. Authorization is the pipeline's own policy table, not Keycloak roles.",
         "clientRole": false
       }
     ]

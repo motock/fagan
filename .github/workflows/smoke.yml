@@ -1,0 +1,285 @@
+name: Smoke stack
+
+# End-to-end grade for deploy/Dockerfile and deploy/compose.yaml: build the
+# image, bring the stack up, assert against it with deploy/smoke/smoke.sh, and
+# always leave the runner with the diagnostic logs. A local planning container
+# has a docker client but no daemon, so this job is the only place the image is
+# actually built and the compose stack actually starts.
+#
+# ADVISORY FOR NOW: `build-and-smoke` builds deploy/Dockerfile, runs
+# `docker compose up -d --wait`, then deploy/smoke/smoke.sh, but it is gated on
+# the repository variable `ENABLE_SMOKE_CI` and is OFF by default, so it does
+# not block a merge while the stack is still being brought to green. Turn it
+# on (set ENABLE_SMOKE_CI=true) once the run passes; the image publish below is
+# not gated and runs on every push to master.
+#
+# Every `uses:` is pinned to a full 40-character commit SHA (a tag is a mutable
+# ref, and the publish job holds `packages: write`). tests/unit/test_smoke_workflow.py
+# enforces both that pinning and the least-privilege split below.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# Least privilege at the top: every job inherits read-only `contents` and has to
+# add anything more explicitly. Only the publish job adds `packages: write`.
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match `image:` for the `pipeline` service in deploy/compose.yaml:
+  # otherwise `up --wait` builds or pulls a different ref instead of using the
+  # image this workflow just built and loaded.
+  IMAGE_REF: pipeline-smoke:pinned
+  COMPOSE_FILE: deploy/compose.yaml
+
+jobs:
+  build-and-smoke:
+    name: Build image and run the smoke stack
+    # Advisory until the run is green; see the header. A missing variable
+    # evaluates to "", so the job is skipped, and a skipped check does not gate
+    # a merge.
+    if: vars.ENABLE_SMOKE_CI == 'true'
+    runs-on: ubuntu-latest
+    # A wedged buildx build or a `compose up --wait` that never settles would
+    # otherwise hold a runner for the 6-hour default. The `if: always()` log,
+    # upload and teardown steps still run when this bound trips.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Build the server image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          # No push here: this job holds no packages permission. `load: true`
+          # puts the image in the local daemon under IMAGE_REF, which is the
+          # ref `docker compose up` resolves.
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_REF }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate throwaway stack credentials
+        # deploy/compose.yaml reads these from the environment and refuses to
+        # start without them (`${VAR:?...}`). They are disposable, valid only
+        # inside this run, and are generated here rather than stored: no
+        # credential is checked in, and no value is echoed into the log.
+        run: |
+          set -euo pipefail
+          {
+            echo "PIPELINE_MCP_CLIENT_SECRET=$(openssl rand -hex 16)"
+            echo "PIPELINE_DASHBOARD_CLIENT_SECRET=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_OWNER_PASSWORD=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_STRANGER_PASSWORD=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_USER_CLIENT_SECRET=$(openssl rand -hex 16)"
+            echo "KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+          } >> "$GITHUB_ENV"
+
+      - name: Render the realm's env placeholders
+        # Keycloak 26.0.7's --import-realm imported `deploy/keycloak/realm.json`
+        # with its `${env.X}` placeholders literal - verified against the admin
+        # API, which showed the client secret stored as the placeholder text -
+        # so every token request failed with invalid_client_credentials.
+        # Render the checkout's copy in place before the stack imports it. The
+        # checkout is disposable, so the rendered file is never committed; a
+        # missing variable fails this step loudly rather than importing a
+        # placeholder as a credential.
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          placeholders = re.compile(r"\$\{env\.([A-Z0-9_]+)\}")
+
+
+          def render(value):
+              if isinstance(value, str):
+                  return placeholders.sub(lambda m: os.environ[m.group(1)], value)
+              if isinstance(value, list):
+                  return [render(item) for item in value]
+              if isinstance(value, dict):
+                  return {key: render(item) for key, item in value.items()}
+              return value
+
+
+          path = pathlib.Path("deploy/keycloak/realm.json")
+          rendered = render(json.loads(path.read_text(encoding="utf-8")))
+          path.write_text(json.dumps(rendered, indent=2) + "\n", encoding="utf-8")
+          print("rendered the realm's env placeholders")
+          PY
+
+      - name: Start the stack
+        # Every compose invocation in this file carries the same `-f`: the
+        # compose project name is derived from the file (deploy/compose.yaml
+        # declares `name: pipeline-smoke`), so a bare `docker compose down`
+        # would target a different project, leave these containers running and
+        # leak the published port into the next run on the runner.
+        # `--wait-timeout` bounds the container start wait so a stack that never
+        # comes up fails here instead of consuming the job's timeout. The file
+        # declares no healthchecks, so `--wait` waits for the running state;
+        # smoke.sh's own bounded polls are what catch a service that starts but
+        # cannot serve.
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 600
+
+      - name: Wait for the IdP to import the realm
+        # `--wait` only covers the containers' running state: Keycloak is up as
+        # soon as its JVM starts and finishes installing the realm import
+        # seconds later. smoke.sh's first assertion is a client-credentials
+        # grant, which the IdP refuses until then, so bound the wait here.
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -sk -o /dev/null -w '%{http_code}' \
+                 https://localhost:8443/realms/pipeline/.well-known/openid-configuration \
+               | grep -q '^200$'; then
+              echo "the IdP is serving the pipeline realm"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the IdP did not serve the pipeline realm within 120s" >&2
+          exit 1
+
+      - name: Run the smoke assertions
+        # `-x` while the stack is being brought to green: a failing command
+        # inside a command substitution exits the script without the ERR trap
+        # firing, so the step log otherwise ends at the last named step. The
+        # trace is redacted - it carries bearer tokens and client secrets in
+        # curl arguments - and every line goes through sed before the log.
+        run: |
+          set -o pipefail
+          bash -x deploy/smoke/smoke.sh 2>&1 \
+            | sed -E 's/(Bearer )[^"]*/\1<redacted>/g; s/((client_)?secret|password)=[^ &"]*/\1=<redacted>/g'
+
+      - name: Diagnose IdP client credentials on failure
+        # `invalid_client_credentials` means the secret the runner sends and the
+        # one the realm import stored disagree. Classify the stored value
+        # without printing it, and prove the admin read itself worked, so the
+        # next run names the cause instead of another guess.
+        if: failure()
+        run: |
+          set -uo pipefail
+          compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+          compose exec -T idp env | grep -E '^PIPELINE_(MCP|DASHBOARD|SMOKE)' | sed 's/=.*$/=<set>/' || true
+          if compose exec -T idp /opt/keycloak/bin/kcadm.sh config credentials \
+               --server http://localhost:8080 --realm master \
+               --user "${KEYCLOAK_ADMIN:-smoke-admin}" \
+               --password "${KEYCLOAK_ADMIN_PASSWORD}" >/dev/null; then
+            echo "kcadm authenticated against the master realm"
+          else
+            echo "kcadm could NOT authenticate; the comparison below is unreliable"
+          fi
+          stored="$(compose exec -T idp /opt/keycloak/bin/kcadm.sh get clients \
+            -r pipeline -q clientId=pipeline-mcp --fields secret \
+            --format csv --noquotes | tr -d '\r' | tail -n 1)"
+          if [ -z "$stored" ]; then
+            echo "no stored secret was read (kcadm returned nothing)"
+          elif [ "$stored" = "${PIPELINE_MCP_CLIENT_SECRET}" ]; then
+            echo "pipeline-mcp secret MATCHES the runner's value"
+          elif [ "$stored" = '${env.PIPELINE_MCP_CLIENT_SECRET}' ]; then
+            echo "pipeline-mcp stored the LITERAL placeholder: the realm import did not substitute"
+          else
+            echo "pipeline-mcp secret DIFFERS (stored length ${#stored})"
+          fi
+          compose exec -T idp /opt/keycloak/bin/kcadm.sh get users -r pipeline \
+            --fields username --format csv --noquotes | tr -d '\r' || true
+          echo "--- token claims the pipeline judges ---"
+          token="$(curl -sk -X POST \
+            https://localhost:8443/realms/pipeline/protocol/openid-connect/token \
+            -d grant_type=client_credentials -d client_id=pipeline-mcp \
+            --data-urlencode "client_secret=${PIPELINE_MCP_CLIENT_SECRET}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
+          python3 - "$token" <<'PY'
+          import base64, json, sys
+          token = sys.argv[1]
+          def part(segment):
+              segment += "=" * (-len(segment) % 4)
+              return json.loads(base64.urlsafe_b64decode(segment))
+          if not token:
+              print("no token minted")
+              raise SystemExit
+          header = part(token.split(".")[0])
+          claims = part(token.split(".")[1])
+          print("token header alg/kid:", header.get("alg"), header.get("kid"))
+          for name in ("aud", "azp", "iss", "sub", "typ"):
+              print(f"token {name}:", claims.get(name))
+          PY
+          echo "--- JWKS kids the pipeline would load ---"
+          curl -sk https://localhost:8443/realms/pipeline/protocol/openid-connect/certs \
+            | python3 -c 'import json,sys; print([k.get("kid") for k in json.load(sys.stdin).get("keys",[])])' || true
+          grep -A1 'PIPELINE_OIDC_AUDIENCE' "$COMPOSE_FILE" | head -2 || true
+
+      - name: Collect compose logs
+        # Before teardown: `down -v` removes the containers, and `docker compose
+        # logs` then has nothing left to read, so the diagnostic artifact would
+        # be empty exactly on the failing run that needs it.
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" logs --no-color > compose-logs.txt
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          if-no-files-found: warn
+
+      - name: Tear the stack down
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v
+
+  publish:
+    name: Publish image to GHCR
+    needs: build-and-smoke
+    # `always()` because the smoke job above is skipped while ENABLE_SMOKE_CI is
+    # unset, and a job whose `needs` was skipped is skipped too: without it the
+    # image would stop shipping on every push to master.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job that may write packages; `contents: read` keeps the checkout
+    # working without widening anything else. No `id-token: write`: the SBOM and
+    # provenance attestations below are emitted by build-push-action as OCI
+    # manifests and need no OIDC token.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the server image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          # Both are emitted as OCI manifests beside the image, so a pulled
+          # image carries its SBOM and provenance attestations.
+          sbom: true
+          provenance: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/fagan:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/fagan:master
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

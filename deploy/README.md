@@ -190,6 +190,28 @@ the step that failed, so a red run says which invariant broke: `token`,
 `stranger-denied`, `stranger-no-plans`, `verify_audit`, `auth-fail-429`,
 `broker-once` or `restart-no-loss`.
 
+### The smoke stack in CI
+
+`.github/workflows/smoke.yml` runs the same stack on every pull request and on
+every push to `master`: it builds `deploy/Dockerfile` with buildx, brings the
+compose file up with `docker compose up -d --wait`, runs
+`deploy/smoke/smoke.sh`, and uploads the compose logs as the `compose-logs`
+artifact. The logs are collected before teardown, so a failing run still has
+them; a job-level timeout bounds a build or container start wait that never
+settles. The
+workflow is the only place the image is actually built and the stack actually
+started — the local suite reads the artifacts as text because it has no docker
+daemon.
+
+The stack job is **advisory for now**: it is gated on the repository variable
+`ENABLE_SMOKE_CI` and off by default, because the compose stack does not yet
+boot on a Linux engine and a red check on every pull request would block every
+merge. Set that variable to `true` to turn it back on. On a push to `master` a
+second job publishes the image to `ghcr.io/<owner>/fagan`, tagged with the
+commit sha and `master`, with SBOM and provenance attestations; `packages:
+write` is granted to that job alone, that job is not gated, and every action is
+pinned to a full commit SHA.
+
 ### How the pipeline container is wired
 
 The stack-specific startup lives in the `pipeline` service's `entrypoint:` in

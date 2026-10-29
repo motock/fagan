@@ -1,6 +1,6 @@
 # 0011. The scheduler advances plans as leased work items and runs heavy work as detached jobs
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-28
 - **Supersedes:** rule 6 of [ADR 0010](0010-event-delivery-contract-and-nats-jetstream.md)
   ("exactly one consuming process per deployment").
@@ -95,6 +95,15 @@ never runs a test suite or build inline.**
 | S1 | `wake_handler` enqueues instead of advancing inline; long-lived advancers drain an in-process queue; reconcile becomes a staleness sweep. | The plan flock. | S0 |
 | S2 | Leases and the advance queue move into the control-plane store, written in the same transaction as the event outbox. More than one scheduler process may run. The single-instance lock goes away. | A lease row with an expiry. | ADR 0008 stage 2b, ADR 0010 broker |
 | S3 | Heavy jobs run on workers; CI arrives by webhook; fair-share admission. | A lease row. | ADR 0008 stage 3 |
+
+### Progress
+
+S0 has shipped: the `PIPELINE_ADVANCE_WORKERS` pool, the detached merge re-verify and the per-commit dispatch baseline. The throughput work is tracked in `docs/plans/SCHEDULER_THROUGHPUT_PLAN.json`.
+
+S1 is specified in `docs/plans/SCHEDULER_EVENT_DRIVEN_PLAN.json` and runs behind `PIPELINE_ADVANCE_MODE=queue`. It adds two items beyond the S1 row in the staging table above:
+
+- Wake signals for detached-job results, `blocked_by` completions and operator actions.
+- Per-repository batched CI status, pulled forward from S3: the per-PR status poll meets GitHub's rate limit at roughly 50-80 open pull requests.
 
 ## Consequences
 

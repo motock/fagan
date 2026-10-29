@@ -106,6 +106,8 @@ def test_success_path_return_and_record_unchanged(plan_dir, agents_dir, monkeypa
         "notify_user": False,
         "split": [],
         "decided_by": "overlord",
+        "requested_by": "local-operator",
+        "routed_to": {"owner": "local-operator", "delegates": []},
     }
     log = _decisions(plan_dir)
     assert len(log) == 1

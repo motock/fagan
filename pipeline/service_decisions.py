@@ -7,6 +7,57 @@ pipeline.service, so tests patching pipeline.server still land.
 import logging
 from datetime import UTC, datetime
 
+from app.identity import LOCAL_OPERATOR
+
+from .actor import actor_id
+from .authorization import _load_manifest
+
+#: Parsed ACTION values that mean a human must answer: the overlord parks the
+#: story for one. A ruling with a truthy ``notify_user`` escalates too - the
+#: contract asks the user to read and answer it.
+_ESCALATING_ACTIONS = frozenset({"park_for_human"})
+
+
+def _escalates_to_human(ruling: dict) -> bool:
+    """Return whether *ruling* hands the decision to a human.
+
+    ``_parse_ruling`` yields ``action`` (normalized, so unparseable payloads
+    land on ``park_for_human``) and ``notify_user`` (a bool). Either one saying
+    "a human is needed" is enough; anything else is a ruling the overlord
+    settled itself.
+    """
+    return ruling.get("action") in _ESCALATING_ACTIONS or bool(ruling.get("notify_user"))
+
+
+def _routing_target(plan_name: str) -> dict:
+    """Return who must answer a decision escalated to a human (ADR 0006).
+
+    The target is the plan manifest's ``owner`` plus the ``delegates`` the
+    owner named. A manifest that names no owner routes to the local operator,
+    which is the deployment's single human. The result is descriptive: it says
+    who the answer belongs to, and this module never delivers it.
+
+    An unreadable manifest must not turn a routable escalation into a tool
+    error, so any read failure yields the local-operator default. Only the plan
+    name is logged - never the exception text or a path (Secure-by-Design).
+    """
+    default = {"owner": LOCAL_OPERATOR.subject, "delegates": []}
+    try:
+        manifest = _load_manifest(plan_name)
+    except Exception:  # noqa: BLE001 - an unreadable manifest must not raise
+        logging.getLogger("pipeline").warning(
+            "could not read the plan manifest for routing plan=%s", plan_name
+        )
+        return default
+    if not isinstance(manifest, dict):
+        return default
+    owner = manifest.get("owner")
+    delegates = manifest.get("delegates")
+    return {
+        "owner": str(owner).strip() if owner else LOCAL_OPERATOR.subject,
+        "delegates": [str(d) for d in delegates if d] if isinstance(delegates, list) else [],
+    }
+
 
 def _request_decision_impl(self, plan_name: str, story_key: str, question: str, options: list[str], context: str=''):
     _validate_key(plan_name)
@@ -38,6 +89,7 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
             story_key,
             summary,
         )
+        routed_to = _routing_target(plan_name)
         record = {
             "story_key": story_key,
             "question": question,
@@ -52,6 +104,8 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
             "failed_open": True,
             "summary": summary,
             "decided_by": "overlord",
+            "requested_by": actor_id(),
+            "routed_to": routed_to,
             "decided_at": datetime.now(UTC).isoformat(),
         }
         try:
@@ -74,11 +128,14 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
                 "Failed to park story %s after overlord failure", story_key
             )
         try:
-            # Make the park visible to the operator (mirrors triage._park).
-            # Only the exception class name is included - no payload data.
+            # Make the park visible to the operator (mirrors triage._park), and
+            # name who the answer now belongs to, so the notification is
+            # actionable on its own. Only the exception class name is included -
+            # no payload data - and the owner is a name, never the raw target.
             _notify_user(
                 plan_name,
-                f"request_decision failed open for {story_key}: {summary}",
+                f"request_decision failed open for {story_key}: {summary}; "
+                f"see decisions log (routed to {routed_to['owner']})",
                 story_key=story_key,
                 severity="warning",
                 event="overlord_failure",
@@ -94,8 +151,11 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
         "options": list(options),
         **ruling,
         "decided_by": "overlord",
+        "requested_by": actor_id(),
         "decided_at": datetime.now(UTC).isoformat(),
     }
+    if _escalates_to_human(ruling):
+        record["routed_to"] = _routing_target(plan_name)
     _store.append_decision(plan_name, record)
     return record
 

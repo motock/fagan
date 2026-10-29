@@ -601,10 +601,17 @@ The remaining work, in dependency order:
    to the nearest action when its work falls outside the enum (§4's first
    row). The one deliberate exception is `decompose_plan`, which writes no
    state.
-2. **Ownership records.** Landed in part: a plan's manifest records an `owner`
-   and `delegates`, and they may approve, reject, merge and answer decisions on
-   that plan's work (§2, "Enforcement"). What remains is giving
-   `request_decision` the owner as its routing target (ADR 0006).
+2. **Ownership records.** A plan's manifest records an `owner` and
+   `delegates`, and they may approve, reject, merge and answer decisions on
+   that plan's work (§2, "Enforcement"). `request_decision` also records the
+   routing target on every escalated decision: the decision record carries
+   `routed_to` — `{"owner": <the manifest's owner, or "local-operator" when the
+   plan names none>, "delegates": [...]}` — and `requested_by`, the acting
+   principal's subject. A decision that escalates to a human (the
+   `park_for_human` action, or a ruling with `notify_user`) and a fail-open
+   record both carry `routed_to`; one the overlord settles itself carries
+   `requested_by` alone. The target is descriptive of who must answer — how a
+   notification reaches them is not this record's concern.
 3. **System principals.** Defined: `system:scheduler` and `system:worker` are
    distinct, narrowly scoped principals, defined in `app/identity.py` with the
    reserved `system:` subject prefix and auth method `system`. Their grants are

@@ -35,6 +35,10 @@ jobs:
   build-and-smoke:
     name: Build image and run the smoke stack
     runs-on: ubuntu-latest
+    # A wedged buildx build or a `compose up --wait` that never settles would
+    # otherwise hold a runner for the 6-hour default. The `if: always()` log,
+    # upload and teardown steps still run when this bound trips.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -76,7 +80,9 @@ jobs:
         # declares `name: pipeline-smoke`), so a bare `docker compose down`
         # would target a different project, leave these containers running and
         # leak the published port into the next run on the runner.
-        run: docker compose -f "$COMPOSE_FILE" up -d --wait
+        # `--wait-timeout` bounds the health wait so a stack that never becomes
+        # healthy fails here instead of consuming the job's timeout.
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 600
 
       - name: Run the smoke assertions
         run: bash deploy/smoke/smoke.sh
@@ -105,6 +111,7 @@ jobs:
     needs: build-and-smoke
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # The only job that may write packages; `contents: read` keeps the checkout
     # working without widening anything else. No `id-token: write`: the SBOM and
     # provenance attestations below are emitted by build-push-action as OCI

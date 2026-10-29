@@ -35,6 +35,7 @@ from typing import Any
 
 from app.identity import Principal
 
+from . import wake
 from .actor import current_correlation_id, current_principal
 from .audit import record_audit
 
@@ -246,7 +247,8 @@ class PlanApprovalMixin:
     def approve_plan(self, plan_name: str) -> dict[str, Any]:
         """Approve ``plan_name``'s authored content (``pending_approval`` ->
         ``approved``)."""
-        return self._decide_plan(plan_name, status="approved", reason="")
+        result = self._decide_plan(plan_name, status="approved", reason="")
+        return wake.after(plan_name, "approve_plan", result)
 
     def reject_plan(self, plan_name: str, reason: str = "") -> dict[str, Any]:
         """Request changes on ``plan_name`` (``pending_approval`` ->

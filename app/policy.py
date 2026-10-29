@@ -126,7 +126,7 @@ def _coerce_action(action: Action | str) -> Action | None:
 class LocalPolicy:
     """The local single-operator policy: the operator may do everything.
 
-    Every other principal is denied every action, with two exceptions. A plan's
+    Every other principal is denied every action, with three exceptions. A plan's
     ``owner`` and its ``delegates`` are allowed ``plan:approve``,
     ``plan:reject``, ``story:merge`` and ``decision:answer``; ownership is
     additive only — it can allow a principal the role rule denies, never deny

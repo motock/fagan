@@ -16,8 +16,24 @@ from .audit import record_audit
 
 #: A subject: one line, 1-64 characters, no control characters. The owner is
 #: interpolated into the line-oriented notifications log, so a newline would
-#: forge a line there. Mirrors ``actor.CORRELATION_ID_RE`` at a larger bound.
+#: forge a line there. This is the same 1-64 character bound and one-line
+#: intent as ``actor.CORRELATION_ID_RE``, with a wider charset because a
+#: subject may be an email address or ``ops:oncall``.
 SUBJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}")
+
+#: The refusal an invalid owner gets. It is the message ingest already returned
+#: for a non-string owner, reused verbatim because the ingest path turns exactly
+#: this ``ValueError`` into its structured ``{"ok": False}`` refusal.
+OWNER_REFUSAL = "invalid owner: must be a non-empty string"
+
+
+def _single_line(value: str) -> bool:
+    """Return whether *value* carries no newline, carriage return or ANSI escape.
+
+    Checked on the raw value, before any stripping, because stripping would hide
+    a trailing newline.
+    """
+    return "\n" not in value and "\r" not in value and "\x1b" not in value
 
 
 def ownership_from_plan(plan: dict[str, Any], ingested_by: str) -> dict[str, Any]:
@@ -30,21 +46,30 @@ def ownership_from_plan(plan: dict[str, Any], ingested_by: str) -> dict[str, Any
     than a silent empty list, because a dropped delegate silently removes
     someone's authority.
     """
-    owner = plan.get("owner") or ingested_by
-    if not isinstance(owner, str):
-        # ValueError, not TypeError: the ingest path turns this into its
-        # structured {"ok": False} refusal, which only catches ValueError.
-        raise ValueError(  # noqa: TRY004 - ingest's refusal path catches ValueError
-            "invalid owner: must be a non-empty string"
-        )
-    # The owner is interpolated into the line-oriented notifications log, so it
-    # must be a single-line subject. The raw value is checked before ``strip()``
-    # because stripping would hide a trailing newline.
-    if "\n" in owner or "\r" in owner or "\x1b" in owner:
-        raise ValueError("invalid owner: must be a non-empty string")
-    candidate = owner.strip()
-    if not candidate or not SUBJECT_RE.fullmatch(candidate):
-        raise ValueError("invalid owner: must be a non-empty string")
+    # An owner the plan names is interpolated into the line-oriented
+    # notifications log, so it must be a single-line subject; anything else is
+    # refused here, at the boundary. ValueError, not TypeError: the ingest path
+    # turns this into its structured {"ok": False} refusal, which only catches
+    # ValueError.
+    named_owner = plan.get("owner")
+    if named_owner:
+        if not isinstance(named_owner, str) or not _single_line(named_owner):
+            raise ValueError(OWNER_REFUSAL)
+        if not SUBJECT_RE.fullmatch(named_owner.strip()):
+            raise ValueError(OWNER_REFUSAL)
+        owner = named_owner
+    else:
+        # The ingester is not required to be a routing subject: an OIDC
+        # principal is ``f"{issuer}#{sub}"``, and ``#`` and ``/`` are outside
+        # SUBJECT_RE, so a shape bound here would break ingest for every
+        # authenticated OIDC caller. The ingester's value is still written to
+        # the log, so only the log-safety bound applies; routing guards a
+        # non-conforming owner when the record is read back.
+        if not isinstance(ingested_by, str) or not _single_line(ingested_by):
+            raise ValueError(OWNER_REFUSAL)
+        if not ingested_by.strip():
+            raise ValueError(OWNER_REFUSAL)
+        owner = ingested_by
     delegates = plan.get("delegates") or []
     if not isinstance(delegates, list):
         # ValueError, not TypeError: the ingest path turns this into its

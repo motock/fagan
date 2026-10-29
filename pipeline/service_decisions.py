@@ -13,9 +13,11 @@ from app.identity import LOCAL_OPERATOR
 from .actor import actor_id
 from .authorization import _load_manifest
 
-#: A routing subject: one line, 1-64 characters, no control characters. This
-#: mirrors ``actor.CORRELATION_ID_RE`` at a larger bound because a subject is
-#: interpolated into the line-oriented notifications log (log forging).
+#: A routing subject: one line, 1-64 characters, no control characters. This is
+#: the same 1-64 character bound and one-line intent as
+#: ``actor.CORRELATION_ID_RE``, with a wider charset because a subject may be an
+#: email address or ``ops:oncall``. A subject is interpolated into the
+#: line-oriented notifications log, so a newline there would forge a line.
 SUBJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}")
 
 #: Cap on the delegates a manifest may route to, so a hostile list cannot bury
@@ -44,9 +46,9 @@ def _valid_subject(value: object) -> str | None:
 
     A subject is a single line of ``SUBJECT_RE``. The raw value is checked for
     newlines, carriage returns and ANSI escapes *before* stripping, because
-    ``"alice\\n"`` would otherwise be accepted as ``"alice"`` and ``$``/``strip``
-    both hide a trailing newline. Non-strings are rejected outright rather than
-    coerced: ``str()`` would turn ``123`` into a routable ``"123"``.
+    stripping would otherwise hide a trailing newline and accept ``"alice\n"``
+    as ``"alice"``. Non-strings are rejected outright rather than coerced:
+    ``str()`` would turn ``123`` into a routable ``"123"``.
     """
     if not isinstance(value, str):
         return None
@@ -73,7 +75,10 @@ def _routing_target(plan_name: str) -> dict:
     forge a line there and an unbounded value would bury neighbouring records.
     A value that is not a subject falls back to the local operator - the same
     deny-to-safe-default as an unreadable manifest - and the notification is
-    still sent.
+    still sent. That includes a real owner whose subject is merely outside the
+    charset (a plus-addressed email, an OIDC ``issuer#sub``): it cannot be told
+    apart from a hostile value here, so the local operator answers instead
+    (ADR 0006).
     """
     default = {"owner": LOCAL_OPERATOR.subject, "delegates": []}
     try:

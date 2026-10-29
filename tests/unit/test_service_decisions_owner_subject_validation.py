@@ -25,12 +25,10 @@ from pipeline import server as p
 from pipeline.actor import bind_principal
 from pipeline.authorization import ENFORCE_ENV
 from pipeline.service_decisions import _routing_target
-from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
+from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401 - fixtures
     _clear_caches,
     _isolate_usage_state,
     _plane_configured,
-    _read_manifest,
-    _write_manifest,
 )
 from tests.unit._pipeline_mcp_server_test_helpers import (
     agents_dir as _agents_dir_fixture,
@@ -206,3 +204,57 @@ def test_non_list_delegates_yield_empty_list(plan_dir, agents_dir):
     _seed(plan_dir, owner="alice", delegates="bob")
 
     assert _routing_target(PLAN) == {"owner": "alice", "delegates": []}
+
+
+def test_owner_length_bound_is_exactly_sixty_four(plan_dir, agents_dir):
+    """64 characters is a subject; 65 is not - the boundary is off-by-one tested."""
+    at_bound = "a" * 64
+    _seed(plan_dir, owner=at_bound)
+    assert _routing_target(PLAN)["owner"] == at_bound
+
+    _seed(plan_dir, owner="a" * 65)
+    assert _routing_target(PLAN)["owner"] == LOCAL
+
+
+@pytest.mark.parametrize("count", [63, 64, 65])
+def test_delegate_count_bound(plan_dir, agents_dir, count):
+    """The cap keeps 63 and 64 delegates and truncates 65 to the cap."""
+    _seed(plan_dir, owner="alice", delegates=[f"d{i}" for i in range(count)])
+
+    delegates = _routing_target(PLAN)["delegates"]
+
+    assert len(delegates) == min(count, MAX_DELEGATES)
+    assert delegates == [f"d{i}" for i in range(min(count, MAX_DELEGATES))]
+
+
+def test_delegate_entry_length_bound(plan_dir, agents_dir):
+    """A 65-character delegate entry is dropped; 64 is kept."""
+    at_bound = "b" * 64
+    _seed(plan_dir, owner="alice", delegates=[at_bound, "b" * 65, "bob"])
+
+    assert _routing_target(PLAN)["delegates"] == [at_bound, "bob"]
+
+
+def test_hostile_delegates_do_not_consume_a_slot(plan_dir, agents_dir):
+    """The cap is applied after filtering, so 64 valid entries all survive."""
+    valid = [f"d{i}" for i in range(MAX_DELEGATES)]
+    _seed(plan_dir, owner="alice", delegates=["a\nb", "\x1b[2J"] + valid)
+
+    assert _routing_target(PLAN)["delegates"] == valid
+
+
+@pytest.mark.parametrize(
+    "owner",
+    ["alice+notifications@example.com", "https://issuer.example#alice", "ops oncall"],
+)
+def test_legitimate_but_non_conforming_owner_falls_back_to_local_operator(
+    plan_dir, agents_dir, owner
+):
+    """Documented shape: a real-but-non-conforming subject still routes safely.
+
+    Such an owner cannot be told apart from a hostile one at this boundary, so
+    it routes to the local operator rather than into the log (ADR 0006).
+    """
+    _seed(plan_dir, owner=owner)
+
+    assert _routing_target(PLAN)["owner"] == LOCAL

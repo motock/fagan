@@ -14,7 +14,9 @@ ingest path turns only ``ValueError`` into its ``{"ok": False}`` refusal.
 import pytest
 
 from app.identity import LOCAL_OPERATOR
-from pipeline.ownership import ownership_from_plan
+from pipeline.ownership import ownership_from_plan, resolve_ownership
+
+PLAN = "payments-rollout"
 
 HOSTILE_OWNERS = ["a\nb", "\x1b[2J", "x" * 10000, {"x": 1}, 123, "alice\n"]
 VALID_OWNERS = ["alice", "team@example.com", "ops:oncall"]
@@ -75,3 +77,45 @@ def test_hostile_owner_is_never_persisted_before_a_valid_one():
     accepted = ownership_from_plan({"owner": "team@example.com"}, INGESTED_BY)
 
     assert accepted == {"owner": "team@example.com", "delegates": []}
+
+
+def test_owner_length_bound_is_exactly_sixty_four():
+    """64 characters is a subject; 65 is refused - the boundary is tested."""
+    at_bound = "a" * 64
+    assert ownership_from_plan({"owner": at_bound}, INGESTED_BY) == {
+        "owner": at_bound,
+        "delegates": [],
+    }
+
+    assert _refusal("a" * 65) == PRE_EXISTING_REFUSAL
+
+
+#: An OIDC principal is ``f"{issuer}#{sub}"`` (app/oidc.py), so it carries ``#``
+#: and ``/`` - characters that are outside SUBJECT_RE. Bounding the ingester
+#: with the subject shape would break ingest for every OIDC caller that ingests
+#: a plan naming no owner.
+OIDC_ACTOR = "https://issuer.example/api/auth#248289761001"
+
+
+def test_oidc_ingester_default_owner_still_ingests():
+    """A plan naming no owner still ingests for a non-conforming OIDC caller."""
+    assert ownership_from_plan({}, OIDC_ACTOR) == {
+        "owner": OIDC_ACTOR,
+        "delegates": [],
+    }
+
+
+def test_oidc_first_ingest_through_resolve_ownership_succeeds():
+    """The whole ingest boundary accepts an OIDC caller, end to end."""
+    assert resolve_ownership(PLAN, {}, {}, OIDC_ACTOR) == {
+        "owner": OIDC_ACTOR,
+        "delegates": [],
+    }
+
+
+def test_hostile_ingester_value_is_still_refused():
+    """The ingester default keeps the one-line bound even though it is not a subject."""
+    for ingested_by in ["a\nb", "\x1b[2J", ""]:
+        with pytest.raises(ValueError) as excinfo:
+            ownership_from_plan({}, ingested_by)
+        assert str(excinfo.value) == PRE_EXISTING_REFUSAL, ingested_by

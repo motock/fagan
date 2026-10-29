@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from . import telemetry
@@ -27,6 +29,36 @@ ALLOWED_EVENT_BUSES = (EVENT_BUS_INPROCESS, EVENT_BUS_JSONL, EVENT_BUS_NATS)
 #: unsupported value. Deliberately not a bus name: it says "this process's
 #: selection could not be honoured" without echoing the rejected value.
 EVENT_BUS_INVALID = "invalid"
+
+
+#: Guards :data:`_wake_hook`. The hook is read under the lock and called
+#: *outside* it: it takes the advance queue's own lock, so holding this one
+#: across the call would invite a deadlock between the two.
+_hook_lock = threading.Lock()
+#: Set by :func:`set_wake_hook` when advancement is queue-driven (ADR 0011 S1).
+#: ``None`` means "advance synchronously, as this process always has".
+_wake_hook: Callable[[str], object] | None = None
+
+
+def set_wake_hook(hook: Callable[[str], object] | None) -> None:
+    """Install *hook* as the sink for advance requests, or ``None`` to clear it.
+
+    With a hook installed, :func:`wake_handler` hands the plan name to it and
+    returns immediately instead of advancing the plan on the delivering
+    thread. With no hook the handler advances synchronously, exactly as before.
+
+    The hook's return value is ignored: whether it accepted the request is the
+    hook's own business (the queue coalesces a plan that is already pending).
+    """
+    global _wake_hook
+    with _hook_lock:
+        _wake_hook = hook
+
+
+def _current_wake_hook() -> Callable[[str], object] | None:
+    """Return the installed wake hook, if any."""
+    with _hook_lock:
+        return _wake_hook
 
 
 def wake_handler(event: dict) -> dict:
@@ -65,6 +97,14 @@ def wake_handler(event: dict) -> dict:
     if not precond.get("ok"):
         # Return the dict unchanged – a stale or redelivered event.
         return precond
+
+    # Queue-driven advancement (ADR 0011 S1): hand the plan to the workers and
+    # return, so a slow advance can never hold up the thread delivering events
+    # or the ones behind it. Read under the lock, call outside it.
+    hook = _current_wake_hook()
+    if hook is not None:
+        hook(plan_name)
+        return {"ok": True, "queued": plan_name}
 
     # Resolved at call time (not at module load) so tests patching
     # ``pipeline.server.advance_pipeline`` land on this call site.

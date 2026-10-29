@@ -22,6 +22,7 @@ import time
 from pipeline import config_provenance
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
+from pipeline.events_nats_consumer import start_consumers, stop_consumers
 from pipeline.paths import PLAN_DIR
 from pipeline.watchers import scan_all_plans
 
@@ -961,6 +962,7 @@ def run_daemon() -> int:
     )
 
     bus = build_bus()
+    start_consumers(bus)
 
     def scan_fn():
         scan_all_plans(bus)
@@ -984,6 +986,7 @@ def run_daemon() -> int:
         health_path=health_path,
     )
     daemon.run_forever(threading.Event())
+    stop_consumers()
     return 0
 
 

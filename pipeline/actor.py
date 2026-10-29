@@ -33,7 +33,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from app.identity import LOCAL_OPERATOR, Principal
+from app.identity import (
+    LOCAL_OPERATOR,
+    SYSTEM_SCHEDULER,  # noqa: F401 (re-exported)
+    Principal,
+)
 
 #: A caller whose transport refused to identify them. Distinct from "no
 #: transport at all": this one must never be treated as the local operator.

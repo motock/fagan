@@ -66,6 +66,51 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
 
+      - name: Install nats-server
+        # The NATS JetStream bus tests (tests/integration/test_nats_bus.py, the
+        # `nats` cases in tests/contract/test_event_bus_contract.py) run against
+        # a real broker. Pinned release, verified against the checksum that
+        # release publishes, so a swapped or truncated tarball fails the job
+        # instead of quietly changing what the publish path is tested against.
+        # The Linux build only: this step is skipped on the macOS leg below.
+        if: runner.os == 'Linux'
+        env:
+          NATS_SERVER_VERSION: "2.10.22"
+          NATS_SERVER_SHA256: "db0b3ccbe4cbdd3872ae7486ec4f6b0f85824632a0789f4da2e0a8518390483e"
+        run: |
+          set -euo pipefail
+          tarball="nats-server-v${NATS_SERVER_VERSION}-linux-amd64.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/${tarball}"
+          echo "${NATS_SERVER_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball"
+          echo "${PWD}/nats-server-v${NATS_SERVER_VERSION}-linux-amd64" >> "$GITHUB_PATH"
+
+      - name: Start nats-server
+        # A JetStream broker for the publish path. The broker-backed tests start
+        # their own on a random port, so this one exists to prove the binary
+        # works in this job and to give PIPELINE_NATS_URL a live target.
+        # PIPELINE_REQUIRE_NATS_TESTS makes a missing broker binary FAIL those
+        # tests rather than skip them: a broker suite that silently skips in CI
+        # cannot catch a broken publish path.
+        if: runner.os == 'Linux'
+        env:
+          PIPELINE_REQUIRE_NATS_TESTS: "1"
+        run: |
+          set -euo pipefail
+          nats-server -js -a 127.0.0.1 -p 4222 \
+            -sd "$RUNNER_TEMP/nats-js-store" >"$RUNNER_TEMP/nats-server.log" 2>&1 &
+          for _ in $(seq 1 100); do
+            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then
+              echo "nats-server is listening on 127.0.0.1:4222"
+              exit 0
+            fi
+            sleep 0.1
+          done
+          cat "$RUNNER_TEMP/nats-server.log"
+          echo "nats-server did not start" >&2
+          exit 1
+
       - name: Run tests
         # Run the real full suite. `--override-ini=testpaths=` defeats the
         # pyproject.toml testpaths allowlist, which is a pinned file list that
@@ -77,6 +122,8 @@ jobs:
         # the benchmark/experiments dirs (which aren't correctness suites) out
         # of collection. `-n auto` now comes from pyproject.toml's addopts by
         # default, so it's not repeated here.
+        env:
+          PIPELINE_REQUIRE_NATS_TESTS: "1"
         run: pytest -q --override-ini=testpaths=. --ignore=tests/benchmark --ignore=tests/experiments
 
   lint:

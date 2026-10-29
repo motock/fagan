@@ -17,9 +17,14 @@ import pytest
 # module for the rest of the session, making unrelated tests fail on a correct
 # codebase. Clearing here, at the suite root, covers every test directory.
 _ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_")
+#: CI-only gates that are not runtime configuration, so the scrub below keeps
+#: them: no pipeline module reads them, and the broker suites must see the
+#: value CI exported -- a broker suite that silently skipped cannot catch a
+#: broken publish path.
+_KEPT_ENV = ("PIPELINE_REQUIRE_NATS_TESTS",)
 
 for _key in list(os.environ):
-    if _key.startswith(_ISOLATED_ENV_PREFIXES):
+    if _key.startswith(_ISOLATED_ENV_PREFIXES) and _key not in _KEPT_ENV:
         del os.environ[_key]
 
 # CI sets AGENTS_DIR to the repo's checked-in personas (.github/workflows/ci.yml);

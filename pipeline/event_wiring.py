@@ -114,6 +114,32 @@ def wake_handler(event: dict) -> dict:
     return {"ok": True, "woke": plan_name, "result": result}
 
 
+def reconcile_handler(event: dict) -> None:
+    """Hand a ``reconcile`` event's plan to the wake hook.
+
+    This is a hint, never an advance: with no hook installed (a process that
+    did not opt into queue-driven advancement) the event is ignored, so a
+    reconcile event can never make the delivering thread run an advance.
+    Whether the plan has anything to do is decided by the advance itself, from
+    a fresh read of the manifest.
+
+    The hook is read under the lock and called outside it for the same reason
+    :func:`wake_handler` does: it takes the advance queue's own lock.
+    """
+    plan_name = event.get("plan")
+    if not plan_name:
+        return
+    hook = _current_wake_hook()
+    if hook is None:
+        return
+    try:
+        hook(plan_name)
+    except Exception as exc:  # noqa: BLE001 - a broken queue must not break the bus
+        logger.warning(
+            "reconcile wake failed: %s", type(exc).__name__, extra={"plan": plan_name}
+        )
+
+
 def selected_event_bus_name() -> str:
     """Return the event-bus name selected by ``PIPELINE_EVENT_BUS``.
 

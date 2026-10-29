@@ -215,8 +215,9 @@ def test_first_ingest_is_allowed_for_non_operator_principal() -> None:
     assert (
         LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner="")) is True
     )
-    # `authorize` passes `resource=None` when there is no manifest at all.
-
+    # A real caller always passes a resource: `authorize` builds one with
+    # `resource_for`, which yields an empty owner when there is no manifest.
+    # `resource=None` is therefore denied — see the tests above.
 
 
 def test_reingest_of_owned_plan_is_allowed_for_owner() -> None:

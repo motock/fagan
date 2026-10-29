@@ -81,6 +81,50 @@ Do **not** re-dispatch `DK-03`, do **not** mark it done, do **not** merge
 PR #1380 on its merits; there is no `gh` evidence that it is MERGED, and new commits
 on `agent/dk-03` never corroborate on their own under the squash-merge rule.
 
+The manifest entry is **runtime state, not version controlled**
+(`~/.claude/plans/smoke-stack.manifest.json`, resolved by `pipeline/paths.py`), and
+`parked_reason` is a field the pipeline rewrites: a live supervisor re-parks `DK-03`
+within ~45s — observed with no test run in flight — because `DK-03` carries
+`triage_attempts == 2`, and `pipeline/triage.py`'s cap path (`triage_allowed` ->
+`_park`) overwrites `parked_reason` unconditionally with
+`triage attempts (2) at or above cap (2)`. That is the same clobber class as the
+repo's TRIFID-2 note (a merge-gate hold reason destroyed by the triage cap path), so
+the *authoritative* record of this reason is this story file, and
+`tests/unit/test_dk03_repo_issue_story.py` pins it here character-for-character while
+tolerating only that one documented clobber shape on the live entry. Re-assert the
+park through the repo's own store API, which updates only the two fields and leaves
+`pr_url`, `branch` and `last_reviewed_sha` alone:
+
+```python
+from pipeline.store import build_store
+build_store().update_story(
+    "smoke-stack",
+    "DK-03",
+    {
+        "status": "parked",
+        "parked_reason": (
+            "green branch awaiting human review/merge; triage evidence blocked by "
+            "unresolved base branch (see `DK-03-repo-issue`)"
+        ),
+    },
+)
+```
+
+Run it twice: the second run must leave the entry count, the reason and every other
+field byte-identical (the follow-up entry is added only when absent). Because the
+supervisor re-clobbers the reason, treat a re-park as routine upkeep, not as evidence
+that DK-03's grade changed — and never "fix" it by lowering `triage_attempts`.
+
+## Known pipeline defect this story exposes (do not fix here)
+
+`_park` overwriting `parked_reason` unconditionally is a *general* defect, not
+DK-03-specific: it destroys any human- or triage-authored hold reason on a story that
+has exhausted its triage budget. `tests/unit/test_triage_excludes_merge_gate_holds.py`
+patches only the merge-gate case (by excluding merge holds from triage entirely).
+Making `_park` preserve a reason it did not author — or keying the cap path on an
+immutable marker instead of the mutable string — is a follow-up in its own right; this
+story is scoped to base-branch resolution and must not change triage behaviour.
+
 ## This story must NOT implement DK-03's deliverable
 
 Do not add or change `deploy/compose.yaml`, `deploy/keycloak/realm.json`,

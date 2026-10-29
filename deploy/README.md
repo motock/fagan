@@ -197,7 +197,8 @@ every push to `master`: it builds `deploy/Dockerfile` with buildx, brings the
 compose file up with `docker compose up -d --wait`, runs
 `deploy/smoke/smoke.sh`, and uploads the compose logs as the `compose-logs`
 artifact. The logs are collected before teardown, so a failing run still has
-them; a job-level timeout bounds a build or health wait that never settles. The
+them; a job-level timeout bounds a build or container start wait that never
+settles. The
 workflow is the only place the image is actually built and the stack actually
 started — the local suite reads the artifacts as text because it has no docker
 daemon. On a push to `master` a second job publishes the image to

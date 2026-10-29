@@ -1,7 +1,6 @@
 {
   "tests/unit/test_comms_landing_redesign.py": [
-    30,
-    86
+    35
   ],
   "tests/unit/test_dashboard_comms_css.py": [
     76,

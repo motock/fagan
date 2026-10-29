@@ -159,6 +159,15 @@ class LocalPolicy:
                 principal.subject, frozenset()
             )
 
+        if resolved_action is Action.PLAN_INGEST and isinstance(principal, Principal):
+            if principal.subject == LOCAL_OPERATOR_SUBJECT:
+                return True
+            if resource is None or not resource.owner:
+                # No manifest yet, or a legacy ownerless plan: ADR 0006 makes the
+                # authenticated caller the owner at ingest.
+                return True
+            return principal.subject == resource.owner
+
         # Ownership is an ADDITIONAL authority for exactly the four actions a
         # plan's owner governs: it can only allow a principal the role rules
         # below would deny, never deny one they would allow. The `resource.owner

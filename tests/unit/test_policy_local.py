@@ -108,7 +108,11 @@ def test_non_local_principal_is_denied_for_every_action() -> None:
 
     allowed = {action for action in Action if policy.allow(system_principal, action)}
 
-    assert allowed == set()
+    # DK-05 exception: ingest of a plan with no owner yet is the one action a
+    # non-operator principal holds, because ADR 0006 makes the authenticated
+    # caller the owner at ingest -- so the caller must be able to create it.
+    # Every other action stays denied.
+    assert allowed == {Action.PLAN_INGEST}
 
 
 def test_non_local_principal_is_denied_plan_approve() -> None:
@@ -158,7 +162,73 @@ def test_empty_resource_does_not_change_any_decision() -> None:
     for action in Action:
         assert policy.allow(LOCAL_OPERATOR, action, empty) is True
         assert policy.allow(None, action, empty) is False
-        assert policy.allow(system_principal, action, empty) is False
+        # DK-05 exception: an authenticated caller may ingest a plan with no
+        # owner yet (ADR 0006); every other action on an empty resource stays
+        # denied for a non-operator principal.
+        expected = action is Action.PLAN_INGEST
+        assert policy.allow(system_principal, action, empty) is expected
 
     assert policy.allow(LOCAL_OPERATOR, "plan:nuke", empty) is False
     assert policy.allow(LOCAL_OPERATOR, None, empty) is False
+
+
+# --- DK-05: a plan's authenticated caller may ingest (and re-ingest) it -----
+#
+# ADR 0006 makes the authenticated caller the plan's owner at ingest, so a
+# first ingest carries no owner yet (or a pre-OWN-01 ownerless plan) and must
+# be allowed for any authenticated principal. Re-ingest is allowed only for the
+# owner. Every other action keeps the rules it had: ownership buys exactly the
+# four governing actions, and a reserved system principal keeps exactly its row.
+
+#: A remote (OIDC) caller: authenticated, not the local operator, not reserved.
+OIDC_ALICE = Principal(subject="oidc:alice", auth_method="oidc")
+OIDC_BOB_SUBJECT = "oidc:bob"
+
+#: The scheduler's own identity, spelled out so this module needs no new import.
+SYSTEM_SCHEDULER_PRINCIPAL = Principal(subject="system:scheduler", auth_method="system")
+
+
+def test_first_ingest_is_allowed_for_non_operator_principal() -> None:
+    # No manifest yet: the resource has no owner, so the caller becomes owner.
+    assert (
+        LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, Resource(owner="")) is True
+    )
+
+
+def test_reingest_of_owned_plan_is_allowed_for_owner() -> None:
+    resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, resource) is True
+
+
+def test_ingest_of_plan_owned_by_someone_else_is_denied() -> None:
+    resource = Resource(plan="p1", owner=OIDC_BOB_SUBJECT)
+
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_INGEST, resource) is False
+
+
+def test_unauthenticated_principal_cannot_ingest() -> None:
+    assert LocalPolicy().allow(None, Action.PLAN_INGEST, Resource(owner="")) is False
+    assert LocalPolicy().allow(None, Action.PLAN_INGEST, None) is False
+
+
+def test_system_scheduler_cannot_ingest() -> None:
+    # The reserved-system branch is decided first: ownership never widens it.
+    assert (
+        LocalPolicy().allow(
+            SYSTEM_SCHEDULER_PRINCIPAL, Action.PLAN_INGEST, Resource(owner="")
+        )
+        is False
+    )
+    assert LocalPolicy().allow(SYSTEM_SCHEDULER_PRINCIPAL, Action.PLAN_INGEST) is False
+
+
+def test_ingest_branch_does_not_change_other_actions() -> None:
+    policy = LocalPolicy()
+
+    # Approving is still refused on a plan with no owner ...
+    assert policy.allow(OIDC_ALICE, Action.PLAN_APPROVE, Resource(owner="")) is False
+    # ... while the four governing actions still follow ownership.
+    owned = Resource(plan="p1", owner=OIDC_ALICE.subject)
+    assert policy.allow(OIDC_ALICE, Action.STORY_MERGE, owned) is True
+    assert policy.allow(OIDC_ALICE, Action.DECISION_ANSWER, owned) is True

@@ -229,6 +229,11 @@ tool never raises to the calling agent:
 - it appends a `<plan>.decisions.json` record with `action: "park_for_human"`
   and `failed_open: true`, whose `summary` is the exception **class name only**
   (`"RuntimeError"` — never the message, traceback, file paths or payload data);
+  the record also carries `requested_by` (the acting principal's subject) and
+  `routed_to` (`{"owner": <manifest owner or "local-operator">, "delegates":
+  [...]}`), the same two fields an escalated ruling gets;
+- it notifies the operator with a message ending `(routed to <owner>)`, naming
+  who the answer now belongs to;
 - it parks the story with `parked_reason: "overlord failure: <ClassName>"`;
 - it returns the single-line message `decision escalated to human: story parked,
   see decisions log` — a plain `str`, not the usual ruling `dict`, so callers

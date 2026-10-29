@@ -45,6 +45,7 @@ import pipeline.server as p
 from app.identity import Principal
 from pipeline import paths as ppaths
 from pipeline import persistence as ppers
+from pipeline import usage as pusage
 from pipeline.actor import bind_principal, current_principal
 from pipeline.events import InProcessEventBus
 from pipeline.scheduler_daemon import SchedulerDaemon
@@ -74,6 +75,30 @@ def _git(repo: Path, *args: str) -> None:
             "GIT_COMMITTER_EMAIL": "test@example.invalid",
         },
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_usage_state(tmp_path, monkeypatch):
+    """Point the usage gate at a throwaway file for every test in this module.
+
+    ``pipeline.paths.USAGE_STATE_PATH`` defaults to ``~/.claude/usage_state.json``
+    in the *developer's* home, which the real usage poller rewrites every minute.
+    When that file reports a session or week over the pause threshold, dispatch
+    falls through to the env-default backend, ``advance_pipeline`` sets
+    ``dispatch_paused`` and makes no dispatch decision - so this module's
+    assertion that a tick's dispatch is attributed to ``system:scheduler`` would
+    pass or fail on ambient host state rather than on the code under test. A
+    missing file reads as "not paused".
+
+    The environment variable is set as well as the module attributes because a
+    daemon tick may fork child processes, which re-import ``pipeline.paths`` and
+    would otherwise read the live file again.
+    """
+    path = tmp_path / "usage_state.json"
+    monkeypatch.setenv("USAGE_STATE_PATH", str(path))
+    for module in (p, ppaths, pusage):
+        monkeypatch.setattr(module, "USAGE_STATE_PATH", path)
+    return path
 
 
 @pytest.fixture

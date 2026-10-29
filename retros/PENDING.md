@@ -72,3 +72,4 @@ if a precise date is needed when writing one of these up.
 - dashboard-oidc-login — completed 2026-10-28, 4 stories
 - observability-otel — completed 2026-10-28, 5 stories
 - flake-and-followup-fixes — completed 2026-10-29, 4 stories
+- system-principals — completed 2026-10-29, 2 stories

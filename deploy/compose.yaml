@@ -255,9 +255,10 @@ volumes:
   # Mutable server state: plans, manifests, worktrees, the audit chain.
   pipeline-state:
   # The git origin: the bare repository the stack pushes story branches to,
-  # plus the working clone plan.json's repo_root points at. The pipeline
-  # service seeds both on first start and skips the seed afterwards, so a
-  # restart keeps the refs a story pushed.
+  # plus the working clone plan.json's repo_root points at. Neither is created
+  # by the pipeline service: the `origin-seed` step in deploy/smoke/smoke.sh
+  # makes the bare repository once, as root, and hands the volume back to the
+  # service uid, so a restart keeps the refs a story already pushed.
   git-origin:
   # Caddy's internal CA and the certificates it issues.
   caddy-data:

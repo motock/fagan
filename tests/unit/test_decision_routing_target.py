@@ -20,6 +20,8 @@ The routing target is descriptive only: delivery is not this module's job.
 """
 import json
 
+import pytest
+
 import pipeline.server  # noqa: F401 - imported before other pipeline imports on purpose: pre-existing import cycle (see test_triage_cap_silent_skip.py)
 from app.identity import Principal
 from pipeline import server as p
@@ -98,6 +100,22 @@ def _decisions(pdir):
     if not path.exists():
         return []
     return json.loads(path.read_text())
+
+
+@pytest.fixture(autouse=True)
+def quiet_notify(monkeypatch):
+    """Keep every test in this module off the real operator notification path.
+
+    ``_notify_user`` reaches Plane, the desktop notifier and - on a machine with
+    credentials - the network, and it records process-wide reachability state.
+    These tests are about the decision RECORD, and an escalation record is
+    written whether or not a notification is delivered, so nothing here needs a
+    real delivery. Tests that assert on the message patch ``_notify_user``
+    themselves; that patch is applied after this one and therefore wins.
+    """
+    sent: list = []
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: sent.append((a, k)))
+    return sent
 
 
 def _raiser(exc):

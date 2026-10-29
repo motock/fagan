@@ -62,7 +62,7 @@ Required behaviour for the fix:
    the negative/boundary paths (missing payload, empty payload, child killed,
    retry-once) with tests in the normal `tests/unit/` suite.
 
-## Second defect — the inline re-verify flakes in `test_plan_approval.py`
+## Second defect — the inline re-verify flakes on a fixed set of 20 nodes
 
 Recorded 2026-10-28, after OT-03 was merged by hand. `approve_merge` failed
 OT-03 five times, and the failures are two different defects, not one. The
@@ -77,20 +77,53 @@ and it has a sharper signature than "could not reproduce":
 Same suite, same collected total, opposite verdict. That rules out an
 environment split (a different suite, a stripped `PIPELINE_*` env, a stale
 `.pipeline.env`, a `PYTHONPATH` difference — all were tested and rejected)
-and points at a **flake**, in the 20 failing cases, all of which are the
-env/`monkeypatch`-driven cases in `tests/unit/test_plan_approval.py`.
+and points at a **flake** in a fixed set of 20 nodes.
+
+### The 20 nodes, named
+
+The harness itself names them. Every dispatch writes the dispatch-baseline
+snapshot to `<worktree>/.dispatch_baseline_test_checked`, and the `SYS-02`
+dispatch on 2026-10-28 recorded exactly 20 `failed_node_ids` — the same count
+the gate reported:
+
+| file | nodes |
+|---|---|
+| `tests/unit/test_aider_harness_availability.py` | 2 |
+| `tests/unit/test_blocked_by_ingest.py` | 7 |
+| `tests/unit/test_file_overlap_advisory.py` | 6 |
+| `tests/unit/test_plan_approval.py` | 5 |
+
+An earlier revision of this section attributed all 20 to `test_plan_approval.py`;
+that was wrong, and the four-file spread is the more useful fact, because the
+files have little in common.
+
+### It does not reproduce standalone, in the same worktree
+
+Measured after that snapshot was written, in the same worktree, with no other
+suite running:
+
+- full suite: **18282 passed, 15 skipped, 0 failed**
+- `tests/unit/test_plan_approval.py` alone: **43 passed**
+
+So this is not a bad baseline and not a property of the worktree. The snapshot
+was taken while `SYS-01`'s `approve_merge` re-verify was running its own full
+suite on the same machine; the plain re-run was not. **Concurrency is the only
+variable observed to differ, and it remains a hypothesis, not a finding** —
+reproducing it means running two full suites at once and watching these 20
+nodes, which has not been done.
 
 Neither the story's diff nor its branch can explain it: OT-03 was
 `REFERENCE.md +46/-0`. The same gate then passed FLK-02 and FLK-03 on the
 unchanged inline path, so the flake is intermittent rather than a
 deterministic property of any one branch.
 
-Scope for this half of the record: find the shared state or scheduling race
-in `tests/unit/test_plan_approval.py` that lets 20 of its cases fail under
-`-n auto` in a fresh worktree, and fix it the same way `FLK-01` (module
-attribute restored by the `fresh_import` fixture) and `FLK-02` (the store
-contract test's release-ordering race) were fixed — a reproducing test first,
-observed failing, then the fix. Do not loosen the assertions to make it pass.
+Scope for this half of the record: reproduce the 20 nodes by running two full
+suites concurrently, then fix the shared resource or timing assumption they
+actually share — not by loosening the assertions. The fix should look like
+`FLK-01` (module attribute restored by the `fresh_import` fixture) and
+`FLK-02` (the store contract test's release-ordering race): a reproducing test
+first, observed failing, then the fix. Do not loosen the assertions to make it
+pass.
 
 The two defects need separate diagnosis even if they share a fix: a green
 suite that the harness nonetheless records as red hides the flake, and a

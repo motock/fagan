@@ -546,22 +546,30 @@ main() {
     resolve_ca
     seed_origin_if_missing
 
-    step_token
+    # Name each step as it starts: a failure inside a command substitution can
+    # exit without the ERR trap firing, and then the log says nothing at all.
+    run_step() {
+        STEP="$1"
+        log "step: ${STEP}"
+        "step_${STEP}"
+    }
+
+    run_step token
     TOKEN_OWNER="$(user_token owner "${PIPELINE_SMOKE_OWNER_PASSWORD:?set PIPELINE_SMOKE_OWNER_PASSWORD}")"
     TOKEN_STRANGER="$(user_token stranger "${PIPELINE_SMOKE_STRANGER_PASSWORD:?set PIPELINE_SMOKE_STRANGER_PASSWORD}")"
     NOTIFICATIONS_FILE="${PLAN_DIR_IN_CONTAINER}/${SMOKE_PLAN_NAME}.notifications.jsonl"
 
-    step_list_plans
-    step_ingest
-    step_approve
-    step_dispatch
-    step_poll_reviewed
-    step_stranger_denied
-    step_stranger_no_plans
-    step_verify_audit
-    step_broker_once
-    step_restart_no_loss
-    step_auth_fail_429
+    run_step list_plans
+    run_step ingest
+    run_step approve
+    run_step dispatch
+    run_step poll_reviewed
+    run_step stranger_denied
+    run_step stranger_no_plans
+    run_step verify_audit
+    run_step broker_once
+    run_step restart_no_loss
+    run_step auth_fail_429
 
     STEP="done"
     log "all assertions passed: reviewed with the merge parked, one notification, one ack"

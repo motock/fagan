@@ -9,7 +9,7 @@
           "key": "SMOKE-1",
           "summary": "Write the scripted smoke output file",
           "description": "The smallest story the smoke run can dispatch end to end. The scripted model answers with the three harness calls that land it: create the file, commit it, and finish.",
-          "agent_instructions": "Create `scripted_smoke_output.txt` containing exactly `scripted smoke run`, commit it, and report done. No other file may change.",
+          "agent_instructions": "Preflight: the smoke stack routes every role to the scripted model server, so there is no implementation-risk impact run for this story; it exists to exercise dispatch, review and the merge park end to end. Create `scripted_smoke_output.txt` containing exactly `scripted smoke run`, commit it, and report done. No other file may change.",
           "acceptance": [],
           "files": [
             "scripted_smoke_output.txt"
@@ -21,7 +21,7 @@
           "key": "SMOKE-2",
           "summary": "Second story for the post-flood follow-up",
           "description": "A second story in the same plan. The smoke run uses it to prove the run-scoped state assertions still hold after the first story finished, without dispatching it.",
-          "agent_instructions": "Same shape as the first story: create `scripted_smoke_output.txt` with exactly `scripted smoke run`, commit it, and report done. The smoke run never dispatches this story; it exists so the plan holds unused scope.",
+          "agent_instructions": "Preflight: the smoke stack routes every role to the scripted model server, so there is no implementation-risk impact run for this story; it exists to exercise dispatch, review and the merge park end to end. Same shape as the first story: create `scripted_smoke_output.txt` with exactly `scripted smoke run`, commit it, and report done. The smoke run never dispatches this story; it exists so the plan holds unused scope.",
           "acceptance": [],
           "files": [
             "scripted_smoke_output.txt"

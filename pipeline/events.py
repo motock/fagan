@@ -200,8 +200,15 @@ class JsonlEventBus(EventBus):
     # -----------------------------------------------------------------------
     # Validation helpers
     # -----------------------------------------------------------------------
-    def _validate_plan(self, plan: str) -> str:
+    @staticmethod
+    def _validate_plan(plan: str) -> str:
         """Validate a *plan* identifier.
+
+        A static method on purpose: this is the single definition of what a
+        plan identifier may look like, and broker-backed buses reuse it
+        without an instance of this bus. Keeping it independent of ``self``
+        makes that reuse safe -- it cannot start depending on instance state
+        that a caller does not have.
 
         Raises
         ------

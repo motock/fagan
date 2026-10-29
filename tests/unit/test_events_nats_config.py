@@ -328,7 +328,7 @@ def test_publish_refuses_an_invalid_plan_before_sending(bus, fake_nats):
     # The JSONL bus owns the plan rules; the broker bus must not restate them.
     invalid_plan = "Bad/Plan"
     with pytest.raises(ValueError):
-        JsonlEventBus._validate_plan(None, invalid_plan)
+        JsonlEventBus._validate_plan(invalid_plan)
 
     with pytest.raises(ValueError):
         bus.publish(_event(plan=invalid_plan))

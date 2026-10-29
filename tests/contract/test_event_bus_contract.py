@@ -1,31 +1,39 @@
 """Contract suite for ``EventBus`` in ``pipeline/events.py``.
 
 Every event bus implementation must satisfy these behaviours unchanged. The
-suite is split into two tiers:
+suite is split into three tiers:
 
 * the **base tier** -- parametrized by ``bus_factory`` over every
-  implementation in the tree (``InProcessEventBus`` and ``JsonlEventBus``) --
-  pins the rules every bus owes its publishers and subscribers: an event
-  reaches subscribers of its own type only, an unknown type never becomes an
-  event, ``delivers()`` reports subscription state without changing it, an
-  event dict survives a round trip with every key and value intact, and a
-  raising handler does not silence the handlers registered after it.
-* the **durable tier** -- marked ``durable_bus`` and parametrized over
-  ``DURABLE_BUS_FACTORIES``, which lists only broker-backed implementations --
-  pins ADR 0010 rules 1-4 and 6 on top of the base tier: redelivery after a
-  raising handler, dead-lettering after ``PIPELINE_EVENT_MAX_DELIVER``
-  attempts, publish-time duplicate suppression, and a bounded ``publish`` that
-  raises ``EventPublishError`` when the broker cannot be reached.
+  implementation in the tree (``InProcessEventBus``, ``JsonlEventBus`` and,
+  where a broker binary is available, ``NatsEventBus``) -- pins the rules
+  every bus owes its publishers and subscribers: an event reaches subscribers
+  of its own type only, an unknown type never becomes an event, ``delivers()``
+  reports subscription state without changing it, an event dict survives a
+  round trip with every key and value intact, and a raising handler does not
+  silence the handlers registered after it.
+* the **durable delivery tier** -- marked ``durable_bus`` and parametrized
+  over ``DURABLE_BUS_FACTORIES`` -- lists broker-backed buses that deliver to
+  their own subscribers, and pins ADR 0010 rules 1-4 and 6 on top of the base
+  tier: redelivery after a raising handler and dead-lettering after
+  ``PIPELINE_EVENT_MAX_DELIVER`` attempts.
+* the **publish-only durable tier** -- parametrized over
+  ``PUBLISH_ONLY_DURABLE_BUS_FACTORIES`` -- lists broker-backed buses whose
+  consumption runs in a separate runner, so only the publish-side ADR 0010
+  rules apply here: publish-time duplicate suppression, and a bounded
+  ``publish`` that raises ``EventPublishError`` when the broker cannot be
+  reached.
 
 Registering an implementation means appending a factory to ``BUS_FACTORIES``
-(base tier) or ``DURABLE_BUS_FACTORIES`` (both tiers); nothing else in this
-file changes.
+(base tier) and, for a broker-backed bus, to ``DURABLE_BUS_FACTORIES`` (a bus
+that consumes) or ``PUBLISH_ONLY_DURABLE_BUS_FACTORIES`` (a bus whose publish
+path is all this suite exercises); nothing else in this file changes.
 
-Delivery timing differs between the two implementations and is the one thing
-this contract does not constrain: ``InProcessEventBus.publish`` dispatches
-synchronously, while ``JsonlEventBus.publish`` appends to the plan's log and
-dispatches on ``drain(plan)``. ``_publish`` below is the single place that
-knows the difference, so the assertions themselves stay bus-agnostic.
+Delivery timing differs between the implementations and is the one thing this
+contract does not constrain: ``InProcessEventBus.publish`` dispatches
+synchronously, ``JsonlEventBus.publish`` appends to the plan's log and
+dispatches on ``drain(plan)``, and ``NatsEventBus.publish`` hands the event to
+JetStream. ``_publish`` below is the single place that knows the difference,
+so the assertions themselves stay bus-agnostic.
 """
 
 import contextlib
@@ -134,24 +142,27 @@ def _stop_nats_server(server):
         server.kill()
 
 
-def _new_nats_bus(url, *, publish_timeout_s=None):
+def _new_nats_bus(url, env, *, publish_timeout_s=None):
     """Build a ``NatsEventBus`` aimed at *url*, owning a stream of its own.
 
     The stream name is unique per bus, so cases never read one another's
-    stored messages.
+    stored messages. Every setting goes through *env*, a ``MonkeyPatch``
+    context that restores the environment when it is undone: a value left
+    behind would steer the next case on the same worker.
     """
-    os.environ["PIPELINE_NATS_URL"] = url
-    os.environ["PIPELINE_NATS_STREAM"] = f"CONTRACT_{os.getpid()}_{_free_port()}"
-    os.environ["PIPELINE_NATS_MANAGE_STREAM"] = "1"
-    os.environ["PIPELINE_EVENT_PUBLISH_TIMEOUT_S"] = str(
-        5 if publish_timeout_s is None else publish_timeout_s
+    env.setenv("PIPELINE_NATS_URL", url)
+    env.setenv("PIPELINE_NATS_STREAM", f"CONTRACT_{os.getpid()}_{_free_port()}")
+    env.setenv("PIPELINE_NATS_MANAGE_STREAM", "1")
+    env.setenv(
+        "PIPELINE_EVENT_PUBLISH_TIMEOUT_S",
+        str(5 if publish_timeout_s is None else publish_timeout_s),
     )
     for name in (
         "PIPELINE_NATS_CREDS_FILE",
         "PIPELINE_NATS_TLS_CA_FILE",
         "PIPELINE_NATS_DURABLE_TYPES",
     ):
-        os.environ.pop(name, None)
+        env.delenv(name, raising=False)
 
     from pipeline.events_nats import NatsEventBus
 
@@ -165,18 +176,32 @@ def _make_nats_durable(root, *, url=None, publish_timeout_s=None):
     *url* aims the bus at that address -- so a case naming an address with no
     broker behind it gets a bus whose ``publish`` must report the failure --
     and every other case gets a private server that stops with the bus.
+
+    The settings live in a private ``MonkeyPatch`` context that is undone when
+    the bus closes, so nothing this factory set leaks to the next case on the
+    same worker.
     """
     if url is None:
         url, server = _start_nats_server()
     else:
         server = None
-    bus = _new_nats_bus(url, publish_timeout_s=publish_timeout_s)
+    env = pytest.MonkeyPatch()
+    try:
+        bus = _new_nats_bus(url, env, publish_timeout_s=publish_timeout_s)
+    except BaseException:
+        env.undo()
+        if server is not None:
+            _stop_nats_server(server)
+        raise
     close_bus = bus.close
 
     def close_bus_and_server():
-        close_bus()
-        if server is not None:
-            _stop_nats_server(server)
+        try:
+            close_bus()
+        finally:
+            env.undo()
+            if server is not None:
+                _stop_nats_server(server)
 
     bus.close = close_bus_and_server
     return bus
@@ -214,10 +239,7 @@ BUS_FACTORIES = [
     pytest.param(
         _make_nats,
         id="nats",
-        marks=pytest.mark.skipif(
-            _NATS_SERVER is None and not _REQUIRE_NATS,
-            reason="nats-server not installed",
-        ),
+        marks=_NATS_ABSENT,
     ),
 ]
 

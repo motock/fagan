@@ -384,10 +384,10 @@ class NatsEventBus(EventBus):
     def _event_plan(event: dict) -> str:
         plan = event.get("plan")
         if not plan:
-            raise ValueError("Event must contain a non‑empty 'plan' key")
+            raise ValueError("Event must contain a non-empty 'plan' key")
         # Reuse the JSONL bus's rules rather than restating them here, so the
         # two buses can never disagree about what a plan identifier is.
-        return JsonlEventBus._validate_plan(None, plan)
+        return JsonlEventBus._validate_plan(plan)
 
     @staticmethod
     def _subject(event_type: str, plan: str) -> str:

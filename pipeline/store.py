@@ -12,6 +12,14 @@ The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
 ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
 intentionally not imported here (a module-load copy would freeze the real
 ~/.claude/plans path into every test run).
+
+Store selection lives here too: ``build_store()`` is the only place a
+``FileStore`` is constructed, so ``PIPELINE_STORE`` governs every call site,
+``store_kind()`` resolves the selected kind, and ``reported_store_kind()``
+renders it for observation (``/api/health``'s ``runtime`` block) without ever
+raising -- an unsupported selection is reported as ``STORE_INVALID`` while
+``build_store()`` stays fail-closed. None of them are listed in ``__all__``,
+which is pinned by ``tests/unit/test_live_ref.py``.
 """
 
 import json
@@ -393,3 +401,52 @@ class FileStore:
             tmp.unlink(missing_ok=True)
             raise
 
+
+STORE_INVALID = "invalid"
+
+
+def store_kind(environ=None) -> str:
+    """Return the selected Store kind without constructing a store.
+
+    ``PIPELINE_STORE`` unset, or exactly ``file``, selects the JSON-files
+    ``FileStore``. Every other value -- including the empty string -- raises,
+    because a store selection an operator cannot be given must never fall back
+    silently to a different one. Nothing is cached: the variable is read on
+    every call, so a later change is observed.
+
+    ``environ`` defaults to the live process environment; passing a mapping
+    reads that instead, which is how callers state a selection explicitly.
+    """
+    source = os.environ if environ is None else environ
+    raw = source.get("PIPELINE_STORE")
+    if raw is None or raw == "file":
+        return "file"
+    raise ValueError(
+        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file')"
+    )
+
+
+def build_store(environ=None) -> Store:
+    """Select the configured Store; validates before any filesystem work.
+
+    The kind is resolved first, so a rejected configuration raises without
+    constructing a ``FileStore`` -- i.e. without touching the plan directory.
+    """
+    store_kind(environ)
+    return FileStore()
+
+
+def reported_store_kind(environ=None) -> str:
+    """Return the selected store kind for *observation*, never raising.
+
+    Read-only reporting (``/api/health``'s ``runtime.store``) must not turn a
+    health check into a 500 because of one mistyped environment variable, so an
+    unsupported value is reported as :data:`STORE_INVALID` instead of raising.
+    The rejected value is never echoed -- it may be a path or a secret.
+    :func:`build_store` remains fail-closed: the pipeline still refuses to run
+    with a selection it cannot honour; only the report degrades.
+    """
+    try:
+        return store_kind(environ)
+    except ValueError:
+        return STORE_INVALID

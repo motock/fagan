@@ -354,7 +354,7 @@ from .self_modification import (  # noqa: F401
     _mcp_restart_notice,
     _mcp_self_source_touched,
 )
-from .store import FileStore, Store, _TransactionLock  # noqa: F401
+from .store import FileStore, Store, _TransactionLock, build_store  # noqa: F401
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
 # (monkeypatch.setattr(pt, "plane_request", ...), monkeypatch.setattr(pt,
@@ -570,7 +570,7 @@ def _scoped_repo_root(plan_name: str):
 
 
 
-_store = FileStore()
+_store = build_store()
 
 from pipeline.service import PipelineService
 

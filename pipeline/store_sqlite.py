@@ -205,7 +205,11 @@ class SqliteStore:
                 return True
             except sqlite3.OperationalError as exc:
                 if self._conn.in_transaction:
-                    self._conn.execute("ROLLBACK")
+                    # A ROLLBACK that fails must not replace the error that
+                    # caused it: the caller's decision is taken on `exc`, so
+                    # the rollback failure is contained here.
+                    with contextlib.suppress(sqlite3.Error):
+                        self._conn.execute("ROLLBACK")
                 if not _is_lock_conflict(exc):
                     raise
                 if time.monotonic() >= deadline:

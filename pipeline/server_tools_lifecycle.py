@@ -205,14 +205,9 @@ def advance_all_plans() -> dict[str, Any]:
     """
     Run advance_pipeline on every plan that has been ingested (has a
     manifest), keyed by plan name. Plans saved but not yet ingested (no
-    manifest) are skipped. A plan with no dispatch, review or merge work left
-    (every story done, paused with no agent to interrupt, or not approved for
-    activation) is not advanced: it is reported as
-    ``{"ok": True, "skipped": "inert"}``, so such a plan carries ``inert``
-    rather than ``plan_paused`` or ``plan_not_approved`` in its entry. Every
-    other plan is still advanced per plan. Intended for a recurring scheduler
-    (cron/launchd or /loop) so newly ingested plans are picked up
-    automatically with no hardcoded plan name to maintain.
+    manifest) are skipped. Intended for a recurring scheduler (cron/launchd
+    or /loop) so newly ingested plans are picked up automatically with no
+    hardcoded plan name to maintain.
 
     NOTE on zombie reaping: the per-plan advance_pipeline polling phase
     already handles dead-pid in_progress stories via check_story_status

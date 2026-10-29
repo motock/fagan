@@ -18,6 +18,10 @@ Exit codes: 0 success, 1 advance raised, 2 bad invocation (nothing written).
 
 Identity is re-bound here (``SYSTEM_SCHEDULER`` + a fresh correlation id) so the
 child's records and policy decisions look exactly like the scheduler's own.
+``configure_child`` holds the per-process setup (logging, the scheduler role call
+clamp, the ``service.instance.id`` resource attribute, telemetry) that every
+process advancing on the daemon's behalf needs, so the long-lived advance worker
+in ``pipeline.advance_worker`` shares exactly the same initialization.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from pipeline.actor import (
     new_correlation_id,
 )
 
-__all__ = ["main"]
+__all__ = ["configure_child", "main"]
 
 
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
@@ -76,19 +80,15 @@ def _invalid_arguments(args: list[str]) -> bool:
     return not result_path.is_absolute() or not result_path.parent.is_dir()
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run one plan advance; return the process exit code."""
-    # Import-cycle: pipeline.server must be imported before other pipeline
-    # modules, and it is resolved per call so tests can patch advance_pipeline.
-    import pipeline.server
+def configure_child() -> None:
+    """Apply the per-process setup a scheduler child needs before advancing.
 
-    args = list(sys.argv[1:] if argv is None else argv)
-    if _invalid_arguments(args):
-        return 2
-
-    plan_name, raw_result_path = args
-    result_path = Path(raw_result_path)
-
+    Shared by every process that advances a plan on the daemon's behalf (one
+    plan per process here, and the long-lived advance worker). It is
+    deliberately idempotent: logging is reconfigured from the environment, the
+    scheduler role call clamp is re-applied, and telemetry is (re)initialised
+    for this process id.
+    """
     import pipeline.log_format
     import pipeline.scheduler_timeouts
     import pipeline.telemetry
@@ -106,6 +106,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     pipeline.telemetry.configure()
     pipeline.telemetry.configure_metrics()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one plan advance; return the process exit code."""
+    # Import-cycle: pipeline.server must be imported before other pipeline
+    # modules, and it is resolved per call so tests can patch advance_pipeline.
+    import pipeline.server
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if _invalid_arguments(args):
+        return 2
+
+    plan_name, raw_result_path = args
+    result_path = Path(raw_result_path)
+
+    import pipeline.telemetry
+
+    configure_child()
 
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):

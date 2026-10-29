@@ -24,6 +24,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0008](0008-shared-control-plane-per-repo-workers.md) | Enterprise topology is a shared control plane with per-repo workers | Accepted |
 | [0009](0009-tenancy-and-authorization-model.md) | Tenancy and authorization are a service-layer policy over a verified principal | Accepted |
 | [0010](0010-event-delivery-contract-and-nats-jetstream.md) | Events have an at-least-once delivery contract; NATS JetStream is the default broker | Proposed (rule 6 superseded by 0011) |
-| [0011](0011-scheduler-scale-out-leased-plan-advancement.md) | The scheduler advances plans as leased work items and runs heavy work as detached jobs | Proposed |
+| [0011](0011-scheduler-scale-out-leased-plan-advancement.md) | The scheduler advances plans as leased work items and runs heavy work as detached jobs | Accepted |
 
 See [`template.md`](template.md) when adding one.

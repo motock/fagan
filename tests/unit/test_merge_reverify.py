@@ -223,9 +223,85 @@ def test_start_spawns_detached_job_from_the_source_root(tmp_path, monkeypatch):
     assert job["result_path"] == str(result_path)
     assert job["log_path"] == str(log_path)
     started = datetime.fromisoformat(job["started_at"])
+    started = datetime.fromisoformat(job["started_at"])
     assert started.tzinfo is not None
     assert started.utcoffset() == timedelta(0)
 
+
+def test_start_gives_the_child_a_per_job_bytecode_cache(tmp_path, monkeypatch):
+    """The grading child must never consult the worktree's own ``__pycache__``.
+
+    The gate rebases that worktree in place and reuses it across commits, so an
+    in-tree cache can hold a ``.pyc`` whose mtime-and-size stamp still matches a
+    rewritten source: the child would then run (and pass) the previous commit's
+    compiled test while reporting the new sha.  A per-job
+    ``PYTHONPYCACHEPREFIX`` cannot contain an earlier job's bytecode.
+    """
+    calls = _fake_popen(monkeypatch)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    state_root = tmp_path / "sr"
+
+    mr.start_merge_reverify("P", "S-1", str(worktree), state_root)
+
+    job_dir = state_root / "merge_reverify" / "S-1"
+    env = calls["kwargs"]["env"]
+    assert env["PYTHONPYCACHEPREFIX"] == str(job_dir / "pycache")
+    # Outside the graded worktree, so nothing in it can be accepted as fresh.
+    assert not Path(env["PYTHONPYCACHEPREFIX"]).is_relative_to(worktree)
+
+
+def test_start_preserves_the_inherited_environment_for_the_child(tmp_path, monkeypatch):
+    """Only the cache prefix is overridden: the child keeps the caller's env."""
+    monkeypatch.setenv("FU03_CANARY", "kept")
+    monkeypatch.delenv("PYTHONPYCACHEPREFIX", raising=False)
+    calls = _fake_popen(monkeypatch)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+
+    mr.start_merge_reverify("P", "S-1", str(worktree), tmp_path / "sr")
+
+    env = calls["kwargs"]["env"]
+    assert env["FU03_CANARY"] == "kept"
+    assert env["PATH"] == os.environ["PATH"]
+    # The caller's environment is not mutated for every later child.
+    assert "PYTHONPYCACHEPREFIX" not in os.environ
+
+
+def test_each_job_gets_its_own_cache_so_no_run_inherits_another(tmp_path, monkeypatch):
+    """Two jobs for the same story must not share a bytecode cache directory."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+
+    calls = _fake_popen(monkeypatch)
+    mr.start_merge_reverify("P", "S-1", str(worktree), tmp_path / "sr")
+    first = calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"]
+
+    calls = _fake_popen(monkeypatch)
+    mr.start_merge_reverify("P", "S-1", str(worktree), tmp_path / "sr")
+    prefixes = [first, calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"]]
+    # Whatever the job directory holds is discarded with it: the prefix is the
+    # job dir's own subtree, never a fixed shared location.
+    assert Path(prefixes[0]).name == "pycache"
+    assert Path(prefixes[0]).parent == tmp_path / "sr" / "merge_reverify" / "S-1"
+
+
+def test_start_makes_the_cache_prefix_absolute_for_a_relative_state_root(tmp_path, monkeypatch):
+    """CPython resolves a relative prefix against the *child's* cwd, so pin it.
+
+    A relative ``state_root`` must still yield an absolute prefix naming this
+    job's directory; otherwise the cache would move with the child's cwd.
+    """
+    calls = _fake_popen(monkeypatch)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    mr.start_merge_reverify("P", "S-1", str(worktree), Path("sr"))
+
+    prefix = Path(calls["kwargs"]["env"]["PYTHONPYCACHEPREFIX"])
+    assert prefix.is_absolute()
+    assert prefix == (tmp_path / "sr" / "merge_reverify" / "S-1" / "pycache").resolve()
 
 def test_start_creates_job_dir_private(tmp_path, monkeypatch):
     _fake_popen(monkeypatch)

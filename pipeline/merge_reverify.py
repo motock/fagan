@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -97,7 +98,10 @@ def start_merge_reverify(
     if not Path(worktree).is_dir():
         raise ValueError("worktree must be an existing directory")
 
-    job_dir = Path(state_root) / "merge_reverify" / story_key
+    # Resolve before use: PYTHONPYCACHEPREFIX is interpreted by the child, and
+    # a relative value would be resolved against the child's cwd (the control
+    # plane's source root) rather than the caller's.
+    job_dir = (Path(state_root) / "merge_reverify" / story_key).resolve()
     job_dir.mkdir(parents=True, exist_ok=True)
     # mkdir's mode is filtered by the process umask and does not re-tighten an
     # existing directory, so chmod it explicitly: the result and the log carry
@@ -105,9 +109,15 @@ def start_merge_reverify(
     os.chmod(job_dir, 0o700)
     result_path = job_dir / "result.json"
     log_path = job_dir / "job.log"
+    pycache_dir = job_dir / "pycache"
     # Delete any previous result BEFORE the child starts: a stale "pass" left
     # behind by an earlier run must never be mistaken for this run's verdict.
     result_path.unlink(missing_ok=True)
+    # Same reasoning for the bytecode cache.  The job directory is keyed by
+    # story, so back-to-back jobs for one story share this path; a prefix left
+    # by the previous job could still hold a .pyc whose mtime-and-size stamp
+    # matches the commit this job grades (see the Popen call below).
+    shutil.rmtree(pycache_dir, ignore_errors=True)
 
     with open(log_path, "ab") as log_file:
         proc = subprocess.Popen(
@@ -128,12 +138,11 @@ def start_merge_reverify(
             # length inside one second leaves the worktree's __pycache__ entry
             # acceptable and the child would run the previous commit's compiled
             # test, reporting "pass" for a red suite while naming the new sha.
-            # A fresh per-job prefix (removed with the job directory) can never
-            # hold an earlier job's pyc, so the child always compiles the bytes
-            # actually checked out.
+            # A prefix under this job's directory never names the worktree, so
+            # the worktree's own cache can never be consulted.
             env={
                 **os.environ,
-                "PYTHONPYCACHEPREFIX": str(job_dir / "pycache"),
+                "PYTHONPYCACHEPREFIX": str(pycache_dir),
             },
             start_new_session=True,
             stdin=subprocess.DEVNULL,

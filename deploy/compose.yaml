@@ -73,9 +73,15 @@ services:
       # reads this file. The image's entrypoint still refuses to start unless the
       # named file is readable (a deployment contract assertion), so the shim in
       # `entrypoint` materialises it from the client secret the IdP was given,
-      # inside the state volume, mode 600. No credential is baked into the image
-      # and none is passed inside a command line.
-      PIPELINE_OIDC_CLIENT_SECRET_FILE: /var/lib/pipeline/oidc_client_secret
+      # mode 600. No credential is baked into the image and none is passed
+      # inside a command line.
+      #
+      # `/tmp`, not the state volume: a Linux engine creates the named volume
+      # root-owned, so the image's non-root uid cannot create a file inside it
+      # (Docker Desktop on macOS maps the volume to the invoking user, which is
+      # why this only fails on Linux). The file is rewritten on every start and
+      # never persisted.
+      PIPELINE_OIDC_CLIENT_SECRET_FILE: /tmp/oidc_client_secret
       PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET}
       PIPELINE_POLICY_ENFORCE: "1"
       # The auth-fail bucket is charged per client address (pipeline/rate_limit.py

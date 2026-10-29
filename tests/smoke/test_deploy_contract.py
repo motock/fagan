@@ -280,6 +280,15 @@ def test_pipeline_service_materialises_the_oidc_secret_file_the_image_asserts() 
     assert pairs.get("PIPELINE_OIDC_CLIENT_SECRET_FILE"), (
         "the pipeline service must name the OIDC client-secret file"
     )
+    # A Linux engine creates a named volume root-owned, so the image's non-root
+    # uid cannot create a file inside one. The shim must write somewhere the
+    # container user can already write; a state-volume path fails at startup on
+    # every Linux host (Docker Desktop on macOS masks it by mapping ownership).
+    secret_path = pairs["PIPELINE_OIDC_CLIENT_SECRET_FILE"]
+    assert secret_path.startswith("/tmp/"), (
+        "the shim runs as the image's non-root uid, which cannot write into a "
+        f"root-owned named volume; got {secret_path!r}"
+    )
     assert "PIPELINE_OIDC_CLIENT_SECRET_FILE" in script, (
         "the shim must create the file the image entrypoint refuses to start "
         "without: verification is JWKS-only, so the stack materialises it from the "

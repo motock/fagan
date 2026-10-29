@@ -59,6 +59,9 @@ class _FakeStore:
     def list_manifests(self) -> list[str]:
         return list(self._plans)
 
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch: pytest.MonkeyPatch):

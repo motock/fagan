@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from pipeline import cross_plan
+from pipeline import cross_plan, plan_activity
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.telemetry import record_dispatch_attempt
 from pipeline.workspace import (
@@ -764,6 +764,9 @@ class PipelineService(PlanApprovalMixin):
             return advance_all_plans_pooled()
         plans = {}
         for plan_name in _store.list_manifests():
+            if plan_activity.is_inert(_store.get_manifest_or_none(plan_name)):
+                plans[plan_name] = {"ok": True, "skipped": "inert"}
+                continue
             try:
                 plans[plan_name] = advance_pipeline(plan_name)
             except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)

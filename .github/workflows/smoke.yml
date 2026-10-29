@@ -1,0 +1,174 @@
+# Smoke: build the deploy image, run the whole stack, assert end to end.
+#
+# The stack in deploy/compose.yaml is the only place the dashboard, the remote
+# MCP transport, the OIDC IdP, the TLS proxy and the NATS JetStream broker run
+# together, so this job is the only signal that the wiring is intact. It runs on
+# every pull request and on master, and it is the gate in front of publishing:
+# the `publish` job needs `build`, so an image that fails its own smoke run is
+# never pushed.
+#
+# Two properties this file is written to preserve:
+#
+#   * Every action is pinned to a full 40-character commit SHA with the human
+#     version in a comment. A tag can be moved under a reviewed workflow, so a
+#     `uses: owner/action@v4` is not a reviewable input.
+#   * `permissions:` is least privilege. The workflow default is
+#     `contents: read`; `packages: write` is granted to the publish job only,
+#     and that job only runs for a push to master. No step mints an OIDC token:
+#     the SBOM and the provenance are produced by buildx itself and travel with
+#     the registry push, so the registry credentials are the whole surface.
+#
+# Job-level `permissions` replaces the workflow map instead of merging into it,
+# which is why `contents: read` is restated on `publish`: without it checkout
+# runs with no contents permission and fails.
+
+name: Smoke
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Registry path for the published server image. The owner is lowercase on
+  # purpose: an uppercase character in a ghcr reference is rejected as an
+  # invalid reference format.
+  IMAGE: ghcr.io/motock/fagan
+  COMPOSE_FILE: deploy/compose.yaml
+  # Local tag the smoke stack consumes. It matches `image:` on the `pipeline`
+  # service in deploy/compose.yaml, so compose uses the image this job built
+  # rather than building a second, unreviewed one of its own.
+  SMOKE_IMAGE: pipeline-smoke:pinned
+
+jobs:
+  build:
+    name: Build image and run smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build the deploy image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          # deploy/Dockerfile, not the repo-root MCP-directory Dockerfile: this
+          # is the long-running server the stack starts.
+          context: .
+          file: deploy/Dockerfile
+          # `load` puts the image in the local docker store so the next step can
+          # start it; nothing is pushed from this job.
+          load: true
+          push: false
+          tags: ${{ env.SMOKE_IMAGE }}
+          # The cache scope is explicit and shared with `publish`. BuildKit
+          # scopes a gha cache to the ref of the run that wrote it, so a bare
+          # `cache-to: type=gha` writes a cache the master run can never read:
+          # PR runs and master runs would each rebuild from scratch.
+          cache-from: type=gha,scope=buildkit
+          cache-to: type=gha,mode=max,scope=buildkit
+
+      - name: Generate throwaway stack credentials
+        # deploy/compose.yaml refuses to start without these (`${VAR:?...}`).
+        # They are per-run values for a disposable stack: generated here, never
+        # written to a file in the repo, never a checked-in secret. `>>$GITHUB_ENV`
+        # keeps them out of the command line of later steps.
+        run: |
+          set -euo pipefail
+          {
+            echo "KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+            echo "PIPELINE_DASHBOARD_CLIENT_SECRET=$(openssl rand -hex 16)"
+            echo "PIPELINE_MCP_CLIENT_SECRET=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_OWNER_PASSWORD=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_STRANGER_PASSWORD=$(openssl rand -hex 16)"
+            echo "PIPELINE_SMOKE_USER_CLIENT_SECRET=$(openssl rand -hex 16)"
+          } >> "$GITHUB_ENV"
+
+      - name: Start the smoke stack
+        # `--wait` is the readiness check: compose polls every service until it
+        # is running or healthy and exits non-zero on the ones that never get
+        # there, so a half-started stack fails here instead of inside an
+        # assertion. `--no-build` refuses to build implicitly, so the stack
+        # under test is exactly the image built above.
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait --no-build
+
+      - name: Run the smoke assertions
+        # No `continue-on-error`: a failing assertion has to fail the job. The
+        # steps below still run because they are guarded with `if: always()`.
+        run: bash deploy/smoke/smoke.sh
+
+      - name: Capture compose logs
+        # Capture before teardown: `down -v` removes the containers, and a logs
+        # call against removed containers prints nothing and can exit non-zero.
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" logs --no-color > compose-logs.txt 2>&1 || true
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          if-no-files-found: warn
+
+      - name: Tear down the smoke stack
+        # `down -v` also drops the named volumes, so a rerun on the same runner
+        # starts from the seeded state rather than from a previous run's data.
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+
+  publish:
+    name: Publish image to ghcr
+    needs: build
+    # Only a push to master publishes. `head.sha`/`head_ref` are empty on a push
+    # event, so the tags below use `github.sha` and `github.ref`, which are set.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      # Restated, not inherited: a job-level permissions map replaces the
+      # workflow map, so omitting this would leave checkout without contents.
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Log in to ghcr
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the deploy image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          # Two tags: the commit SHA is immutable and is the rollback point;
+          # `master` moves forward with each merge. Never `latest` - a mutable
+          # convenience tag gives no way back to a known-good image.
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:master
+          # Both attestations are produced by buildx itself and travel with the
+          # push, so they need no extra action and no extra permission.
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=buildkit
+          cache-to: type=gha,mode=max,scope=buildkit

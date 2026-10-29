@@ -1,5 +1,3 @@
-# ruff: noqa: I001  -- pipeline.server must be imported before any other
-# pipeline module (pre-existing import cycle; see test_triage_cap_silent_skip).
 """Tests for the coalescing per-plan advance queue (ADR 0011 decision 3).
 
 A state change enqueues "advance plan X"; requests for the same plan coalesce

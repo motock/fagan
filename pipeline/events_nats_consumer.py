@@ -53,13 +53,16 @@ import datetime
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
+from typing import Any
 
 from . import persistence
 from .events import JsonlEventBus
 from .events_nats import NatsEventBus
 
 __all__ = [
+    "consumer_status",
     "durable_types",
     "max_deliver",
     "running_consumer_names",
@@ -480,3 +483,127 @@ def _num_delivered(message) -> int:
         return max(int(message.metadata.num_delivered), 1)
     except Exception:  # noqa: BLE001 - a message without metadata is a first try
         return 1
+
+
+#: How long one collected broker status is served before it is re-read.
+_STATUS_TTL_SECONDS = 30.0
+#: The cached status and the monotonic deadline it stops being served at.
+#: ``None`` (never ``0.0``) as the initial deadline: a monotonic clock may sit
+#: below zero, and ``0.0`` would then look permanently unexpired.
+_status_cache: dict[str, Any] = {"expires_at": None, "value": None}
+
+
+async def _collect_consumer_status_async() -> dict:
+    """Read every durable consumer's delivery state from the broker.
+
+    Per durable consumer (named ``pipeline-<type>``, the name
+    :func:`start_consumers` creates):
+
+    * ``pending`` — messages the consumer has not delivered yet
+      (``ConsumerInfo.num_pending``);
+    * ``redelivered`` — deliveries the broker repeated
+      (``ConsumerInfo.num_redelivered``);
+    * ``dead_lettered`` — messages retained for this type's dead-letter
+      subject (``pipeline.deadletter.<type>.>``), counted with a
+      subject-filtered ``StreamInfo``. JetStream's consumer info carries no
+      dead-letter counter of its own, and the managed stream captures
+      ``pipeline.>``, so that filtered count is the dead-letter backlog as the
+      broker holds it.
+
+    The connection is per call and short-lived: this runs in a process that
+    does not own the consumers (the dashboard), so it must not assume a bus.
+    Raises whatever the broker raises; :func:`consumer_status` is the wrapper
+    that turns a failure into ``{"reachable": False}``.
+    """
+    import nats  # local import: keeps this module importable without nats-py
+
+    from .events_nats import nats_settings_from_env
+
+    settings = nats_settings_from_env()
+
+    async def _ignore(error: Exception) -> None:
+        """Report nothing: this probe's answer is its return value.
+
+        The client's default error callback logs the connect failure with a
+        traceback naming the broker endpoint. For a *probe* that would put the
+        same dial failure in the dashboard log on every cache refresh, while
+        ``consumer_status()`` already reports ``{"reachable": False}``.
+        """
+
+    options: dict = {
+        "servers": [settings.url],
+        "name": "pipeline-health",
+        # One refusal is enough to know the broker is not there; the client's
+        # own retry loop would otherwise outlast the health request.
+        "max_reconnect_attempts": 1,
+        "reconnect_time_wait": 0.1,
+        "connect_timeout": settings.publish_timeout_s,
+        "error_cb": _ignore,
+    }
+    if settings.creds_file:
+        options["user_credentials"] = settings.creds_file
+    if settings.tls_ca_file:
+        import ssl
+
+        options["tls"] = ssl.create_default_context(cafile=settings.tls_ca_file)
+
+    nc = await nats.connect(**options)
+    try:
+        js = nc.jetstream()
+        status: dict = {}
+        for event_type in sorted(settings.durable_types):
+            durable = _durable_name(event_type)
+            info = await js.consumer_info(settings.stream, durable)
+            dead_letters = await js.stream_info(
+                settings.stream,
+                subjects_filter=f"{DEAD_LETTER_PREFIX}.{event_type}.>",
+            )
+            status[durable] = {
+                "pending": int(info.num_pending or 0),
+                "redelivered": int(info.num_redelivered or 0),
+                "dead_lettered": int(getattr(dead_letters.state, "messages", 0) or 0),
+            }
+        return status
+    finally:
+        await nc.close()
+
+
+def _collect_consumer_status() -> dict:
+    """Synchronous wrapper around the broker reads.
+
+    The NATS client is async-only while ``/api/health`` is a plain sync
+    endpoint, so each collection drives its own short-lived loop. Called from a
+    thread that already runs a loop this raises, and
+    :func:`consumer_status` reports the broker as unreachable rather than
+    failing the probe.
+    """
+    return asyncio.run(_collect_consumer_status_async())
+
+
+def consumer_status() -> dict:
+    """Per durable consumer delivery state, cached and never raising.
+
+    Returns ``{durable_name: {"pending": int, "redelivered": int,
+    "dead_lettered": int}}`` on success, or exactly ``{"reachable": False}``
+    when the broker cannot be queried — the health payload has one shape per
+    outcome, and a probe must never turn into a 500.
+
+    The answer is held for :data:`_STATUS_TTL_SECONDS` from the collection that
+    produced it; a cache hit does not extend the deadline, so a 10-second
+    poller still refreshes every 30 seconds. A failure is cached by the same
+    rule so an unreachable broker is not redialled on every probe.
+
+    Nothing about the failure is returned or logged — a broker error can carry
+    connection details — the marker alone says the status is unavailable.
+    """
+    now = time.monotonic()
+    expires_at = _status_cache["expires_at"]
+    if expires_at is not None and now < expires_at:
+        return _status_cache["value"]
+    try:
+        value = _collect_consumer_status()
+    except Exception:  # noqa: BLE001 (deliberate: the marker replaces any cause)
+        value = {"reachable": False}
+    _status_cache["value"] = value
+    _status_cache["expires_at"] = now + _STATUS_TTL_SECONDS
+    return value

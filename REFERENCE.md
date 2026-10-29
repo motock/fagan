@@ -1747,6 +1747,51 @@ structural test for a doc or config edit belongs in the brief itself. A
 story with no `files`, or with any other path, is unaffected.
 
 ## Configuration (environment variables)
+### Message broker (NATS JetStream)
+
+`PIPELINE_EVENT_BUS=nats` replaces the in-process bus with the NATS JetStream
+bus, so events survive a process restart and are delivered across processes
+(the scheduler daemon runs the durable consumers). Every other value keeps the
+in-process bus. `/api/health` reports the selection under `runtime.event_bus`,
+and — only when it is `nats` — the broker's delivery state under
+`runtime.broker`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PIPELINE_EVENT_BUS` | `inprocess` | Bus selection: `inprocess`, `jsonl` or `nats`. An unsupported value is reported as `invalid` in `/api/health` and refused by the pipeline itself. |
+| `PIPELINE_NATS_URL` | *(required when the bus is `nats`)* | Server URL, `nats://host:port` or `tls://host:port`. A non-loopback host must use `tls://` or set `PIPELINE_NATS_TLS_CA_FILE`. |
+| `PIPELINE_NATS_STREAM` | `PIPELINE` | JetStream stream name. The managed stream captures the `pipeline.>` subjects. |
+| `PIPELINE_NATS_MANAGE_STREAM` | unset (`0`) | `1` lets the bus create the stream when it is missing; otherwise a missing stream is refused before anything is published. |
+| `PIPELINE_NATS_CREDS_FILE` | unset | Optional NATS user-credentials file; it must be readable by its owner only (mode `600`). |
+| `PIPELINE_NATS_TLS_CA_FILE` | unset | CA bundle used to verify a `nats://` connection to a non-loopback host. |
+| `PIPELINE_NATS_DURABLE_TYPES` | `notification,agent_done` | Comma-separated event types that get one durable consumer each. Unset means the default set; set-but-blank means no durable types. |
+| `PIPELINE_EVENT_PUBLISH_TIMEOUT_S` | `5` | Upper bound on one publish, and on the connection dial. |
+| `PIPELINE_EVENT_MAX_DELIVER` | `5` | Delivery attempts before an event is dead-lettered. |
+
+`runtime.broker` maps each durable consumer (named `pipeline-<type>`) to
+`pending` (not delivered yet), `redelivered` (repeated deliveries) and
+`dead_lettered` (messages retained on that type's `pipeline.deadletter.<type>.>`
+subject). It is cached for 30 seconds, and an unreachable broker reports
+`{"reachable": false}` instead of failing the health check.
+
+**Delivery contract** — the authoritative statement is
+[ADR 0010](docs/adr/0010-event-delivery-contract-and-nats-jetstream.md).
+Delivery is **at-least-once**: a message is acked only after every handler
+registered for its type has returned, so a crash mid-handling redelivers it and
+handlers must be idempotent. The publisher sets the `Nats-Msg-Id` header, which
+the stream uses to deduplicate a repeated publish. A handler that raises causes
+a `nak` with exponential backoff; once the delivery count reaches
+`PIPELINE_EVENT_MAX_DELIVER` the raw message is republished to
+`pipeline.deadletter.<type>.<plan>`, an `event_dead_lettered` record is
+appended to the plan's sidecar, and the message is acked.
+
+A minimal local broker (the `-js` flag enables JetStream; without it the bus's
+stream check fails):
+
+```
+nats-server -js
+```
+
 ### Launchd Install & Reload
 
 The launchd plist files in this repository are templates. The running daemon reads only the installed agent under `~/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist`. To apply a change to the running daemon you must:

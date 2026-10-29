@@ -106,14 +106,21 @@ services:
     # the first object into it. deploy/smoke/smoke.sh does that one-shot
     # bootstrap as root and hands the result back to the service's uid, which
     # keeps the running server non-root (see its `origin-seed` step).
+    #
+    # Every `$` below that the *container's* shell must expand is written `$$`.
+    # Compose interpolates `$VAR` in this file itself, before any container
+    # starts, so an unescaped reference is replaced from the operator's host
+    # environment - empty when they have not exported it, which turns
+    # `> "$FILE"` into a redirect to an empty path and puts a client secret
+    # into the rendered config.
     entrypoint:
       - /bin/bash
       - -c
       - |
         set -euo pipefail
         umask 077
-        printf '%s' "${PIPELINE_MCP_CLIENT_SECRET:-}" > "$PIPELINE_OIDC_CLIENT_SECRET_FILE"
-        if [ "${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
+        printf '%s' "$${PIPELINE_MCP_CLIENT_SECRET:-}" > "$$PIPELINE_OIDC_CLIENT_SECRET_FILE"
+        if [ "$${PIPELINE_SCRIPTED_MODEL:-0}" = "1" ]; then
           # Selecting a model is a registry fact, not an environment-only switch:
           # the pipeline validates a role's model name against
           # providers.<provider>.models. This registry declares the scripted
@@ -131,10 +138,10 @@ services:
             "review": {"provider": "lmstudio", "model": "scripted-review"},
             "security_review": {"provider": "lmstudio", "model": "scripted-review"},
             "overlord": {"provider": "lmstudio", "model": "scripted-overlord"},
-            "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$registry"
-          export PIPELINE_MODEL_REGISTRY_PATH="$registry"
+            "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$$registry"
+          export PIPELINE_MODEL_REGISTRY_PATH="$$registry"
         fi
-        if [ "${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
+        if [ "$${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
           echo "compose: starting the scheduler daemon (the only durable event-bus consumer)"
           python -m pipeline.scheduler_daemon &
         fi

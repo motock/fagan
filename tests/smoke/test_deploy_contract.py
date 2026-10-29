@@ -387,6 +387,40 @@ def test_compose_nats_still_starts_after_the_pipeline_container() -> None:
     )
 
 
+def test_compose_entrypoint_defers_shell_expansion_to_the_container() -> None:
+    """Compose interpolates `$VAR` in this file before any container starts.
+
+    An unescaped runtime reference is replaced from the operator's host
+    environment: `> "$PIPELINE_OIDC_CLIENT_SECRET_FILE"` becomes a redirect to
+    an empty path, the scripted-model branch never runs, and the client secret
+    is written into the rendered config. Every reference the container's shell
+    must expand is written `$$`.
+    """
+    text = _text(COMPOSE)
+    for escaped in (
+        "$$PIPELINE_OIDC_CLIENT_SECRET_FILE",
+        "$$registry",
+        "$${PIPELINE_MCP_CLIENT_SECRET:-}",
+        "$${PIPELINE_SCRIPTED_MODEL:-0}",
+        "$${PIPELINE_SCHEDULER_DAEMON:-0}",
+    ):
+        assert escaped in text, (
+            f"deploy/compose.yaml must escape {escaped!r} for the container shell; "
+            "compose interpolates a single-$ reference from the host environment"
+        )
+    for unescaped in (
+        '"$PIPELINE_OIDC_CLIENT_SECRET_FILE"',
+        '"$registry"',
+        '"${PIPELINE_MCP_CLIENT_SECRET:-}"',
+        '"${PIPELINE_SCRIPTED_MODEL:-0}"',
+        '"${PIPELINE_SCHEDULER_DAEMON:-0}"',
+    ):
+        assert unescaped not in text, (
+            f"deploy/compose.yaml leaves {unescaped} unescaped; compose will "
+            "interpolate it from the host environment before the container runs"
+        )
+
+
 def test_compose_declares_and_mounts_the_git_origin_volume() -> None:
     compose = _compose()
     volumes = compose.get("volumes") or {}

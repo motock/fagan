@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .events import EventBus
 from .parsers import _atomic_write_json
 from .paths import PLAN_DIR
 
@@ -279,11 +280,17 @@ def _notify_user(
         bus.publish(evt)
         # InProcessEventBus.publish swallows handler exceptions internally, so a
         # sink that fails to persist never raises here and can't be caught below.
-        # Instead, check whether any handler is actually subscribed to
-        # "notification": if no sink ran, write directly so the notification is
-        # never silently dropped; if a sink is subscribed (the normal, wired
-        # bus), it already persisted the record, so skip to avoid a double write.
-        if not getattr(bus, "_handlers", {}).get("notification"):
+        # Instead, ask the bus whether anything -- a local sink or a durable
+        # remote consumer -- will receive "notification": if nothing delivers,
+        # write directly so the notification is never silently dropped; when
+        # something delivers (the normal, wired bus), it already persisted the
+        # record, so skip to avoid a double write.
+        delivers = getattr(bus, "delivers", None)
+        if delivers is None:
+            will_deliver = EventBus.delivers(bus, "notification")
+        else:
+            will_deliver = delivers("notification")
+        if not will_deliver:
             try:
                 _write_directly()
             except Exception as exc:  # noqa: BLE001

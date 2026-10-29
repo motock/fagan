@@ -147,6 +147,15 @@ class EventBus(ABC):
     def subscribe(self, event_type: str, handler) -> None:
         """Subscribe *handler* to events of type *event_type*."""
 
+    def delivers(self, event_type: str) -> bool:
+        """Whether a subscriber, local or durable remote, will receive ``event_type``.
+
+        ADR 0010 rule 5. A publisher that gets ``False`` must perform the
+        side effect itself; a broker-backed bus answers from its durable
+        subscription state because the remote consumer is the subscriber.
+        """
+        return bool(getattr(self, "_handlers", {}).get(event_type))
+
 # ---------------------------------------------------------------------------
 # In‑process implementation
 # ---------------------------------------------------------------------------

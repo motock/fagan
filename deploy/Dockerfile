@@ -18,8 +18,10 @@
 #     PIPELINE_IDENTITY_PROVIDER=oidc, which puts a bearer-token gate on every
 #     /api/ route (app/dashboard.py), so the probe uses "/" instead;
 #   * no secrets baked in. Every credential arrives as a mounted file at
-#     runtime; nothing secret is COPYed and no build ARG is declared, because
-#     both leak into image history.
+#     runtime; nothing secret is COPYed. There are no build args at all, not
+#     even for the public tooling versions: build args land in image history
+#     and tests/unit/test_deploy_dockerfile.py forbids them in this file, so the
+#     version pins are ordinary variables inside the install step.
 #
 # Build:  docker build -f deploy/Dockerfile -t pipeline-server .
 # Run:    docker run --rm -p 8000:8000 -p 8080:8080 \
@@ -53,6 +55,16 @@ RUN python -m venv /opt/venv \
 # --------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
+# Pinned tooling versions live inside the install step at the bottom of this
+# stage (GH_VERSION / NODE_VERSION / CLAUDE_CODE_VERSION). They are shell
+# variables, not build args: this file declares no build args at all, and a
+# build arg would also let a caller swap a version without touching the pinned
+# checksums. The sha256 digests beside those variables are bound to the exact
+# versions -- whenever one changes, every checksum must be refreshed from the
+# upstream release page in the same commit, or the build fails at `sha256sum -c`
+# (which is the point: a silent upstream swap is the failure mode this pinning
+# exists to prevent).
+
 # PYTHONUNBUFFERED/PYTHONDONTWRITEBYTECODE: logs stream to the container log
 # driver and the read-only install tree stays clean.
 ENV PYTHONUNBUFFERED=1 \
@@ -77,9 +89,10 @@ ENV PYTHONUNBUFFERED=1 \
     PIPELINE_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 
 # git is a runtime dependency (worktrees, commits, diffs); ca-certificates is
-# needed for the IdP's JWKS fetch. Lists are dropped in the same layer.
+# needed for the IdP's JWKS fetch; curl and xz-utils fetch and unpack the pinned
+# gh, Node and Claude Code tooling below. Lists are dropped in the same layer.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Fixed numeric ids so the volume can be pre-created with host-side ownership
@@ -114,6 +127,76 @@ RUN chmod 0755 ./deploy/entrypoint.sh \
 # Mutable state: plans, worktrees, scheduler health. Mount a named volume or a
 # host path here, or every restart starts from an empty plan directory.
 VOLUME ["/var/lib/pipeline"]
+
+# --------------------------------------------------------------------------
+# Pinned operator tooling: gh (pull requests, merges) and Node + the Claude Code
+# CLI (the Claude backend). Both come from upstream release tarballs whose
+# digests are checked here, so a corrupted or silently re-tagged download fails
+# the build instead of landing in a layer. No compiler toolchain is involved and
+# nothing is fetched from a mutable tag. Runs as root, so it must stay above the
+# USER line below.
+#
+# The three version pins are shell variables, not build args: a build arg would
+# land in image history and this file declares none, so a rebuild of the same
+# commit resolves the same three URLs. The digests below belong to exactly these
+# versions -- refresh all of them together, in the same commit.
+#
+# Arch: TARGETARCH is set by BuildKit when the build supplies a platform, and is
+# empty otherwise (this file declares no args, so it is never overridden from the
+# command line). Falling back to `uname -m` maps the machine the RUN actually
+# executes on, which is the right answer for cross builds too: buildx runs an
+# emulated arm64 RUN inside an arm64 image, so it reports aarch64. Anything that
+# is neither amd64 nor arm64 fails here, before a single byte is downloaded.
+#
+# The npm install below spells the Claude Code version out through the pinned
+# variable; an npm range such as a caret or tilde spec would let a rebuild pick
+# up unreviewed code.
+# --------------------------------------------------------------------------
+RUN set -eux; \
+    GH_VERSION=2.102.0; \
+    NODE_VERSION=24.22.0; \
+    CLAUDE_CODE_VERSION=2.1.301; \
+    case "${TARGETARCH:-$(uname -m)}" in \
+        amd64|x86_64) \
+            GH_ARCH=linux_amd64; \
+            NODE_ARCH=x64; \
+            GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386; \
+            NODE_SHA256=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008; \
+            ;; \
+        arm64|aarch64) \
+            GH_ARCH=linux_arm64; \
+            NODE_ARCH=arm64; \
+            GH_SHA256=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484; \
+            NODE_SHA256=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143; \
+            ;; \
+        *) \
+            echo "unsupported TARGETARCH '${TARGETARCH:-<unset>}': this image ships amd64 or arm64 tooling only" >&2; \
+            exit 1; \
+            ;; \
+    esac; \
+    curl -fsSL -o gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"; \
+    echo "${GH_SHA256}  gh.tar.gz" | sha256sum -c -; \
+    tar -xzf gh.tar.gz; \
+    install -m 0755 "gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh" /usr/local/bin/gh; \
+    curl -fsSL -o node.tar.xz \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"; \
+    echo "${NODE_SHA256}  node.tar.xz" | sha256sum -c -; \
+    mkdir -p /usr/local/lib/nodejs; \
+    tar -xJf node.tar.xz -C /usr/local/lib/nodejs --strip-components=1; \
+    for binary in node npm npx; do \
+        ln -sf "/usr/local/lib/nodejs/bin/${binary}" "/usr/local/bin/${binary}"; \
+    done; \
+    npm install -g --prefix /usr/local --omit=dev "@anthropic-ai/claude-code@2.1.301"; \
+    npm cache clean --force; \
+    test -x /usr/local/bin/gh; \
+    test -x /usr/local/bin/node; \
+    test -x /usr/local/bin/npm; \
+    test -x /usr/local/bin/npx; \
+    test -x /usr/local/bin/claude; \
+    rm -rf gh.tar.gz node.tar.xz "gh_${GH_VERSION}_linux_${GH_ARCH}" /root/.npm; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 USER 10001:10001
 

@@ -57,8 +57,7 @@
             "SA-03"
           ],
           "persona": "software-engineer",
-          "risk": "high",
-          "backend": "claude"
+          "risk": "high"
         }
       ]
     },
@@ -199,8 +198,7 @@
             "SA-14"
           ],
           "persona": "devops-release-engineer",
-          "risk": "medium",
-          "backend": "claude"
+          "risk": "medium"
         }
       ]
     },
@@ -238,8 +236,7 @@
             "SA-15"
           ],
           "persona": "devops-release-engineer",
-          "risk": "medium",
-          "backend": "claude"
+          "risk": "medium"
         },
         {
           "key": "SA-17",
@@ -258,8 +255,7 @@
             "SA-10"
           ],
           "persona": "tech-writer",
-          "risk": "low",
-          "backend": "claude"
+          "risk": "low"
         },
         {
           "key": "SA-18",
@@ -274,8 +270,7 @@
             "SA-05"
           ],
           "persona": "devops-release-engineer",
-          "risk": "medium",
-          "backend": "claude"
+          "risk": "medium"
         }
       ]
     },

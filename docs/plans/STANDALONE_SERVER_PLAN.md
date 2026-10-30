@@ -5,14 +5,15 @@
   `smoke-stack-green` merged. The plan file is
   [`STANDALONE_SERVER_PLAN.json`](STANDALONE_SERVER_PLAN.json); the briefs
   there are authoritative where they differ from the drafts below (see
-  "Changes at preflight").
+  "Changes at preflight"). Dispatching since 2026-10-30.
 - **Goal:** someone runs one installer, gets a running server, and points
   Claude Code, OpenCode or another MCP client at its HTTP endpoint. They then
   use it instead of a local stdio pipeline.
 - **Dispatch tier:** cloud open-source, Claude-class sizing. The live registry
-  routes `roles.dispatch` to `ollama / deepseek-v4.1-flash`. Stories that edit
-  `REFERENCE.md` (over 1000 lines) or need real investigation pin
-  `backend: claude`.
+  routes `roles.dispatch` to `ollama / deepseek-v4.1-flash`, which the operator
+  counts as a stronger tier for the purposes of the large-file rule. No story is
+  pinned to `backend: claude`; SA-02, which edits the 2,966-line `REFERENCE.md`,
+  runs on the default like the rest.
 
 ## Decisions (2026-10-29, from the operator)
 
@@ -62,8 +63,9 @@
   `REMOTE_ENFORCED`. Plan-scoped reads (`get_effective_config(plan_name)`) get
   the same hidden-refusal treatment as the other plan-scoped reads. First check
   that `checkpoint_story` (`pipeline/server.py`) authorizes; gate it if not. Also
-  update the remote-tools section of `REFERENCE.md` (`backend: claude`, since
-  the file is over 1000 lines).
+  update the remote-tools section of `REFERENCE.md` (2,966 lines): anchor the
+  edit on the paragraphs named in the brief rather than re-emitting the
+  section.
 - **SA-03: A remote plan may not name a server path.** A plan saved or ingested
   by a remote principal that sets `repo_root` is refused. It must use
   `repo_url` (SA-05). This is deny by default: without it, a remote caller

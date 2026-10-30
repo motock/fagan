@@ -74,3 +74,9 @@ if a precise date is needed when writing one of these up.
 - flake-and-followup-fixes — completed 2026-10-29, 4 stories
 - system-principals — completed 2026-10-29, 2 stories
 - scheduler-throughput — completed 2026-10-29, 5 stories
+- decision-routing — completed 2026-10-29, 3 stories
+- eventing-broker-adapter — completed 2026-10-29, 5 stories
+- control-plane-store — completed 2026-10-29, 4 stories
+- harness-defect-followups — completed 2026-10-29, 7 stories
+- smoke-stack — completed 2026-10-29, 11 stories
+- SCHEDULER_EVENT_DRIVEN_PLAN — completed 2026-10-30, 17 stories

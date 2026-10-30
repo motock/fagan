@@ -171,16 +171,25 @@ parking.
 
 ### Bringing the stack up and asserting against it
 
-Two commands, and neither needs anything but a docker daemon:
+You need a docker daemon. Do this in a throwaway checkout or worktree, because
+step 2 rewrites `deploy/keycloak/realm.json` in place:
 
 ```sh
 export PIPELINE_MCP_CLIENT_SECRET=... PIPELINE_DASHBOARD_CLIENT_SECRET=... \
        PIPELINE_SMOKE_OWNER_PASSWORD=... PIPELINE_SMOKE_STRANGER_PASSWORD=... \
        PIPELINE_SMOKE_USER_CLIENT_SECRET=... KEYCLOAK_ADMIN_PASSWORD=...
+# 1. Build the image under the ref compose.yaml names.
+docker build -f deploy/Dockerfile -t pipeline-smoke:pinned .
+# 2. Substitute the realm's ${env.X} placeholders, which Keycloak's
+#    --import-realm stores literally (the CI step "Render the realm's env
+#    placeholders" in .github/workflows/smoke.yml; run that script here).
+# 3. Bring the stack up, wait for the realm, assert, tear down.
 docker compose -f deploy/compose.yaml up -d --wait
 bash deploy/smoke/smoke.sh
 docker compose -f deploy/compose.yaml down -v
 ```
+
+Without step 2, every token request fails with `invalid_client_credentials`.
 
 Those variables are throwaway values for a disposable stack: they belong to one
 run, are read from the environment (`compose.yaml` refuses to start without
@@ -203,10 +212,13 @@ workflow is the only place the image is actually built and the stack actually
 started — the local suite reads the artifacts as text because it has no docker
 daemon.
 
-The stack job is **advisory for now**: it is gated on the repository variable
-`ENABLE_SMOKE_CI` and off by default, because the compose stack does not yet
-boot on a Linux engine and a red check on every pull request would block every
-merge. Set that variable to `true` to turn it back on. On a push to `master` a
+The stack job is **advisory for now**. It is gated on the repository variable
+`ENABLE_SMOKE_CI` and off by default, because the smoke run has not yet passed,
+and a red check on every pull request would block every merge. The stack itself
+boots: all five containers come up healthy on a Linux engine. The run fails
+after `dispatch`; the open defects are listed in
+[`docs/plans/ENTERPRISE_REMAINING_WORK_PLAN.md`](../docs/plans/ENTERPRISE_REMAINING_WORK_PLAN.md#outcome-verified-2026-10-29).
+Set the variable to `true` once a run is green. On a push to `master` a
 second job publishes the image to `ghcr.io/<owner>/fagan`, tagged with the
 commit sha and `master`, with SBOM and provenance attestations; `packages:
 write` is granted to that job alone, that job is not gated, and every action is
@@ -243,7 +255,6 @@ replies in order; the smoke run never relies on a reply being replayed.
 
 `docker compose up` is not part of `pytest`: the unit-test container has the
 docker client but no daemon, so the stack is asserted statically by
-`tests/smoke/test_deploy_contract.py` and exercised for real by the two commands
-above. Wiring those into a CI job belongs to the CI definition, which has to pass
-the same throwaway values.
+`tests/smoke/test_deploy_contract.py` and exercised for real by the commands
+above and by `.github/workflows/smoke.yml`.
 

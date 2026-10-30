@@ -9,7 +9,7 @@ For what actually shipped and what broke along the way, see
 reference superseded designs or file layouts; read them as history, not
 instruction.
 
-**Status below was verified 2026-10-27** against the pipeline manifests and the
+**Status below was verified 2026-10-29** against the pipeline manifests and the
 code. A plan's own header can lag behind; where it did, a dated
 `Status (verified ...)` banner now sits under its title. When you finish a plan,
 update this index in the same change.
@@ -19,8 +19,7 @@ update this index in the same change.
 | # | Plan | State | Why this position | Next step |
 |---|---|---|---|---|
 | 1 | [`JIRA_TICKET_PROVIDER_PLAN.md`](JIRA_TICKET_PROVIDER_PLAN.md) | Drafted, blocked | Replaces the `JiraTicketProvider` stub. Its Definition of Done needs a live Jira Cloud instance and token. | Get a test Jira instance. |
-| 2 | [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) | Drafted and preflighted | Eleven plans finishing enterprise readiness, in dependency order; plan 1 (`enterprise-enforcement-closeout`) gates the last unchecked mutating tools. | Ingest plan 1; re-run a plan's impact check if master has moved before its turn. |
-| 2b | [`SCHEDULER_THROUGHPUT_PLAN.json`](SCHEDULER_THROUGHPUT_PLAN.json) | Drafted and preflighted (2026-10-28, `0fe77d6`) | Stories crawl when several plans run at once: the reconcile pass advances every plan serially and runs test suites inline. ADR 0011 stage S0. | Ingest as `scheduler-throughput`; TP-03 and TP-05 can start now, TP-01 waits on SYS-02. |
+| 2 | Smoke stack to green (no plan yet) | Open | The compose stack in `deploy/` builds and every container comes up healthy on a Linux engine, but `deploy/smoke/smoke.sh` has never passed: the CI job is gated off (`ENABLE_SMOKE_CI`), and a local run on 2026-10-29 got through `ingest`, `approve` and `dispatch` and then stalled before `reviewed`. The defects are listed in [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md#outcome-verified-2026-10-29). | Plan and fix them, then set `ENABLE_SMOKE_CI=true`. |
 | 3 | [`../specs/PIP_INSTALLABILITY_DESIGN.md`](../specs/PIP_INSTALLABILITY_DESIGN.md) | Decision pending | `pyproject.toml` still has no `[project]` table. `scripts/remote-install.sh` covers the one-line install; pip/uvx matters only for directories that require it. | Decide whether any target listing needs pip/uvx. |
 
 **Enterprise platform readiness (assessed 2026-10-25):**
@@ -33,11 +32,13 @@ seam only, spec `docs/specs/IDENTITY_AND_POLICY.md`). The findings are now being
 worked in dependency order: actor identity, request correlation, structured
 logs and policy enforcement shipped 2026-10-26/27, and the tamper-evident audit
 stream shipped 2026-10-27, and Phase 6 (OIDC verification and the remote MCP
-transport) shipped 2026-10-27. The remaining work — the rest of ADR 0008 stage
-1, Phase 6 hardening, observability, broker prep, stage 2 and a CI smoke stack
-— is drafted as eleven plan files indexed in
-[`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md)
-(2026-10-28), all eleven preflighted on `master` `cd09a83`.
+transport) shipped 2026-10-27. The rest of ADR 0008 stage 1, Phase 6
+hardening, observability, the NATS broker, stage 2a (`SqliteStore`), the
+compose smoke stack and ADR 0011 stages S0–S1 shipped 2026-10-28/29 as the
+eleven plans indexed in
+[`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) plus
+[`SCHEDULER_EVENT_DRIVEN_PLAN.json`](SCHEDULER_EVENT_DRIVEN_PLAN.json). The
+smoke run itself is not green yet (backlog item 2).
 
 **Decision needed (not a build item):**
 [`SHARED_SERVICE_TOPOLOGY_PLAN.md`](SHARED_SERVICE_TOPOLOGY_PLAN.md) recommends
@@ -46,7 +47,7 @@ multi-tenant) until someone can say who answers a decision on a plan they did
 not create. Option B's prerequisites (the latent hazards it names) shipped in
 `TOPOLOGY_COLLISION_GUARDS_PLAN.md`, so accepting B needs no further build.
 **Update 2026-10-25:** the *direction* for T3 is now recorded in
-[ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md) (Proposed): a
+[ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md) (Accepted 2026-10-28): a
 shared control plane with per-repo workers, federated per trust boundary. What
 remains is the tenancy/identity work, not the topology choice.
 
@@ -70,6 +71,17 @@ window retros.
 
 Each of these is fully merged. The pipeline plan name is given where it differs
 from the file name.
+
+**Enterprise readiness (2026-10-28/29)**: `ENTERPRISE_REMAINING_WORK_PLAN.md`
+(the index of the eleven plans below), `ENTERPRISE_ENFORCEMENT_CLOSEOUT_PLAN.json`,
+`DECISION_ROUTING_PLAN.json`, `SYSTEM_PRINCIPALS_PLAN.json`,
+`AUDIT_ANCHOR_PLAN.json`, `REMOTE_MCP_HARDENING_PLAN.json`
+(`remote-mcp-hardening-2`), `DASHBOARD_OIDC_LOGIN_PLAN.json`,
+`OBSERVABILITY_OTEL_PLAN.json`, `EVENTING_BROKER_PREP_PLAN.json`,
+`EVENTING_BROKER_ADAPTER_PLAN.json`, `CONTROL_PLANE_STORE_PLAN.json`,
+`SMOKE_STACK_PLAN.json` (merged, but its smoke run is not green: backlog item
+2), `SCHEDULER_THROUGHPUT_PLAN.json` (ADR 0011 S0) and
+`SCHEDULER_EVENT_DRIVEN_PLAN.json` (ADR 0011 S1).
 
 **Installation and onboarding**: `GUIDED_INSTALL_PLAN.md` (`guided-install`),
 `WAVE1_RETROSPECTIVE.md` (measured retro for auto-merge-off, sidebar settings

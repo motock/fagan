@@ -1,15 +1,83 @@
 # Enterprise readiness — remaining work roadmap
 
-- **Status:** drafted 2026-10-28 on `855cc1e`; every plan preflighted the same
-  day on `master` `cd09a83`. Eleven plan files, none ingested. A dry-run ingest
-  of all eleven (dispatch provider resolved to a non-Claude tier, so the
-  preflight gate was active) accepts every story.
+- **Status (verified 2026-10-29):** all eleven plans shipped 2026-10-28/29, and
+  every story is `done`. ADR 0011 S1 shipped as well
+  ([`SCHEDULER_EVENT_DRIVEN_PLAN.json`](SCHEDULER_EVENT_DRIVEN_PLAN.json), 17
+  stories). The compose smoke stack is merged but **its end-to-end run has
+  never passed**; see [Outcome](#outcome-verified-2026-10-29). Everything
+  below the Outcome section is the plan as drafted on 2026-10-28 (on `855cc1e`,
+  preflighted on `cd09a83`) and is kept as history.
 - **Inputs:** [`ENTERPRISE_PLATFORM_READINESS.md`](ENTERPRISE_PLATFORM_READINESS.md)
   (the gap list), [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md)
   §4 and §6 (what is not implemented, in dependency order),
   [ADR 0006](../adr/0006-decision-routing-on-a-shared-server.md),
   [ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md) staging, and
   [ADR 0009](../adr/0009-tenancy-and-authorization-model.md).
+
+## Outcome (verified 2026-10-29)
+
+**Shipped.** Each item is on `master` at `2a667f7`:
+- **Policy coverage:** every mutating tool is gated (ENF), including the
+  scheduler as `system:scheduler` with explicit grants (SYS). An authenticated
+  caller may ingest a plan it will own and dispatch its own plan's stories.
+- **Decisions:** routed to the plan owner and its delegates (RT).
+- **Remote MCP:** reads are scoped to owned or delegated plans, and failed
+  auths and per-subject requests are rate-limited (RMH).
+- **Dashboard login:** OIDC authorization code with PKCE (LG).
+- **Telemetry:** opt-in OpenTelemetry traces and metrics (OT).
+- **Audit:** a `file:` anchor for the audit-chain head (AA).
+- **Events:** the event bus is selectable, with NATS JetStream behind
+  `PIPELINE_EVENT_BUS=nats` (EV, BR).
+- **Store:** `SqliteStore` (ST, ADR 0008 stage 2a).
+- **Smoke stack:** `deploy/Dockerfile`, `deploy/compose.yaml` (pipeline,
+  Keycloak, Caddy TLS, NATS, scripted model), `deploy/smoke/smoke.sh`, and a CI
+  workflow that publishes the image to GHCR (DK).
+- **Scheduler:** ADR 0011 S0 (TP) and S1, the queue-driven advance behind
+  `PIPELINE_ADVANCE_MODE=queue`.
+
+**Not yet working: the smoke run.** The CI stack job failed on all eight real
+attempts during DK-04. The failures were `ingest` and then `dispatch`, both
+refused by policy. The job was then gated off (`ENABLE_SMOKE_CI`, unset) so the
+story could merge. Both refusals were fixed afterwards (`44efc81`, `9122591`),
+but nothing re-ran the stack. A local run on 2026-10-29 (Docker Desktop, `master`
+`2a667f7`) found the following:
+
+- `docker compose up --wait` brings all five containers up healthy, and
+  `token`, `list_plans`, `ingest`, `approve` and the dispatch authorization
+  pass. Contrary to the earlier note, the stack does boot on a Linux engine.
+- Then `dispatch` and `poll-reviewed` fail on these defects, peeled one at a
+  time:
+  1. **`AGENTS_DIR` is unset in the image.** `deploy/Dockerfile` copies personas
+     to `/app/agents`, but `pipeline/paths.py` defaults to `~/.claude/agents`.
+     Result: `No persona named software-engineer`. Fix: `ENV AGENTS_DIR=/app/agents`.
+  2. **The dispatch interpreter is hard-coded.**
+     `app/backend_ollama.py` `_VENV_PYTHON` points at `<repo>/.venv/bin/python3`,
+     but the image's venv is `/opt/venv`. Fix: symlink `/app/.venv` to
+     `/opt/venv` in the image, or resolve the interpreter from `sys.executable`.
+  3. **The image has no git identity.** The WIP checkpoint commit fails with
+     `Author identity unknown`. That exception escapes `wake_handler`, and NATS
+     dead-letters `agent_done` after 5 attempts. Fix: set `GIT_AUTHOR_*` and
+     `GIT_COMMITTER_*` in the image.
+  4. **The agent ignores its pinned provider.**
+     `scripts/local_agent_chat.py` calls `get_local_provider()` with no name, so
+     the agent resolves from `PIPELINE_LOCAL_PROVIDER` (default `ollama`, wire
+     path `/api/chat`) instead of the `LOCAL_AGENT_PROVIDER=lmstudio` the
+     harness passes it. The dispatched model also fell back to
+     `PIPELINE_LOCAL_MODEL_DEFAULT` (`devstral:24b`) instead of the registry's
+     `roles.dispatch` pin. This affects any deployment that pins a role to
+     lmstudio or mlx, not only the smoke stack. The local run worked around it
+     with `PIPELINE_LOCAL_PROVIDER=lmstudio` and
+     `PIPELINE_LOCAL_MODEL_DEFAULT=scripted-dispatch`.
+  5. **Not yet diagnosed.** The scripted model's `dispatch` cursor had already
+     moved past its `create_file` reply when the agent made its first call.
+     The agent therefore committed nothing and the story went `interrupted`.
+     Later role calls also drew 404s from the stub.
+- **Observability gap:** `events_nats` logs only `Event handler failed for
+  event type agent_done`, with no exception type, so defect 3 needed a manual
+  reproduction to find.
+
+Not a defect, by design: the smoke run stops at "reviewed, merge parked"
+because `PIPELINE_FORGE` is unset (see `deploy/README.md`).
 
 ## Dispatch tier
 
@@ -33,7 +101,7 @@ provider to `claude`, which skips the preflight gate.
 | 6 | [`DASHBOARD_OIDC_LOGIN_PLAN.json`](DASHBOARD_OIDC_LOGIN_PLAN.json) | `dashboard-oidc-login` | LG-01..03 | Done; 0 conflicts | — |
 | 7 | [`OBSERVABILITY_OTEL_PLAN.json`](OBSERVABILITY_OTEL_PLAN.json) | `observability-otel` | OT-01..02 | Done; 0 conflicts | — |
 | 8 | [`EVENTING_BROKER_PREP_PLAN.json`](EVENTING_BROKER_PREP_PLAN.json) | `eventing-broker-prep` | EV-01..02 | Done; 2 re-scoped | — |
-| 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Done, stacked on plan 8; 0 conflicts | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) (Proposed) |
+| 8b | [`EVENTING_BROKER_ADAPTER_PLAN.json`](EVENTING_BROKER_ADAPTER_PLAN.json) | `eventing-broker-adapter` | BR-01..05 | Done, stacked on plan 8; 0 conflicts | EV-02; implements [ADR 0010](../adr/0010-event-delivery-contract-and-nats-jetstream.md) |
 | 9 | [`CONTROL_PLANE_STORE_PLAN.json`](CONTROL_PLANE_STORE_PLAN.json) | `control-plane-store` | ST-01..03 | Done; 0 conflicts | ADR 0008 accepted 2026-10-28; ST-01 waits on ENF-03 |
 | 10 | [`SMOKE_STACK_PLAN.json`](SMOKE_STACK_PLAN.json) | `smoke-stack` | DK-01..04 | Done; 0 conflicts (no Docker daemon here) | AA-01, RMH-02, LG-02, BR-04 (on DK-03) |
 | 11 | [`SCHEDULER_THROUGHPUT_PLAN.json`](SCHEDULER_THROUGHPUT_PLAN.json) | `scheduler-throughput` | TP-01..05 | Done on `0fe77d6`; 0 conflicts | SYS-02 (on TP-01); implements [ADR 0011](../adr/0011-scheduler-scale-out-leased-plan-advancement.md) S0 |
@@ -138,7 +206,7 @@ They pass on a normal host and are not conflicts.
    (stage 3).
 7. **The newly gated tools stay off the remote MCP allowlist.** Widening the
    remote surface is a separate decision.
-8. **NATS JetStream is the default broker (ADR 0010, Proposed).** Delivery is
+8. **NATS JetStream is the default broker (ADR 0010, Accepted 2026-10-29).** Delivery is
    at-least-once with idempotent handlers, bounded redelivery and a dead-letter
    subject; there is no ordering guarantee. The scheduler daemon is the only
    consumer, and the in-process bus stays the default and stays best-effort.
@@ -155,10 +223,11 @@ They pass on a normal host and are not conflicts.
   time).** First diagnose what today's code does with an overlord ruling that
   escalates to a human. `_request_decision_impl` parks only on the fail-open
   path.
-- **ADR 0011 stages S1–S3:** an event-triggered advance queue with
-  long-lived advancers, leases in the store with more than one scheduler
+- **ADR 0011 stages S2–S3:** leases in the store with more than one scheduler
   process, CI webhooks, and fair-share dispatch admission. Not drafted; S2
-  depends on ADR 0008 stage 2b and the broker.
+  depends on ADR 0008 stage 2b. (S1, the event-triggered advance queue with
+  long-lived advancers, shipped 2026-10-29 in
+  `SCHEDULER_EVENT_DRIVEN_PLAN.json`.)
 - **ADR 0008 stages 3–4:** a work queue, worker registration and heartbeats,
   generic workers, and federation. Not drafted, because they depend on stage 2
   and on the worker-identity design.

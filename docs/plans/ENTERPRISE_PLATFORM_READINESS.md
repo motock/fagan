@@ -6,8 +6,14 @@
   [`docs/specs/PLAN_APPROVAL.md`](../specs/PLAN_APPROVAL.md)), and
   `tenancy-seams` (the identity/policy seam only, spec
   [`docs/specs/IDENTITY_AND_POLICY.md`](../specs/IDENTITY_AND_POLICY.md)).
-  Nothing else here is scheduled. Read it as a backlog of known gaps, not as an
-  implementation plan.
+  The rest of the gaps were planned in
+  [`ENTERPRISE_REMAINING_WORK_PLAN.md`](ENTERPRISE_REMAINING_WORK_PLAN.md) and
+  shipped 2026-10-28/29.
+- **Status (verified 2026-10-29):** the Verdict table below is current.
+  Sections 1–6 are the 2026-10-25 assessment, kept as rationale. Several gaps
+  they name have since closed: the broker, OTel, browser login, rate limiting,
+  scoped reads and decision routing. For what is still open, read the Verdict
+  table and the roadmap's "Open questions".
 - **Companion records:** [ADR 0006](../adr/0006-decision-routing-on-a-shared-server.md),
   [ADR 0007](../adr/0007-plan-approval-at-activation.md),
   [ADR 0008](../adr/0008-shared-control-plane-per-repo-workers.md), and
@@ -17,10 +23,12 @@
 
 | Area | Current state | Enterprise-ready? | Gap class |
 |---|---|---|---|
-| Eventing | `EventBus` ABC, in-process bus, durable notification outbox and channel layer | **Seam is right, semantics are not** | Event contract + consumer model |
-| Observability | Strong per-story forensics; weak service-level | **Not platform-grade** | Metrics sink and tracing; JSON app logs and request correlation now exist but are opt-in |
+| Eventing | Enriched envelope; bus selected by `PIPELINE_EVENT_BUS` (`inprocess` default, `jsonl`, `nats`); NATS JetStream adapter with at-least-once delivery, bounded redelivery and a dead-letter subject; the scheduler daemon is the one durable consumer; queue-driven advance (ADR 0011 S1) behind `PIPELINE_ADVANCE_MODE=queue` | **Single-host ready** | A handler failure is logged without its exception type; multi-scheduler leases (ADR 0011 S2) |
+| Observability | Opt-in OpenTelemetry traces and metrics (dispatch, authz, merge, capacity); opt-in JSON logs; request correlation on the dashboard and HTTP MCP paths; NATS status in `/api/health` | **Opt-in, platform-grade shape** | Everything is off by default; the stdio MCP path has no request correlation |
+| Persistence | `FileStore` default; `SqliteStore` via `PIPELINE_STORE` (ADR 0008 stage 2a) | **Single host only** | Postgres with distributed locks (stage 2b); notifications, audit, journals and decisions are still files |
+| Deployment | `deploy/Dockerfile` (non-root, two-stage); `deploy/compose.yaml` with Keycloak, Caddy TLS, NATS and a scripted model; image published to GHCR on every push to `master` | **Not proven** | The end-to-end smoke run has never passed, and the CI job is gated off; see the roadmap's [Outcome](ENTERPRISE_REMAINING_WORK_PLAN.md#outcome-verified-2026-10-29) |
 | Auditability | One append-only, hash-chained stream per plan (`<plan>.audit.jsonl`) carrying actor, action, target, outcome, correlation id and timestamp — enforcement decisions, approvals, dispatch provenance, merges and pause/resume; decisions, journals and notifications keep their own files | **Tamper-evident; head anchor opt-in, file-only** | A sink the pipeline host cannot reach (HTTP/S3 with object lock, or a WORM export) so truncation is detectable without a local file; fold the remaining sidecars in |
-| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; every mutating MCP tool's service path asks the policy (`decompose_plan` is the one deliberate exception, because it writes no state); plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Seam, not a control** | Reads are not tenant-scoped; decisions are not routed to the plan owner; OIDC covers API clients only (no browser login); the remote MCP transport has no TLS of its own and no rate limiting at the gate |
+| AuthN / AuthZ | Shared secret by default, or OIDC bearer-token verification selected by `PIPELINE_IDENTITY_PROVIDER`; `Principal` / `IdentityProvider` / `Authorizer` seam with deny-by-default service-layer enforcement for every action in the `Action` enum, every enforced decision audited; every mutating MCP tool's service path asks the policy (`decompose_plan` is the one deliberate exception, because it writes no state); plan owners and delegates may approve, reject and merge their plan; an OIDC-gated remote MCP transport serves an explicit tool allowlist behind the same principal | **Enforced control, single tenant** | Closed since 2026-10-25: scoped remote reads, decisions routed to owner and delegates, dashboard OIDC login (PKCE), per-subject and failed-auth rate limits, `system:scheduler` principal with explicit grants. Still open: TLS only through a proxy (Caddy in the compose stack); the rate limiter is per process; dispatched workers have no identity of their own (SYS-03); no per-tenant key namespacing |
 
 ---
 

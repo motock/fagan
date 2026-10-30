@@ -69,7 +69,7 @@ import stat
 import subprocess
 import tempfile
 from collections.abc import Iterator, Mapping
-from pathlib import Path
+from pathlib import Path, PosixPath
 from urllib.parse import SplitResult, urlsplit
 
 LOG = logging.getLogger(__name__)
@@ -132,7 +132,10 @@ class RepoCloneError(RuntimeError):
     """git could not clone or fetch. The message never carries a credential."""
 
 
-class ClonedRepo(Path):
+# Subclass a concrete flavour, not ``Path``: before 3.12 ``Path`` resolves a
+# class-level ``_flavour`` that a direct subclass does not inherit, so
+# ``ClonedRepo(...)`` raised AttributeError on every 3.11 run.
+class ClonedRepo(PosixPath):
     """A managed repository path that also reports the commit it was pinned to.
 
     :func:`ensure_clone` returns one of these so a caller can audit exactly which

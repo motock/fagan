@@ -181,9 +181,40 @@
   from a `repo_url` on a local git server, and dispatch. Gated like
   `ENABLE_SMOKE_CI` until green.
 
+### Epic 7: grading capacity
+
+- **SA-19: Cap concurrent detached grades.** Observed 2026-10-30 on
+  `smoke-stack-green`: SG-01, SG-02 and SG-04 finished together, and one tick
+  started all three grades at 02:35:51. Each grade runs the full suite with
+  `-n auto` (`pyproject.toml` addopts), so it fans out to every core. With the
+  agents' own suites running too, about 70 xdist workers ran on 10 cores (load
+  average about 50), and a 2-minute suite took more than 13 minutes. Nothing
+  bounds the count today: `pipeline/detached_grade.py` `start_detached_grade`
+  spawns on demand, and a grade has no wall-clock limit while its process is
+  alive.
+  - **The cap:** `PIPELINE_MAX_CONCURRENT_GRADES` (default 1). The count is
+    taken from the live `grading_pid` values across every manifest, and dead
+    pids do not count. A story over the cap stays `in_progress` with an
+    unchanged `.agent_done.consumed` marker and is graded on a later tick, in
+    `dispatched_at` order so none starves.
+  - **The worker count:** an optional `PIPELINE_GRADE_XDIST_WORKERS` passes
+    `-n <value>` to the grade command when the detected runner is pytest with
+    xdist. It is unset by default, which leaves the command unchanged.
+  - **Validation:** a value that is not a positive integer fails closed to the
+    default, with a WARN.
+  - **Before calling it done:** validate the cap against the real host
+    (`.claude/rules/testing-config-gates.md`). Print the measured suite time
+    under the cap next to the uncapped time, and confirm a queued story still
+    grades within one tick of a slot freeing.
+  - **Files:** `pipeline/detached_grade.py` (343 lines) holds the counting and
+    admission helper. The call-site wiring goes in `pipeline/story_status.py`,
+    which is at 987 lines, so it gets at most a few lines there, or a
+    rename-and-delegate split if it does not fit. No dependency on Phase A or
+    the other epics.
+
 ## Order
 
-Epic 1 and SA-04 can start as soon as Phase A merges. SA-05 waits on SA-03 and
+Epic 1, SA-04 and SA-19 can start as soon as Phase A merges. SA-05 waits on SA-03 and
 SA-04. Epic 3 waits on SG-01 and SG-05, the Dockerfile and entrypoint stories.
 SA-11 waits on SA-07, SA-08 and SA-12. Epic 5 waits on SA-13. Epic 6 is last.
 

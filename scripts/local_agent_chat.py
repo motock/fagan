@@ -163,7 +163,7 @@ def _provider_chat_turn_impl(origin, messages):
     condition main()'s proactive trim is gated on, so the primary overflow
     defense never fired at all outside Ollama (2026-08-07 audit).
     """
-    envelope = origin["inference_providers"].get_local_provider().chat(
+    envelope = origin["inference_providers"].get_local_provider(origin["PROVIDER"]).chat(
         messages, model=origin["MODEL"], num_ctx=origin["NUM_CTX"], temperature=origin["TEMPERATURE"],
         tools=origin["TOOLS"], endpoint=origin["ENDPOINT"], timeout=origin["TIMEOUT"],
     )

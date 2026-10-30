@@ -218,14 +218,19 @@ class DispatchingJsonlEventBus(JsonlEventBus):
 
     def publish(self, event: dict) -> None:
         super().publish(event)
-        # The event type and payload are not logged: a handler failure must be
-        # diagnosable without putting event contents in the log.
+        # The event type, the handler's class of failure and nothing else: a
+        # handler failure must be diagnosable without putting event contents or
+        # the exception's text in the log.
         for handler in self._handlers.get(event.get("type"), []):
             try:
                 handler(event)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                error_type = type(exc).__name__
                 logger.error(
-                    "Event handler failed for event type %s", event.get("type")
+                    "Event handler failed for event type %s (%s)",
+                    event.get("type"),
+                    error_type,
+                    extra={"error_type": error_type},
                 )
 
 

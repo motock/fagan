@@ -415,10 +415,17 @@ class NatsEventBus(EventBus):
         for handler in self._handlers.get(event_type, []):
             try:
                 handler(event)
-            except Exception:  # noqa: BLE001 - one handler must not silence others
-                # The type, never the payload or the exception text: a handler
-                # failure must be diagnosable without leaking event contents.
-                logger.error("Event handler failed for event type %s", event_type)
+            except Exception as exc:  # noqa: BLE001 - one handler must not silence others
+                # The type and the exception's class, never the payload or the
+                # exception text: a handler failure must be diagnosable without
+                # leaking event contents.
+                error_type = type(exc).__name__
+                logger.error(
+                    "Event handler failed for event type %s (%s)",
+                    event_type,
+                    error_type,
+                    extra={"error_type": error_type},
+                )
 
     # -- private loop lifecycle ---------------------------------------------
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:

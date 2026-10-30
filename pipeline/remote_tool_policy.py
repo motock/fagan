@@ -1,11 +1,11 @@
 """Default-deny tool policy for the remote MCP transport.
 
 The bearer gate in ``pipeline.remote_transport`` proves who a caller is; it
-does not decide what they may call. Only some tools reach a service path that
-asks ``authorize`` -- the rest (``save_plan``, ``set_story_status``,
-``record_security_audit`` ...) would run for any authenticated caller. So a
-remote principal may call exactly the tools listed here, and every other tool
-is refused before its handler runs.
+does not decide what they may call. Every tool now decides through this policy:
+the enforced tools' service paths ask ``authorize``, the read tools are scoped
+to the plans a caller may see, and a tool named in neither set is refused before
+its handler runs. A name in neither set is therefore a refusal, not a default
+grant, so a new tool stays unreachable remotely until it is listed here.
 
 The tool name decides, with one exception: a caller whose identity claims the
 local operator's -- by singleton, authentication method or subject -- is refused
@@ -23,8 +23,8 @@ behaviour is unchanged.
 Read tools are scoped to the plans a remote principal may see -- the plans it
 owns or is a delegate of, per ``app.policy.can_view``:
 
-* the plan-scoped read tools (``check_story_status``, ``get_story_diff``,
-  ``list_decisions``, ``list_ready_stories``) refuse *before* the handler runs
+* the plan-scoped read tools (``check_story_status``, ``get_effective_config``,
+  ``get_story_diff``, ``list_decisions``, ``list_ready_stories``) refuse *before* the handler runs
   when their ``plan_name`` argument is missing, not a string, not a safe plan
   key (the same ``[A-Za-z0-9._-]`` rule the tools' own path building uses), or
   names a plan the caller may not see. The refusal is one fixed result,
@@ -43,7 +43,13 @@ owns or is a delegate of, per ``app.policy.can_view``:
   for every remote caller: the host chain records other principals'
   authentication attempts;
 * ``check_usage`` stays host-level and unfiltered. It reports deployment-wide
-  counters that belong to no plan, so there is nothing to scope.
+  counters that belong to no plan, so there is nothing to scope;
+* ``advance_all_plans`` runs for every plan, but its result keeps only the plans
+  the caller may see. Each invisible plan's advance is refused by its own
+  ``plan:dispatch`` check, so the filter hides names and does not gate work;
+* ``save_plan`` and ``decompose_plan`` are refused when their ``workspace``
+  argument is set. A server-side path from the network is never trusted, and
+  ``PipelineService.decompose_plan`` cannot be gated in place.
 """
 
 from __future__ import annotations
@@ -65,16 +71,28 @@ logger = logging.getLogger("pipeline.remote_tool_policy")
 #: Tools whose service path calls ``authorize`` itself, so the policy decides.
 REMOTE_ENFORCED = frozenset(
     {
+        "advance_all_plans",
+        "advance_pipeline",
         "approve_merge",
         "approve_plan",
+        "checkpoint",
+        "checkpoint_story",
+        "decompose_plan",
         "dispatch_story",
         "ingest_plan",
         "interrupt_story",
         "mark_story_done",
+        "mark_story_in_progress",
+        "patch_plan",
         "patch_story",
         "pause_plan",
+        "record_security_audit",
         "reject_plan",
+        "request_decision",
         "resume_plan",
+        "review_story",
+        "save_plan",
+        "set_story_status",
     }
 )
 
@@ -86,6 +104,7 @@ REMOTE_READ = frozenset(
     {
         "check_story_status",
         "check_usage",
+        "get_effective_config",
         "get_story_diff",
         "list_decisions",
         "list_plans",
@@ -96,6 +115,10 @@ REMOTE_READ = frozenset(
 
 _REFUSAL = "This tool is not available over the remote transport."
 
+#: Tools that accept a server-side ``workspace`` path, which a remote caller may
+#: not supply. Refused when the argument is present and not ``None``.
+WORKSPACE_REFUSED = frozenset({"decompose_plan", "save_plan"})
+
 #: The single refusal a plan-scoped read returns for a plan the caller may not
 #: see -- deliberately identical to the one for a plan that does not exist, so
 #: the reply cannot be used to probe which plans are on disk.
@@ -105,6 +128,7 @@ _HIDDEN_PLAN = "This plan is not available to the authenticated principal."
 PLAN_SCOPED_READ = frozenset(
     {
         "check_story_status",
+        "get_effective_config",
         "get_story_diff",
         "list_decisions",
         "list_ready_stories",
@@ -176,6 +200,12 @@ def _plan_name_argument(params: dict[str, Any]) -> object:
     if not isinstance(arguments, dict):
         return None
     return arguments.get("plan_name")
+
+
+def _passes_workspace(params: dict[str, Any]) -> bool:
+    """Return whether a ``tools/call`` names a non-``None`` ``workspace`` argument."""
+    arguments = params.get("arguments")
+    return isinstance(arguments, dict) and arguments.get("workspace") is not None
 
 
 def _can_view_plan(principal: Principal, plan_name: object) -> bool:
@@ -348,6 +378,16 @@ def _scope_audit(principal: Principal, result: Any) -> Any:
     return _rebuilt(result, scoped, [json.dumps(scoped)])
 
 
+def _refusal_result() -> dict[str, Any]:
+    """The refusal for a tool the remote transport does not allow.
+
+    The SDK's ``CallToolResult`` shape, returned before request validation
+    runs; a protocol-level error would let some clients render the refusal as a
+    success.
+    """
+    return {"content": [{"type": "text", "text": _REFUSAL}], "isError": True}
+
+
 def _hidden_result() -> dict[str, Any]:
     """The single refusal for a hidden plan, identical however it was reached."""
     return {"content": [{"type": "text", "text": _HIDDEN_PLAN}], "isError": True}
@@ -382,6 +422,9 @@ async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
     params = ctx.params if isinstance(ctx.params, dict) else {}
     name = params.get("name")
     if not _is_local_identity(principal) and remote_tool_allowed(name):
+        if name in WORKSPACE_REFUSED and _passes_workspace(params):
+            _audit_denial(name, principal)
+            return _refusal_result()
         if name in PLAN_SCOPED_READ:
             if not _can_view_plan(principal, _plan_name_argument(params)):
                 _audit_denial(name, principal, outcome="hidden")
@@ -390,11 +433,11 @@ async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
         result = await call_next(ctx)
         if name == "list_plans":
             return _or_hidden(_scope_stems(principal, result))
-        if name == "verify_audit":
+        # advance_all_plans still advances every plan: each invisible plan's
+        # advance is refused by its own plan:dispatch check, so this filter only
+        # hides the names it reports back.
+        if name in ("verify_audit", "advance_all_plans"):
             return _or_hidden(_scope_audit(principal, result))
         return result
     _audit_denial(name, principal)
-    # The SDK's ``CallToolResult`` shape, returned before request validation
-    # runs; a protocol-level error would let some clients render the refusal
-    # as a success.
-    return {"content": [{"type": "text", "text": _REFUSAL}], "isError": True}
+    return _refusal_result()

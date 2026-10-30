@@ -10,9 +10,10 @@
 #     in generated values). Keep it out of git (.gitignore).
 #   - deploy/standalone/secrets/<name>: one file per secret below, mode 0600,
 #     owned by uid 10001 (the pipeline's uid; the entrypoint refuses any other
-#     owner). Compose fails to start when a listed file is missing, so the
-#     installer creates every file, leaving the unused ones empty. The entrypoint
-#     loader (deploy/lib/operator_env.sh) treats an empty file as absent.
+#     owner). `docker compose up` fails when a listed file is missing (`config`
+#     does not check it), so the installer creates every file, leaving the unused
+#     ones empty. The entrypoint loader (deploy/lib/operator_env.sh) treats an
+#     empty file as absent.
 #   - deploy/standalone/realm.json: the realm template, and
 #     deploy/standalone/model_registry.json: a copy of the repo's registry.
 #

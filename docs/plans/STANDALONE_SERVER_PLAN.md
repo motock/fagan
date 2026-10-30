@@ -1,11 +1,11 @@
 # Standalone server: install with compose, connect a local agent client over HTTP
 
-- **Status:** drafted 2026-10-29 on `master` `c57a596`. Not preflighted and not
-  ingested. It runs after [`SMOKE_STACK_GREEN_PLAN.json`](SMOKE_STACK_GREEN_PLAN.json)
-  (plan `smoke-stack-green`, SG-01..06) merges, because most of these stories
-  edit the files that plan changes (`deploy/Dockerfile`, `deploy/entrypoint.sh`,
-  `deploy/compose.yaml`). An impact run on today's `master` would be stale
-  before it was used.
+- **Status:** preflighted and ingested 2026-10-30 as plan `standalone-server`
+  (19 stories, SA-00..SA-19 with no SA-06), on `master` `5c8f8ac` after
+  `smoke-stack-green` merged. The plan file is
+  [`STANDALONE_SERVER_PLAN.json`](STANDALONE_SERVER_PLAN.json); the briefs
+  there are authoritative where they differ from the drafts below (see
+  "Changes at preflight").
 - **Goal:** someone runs one installer, gets a running server, and points
   Claude Code, OpenCode or another MCP client at its HTTP endpoint. They then
   use it instead of a local stdio pipeline.
@@ -212,11 +212,61 @@
     rename-and-delegate split if it does not fit. No dependency on Phase A or
     the other epics.
 
+## Changes at preflight (2026-10-30)
+
+A combined impact run (rough stand-ins of all 19 stories in one scratch
+worktree) and a closer read of the code changed these drafts:
+
+- **SA-00 (new): owner authority.** `app/policy.py` granted a remote plan
+  owner only approve, reject, dispatch, merge and decision:answer, so most of
+  the 13 newly exposed tools would still refuse every remote user. The
+  operator chose to extend owners and delegates to story:patch,
+  story:interrupt, story:mark_done, plan:pause and plan-scoped config:write.
+  Host-scoped config:write stays local-operator only. ADR 0009 gets an
+  amendment, and three existing tests that pinned the old boundary are
+  pre-authorized edits.
+- **SA-01 shrank** to `get_effective_config`: a remote caller must name a plan
+  and gets only `roles`, never host env values or paths. Gating
+  `decompose_plan` in the service broke two AST tests that pin its first
+  statement, and filtering `advance_all_plans` there broke enforcement tests.
+  Both moved into SA-02's middleware: a `workspace` argument from a remote
+  caller is refused, and `advance_all_plans` results are filtered to visible
+  plans with the existing `_scope_audit` helper.
+- **SA-03** also makes `validate_workspace` enforce
+  `PIPELINE_ALLOWED_REPO_ROOTS`, so the dashboard's decompose route is
+  confined too. SA-08 defaults that variable to `PIPELINE_REPOS_ROOT` in the
+  image.
+- **SA-05** needs no dispatch change: dispatch already fetches the base branch
+  from origin (`123ebbe`).
+- **SA-07** pins gh 2.102.0, Node 24.22.0 and Claude Code 2.1.301, each at
+  least two weeks old, with sha256 checksums for amd64 and arm64.
+- **SA-08/SA-09:** the entrypoint exports the operator's key as
+  `PIPELINE_ANTHROPIC_API_KEY`, and `app/backend_claude.py` maps it to
+  `ANTHROPIC_API_KEY` after stripping the redirect variables, so an ambient
+  key is still stripped. An empty secret file counts as absent, because
+  compose needs every listed file to exist.
+- **SA-10** passes the `headers` keyword only while `OLLAMA_API_KEY` is set.
+  Passing it always broke about 60 tests whose httpx fakes have fixed
+  signatures.
+- **SA-13/SA-15 client facts** (verified 2026-10-30):
+  - Claude Code checks RFC 9728 metadata first and supports `headersHelper`.
+    The helper runs at connect and on reconnect and re-runs after a 401 or 403.
+    Pre-registered redirects use `http://localhost:<port>/callback` with
+    `--client-id` and `--callback-port`.
+  - OpenCode supports OAuth with a pre-set `clientId`, and its redirect is
+    `http://127.0.0.1:19876/mcp/oauth/callback`. It has no header helper, only
+    `{env:VAR}` headers, so OAuth is its recommended mode.
+- **SA-19** fits entirely in `pipeline/detached_grade.py`, so
+  `story_status.py` is untouched. Stories over the cap wait for a later tick
+  in no particular order.
+
 ## Order
 
-Epic 1, SA-04 and SA-19 can start as soon as Phase A merges. SA-05 waits on SA-03 and
-SA-04. Epic 3 waits on SG-01 and SG-05, the Dockerfile and entrypoint stories.
-SA-11 waits on SA-07, SA-08 and SA-12. Epic 5 waits on SA-13. Epic 6 is last.
+As ingested: SA-00, SA-01, SA-04, SA-07, SA-08, SA-09, SA-10, SA-12, SA-13,
+SA-14 and SA-19 have no prerequisites. SA-03 follows SA-01, SA-02 follows
+SA-00, SA-01 and SA-03, and SA-05 follows SA-03 and SA-04. SA-11 follows
+SA-07, SA-08 and SA-12..14, and SA-15 follows SA-13. SA-16 follows SA-11,
+SA-13 and SA-15. SA-17 and SA-18 are last.
 
 ## Open questions
 

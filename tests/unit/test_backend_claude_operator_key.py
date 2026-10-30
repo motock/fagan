@@ -134,14 +134,14 @@ def test_should_not_expose_pipeline_operator_key_var(monkeypatch):
 
 
 def test_converted_key_never_travels_under_its_pipeline_name(monkeypatch):
-    """The in-scope control: conversion *removes* the carrier.
+    """The driver-side layer: conversion *removes* the carrier.
 
-    ``pipeline.execution``'s SEC-2 denylist (``_AGENT_SECRET_ENV``) is out of
-    this story's ``files`` scope, so this story may not rely on it; the only
-    guaranteed layer here is that ``_first_party_claude_env()`` (the sole env
-    ``backend_claude`` hands to ``spawn_harness``) carries the credential under
-    ``ANTHROPIC_API_KEY`` only and never under the mounted-secret name.
-    Extending the denylist is tracked separately as defense in depth.
+    ``_first_party_claude_env()`` (the sole env ``backend_claude`` hands to
+    ``spawn_harness``) carries the credential under ``ANTHROPIC_API_KEY`` only
+    and never under the mounted-secret name. ``pipeline.execution``'s SEC-2
+    denylist (``_AGENT_SECRET_ENV``) now also carries
+    ``PIPELINE_ANTHROPIC_API_KEY`` as defense in depth (see the membership
+    test below); this case keeps the driver layer independently covered.
     """
     monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", "sk-test")
 

@@ -1,0 +1,230 @@
+# Standalone install: pipeline + Keycloak (production start mode) + Caddy + NATS
+# JetStream, with operator credentials from secret files.
+#
+# This is the file an operator runs for a real deployment. deploy/compose.yaml is
+# the smoke stack (scripted model, dev-mode Keycloak, throwaway volumes) and is
+# not a template for this one.
+#
+# Setup is written by the installer, not by hand:
+#   - deploy/standalone/.env: the variables below (copy .env.example, then fill
+#     in generated values). Keep it out of git (.gitignore).
+#   - deploy/standalone/secrets/<name>: one file per secret below, mode 0600,
+#     owned by uid 10001 (the pipeline's uid; the entrypoint refuses any other
+#     owner). Compose fails to start when a listed file is missing, so the
+#     installer creates every file, leaving the unused ones empty. The entrypoint
+#     loader (deploy/lib/operator_env.sh) treats an empty file as absent.
+#   - deploy/standalone/realm.json: the realm template, and
+#     deploy/standalone/model_registry.json: a copy of the repo's registry.
+#
+# Every image tag is exact (no `latest`), so an upgrade is a reviewed edit.
+
+name: pipeline-standalone
+
+services:
+  # ---------------------------------------------------------------------------
+  # The pipeline server image (deploy/Dockerfile): dashboard on 8000, remote MCP
+  # on 8080, scheduler daemon in the same container.
+  #
+  # The image is built locally when PIPELINE_IMAGE is unset and no local image of
+  # that name exists. Set PIPELINE_IMAGE to a published tag to skip the build.
+  # ---------------------------------------------------------------------------
+  pipeline:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: ${PIPELINE_IMAGE:-pipeline-standalone:local}
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      # Event bus (ADR 0010). The scheduler daemon in this container is the only
+      # durable consumer. `nats` shares this container's network namespace (see
+      # the nats service), so the broker is loopback and needs no credential.
+      PIPELINE_EVENT_BUS: nats
+      PIPELINE_NATS_URL: nats://127.0.0.1:4222
+      PIPELINE_NATS_MANAGE_STREAM: "1"
+      PIPELINE_SCHEDULER_DAEMON: "1"
+      PIPELINE_POLICY_ENFORCE: "1"
+
+      # Identity: bearer tokens are verified against the IdP's JWKS through the
+      # proxy. The issuer is the public origin the IdP is pinned to (KC_HOSTNAME).
+      # app/oidc.py refuses a plaintext jwks_url, so the JWKS fetch is https via
+      # the proxy's in-network name `proxy:8443`; that certificate is issued by
+      # Caddy's internal CA and trusted through the bundle the proxy publishes in
+      # `ca-public` (SSL_CERT_FILE).
+      PIPELINE_IDENTITY_PROVIDER: oidc
+      PIPELINE_OIDC_ISSUER: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/realms/pipeline
+      PIPELINE_OIDC_AUDIENCE: ${PIPELINE_OIDC_AUDIENCE:-pipeline-mcp}
+      PIPELINE_OIDC_JWKS_URL: https://proxy:8443/realms/pipeline/protocol/openid-connect/certs
+      PIPELINE_OIDC_ALLOW_PRIVATE_JWKS: "1"
+      SSL_CERT_FILE: /caddy-ca/root.crt
+      # The dashboard login client. Its secret is read from the oidc_client_secret
+      # secret file (the entrypoint default for PIPELINE_OIDC_CLIENT_SECRET_FILE).
+      PIPELINE_OIDC_CLIENT_ID: pipeline-dashboard
+      PIPELINE_OIDC_REDIRECT_URI: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/auth/callback
+
+      # Public origin. Hosts the MCP transport and the dashboard accept; the
+      # resource URL is the RFC 9728 identifier clients are told to request.
+      PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
+      PIPELINE_DASHBOARD_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
+      PIPELINE_MCP_RESOURCE_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/mcp
+
+      # Code hosts the pipeline may clone from. Hosts only, no scheme.
+      PIPELINE_REPO_URL_HOSTS: ${PIPELINE_REPO_URL_HOSTS:-github.com}
+
+      # Local model server (Ollama on the Docker host). host-gateway makes
+      # host.docker.internal resolve on Linux as well as Docker Desktop.
+      PIPELINE_LOCAL_ENDPOINT_OLLAMA: ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      PIPELINE_MODEL_REGISTRY_PATH: /app/model_registry.local.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # No published port: the MCP transport and the dashboard are reachable only
+    # through the TLS proxy.
+    expose:
+      - "8000"
+      - "8080"
+    secrets:
+      - oidc_client_secret
+      - anthropic_api_key
+      - claude_code_oauth_token
+      - gh_token
+      - ollama_api_key
+    volumes:
+      - pipeline-state:/var/lib/pipeline
+      - ./model_registry.json:/app/model_registry.local.json:ro
+      # Read-only: the proxy's CA bundle, so the https JWKS fetch verifies the
+      # proxy's certificate. The pipeline never writes here.
+      - ca-public:/caddy-ca:ro
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # IdP: Keycloak in production start mode with the realm imported from
+  # ./realm.json. The H2 database lives in keycloak-data, so users, sessions and
+  # any admin change survive a restart. --import-realm only creates a realm that
+  # does not exist yet; later edits go through the admin console.
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command:
+      - start
+      - --import-realm
+      - --http-port=8080
+      - --health-enabled=true
+    environment:
+      # Keycloak serves plain HTTP on the compose network and trusts the
+      # proxy's X-Forwarded-* headers. KC_HOSTNAME pins the issuer to the
+      # origin callers use, so `iss` matches PIPELINE_OIDC_ISSUER exactly.
+      KC_HOSTNAME: https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}:${PUBLIC_PORT:-8443}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      # Bootstrap admin only; created on first start, then managed in the console.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      # Values realm.json references through ${env.*}. Import substitutes only
+      # variables that exist, so each one is required rather than defaulted: an
+      # absent value would leave the placeholder text as the client secret.
+      PIPELINE_PUBLIC_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}
+      PIPELINE_CLI_CALLBACK_PORT: ${PIPELINE_CLI_CALLBACK_PORT:?set PIPELINE_CLI_CALLBACK_PORT in .env}
+      PIPELINE_OIDC_AUDIENCE: ${PIPELINE_OIDC_AUDIENCE:-pipeline-mcp}
+      PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET in .env}
+      PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET in .env}
+    volumes:
+      - ./realm.json:/opt/keycloak/data/import/realm.json:ro
+      - keycloak-data:/opt/keycloak/data
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # TLS front door. The Caddyfile routes /mcp and the RFC 9728 metadata to the
+  # pipeline's MCP port, /realms and /resources to Keycloak, and everything else
+  # to the dashboard.
+  #
+  # The proxy publishes a CA bundle for the pipeline: the system roots plus, with
+  # CADDY_TLS=internal, Caddy's internal root. The pipeline needs it to verify
+  # the https JWKS fetch and its outbound HTTPS. Caddy's own storage (which holds
+  # private keys) stays in caddy-data and is never mounted into another service.
+  # ---------------------------------------------------------------------------
+  proxy:
+    image: caddy:2.8.4-alpine
+    command:
+      - sh
+      - -c
+      - |
+        caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+        pid=$$!
+        bundle=/ca-public/root.crt
+        if [ "$$CADDY_TLS" = internal ]; then
+          cert=/data/caddy/pki/authorities/local/root.crt
+          i=0
+          while [ ! -f "$$cert" ]; do
+            i=$$((i + 1))
+            if [ "$$i" -gt 60 ]; then
+              echo "the internal CA did not appear within 60s" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /etc/ssl/certs/ca-certificates.crt "$$cert" > "$$bundle"
+        else
+          cp /etc/ssl/certs/ca-certificates.crt "$$bundle"
+        fi
+        chmod 0644 "$$bundle"
+        wait "$$pid"
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}
+      CADDY_TLS: ${CADDY_TLS:-internal}
+    ports:
+      - "${PUBLIC_PORT:-8443}:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - ca-public:/ca-public
+    healthcheck:
+      test: ["CMD", "test", "-f", "/ca-public/root.crt"]
+      interval: 2s
+      retries: 30
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # NATS JetStream, the durable store the scheduler daemon consumes from.
+  #
+  # The broker shares the pipeline container's network namespace and is
+  # therefore loopback-only. pipeline/events_nats.py refuses a plaintext nats://
+  # URL to any non-loopback host, and no other container can reach this broker.
+  # JetStream state lives in nats-data, so a restart keeps unconsumed events.
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:2.10.22
+    command: ["-js", "-sd", "/data", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
+    network_mode: "service:pipeline"
+    volumes:
+      - nats-data:/data
+    depends_on:
+      pipeline:
+        condition: service_started
+    restart: unless-stopped
+
+# Secret files: one per credential, created by the installer under secrets/.
+# The pipeline reads each one from /run/secrets/<name>; see the header above.
+secrets:
+  oidc_client_secret:
+    file: ./secrets/oidc_client_secret
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key
+  claude_code_oauth_token:
+    file: ./secrets/claude_code_oauth_token
+  gh_token:
+    file: ./secrets/gh_token
+  ollama_api_key:
+    file: ./secrets/ollama_api_key
+
+volumes:
+  # Mutable server state: plans, manifests, worktrees, the audit chain.
+  pipeline-state:
+  # Keycloak's database and state.
+  keycloak-data:
+  # Caddy's internal CA, its private keys and the certificates it issues.
+  caddy-data:
+  # The CA bundle the proxy publishes for the pipeline (public material only).
+  ca-public:
+  # JetStream streams and consumer state.
+  nats-data:

@@ -31,6 +31,11 @@ node_modules
 # Local scratch/runtime state (not source)
 .local/
 
+# Standalone install credentials: one file per secret, and the .env the installer
+# writes (generated client secrets). Never commit either.
+deploy/standalone/secrets/
+deploy/standalone/.env
+
 # Operator's personal per-role model routing (provider/model chosen per
 # role), selected via PIPELINE_MODEL_REGISTRY_PATH (app/role_registry.py's
 # _registry_path) instead of the shipped provider-neutral model_registry.json.

@@ -1,0 +1,42 @@
+# TLS front door for the standalone stack (deploy/standalone/compose.yaml).
+#
+# Environment (set through .env):
+#   PUBLIC_HOSTNAME  the name clients use; the site address and the certificate
+#   CADDY_TLS        `internal` (default: Caddy's own CA, for private installs)
+#                    or an email address (ACME, for a publicly resolvable name)
+#
+# The pipeline fetches its JWKS over https through the in-network name
+# proxy:8443, so that name gets its own site with the same routes.
+{
+	admin off
+}
+
+(routes) {
+	# The MCP transport and its RFC 9728 protected-resource metadata.
+	# The pipeline's MCP port is 8080; the dashboard is on 8000.
+	@mcp path /mcp* /.well-known/oauth-protected-resource*
+	handle @mcp {
+		reverse_proxy pipeline:8080
+	}
+
+	# Keycloak: the realm endpoints and its static resources.
+	@identity path /realms/* /resources/*
+	handle @identity {
+		reverse_proxy keycloak:8080
+	}
+
+	# Everything else is the dashboard.
+	handle {
+		reverse_proxy pipeline:8000
+	}
+}
+
+{$PUBLIC_HOSTNAME}:8443 {
+	tls {$CADDY_TLS:internal}
+	import routes
+}
+
+proxy:8443 {
+	tls internal
+	import routes
+}

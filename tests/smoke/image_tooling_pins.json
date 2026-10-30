@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Upstream release digests for the tooling deploy/Dockerfile installs.",
+    "These are release checksums, not pins of a cumulative artifact, so they",
+    "live here as data rather than as sha256 literals in test source (which",
+    "pipeline/pin_guard.py flags): a checksum only ever changes together with",
+    "the version it belongs to, in the same commit, in the same file.",
+    "Refresh every entry from the upstream release page when bumping a version."
+  ],
+  "gh": {
+    "version": "2.102.0",
+    "sha256": {
+      "linux_amd64": "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
+      "linux_arm64": "7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484"
+    }
+  },
+  "node": {
+    "version": "24.22.0",
+    "sha256": {
+      "linux-x64": "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008",
+      "linux-arm64": "fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143"
+    }
+  },
+  "claude_code": {
+    "package": "@anthropic-ai/claude-code",
+    "version": "2.1.301"
+  }
+}

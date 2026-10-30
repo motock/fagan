@@ -18,9 +18,10 @@
 #     PIPELINE_IDENTITY_PROVIDER=oidc, which puts a bearer-token gate on every
 #     /api/ route (app/dashboard.py), so the probe uses "/" instead;
 #   * no secrets baked in. Every credential arrives as a mounted file at
-#     runtime; nothing secret is COPYed and no build ARG carries a credential,
-#     because both leak into image history. The only build args are the three
-#     public tooling version pins and TARGETARCH, none of which are secret.
+#     runtime; nothing secret is COPYed. There are no build args at all, not
+#     even for the public tooling versions: build args land in image history
+#     and tests/unit/test_deploy_dockerfile.py forbids them in this file, so the
+#     version pins are ordinary variables inside the install step.
 #
 # Build:  docker build -f deploy/Dockerfile -t pipeline-server .
 # Run:    docker run --rm -p 8000:8000 -p 8080:8080 \
@@ -54,17 +55,15 @@ RUN python -m venv /opt/venv \
 # --------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
-# Pinned tooling versions. The sha256 digests in the install step below are
-# bound to these exact versions: whenever any of them changes, every checksum
-# must be refreshed from the upstream release page in the same commit, or the
-# build fails at `sha256sum -c` (which is the point -- a silent upstream swap is
-# the failure mode this pinning exists to prevent).
-ARG GH_VERSION=2.102.0
-ARG NODE_VERSION=24.22.0
-ARG CLAUDE_CODE_VERSION=2.1.301
-# docker build supplies this per target platform; the install step maps it onto
-# the two different arch spellings upstream releases use.
-ARG TARGETARCH
+# Pinned tooling versions live inside the install step at the bottom of this
+# stage (GH_VERSION / NODE_VERSION / CLAUDE_CODE_VERSION). They are shell
+# variables, not build args: this file declares no build args at all, and a
+# build arg would also let a caller swap a version without touching the pinned
+# checksums. The sha256 digests beside those variables are bound to the exact
+# versions -- whenever one changes, every checksum must be refreshed from the
+# upstream release page in the same commit, or the build fails at `sha256sum -c`
+# (which is the point: a silent upstream swap is the failure mode this pinning
+# exists to prevent).
 
 # PYTHONUNBUFFERED/PYTHONDONTWRITEBYTECODE: logs stream to the container log
 # driver and the read-only install tree stays clean.
@@ -137,16 +136,26 @@ VOLUME ["/var/lib/pipeline"]
 # nothing is fetched from a mutable tag. Runs as root, so it must stay above the
 # USER line below.
 #
-# TARGETARCH is supplied by BuildKit for every build; when it is absent (a
-# legacy builder), fall back to the host machine's arch and map that the same
-# way. Anything that is neither amd64 nor arm64 fails here, before a single byte
-# is downloaded.
+# The three version pins are shell variables, not build args: a build arg would
+# land in image history and this file declares none, so a rebuild of the same
+# commit resolves the same three URLs. The digests below belong to exactly these
+# versions -- refresh all of them together, in the same commit.
 #
-# The npm install below spells the Claude Code version out literally (an
-# npm range such as a caret or tilde spec would let a rebuild pick up unreviewed
-# code); keep it identical to CLAUDE_CODE_VERSION above when bumping.
+# Arch: TARGETARCH is set by BuildKit when the build supplies a platform, and is
+# empty otherwise (this file declares no args, so it is never overridden from the
+# command line). Falling back to `uname -m` maps the machine the RUN actually
+# executes on, which is the right answer for cross builds too: buildx runs an
+# emulated arm64 RUN inside an arm64 image, so it reports aarch64. Anything that
+# is neither amd64 nor arm64 fails here, before a single byte is downloaded.
+#
+# The npm install below spells the Claude Code version out through the pinned
+# variable; an npm range such as a caret or tilde spec would let a rebuild pick
+# up unreviewed code.
 # --------------------------------------------------------------------------
 RUN set -eux; \
+    GH_VERSION=2.102.0; \
+    NODE_VERSION=24.22.0; \
+    CLAUDE_CODE_VERSION=2.1.301; \
     case "${TARGETARCH:-$(uname -m)}" in \
         amd64|x86_64) \
             GH_ARCH=linux_amd64; \

@@ -28,6 +28,49 @@ _LOCAL_DEFAULT_MODEL = next(
 )
 
 
+def _is_declared_tag(model: str, provider: str) -> bool:
+    """True when model is the tag of a model declared for provider, else False.
+
+    Real LM Studio / MLX model ids are frequently bare words with neither ':'
+    nor '/' ("scripted-dispatch"), so a registry-declared tag must be
+    recognised as a concrete model rather than rewritten to
+    PIPELINE_LOCAL_MODEL_DEFAULT by _resolve_local_model.
+
+    Fails CLOSED (False) on the registry errors callers can actually hit in
+    the dispatch path: a RoleRegistryError from invalid JSON or a bad roles.*
+    reference, an OSError reading the file, and a ValueError from a bad
+    PIPELINE_MODEL_REGISTRY_PATH override. A structurally odd but valid-JSON
+    registry is handled by the shape checks below, not by this except clause.
+    Anything else is a programming error and is left to raise rather than
+    swallowed - deliberately does not catch bare Exception (ruff BLE001).
+    role_registry is imported inside the function so this module stays cheap
+    to import.
+    """
+    from app import role_registry
+
+    try:
+        registry = role_registry.load_registry()
+    except (role_registry.RoleRegistryError, OSError, ValueError):
+        return False
+    # load_registry() only validates JSON syntax and role->provider/model
+    # references, so check the container shapes before indexing: a
+    # structurally odd registry must degrade to False, not raise
+    # AttributeError/TypeError into the dispatch path.
+    providers = registry.get("providers") if isinstance(registry, dict) else None
+    if not isinstance(providers, dict):
+        return False
+    provider_cfg = providers.get(provider)
+    if not isinstance(provider_cfg, dict):
+        return False
+    models = provider_cfg.get("models")
+    if not isinstance(models, dict):
+        return False
+    return any(
+        isinstance(spec, dict) and spec.get("tag") == model
+        for spec in models.values()
+    )
+
+
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
     # or '/' (LiteLLM's vendor/model form, e.g. "openai/gpt-5-mini") is
@@ -38,6 +81,12 @@ def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # PIPELINE_LOCAL_REVIEW_MODEL override). Tier names are always bare
     # lowercase words, so neither separator can appear in a legitimate tier.
     if ":" in tier or "/" in tier:
+        return tier
+    # A registry-declared tag (e.g. the smoke stack's "scripted-dispatch") is
+    # also already a concrete model: the registry pinned a role to exactly
+    # this tag, so rewriting it to PIPELINE_LOCAL_MODEL_DEFAULT would run a
+    # different model than the role declared.
+    if tier and _is_declared_tag(tier, provider):
         return tier
     default = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
     env_var = _LOCAL_TIER_ENV.get(tier.lower())

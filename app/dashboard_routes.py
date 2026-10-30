@@ -29,7 +29,8 @@ from app.dashboard_helpers import (
     _story_last_activity,
 )
 from app.story_replay import build_replay_events
-from pipeline import config_provenance
+from pipeline import config_provenance, remote_scope
+from pipeline.actor import current_principal
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 
 # Same logger name as app.dashboard so log filtering and caplog are unchanged.
@@ -403,6 +404,14 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
         plan_role_config=plan_role_config,
         registry=registry,
     )
+
+    if remote_scope.is_network_principal(current_principal()):
+        # A caller over the network gets the role routing (with its
+        # provenance) and nothing else: the env values resolved below can
+        # hold provider API keys and ``sources`` is host layout (SA-01).
+        # Returning here also means those files are never read for it.
+        return remote_scope.remote_dashboard_config(roles)
+
     env = config_provenance.effective_env_config()
     ignored_env_vars = config_provenance.ignored_env_vars_present()
 

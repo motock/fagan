@@ -163,6 +163,8 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
+from . import remote_scope
+from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
     _patch_plan_impl,
@@ -206,6 +208,12 @@ class PipelineService(PlanApprovalMixin):
     """
 
     def get_effective_config(self, plan_name: str | None = None) -> dict[str, Any]:
+        if remote_scope.is_network_principal(current_principal()):
+            if not plan_name:
+                return remote_scope.remote_effective_config({}, plan_name)
+            return remote_scope.remote_effective_config(
+                _get_effective_config_impl(plan_name), plan_name
+            )
         return _get_effective_config_impl(plan_name)
 
     def set_role_default(

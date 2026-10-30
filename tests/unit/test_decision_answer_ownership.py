@@ -57,7 +57,7 @@ OWNED_ACTIONS = (
 )
 
 #: Actions ownership must never reach.
-NOT_OWNED_ACTIONS = ("story:patch", "plan:ingest", "config:write")
+NOT_OWNED_ACTIONS = ("plan:ingest",)
 
 #: Plans.
 PLAN_A = Resource(owner="alice", delegates=("bob",))

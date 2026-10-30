@@ -279,9 +279,9 @@ def test_ingest_branch_does_not_change_other_actions() -> None:
 #
 # ADR 0009 makes the plan's owner the accountable party for that plan and lets
 # it approve its own plan, so starting the work it approved is the same
-# authority: `plan:dispatch` joins the ownership grant. `plan:pause` stays
-# outside it on purpose — nothing in the current stack asks an owner to pause
-# its own plan, and every action added to the grant widens authority.
+# authority: `plan:dispatch` joins the ownership grant. The ADR 0009
+# amendment of 2026-10-30 later added the plan-scoped actions, `plan:pause`
+# among them, so a remote owner can run its own plan end to end.
 
 
 def test_owner_may_dispatch_the_plan_it_owns() -> None:
@@ -335,8 +335,8 @@ def test_system_scheduler_may_still_dispatch() -> None:
     )
 
 
-def test_owner_still_cannot_pause_its_plan() -> None:
-    # The deliberate boundary: `plan:pause` stays outside the ownership grant.
+def test_owner_may_pause_its_plan() -> None:
+    # ADR 0009 amendment 2026-10-30: plan:pause is inside the ownership grant.
     resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
 
-    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_PAUSE, resource) is False
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_PAUSE, resource) is True

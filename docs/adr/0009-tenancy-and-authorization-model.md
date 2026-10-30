@@ -158,3 +158,20 @@ policy; both operate on a verified `Principal`.**
 Related: [0006](0006-decision-routing-on-a-shared-server.md),
 [0007](0007-plan-approval-at-activation.md),
 [0008](0008-shared-control-plane-per-repo-workers.md).
+
+## Amendment 2026-10-30: owner authority covers plan-scoped actions
+
+A plan's owner and its delegates are now allowed ten actions on that plan:
+`plan:approve`, `plan:reject`, `plan:dispatch`, `story:merge`,
+`decision:answer`, `story:patch`, `story:interrupt`, `story:mark_done`,
+`plan:pause` and plan-scoped `config:write` (`patch_plan`,
+`set_plan_role_config`). Ownership stays additive only, never applies to a
+`system:` subject, and leaves a plan with no owner on the role rule.
+
+Host-scoped `config:write` (`set_role_default`, `record_security_audit`) stays
+local-operator only: it is decided against an empty-owner resource with no
+delegates, so the ownership grant never matches it.
+
+Why: a standalone server has no local operator at the client, so a remote
+(OIDC) owner could approve and dispatch a plan but not patch, pause,
+interrupt or close it. Owners need to run their own plans end to end.

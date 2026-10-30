@@ -335,8 +335,8 @@ def test_system_scheduler_may_still_dispatch() -> None:
     )
 
 
-def test_owner_still_cannot_pause_its_plan() -> None:
-    # The deliberate boundary: `plan:pause` stays outside the ownership grant.
+def test_owner_may_pause_its_plan() -> None:
+    # ADR 0009 amendment 2026-10-30: plan:pause is inside the ownership grant.
     resource = Resource(plan="p1", owner=OIDC_ALICE.subject)
 
-    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_PAUSE, resource) is False
+    assert LocalPolicy().allow(OIDC_ALICE, Action.PLAN_PAUSE, resource) is True

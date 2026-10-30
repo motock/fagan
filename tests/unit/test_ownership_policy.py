@@ -102,7 +102,7 @@ def test_unowned_plan_denies_a_roleless_principal_for_every_action(
     assert _decide(principal, action, Resource(owner="", delegates=())) is False
 
 
-@pytest.mark.parametrize("action", ["story:patch"])
+@pytest.mark.parametrize("action", ["plan:ingest"])
 def test_delegate_is_not_allowed_beyond_the_owner_gated_actions(
     action: str,
 ) -> None:

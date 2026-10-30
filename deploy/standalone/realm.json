@@ -1,0 +1,113 @@
+{
+  "realm": "pipeline",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 900,
+  "clients": [
+    {
+      "clientId": "pipeline-dashboard",
+      "name": "Pipeline dashboard login",
+      "description": "Confidential browser client for the read-only dashboard. Redirect URIs come from the standalone stack's public URL, so the same template works for any host the operator configures.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${env.PIPELINE_DASHBOARD_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "${env.PIPELINE_PUBLIC_URL}/auth/callback"
+      ],
+      "webOrigins": [
+        "${env.PIPELINE_PUBLIC_URL}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "${env.PIPELINE_PUBLIC_URL}/auth/callback",
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "${env.PIPELINE_OIDC_AUDIENCE}",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "pipeline-mcp",
+      "name": "Pipeline MCP client",
+      "description": "Client-credentials client the remote MCP server uses to call the pipeline. No browser flow: a service account only.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${env.PIPELINE_MCP_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "access.token.lifespan": "300"
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "${env.PIPELINE_OIDC_AUDIENCE}",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "pipeline-cli",
+      "name": "Pipeline CLI (Claude Code and OpenCode)",
+      "description": "Public PKCE client for MCP clients that sign a human in through the browser. Claude Code pre-registers http://localhost:<callback-port>/callback; OpenCode uses http://127.0.0.1:19876/mcp/oauth/callback. No secret: a public client holds none, and PKCE S256 binds the code to the caller.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://localhost:${env.PIPELINE_CLI_CALLBACK_PORT}/callback",
+        "http://127.0.0.1:19876/mcp/oauth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "pipeline-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "${env.PIPELINE_OIDC_AUDIENCE}",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

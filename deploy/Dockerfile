@@ -61,6 +61,11 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     PLAN_DIR=/var/lib/pipeline/plans \
     WORKTREE_ROOT=/var/lib/pipeline/worktrees \
+    AGENTS_DIR=/app/agents \
+    GIT_AUTHOR_NAME=pipeline \
+    GIT_AUTHOR_EMAIL=pipeline@localhost \
+    GIT_COMMITTER_NAME=pipeline \
+    GIT_COMMITTER_EMAIL=pipeline@localhost \
     DASHBOARD_HOST=0.0.0.0 \
     DASHBOARD_PORT=8000 \
     DASHBOARD_RELOAD=0 \
@@ -101,6 +106,7 @@ COPY --chown=10001:10001 model_registry.json pyproject.toml ./
 COPY --chown=10001:10001 deploy/entrypoint.sh ./deploy/entrypoint.sh
 
 RUN chmod 0755 ./deploy/entrypoint.sh \
+ && ln -s /opt/venv /app/.venv \
  && chown 10001:10001 /app \
  && install -d -o 10001 -g 10001 -m 0750 \
         /var/lib/pipeline/plans /var/lib/pipeline/worktrees

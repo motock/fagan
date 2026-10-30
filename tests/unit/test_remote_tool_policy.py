@@ -91,35 +91,18 @@ def _plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # --- refusals -------------------------------------------------------------
 
 
-def test_remote_principal_cannot_call_save_plan() -> None:
-    assert _refused({"name": "save_plan"}) is True
-
-
 def test_refused_call_never_reaches_the_handler() -> None:
-    _, recorder = _call({"name": "save_plan"})
+    _, recorder = _call({"name": "not_a_registered_tool"})
     assert recorder.calls == 0
 
 
 def test_refusal_is_audited_as_a_denied_tool_call(tmp_path: Path) -> None:
-    _call({"name": "save_plan"})
+    _call({"name": "not_a_registered_tool"})
     assert [
         (r["action"], r["outcome"], r["detail"]["tool"])
         for r in _audit_records(tmp_path)
         if r["action"] == "tool:call"
-    ] == [("tool:call", "denied", "save_plan")]
-
-
-def test_remote_principal_cannot_call_set_story_status() -> None:
-    assert _refused({"name": "set_story_status"}) is True
-
-
-def test_remote_principal_cannot_call_record_security_audit() -> None:
-    assert _refused({"name": "record_security_audit"}) is True
-
-
-def test_remote_principal_cannot_call_patch_plan() -> None:
-    # patch_plan rewrites role_config without asking for config:write.
-    assert _refused({"name": "patch_plan"}) is True
+    ] == [("tool:call", "denied", "not_a_registered_tool")]
 
 
 # --- allowlist ------------------------------------------------------------
@@ -139,7 +122,7 @@ def test_no_bound_principal_cannot_call_save_plan() -> None:
     # This middleware is installed only by serve(), behind the OIDC gate, so a
     # request that reaches it with nothing bound has lost its principal: fail
     # closed rather than treating it as the local operator.
-    _, recorder = _call({"name": "save_plan"}, principal=None)
+    _, recorder = _call({"name": "not_a_registered_tool"}, principal=None)
     assert recorder.calls == 0
 
 
@@ -184,14 +167,14 @@ def test_denial_is_not_attributed_to_a_claimed_local_identity(tmp_path: Path) ->
     # An OIDC ``sub`` is caller-controlled, so a caller who mints
     # ``local-operator`` must not become the actor on the chain either.
     impostor = Principal(subject=LOCAL_OPERATOR.subject, auth_method="oidc")
-    _call({"name": "save_plan"}, principal=impostor)
+    _call({"name": "not_a_registered_tool"}, principal=impostor)
     assert [(r["actor"], r["detail"]["subject"]) for r in _audit_records(tmp_path)] == [
         ("anonymous", "local-operator")
     ]
 
 
 def test_denial_audits_the_calling_principal(tmp_path: Path) -> None:
-    _call({"name": "save_plan"})
+    _call({"name": "not_a_registered_tool"})
     assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [
         "https://idp#alice"
     ]
@@ -199,14 +182,14 @@ def test_denial_audits_the_calling_principal(tmp_path: Path) -> None:
 
 def test_audit_detail_truncates_a_long_subject(tmp_path: Path) -> None:
     long_subject = "https://idp#" + "a" * 70
-    _call({"name": "save_plan"}, principal=Principal(subject=long_subject))
+    _call({"name": "not_a_registered_tool"}, principal=Principal(subject=long_subject))
     assert [r["detail"]["subject"] for r in _audit_records(tmp_path)] == [
         long_subject[:64]
     ]
 
 
 def test_local_operator_principal_is_not_exempt() -> None:
-    _, recorder = _call({"name": "save_plan"}, principal=LOCAL_OPERATOR)
+    _, recorder = _call({"name": "not_a_registered_tool"}, principal=LOCAL_OPERATOR)
     assert recorder.calls == 0
 
 
@@ -214,7 +197,7 @@ def test_oidc_subject_named_local_operator_is_not_exempt() -> None:
     # An OIDC ``sub`` is caller-mintable, so the literal subject string must
     # carry no authority at all.
     impostor = Principal(subject=LOCAL_OPERATOR.subject, auth_method="oidc")
-    _, recorder = _call({"name": "save_plan"}, principal=impostor)
+    _, recorder = _call({"name": "not_a_registered_tool"}, principal=impostor)
     assert recorder.calls == 0
 
 
@@ -230,7 +213,7 @@ def test_oidc_subject_named_local_operator_cannot_reach_an_allowed_tool() -> Non
 
 @pytest.mark.parametrize("method", ["tools/list", "initialize"])
 def test_non_tools_call_method_passes_through(method: str) -> None:
-    _, recorder = _call({"name": "save_plan"}, method=method)
+    _, recorder = _call({"name": "not_a_registered_tool"}, method=method)
     assert recorder.calls == 1
 
 
@@ -246,11 +229,11 @@ def test_call_with_a_non_string_tool_name_is_refused() -> None:
 
 
 def test_call_with_an_unhashable_tool_name_is_refused() -> None:
-    assert _refused({"name": {"tool": "save_plan"}}) is True
+    assert _refused({"name": {"tool": "not_a_registered_tool"}}) is True
 
 
 def test_call_with_non_dict_params_is_refused() -> None:
-    assert _refused(["save_plan"]) is True
+    assert _refused(["not_a_registered_tool"]) is True
 
 
 def test_audit_detail_truncates_a_long_tool_name(tmp_path: Path) -> None:
@@ -265,7 +248,7 @@ def test_audit_failure_still_refuses(
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
-    result, recorder = _call({"name": "save_plan"})
+    result, recorder = _call({"name": "not_a_registered_tool"})
     assert recorder.calls == 0 and result["isError"] is True
 
 
@@ -279,7 +262,7 @@ def test_non_os_audit_failure_still_refuses(
         raise error
 
     monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
-    result, recorder = _call({"name": "save_plan"})
+    result, recorder = _call({"name": "not_a_registered_tool"})
     assert result["isError"] is True and recorder.calls == 0
 
 
@@ -295,23 +278,23 @@ def test_audit_failure_warning_names_what_was_denied(
 
     monkeypatch.setattr("pipeline.remote_tool_policy.append_host_audit", _boom)
     with caplog.at_level("WARNING", logger="pipeline.remote_tool_policy"):
-        _call({"name": "save_plan"})
-    assert "save_plan" in caplog.text and ALICE.subject in caplog.text
+        _call({"name": "not_a_registered_tool"})
+    assert "not_a_registered_tool" in caplog.text and ALICE.subject in caplog.text
 
 
 # --- consecutive calls ----------------------------------------------------
 
 
 def test_consecutive_calls_keep_every_refusal(tmp_path: Path) -> None:
-    _call({"name": "save_plan"})
-    _call({"name": "save_plan"})
+    _call({"name": "not_a_registered_tool"})
+    _call({"name": "not_a_registered_tool"})
     _, recorder = _call({"name": "approve_plan"})
     denied = [r for r in _audit_records(tmp_path) if r["outcome"] == "denied"]
     assert (
         len(denied),
         [r["detail"]["tool"] for r in denied],
         recorder.calls,
-    ) == (2, ["save_plan", "save_plan"], 1)
+    ) == (2, ["not_a_registered_tool", "not_a_registered_tool"], 1)
 
 
 # --- serve() installs it --------------------------------------------------

@@ -17,8 +17,9 @@ The contract pinned here:
 * the grant stays additive: the local operator still answers everywhere,
   including on a plan someone else owns, and a plan with no owner simply falls
   through to the role rule;
-* ownership still grants nothing beyond the four actions it governs -- it is
-  not a general "may do anything on my plan";
+* ownership still grants nothing beyond the ten plan-scoped actions it governs
+  (ADR 0009 amendment 2026-10-30) -- it is not a general "may do anything on my
+  plan";
 * end to end through the dashboard, an owner's answer is recorded, a stranger's
   is refused with no decision written, and that refusal leaves no state behind
   for the next caller.

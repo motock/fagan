@@ -411,7 +411,6 @@ def test_compose_entrypoint_defers_shell_expansion_to_the_container() -> None:
         "$$registry",
         "$${PIPELINE_MCP_CLIENT_SECRET:-}",
         "$${PIPELINE_SCRIPTED_MODEL:-0}",
-        "$${PIPELINE_SCHEDULER_DAEMON:-0}",
     ):
         assert escaped in text, (
             f"deploy/compose.yaml must escape {escaped!r} for the container shell; "

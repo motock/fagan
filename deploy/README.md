@@ -85,6 +85,7 @@ public hostname through with the default `$host` form gets a 403.
 | `PIPELINE_MCP_ALLOWED_HOSTS` | unset | Comma-separated allowlist enabling DNS-rebinding protection for a proxied deployment. Set it whenever the container sits behind a reverse proxy. |
 | `PLAN_DIR` | `/var/lib/pipeline/plans` | Where plans and decision files live. |
 | `WORKTREE_ROOT` | `/var/lib/pipeline/worktrees` | Where per-plan git worktrees live. |
+| `PIPELINE_SCHEDULER_DAEMON` | `1` | Whether the entrypoint starts `python -m pipeline.scheduler_daemon` and supervises it alongside the dashboard and the MCP transport. Any value other than `0` or `1` is a start failure. Set `0` to run exactly one daemon outside the container instead (one daemon per `PLAN_DIR`). |
 
 The client secret is a **mounted file**, never an environment value:
 environment variables are visible to `docker inspect` and to every process in
@@ -249,9 +250,10 @@ The stack-specific startup lives in the `pipeline` service's `entrypoint:` in
 2. it writes a model registry that maps every model role onto the scripted
    server, because selecting a model is a registry fact the pipeline validates,
    not an environment-only switch;
-3. it starts the scheduler daemon, the only durable event-bus consumer
-   (ADR 0010), then `exec`s the image entrypoint, so signals and exit status pass
-   through unchanged.
+3. it `exec`s the image entrypoint, so signals and exit status pass through
+   unchanged; the image entrypoint in turn starts and supervises the scheduler
+   daemon, the only durable event-bus consumer (ADR 0010), alongside the
+   dashboard and the MCP transport.
 
 The git origin is the one piece of state that must survive a restart, and its
 bootstrap deliberately lives in `deploy/smoke/smoke.sh` (`origin-seed`) rather

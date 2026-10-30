@@ -1,7 +1,8 @@
 #!/bin/sh
-# Container entrypoint: dashboard + remote MCP transport in one process tree.
+# Container entrypoint: dashboard, remote MCP transport and scheduler daemon in
+# one process tree.
 #
-# Both processes are children of this script, and the script runs until one of
+# All processes are children of this script, and the script runs until one of
 # them exits. That matters for orchestration: a container whose entrypoint has
 # returned looks healthy to a supervisor while a half of the service is gone.
 #
@@ -29,6 +30,7 @@ PIPELINE_MCP_TRANSPORT="${PIPELINE_MCP_TRANSPORT:-streamable-http}"
 PIPELINE_IDENTITY_PROVIDER="${PIPELINE_IDENTITY_PROVIDER:-oidc}"
 PIPELINE_OIDC_CLIENT_SECRET_FILE="${PIPELINE_OIDC_CLIENT_SECRET_FILE:-/run/secrets/oidc_client_secret}"
 PIPELINE_POLICY_ENFORCE="${PIPELINE_POLICY_ENFORCE:-1}"
+PIPELINE_SCHEDULER_DAEMON="${PIPELINE_SCHEDULER_DAEMON:-1}"
 
 export DASHBOARD_HOST DASHBOARD_PORT
 export PIPELINE_MCP_HOST PIPELINE_MCP_PORT PIPELINE_MCP_TRANSPORT
@@ -58,6 +60,14 @@ fi
 [ "$PIPELINE_MCP_TRANSPORT" = "streamable-http" ] \
     || die "PIPELINE_MCP_TRANSPORT must be streamable-http in this image"
 
+# Fail closed before any child starts: an unrecognised value would silently
+# pick one of the two behaviours, and "the scheduler is not running" is not a
+# state a deployment should discover later.
+case "$PIPELINE_SCHEDULER_DAEMON" in
+    0|1) ;;
+    *) die "PIPELINE_SCHEDULER_DAEMON must be 0 or 1" ;;
+esac
+
 # Mutable state must be on the volume, or plans and worktrees vanish with the
 # container. Refuse to start on a read-only or missing PLAN_DIR.
 for dir in "${PLAN_DIR:-/var/lib/pipeline/plans}" "${WORKTREE_ROOT:-/var/lib/pipeline/worktrees}"; do
@@ -74,9 +84,21 @@ log "starting MCP transport ${PIPELINE_MCP_TRANSPORT} on ${PIPELINE_MCP_HOST}:${
 python app/pipeline_mcp_server.py &
 mcp_pid=$!
 
+# The scheduler daemon is the only durable event-bus consumer (ADR 0010), so it
+# runs here rather than in an orchestration shim: a container supervisor sees
+# one process tree, and a daemon that dies takes the container down with it.
+# PIPELINE_SCHEDULER_DAEMON=0 runs it outside the image instead.
+scheduler_pid=
+if [ "$PIPELINE_SCHEDULER_DAEMON" = "1" ]; then
+    log "starting scheduler daemon"
+    python -m pipeline.scheduler_daemon &
+    scheduler_pid=$!
+fi
+
 shutdown() {
     log "shutting down"
-    kill -TERM "$dashboard_pid" "$mcp_pid" 2>/dev/null || true
+    # shellcheck disable=SC2086  # unquoted on purpose: an empty pid must vanish
+    kill -TERM "$dashboard_pid" "$mcp_pid" $scheduler_pid 2>/dev/null || true
 }
 trap shutdown INT TERM
 
@@ -95,11 +117,20 @@ while :; do
         wait "$mcp_pid" || status=$?
         break
     fi
+    if [ -n "$scheduler_pid" ] && ! kill -0 "$scheduler_pid" 2>/dev/null; then
+        log "scheduler daemon exited"
+        wait "$scheduler_pid" || status=$?
+        break
+    fi
     sleep 1
 done
 
-# Reap the sibling so no orphan keeps the port.
-kill -TERM "$dashboard_pid" "$mcp_pid" 2>/dev/null || true
+# Reap the siblings so no orphan keeps the port or the daemon lock.
+# shellcheck disable=SC2086  # unquoted on purpose: an empty pid must vanish
+kill -TERM "$dashboard_pid" "$mcp_pid" $scheduler_pid 2>/dev/null || true
 wait "$dashboard_pid" 2>/dev/null || true
 wait "$mcp_pid" 2>/dev/null || true
+if [ -n "$scheduler_pid" ]; then
+    wait "$scheduler_pid" 2>/dev/null || true
+fi
 exit "$status"

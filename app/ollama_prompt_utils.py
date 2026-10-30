@@ -48,7 +48,19 @@ def _is_declared_tag(model: str, provider: str) -> bool:
         registry = role_registry.load_registry()
     except (role_registry.RoleRegistryError, OSError, ValueError):
         return False
-    models = registry.get("providers", {}).get(provider, {}).get("models", {})
+    # load_registry() only validates JSON syntax and role->provider/model
+    # references, so check the container shapes before indexing: a
+    # structurally odd registry must degrade to False, not raise
+    # AttributeError/TypeError into the dispatch path.
+    providers = registry.get("providers") if isinstance(registry, dict) else None
+    if not isinstance(providers, dict):
+        return False
+    provider_cfg = providers.get(provider)
+    if not isinstance(provider_cfg, dict):
+        return False
+    models = provider_cfg.get("models")
+    if not isinstance(models, dict):
+        return False
     return any(
         isinstance(spec, dict) and spec.get("tag") == model
         for spec in models.values()

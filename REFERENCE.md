@@ -2510,6 +2510,7 @@ configured.
 | `PIPELINE_MCP_HOST` | `127.0.0.1` | Interface the endpoint binds to. The loopback default keeps the server off the network unless you change it. |
 | `PIPELINE_MCP_PORT` | `8000` | Port the endpoint binds to. Must be an integer in `1`–`65535`, otherwise the process stops at startup. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | *(unset)* | Comma-separated list of `Host` values the endpoint accepts. Unset means the MCP SDK's own loopback-only check, which is all a loopback bind needs. Set it to a name such as `mcp.example.com` (or `mcp.example.com:*` to accept any port) when a reverse proxy forwards a public name: DNS-rebinding protection stays on, restricted to this list. |
+| `PIPELINE_MCP_RESOURCE_URL` | *(unset)* | The public URL of this MCP endpoint as a client sees it, e.g. `https://pipeline.example.com/mcp`. Setting it publishes RFC 9728 protected-resource metadata and points the `401` challenge at it, which is what lets a client (Claude Code checks RFC 9728 before RFC 8414) discover the authorization server and start its login flow. It must be an absolute `https://` URL with no query, fragment or userinfo; anything else — `http://`, a relative path, `?x`, `user@host` — stops the transport at startup. Unset means no metadata is published and the transport behaves exactly as it did before. |
 | `PIPELINE_MCP_AUTH_FAIL_PER_MIN` | `10` | Failed authentications allowed per client address per minute before the gate answers `429`. The key is the address resolved under `PIPELINE_MCP_TRUSTED_PROXIES`, never a wider network block: carrier NAT and corporate `/24`s put unrelated callers in one block, so a block key would let one caller throttle its neighbours. `0` disables the bucket. Any other value — negative, non-integer, or non-canonical such as `+10` — stops the transport at startup. |
 | `PIPELINE_MCP_REQUESTS_PER_MIN` | `120` | Requests allowed per authenticated subject per minute before the gate answers `429`. `0` disables the bucket. Any other value — negative, non-integer, or non-canonical such as `+120` — stops the transport at startup. |
 | `PIPELINE_MCP_MAX_BUCKETS` | `4096` | Maximum live buckets kept per limiter. Past the bound, refilled buckets are dropped and new keys are left untracked — never refused, so filling the map cannot deny service to other callers. Raise it for a deployment with more distinct clients per minute than this. Must be a positive integer: `0` is refused at startup, as is any non-integer or non-canonical value. |
@@ -2541,17 +2542,32 @@ carries:
 | Header | Value |
 | --- | --- |
 | `X-Correlation-ID` | The request's correlation id, echoed on success too. |
-| `WWW-Authenticate` | `Bearer` — RFC 6750 requires a challenge from a bearer-protected resource. |
+| `WWW-Authenticate` | `Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource<resource path>"` when `PIPELINE_MCP_RESOURCE_URL` is set, plain `Bearer` when it is not — RFC 6750 requires a challenge from a bearer-protected resource, and RFC 9728 lets the challenge name where the metadata lives. With `PIPELINE_MCP_RESOURCE_URL=https://pipeline.example.com/mcp` the value is `Bearer resource_metadata="https://pipeline.example.com/.well-known/oauth-protected-resource/mcp"`. |
 | `Cache-Control` | `no-store`. |
 
-The gate's behaviour is fixed, not configurable, and an operator should expect
-all of it:
+The gate's behaviour is fixed, not configurable — with one deliberate exception,
+the `PIPELINE_MCP_RESOURCE_URL` metadata described below — and an operator
+should expect all of it:
 
 - Only `lifespan` scopes bypass authentication (uvicorn sends one during
   startup, and answering it with `401` would stop the app booting). Any other
   non-`http` scope is closed without reaching the wrapped app; a `websocket`
   scope is closed with code `1008` rather than answered, because a WebSocket
   route on the mounted app would otherwise be reachable unauthenticated.
+- The only unauthenticated route is the RFC 9728 protected-resource metadata
+  document, and only when `PIPELINE_MCP_RESOURCE_URL` is set. A `GET` of
+  `/.well-known/oauth-protected-resource` — or of that path plus the resource
+  URL's own path (`/.well-known/oauth-protected-resource/mcp` for
+  `https://pipeline.example.com/mcp`, the RFC 9728 section 3.1 path-suffixed
+  form) — is answered `200 application/json` without a token, because a client
+  reads it to find out where to log in. The document names the resource, the
+  `PIPELINE_OIDC_ISSUER` as its authorization server, and
+  `bearer_methods_supported: ["header"]` with `scopes_supported: ["openid"]`.
+  Any other method on that path is answered `405`. The answer is not counted
+  against the failed-authentication bucket and writes no audit record: it is
+  public, unchanging, and a client may poll it before it has a token. With the
+  variable unset the path gets no special treatment and falls through to the
+  ordinary `401`, so the surface with metadata disabled is exactly what it was.
 - A request carrying more than one `Authorization` header is denied, not
   resolved to one value. A reverse proxy that appends instead of replacing
   could otherwise let the proxy validate one token while this gate validates

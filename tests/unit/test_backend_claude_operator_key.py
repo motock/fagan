@@ -27,6 +27,9 @@ _ENV_VARS_TO_RESET = (
     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
     "PIPELINE_ANTHROPIC_API_KEY", "PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    # Credentials the CLI itself never uses (see _AGENT_UNUSED_SECRETS).
+    "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
+    "OLLAMA_API_KEY", "PIPELINE_MODEL_REGISTRY_PATH",
 )
 
 # Prints the child's environment *variable names only* -- never a value --
@@ -161,6 +164,7 @@ def test_spawn_harness_child_env_carries_converted_key_only(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("GH_TOKEN", "ghs-secret")
     monkeypatch.setenv("PIPELINE_EXEC_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_SANDBOX", "none")
 
@@ -189,6 +193,60 @@ def test_spawn_harness_child_env_carries_converted_key_only(
     assert names, "child process did not report its environment"
     assert "ANTHROPIC_API_KEY" in names
     assert "PIPELINE_ANTHROPIC_API_KEY" not in names
+    assert "GH_TOKEN" not in names
+
+
+# Credentials the `claude` CLI itself never uses. Its Bash tool is
+# model-driven, so a prompt-injected agent could read any of them out of the
+# child's /proc/self/environ: forge write access, or the operator's Ollama
+# account. Asserted by membership only where the denylist is concerned -- the
+# frozenset is cumulative and this story must not pin its exact contents.
+_AGENT_UNUSED_SECRETS = (
+    "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
+    "OLLAMA_API_KEY",
+)
+
+
+@pytest.mark.parametrize("var", _AGENT_UNUSED_SECRETS)
+def test_should_drop_credential_the_cli_never_uses(monkeypatch, var):
+    monkeypatch.setenv(var, "secret-value")
+    monkeypatch.setenv("PIPELINE_MODEL_REGISTRY_PATH", "/tmp/registry.json")
+
+    env = _first_party_claude_env()
+
+    assert var not in env
+
+
+def test_should_keep_non_secret_variable(monkeypatch):
+    monkeypatch.setenv("PIPELINE_MODEL_REGISTRY_PATH", "/tmp/registry.json")
+
+    env = _first_party_claude_env()
+
+    assert env["PIPELINE_MODEL_REGISTRY_PATH"] == "/tmp/registry.json"
+
+
+@pytest.mark.parametrize("var", _AGENT_UNUSED_SECRETS)
+def test_agent_secret_denylist_covers_credential(monkeypatch, var):
+    """Defence in depth: the agent denylist must carry the same names."""
+    assert var in execution._AGENT_SECRET_ENV
+
+
+def test_denylist_covers_the_operator_key_carrier():
+    """Membership only: the frozenset is cumulative, never pinned exactly."""
+    assert "PIPELINE_ANTHROPIC_API_KEY" in execution._AGENT_SECRET_ENV
+
+
+@pytest.mark.parametrize("var", _AGENT_UNUSED_SECRETS
+                         + ("PIPELINE_ANTHROPIC_API_KEY",))
+def test_local_agent_env_strips_names_from_inherited_environ(
+    monkeypatch, var
+):
+    """Grades the wiring, not just the constant: `None` means inherit."""
+    monkeypatch.setenv(var, "secret-value")
+
+    child_env = execution._local_agent_env(None)
+
+    assert var not in child_env
 
 
 def test_should_leave_oauth_token_alone_when_api_key_also_set(monkeypatch):

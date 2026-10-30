@@ -36,6 +36,18 @@ _CLAUDE_PROVIDER_REDIRECT_VARS = (
 )
 
 
+# Credentials the `claude` CLI never uses itself, but which a dispatched agent
+# (whose Bash tool is model-driven) could exfiltrate from the child's
+# environment to gain forge write access or the operator's model account.
+# Kept in sync with pipeline.execution._AGENT_SECRET_ENV, which strips them
+# from every agent child; this list covers the `claude` subprocess env too so
+# neither path leaks them.
+_CLAUDE_AGENT_UNUSED_SECRETS = (
+    "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
+    "OLLAMA_API_KEY",
+)
+
+
 def _validated_operator_key() -> str:
     """The operator's mounted Anthropic key, or "" when none is configured.
 
@@ -85,9 +97,18 @@ def _first_party_claude_env() -> dict:
     # the mounted secret name must not travel with it.
     # CLAUDE_CODE_OAUTH_TOKEN is not a redirect var and passes through as-is;
     # when both are mounted, CLI precedence (not this function) picks the
-    # account/billing identity, so operators must mount exactly one.
+    # account/billing identity, so operators must mount exactly one. Those two
+    # (ANTHROPIC_API_KEY above, CLAUDE_CODE_OAUTH_TOKEN here) ARE the CLI's own
+    # authentication and are the only credentials it needs.
+    # The forge tokens below are a different exposure: the CLI itself needs
+    # none of them, but its Bash tool is model-driven, so a prompt-injected
+    # agent could read them out of the child's /proc/self/environ and get
+    # forge write access (or the operator's Ollama account). Dropped here as
+    # well as in the agent denylist -- belt and braces, same SEC-2 class.
     operator_key = _validated_operator_key()
     env.pop("PIPELINE_ANTHROPIC_API_KEY", None)
+    for var in _CLAUDE_AGENT_UNUSED_SECRETS:
+        env.pop(var, None)
     if operator_key:
         env["ANTHROPIC_API_KEY"] = operator_key
     return env

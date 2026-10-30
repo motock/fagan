@@ -220,6 +220,13 @@ _AGENT_SECRET_ENV = frozenset({
     "GITLAB_TOKEN",
     "GLAB_TOKEN",
     "CI_JOB_TOKEN",
+    # The operator's mounted Anthropic key (the claude driver converts it to
+    # ANTHROPIC_API_KEY and drops this carrier) and the Ollama key: a
+    # prompt-injected agent must never see the raw mounted secret name nor a
+    # second provider credential. Defence in depth behind the driver's own
+    # strip, so neither path leaks it.
+    "PIPELINE_ANTHROPIC_API_KEY",
+    "OLLAMA_API_KEY",
 })
 
 

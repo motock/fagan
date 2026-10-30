@@ -40,6 +40,16 @@ def test_stranger_is_denied_plan_scoped_action(action: Action) -> None:
     assert LocalPolicy().allow(mallory, action, OWNED_PLAN) is False
 
 
+@pytest.mark.parametrize("action", PLAN_SCOPED_ACTIONS)
+def test_ownerless_plan_denies_plan_scoped_action(action: Action) -> None:
+    # The `resource.owner and` guard: a pre-OWN-01 plan with no owner keeps
+    # today's behaviour, so ownership can never be claimed by a principal whose
+    # subject happens to match an empty owner.
+    alice = Principal(subject="alice", auth_method="oidc")
+
+    assert LocalPolicy().allow(alice, action, Resource(plan="p", owner="")) is False
+
+
 def test_host_scoped_config_write_is_denied_to_oidc_principal() -> None:
     alice = Principal(subject="alice", auth_method="oidc")
 

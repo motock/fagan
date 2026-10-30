@@ -262,6 +262,46 @@ worktree) and a closer read of the code changed these drafts:
   `story_status.py` is untouched. Stories over the cap wait for a later tick
   in no particular order.
 
+## Repair after the first dispatch round (2026-10-30)
+
+Six stories were dispatched and four of the six that came back did so on the
+scope gate rather than on their code. In every case the branch's own work was
+green (full suite and `ruff` both clean) and the flagged path was work the
+brief needed, so the defect was in the declared scope, not in the story:
+
+- SA-01 needed `app/dashboard_routes.py`: the dashboard's `GET /api/config`
+  route calls the same `_get_effective_config_impl` and is reachable by a
+  remote (OIDC) session, so it leaks `env` and `sources` by the same path.
+- SA-08 needed `deploy/Dockerfile` and `deploy/lib/operator_env.sh` (widened
+  earlier the same day, after three rework cycles had already been spent).
+- SA-09's attempt also edited `pipeline/execution.py` to add the new secret
+  name to `_AGENT_SECRET_ENV`. It reverted that correctly and deferred it; the
+  remaining work is defense in depth, not a defect.
+- SA-00 was unwinnable by construction: the scope gate ordered the agent to
+  revert `docs/specs/IDENTITY_AND_POLICY.md`, and the reviewer then blocked
+  because that canonical spec pins the five-action boundary and was stale. The
+  branch spent four of its seven commits oscillating between the two.
+
+Three changes follow, and they apply to every story in the plan:
+
+1. `files` widened to where the code actually lives: SA-00 gains
+   `docs/specs/IDENTITY_AND_POLICY.md`, with the two passages to rewrite
+   (the `LocalPolicy` table row and the prose block listing the five actions)
+   named in its brief; SA-01 gains `app/dashboard_routes.py` with a
+   "SCOPE IS DECIDED, NOT A FINDING" note.
+2. Every brief now ends with the scope-conflict escape: an agent that needs an
+   undeclared production path ends its turn with
+   `SCOPE_CONFLICT: <path> :: <why>`, which triage's `amend_scope` reads,
+   instead of reverting the edit and re-adding it on the next attempt.
+3. Auto-escalation is off (`PIPELINE_AUTO_ESCALATE=off`). `_escalation_target()`
+   resolves through `roles.dispatch`, which is the same
+   `ollama / deepseek-v4.1-flash:cloud` the story had just failed on, so every
+   escalation re-ran the same model against the same finding.
+
+SA-01 and SA-08 also had their rework and triage counters reset: their verdicts
+were recorded against the narrow scope, and `REWORK_MAX_ATTEMPTS` would
+otherwise have parked them on the first review under the corrected one.
+
 ## Order
 
 As ingested: SA-00, SA-01, SA-04, SA-07, SA-08, SA-09, SA-10, SA-12, SA-13,

@@ -1,5 +1,5 @@
-"""Tests for pipeline/repo_clone.py: URL parsing, managed paths, clone/fetch
-and token handling.
+"""Tests for pipeline/repo_clone.py: URL parsing, managed paths, clone/fetch,
+pinning, token handling and the security properties the module promises.
 
 Every test passes an explicit ``environ`` dict instead of mutating
 ``os.environ``; the suite runs them in parallel and a leaked PIPELINE_* var
@@ -14,11 +14,13 @@ import logging
 import os
 import subprocess
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
 
 from pipeline.repo_clone import (
+    ClonedRepo,
     RepoCloneError,
     RepoUrlError,
     _askpass,
@@ -89,6 +91,15 @@ def _token_file(tmp_path: Path, mode: int = 0o600) -> Path:
     return token
 
 
+def _fake_subprocess(handler) -> types.SimpleNamespace:
+    """A stand-in for the ``subprocess`` module as seen by repo_clone."""
+    return types.SimpleNamespace(
+        run=handler,
+        TimeoutExpired=subprocess.TimeoutExpired,
+        CompletedProcess=subprocess.CompletedProcess,
+    )
+
+
 # --- parse_repo_url: acceptances -------------------------------------------
 
 
@@ -143,6 +154,14 @@ REJECTED_URLS = [
     "https://github.com:abc/o/r",
     "https://github.com/o/%2e%2e",
     "https://github.com//r",
+    # Embedded whitespace/control characters. urlsplit() drops CR/LF/TAB, so
+    # without an explicit check the string that is validated differs from the
+    # string git would be handed.
+    "https://github.com/o/r\n",
+    "https://github.com/o/\tr",
+    "https://github.com/o/r\r\n",
+    " https://github.com/o/r",
+    "https://github.com/o/r\x00",
     "",
 ]
 
@@ -168,6 +187,20 @@ def test_parse_repo_url_accepts_file_url_only_with_allowance(bare_repo) -> None:
     )
     with pytest.raises(RepoUrlError):
         parse_repo_url(url, environ={"PIPELINE_REPO_URL_ALLOW_FILE": "0"})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///../../etc/widget.git",
+        "file:///tmp/../..//evil.git",
+        "file://relative/path/acme/widget.git",
+        "file:///tmp/acme/widget",
+    ],
+)
+def test_parse_repo_url_rejects_traversing_file_urls(url: str) -> None:
+    with pytest.raises(RepoUrlError):
+        parse_repo_url(url, environ={"PIPELINE_REPO_URL_ALLOW_FILE": "1"})
 
 
 # --- managed_path ----------------------------------------------------------
@@ -217,19 +250,78 @@ def test_ensure_clone_clones_then_fetches(tmp_path: Path, bare_repo) -> None:
 
     target = ensure_clone(url, environ=env)
 
+    assert isinstance(target, ClonedRepo)
     assert target == root / "local" / "acme" / "widget"
     assert (target / ".git").is_dir()
     assert _rev("HEAD", target) == first_sha
+    assert target.commit == first_sha
 
     work = tmp_path / "seed-work"
     second_sha = _push(work, "second.txt", "second")
     assert second_sha != first_sha
 
     assert ensure_clone(url, environ=env) == target
-    # fetch moves the remote-tracking ref; the checked-out tree intentionally
-    # stays at the first commit (no pull/checkout is performed).
+    # ``fetch`` moves the remote-tracking ref, and the worktree is then pinned
+    # onto the fetched commit so a caller cannot read stale or swapped content.
     assert _rev("origin/main", target) == second_sha
+    assert _rev("HEAD", target) == second_sha
+    assert (target / "second.txt").is_file()
+    assert ensure_clone(url, environ=env).commit == second_sha
     assert (bare / "refs" / "heads" / "main").is_file()
+
+
+def test_ensure_clone_removes_untracked_files_from_the_worktree(
+    tmp_path: Path, bare_repo
+) -> None:
+    url, _, _ = bare_repo
+    env = _env(tmp_path / "repos")
+    target = ensure_clone(url, environ=env)
+    injected = target / "injected.py"
+    injected.write_text("print('agent written')\n")
+
+    ensure_clone(url, environ=env)
+
+    assert not injected.exists()
+
+
+def test_ensure_clone_refuses_symlinked_git_directory(
+    tmp_path: Path, bare_repo
+) -> None:
+    url, _, bare = bare_repo
+    root = tmp_path / "repos"
+    target = root / "local" / "acme" / "widget"
+    target.mkdir(parents=True)
+    (target / ".git").symlink_to(bare, target_is_directory=True)
+
+    with pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=_env(root))
+
+
+def test_ensure_clone_refuses_directory_without_git(tmp_path: Path, bare_repo) -> None:
+    url, _, _ = bare_repo
+    root = tmp_path / "repos"
+    target = root / "local" / "acme" / "widget"
+    target.mkdir(parents=True)
+    (target / "leftover.txt").write_text("not a clone\n")
+
+    with pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=_env(root))
+
+
+def test_ensure_clone_refuses_substituted_origin(tmp_path: Path) -> None:
+    first_bare = tmp_path / "bare" / "acme" / "widget.git"
+    _seed_bare(first_bare, tmp_path / "seed-one", message="one")
+    second_bare = tmp_path / "other" / "acme" / "widget.git"
+    _seed_bare(second_bare, tmp_path / "seed-two", message="two")
+    root = tmp_path / "repos"
+    env = _env(root)
+    url = f"file://{first_bare}"
+    target = ensure_clone(url, environ=env)
+
+    _git("remote", "set-url", "origin", str(second_bare), cwd=target)
+
+    with pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=env)
 
 
 # --- credentials -----------------------------------------------------------
@@ -264,6 +356,20 @@ def test_token_never_reaches_git_config_or_logs(
     assert FAKE_TOKEN not in caplog.text
 
 
+def test_token_file_that_is_not_a_regular_file_is_refused(
+    tmp_path: Path, bare_repo
+) -> None:
+    url, _, _ = bare_repo
+    fifo = tmp_path / "token-fifo"
+    os.mkfifo(fifo)
+    fifo.chmod(0o600)
+    env = _env(tmp_path / "repos", PIPELINE_GIT_TOKEN_FILE=str(fifo))
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+    assert "PIPELINE_GIT_TOKEN_FILE" in str(excinfo.value)
+
+
 def test_askpass_temp_dirs_are_cleaned_up_even_on_failure(
     tmp_path: Path, bare_repo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -290,6 +396,43 @@ def test_askpass_temp_dirs_are_cleaned_up_even_on_failure(
     assert [path for path in created if path.exists()] == []
 
 
+def test_git_child_does_not_inherit_pipeline_secrets(
+    tmp_path: Path, bare_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline import repo_clone
+
+    url, _, _ = bare_repo
+    token = _token_file(tmp_path, 0o600)
+    env = _env(
+        tmp_path / "repos",
+        PIPELINE_GIT_TOKEN_FILE=str(token),
+        PLANE_API_KEY="plane-secret",
+        PIPELINE_DASHBOARD_API_KEY="dashboard-secret",
+        ANTHROPIC_API_KEY="anthropic-secret",
+    )
+    seen: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((list(argv), dict(kwargs.get("env") or {})))
+        return subprocess.CompletedProcess(argv, 0, stdout="deadbeef" * 5, stderr="")
+
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
+
+    ensure_clone(url, environ=env)
+
+    assert seen, "ensure_clone must run git"
+    for argv, child_env in seen:
+        assert "PLANE_API_KEY" not in child_env
+        assert "PIPELINE_DASHBOARD_API_KEY" not in child_env
+        assert "ANTHROPIC_API_KEY" not in child_env
+        assert child_env["GIT_TERMINAL_PROMPT"] == "0"
+        assert child_env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert child_env["GIT_ASKPASS"].endswith("askpass.sh")
+        assert child_env["PIPELINE_GIT_TOKEN_FILE"] == str(token)
+        assert FAKE_TOKEN not in " ".join(argv)
+        assert FAKE_TOKEN not in " ".join(child_env.values())
+
+
 # --- failure handling ------------------------------------------------------
 
 
@@ -311,6 +454,38 @@ def test_clone_failure_raises_repo_clone_error_without_token(
     assert "ghp_" not in caplog.text
 
 
+def test_clone_failure_log_sanitises_credentials_in_stderr(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline import repo_clone
+
+    env = _env(tmp_path / "repos")
+    stderr = (
+        f"fatal: could not read Username for 'https://{FAKE_TOKEN}@github.com': "
+        "terminal prompts disabled\nsecond line\n"
+    )
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 128, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone("https://github.com/o/r", environ=env)
+
+    message = str(excinfo.value)
+    assert "clone" in message
+    assert "https://github.com/o/r" in message
+    assert FAKE_TOKEN not in message
+    failures = [r for r in caplog.records if getattr(r, "event", "") == "repo_git_failure"]
+    assert failures, "a failed git command must be logged at WARN"
+    logged = failures[0].stderr
+    assert "https://***@github.com" in logged
+    assert FAKE_TOKEN not in logged
+    assert "\n" not in logged  # only git's first stderr line is logged
+    assert FAKE_TOKEN not in caplog.text
+
+
 def test_failed_clone_can_be_retried_then_fetches(tmp_path: Path) -> None:
     root = tmp_path / "repos"
     bare = tmp_path / "bare" / "acme" / "late.git"
@@ -318,44 +493,43 @@ def test_failed_clone_can_be_retried_then_fetches(tmp_path: Path) -> None:
     env = _env(root)
 
     with pytest.raises(RepoCloneError):
-        ensure_clone(url, environ=env)
-    target = root / "local" / "acme" / "late"
-    assert not (target / ".git").exists()
+        ensure_clone(url, environ=env)  # clone branch fails: no bare repo yet
 
-    first_sha = _seed_bare(bare, tmp_path / "late-work")
-    assert ensure_clone(url, environ=env) == target
-    assert _rev("HEAD", target) == first_sha
+    first_sha = _seed_bare(bare, tmp_path / "seed-work")
+    target = ensure_clone(url, environ=env)  # still the clone branch
+    assert target == root / "local" / "acme" / "late"
+    assert target.commit == first_sha
 
-    second_sha = _push(tmp_path / "late-work", "second.txt", "second")
-    assert ensure_clone(url, environ=env) == target
-    assert _rev("origin/main", target) == second_sha
+    second_sha = _push(tmp_path / "seed-work", "second.txt", "second")
+    assert ensure_clone(url, environ=env).commit == second_sha  # fetch branch
 
 
 def test_git_timeout_becomes_repo_clone_error(
-    tmp_path: Path, bare_repo, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    url, _, _ = bare_repo
+    from pipeline import repo_clone
 
-    def _timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+    def slow_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
 
-    monkeypatch.setattr("pipeline.repo_clone.subprocess.run", _timeout)
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(slow_run))
+
     with pytest.raises(RepoCloneError) as excinfo:
-        ensure_clone(url, environ=_env(tmp_path / "repos"), timeout=1)
+        ensure_clone(
+            "https://github.com/o/r", environ=_env(tmp_path / "repos"), timeout=5
+        )
     assert "timed out" in str(excinfo.value)
 
 
 def test_missing_git_binary_becomes_repo_clone_error(
-    tmp_path: Path, bare_repo, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    url, _, _ = bare_repo
-
     def _not_found(*args, **kwargs):
-        raise FileNotFoundError(2, "No such file or directory: 'git'")
+        raise FileNotFoundError("git")
 
     monkeypatch.setattr("pipeline.repo_clone.subprocess.run", _not_found)
     with pytest.raises(RepoCloneError):
-        ensure_clone(url, environ=_env(tmp_path / "repos"))
+        ensure_clone("https://github.com/o/r", environ=_env(tmp_path / "repos"))
 
 
 def test_sanitize_redacts_credentials_in_https_urls() -> None:
@@ -372,13 +546,17 @@ def test_sanitize_redacts_credentials_in_https_urls() -> None:
 
 
 def test_askpass_script_answers_username_then_token(tmp_path: Path) -> None:
-    env = {"PIPELINE_GIT_TOKEN_FILE": str(_token_file(tmp_path, 0o600))}
-    with _askpass(env) as auth_env:
+    token = _token_file(tmp_path, 0o600)
+    with _askpass(token) as auth_env:
         script = Path(auth_env["GIT_ASKPASS"])
         assert script.stat().st_mode & 0o077 == 0
         assert auth_env["GIT_TERMINAL_PROMPT"] == "0"
-        assert auth_env["PIPELINE_GIT_ASKPASS_TOKEN"] == FAKE_TOKEN
-        child_env = dict(os.environ, **auth_env)
+        assert auth_env["PIPELINE_GIT_TOKEN_FILE"] == str(token)
+        # The token itself is never placed in the child environment.
+        assert "PIPELINE_GIT_ASKPASS_TOKEN" not in auth_env
+        assert FAKE_TOKEN not in " ".join(auth_env.values())
+        assert FAKE_TOKEN not in script.read_text()
+        child_env = {"PATH": os.defpath, "PIPELINE_GIT_TOKEN_FILE": str(token)}
         prompt = "Username for 'https://github.com': "
         user = subprocess.run(
             [str(script), prompt],

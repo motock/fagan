@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
+import ipaddress
 import json
 import os
 import ssl
@@ -38,6 +40,7 @@ from pathlib import Path
 DEFAULT_CONFIG_PATH = "~/.config/pipeline/mcp-client.json"
 REQUIRED_KEYS = ("token_url", "client_id", "client_secret")
 REQUEST_TIMEOUT = 8
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
 class ConfigError(Exception):
@@ -48,21 +51,50 @@ class TokenError(Exception):
     """The token endpoint was unreachable, refused, or answered unusably."""
 
 
+def _is_loopback(host):
+    """True only for hosts that cannot leave the machine."""
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _read_private_file(p):
+    """Read the credentials file through a single fd, refusing symlinks and open modes."""
+    unusable = f"config file not found or not a regular file: {p}"
+    try:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        raise ConfigError(unusable) from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ConfigError(unusable)
+        mode = stat.S_IMODE(info.st_mode)
+        if mode & 0o077:
+            raise ConfigError(
+                f"config file must not be group/other accessible (mode {oct(mode)}): {p}"
+            )
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1  # fdopen owns the descriptor now
+            return handle.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def load_config(path, allow_insecure_http):
     """Read and validate the credentials file, returning its three keys."""
     p = Path(path).expanduser()
-    if not p.is_file():
-        raise ConfigError(f"config file not found or not a regular file: {p}")
-
-    mode = stat.S_IMODE(p.stat().st_mode)
-    if mode & 0o077:
-        raise ConfigError(
-            f"config file must not be group/other accessible (mode {oct(mode)}): {p}"
-        )
+    raw = _read_private_file(p)
 
     try:
-        data = json.loads(p.read_text())
-    except json.JSONDecodeError:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         raise ConfigError(f"config file is not valid JSON: {p}") from None
     if not isinstance(data, dict):
         raise ConfigError(f"config file must contain a JSON object: {p}")
@@ -72,12 +104,15 @@ def load_config(path, allow_insecure_http):
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"config file is missing a non-empty {key}: {p}")
 
-    if not allow_insecure_http:
-        scheme = urllib.parse.urlsplit(data["token_url"]).scheme.lower()
-        if scheme != "https":
-            raise ConfigError(
-                f"token_url must be https (pass --insecure-http only for tests): {p}"
-            )
+    parts = urllib.parse.urlsplit(data["token_url"])
+    scheme = parts.scheme.lower()
+    # --insecure-http exists for the tests only, so bind it to loopback: a single
+    # flag must not be able to send the Basic credential in cleartext off-host.
+    test_http = allow_insecure_http and scheme == "http" and _is_loopback(parts.hostname)
+    if scheme != "https" and not test_http:
+        raise ConfigError(
+            f"token_url must be https (pass --insecure-http only for tests): {p}"
+        )
 
     return {
         "token_url": data["token_url"],
@@ -95,13 +130,42 @@ def _build_context(cacert):
     return ssl.create_default_context()
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every 3xx.
+
+    urllib would otherwise follow the redirect and resend the ``Authorization:
+    Basic`` header -- the long-lived client secret -- to whatever host the token
+    endpoint names, including across an https->http downgrade.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise TokenError(f"token endpoint redirected (HTTP {code}); refusing to follow")
+
+
+def _build_opener(context):
+    """urllib's normal request stack, minus redirect following."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(),
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(context=context),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        _NoRedirectHandler(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 def fetch_token(config, cacert=None):
     """Request a client-credentials token and return just the token string."""
     context = _build_context(cacert)
 
-    basic = base64.b64encode(
-        f"{config['client_id']}:{config['client_secret']}".encode()
-    ).decode()
+    # RFC 6749 2.3.1: form-urlencode each half before Basic base64 encoding.
+    user = urllib.parse.quote(config["client_id"], safe="")
+    secret = urllib.parse.quote(config["client_secret"], safe="")
+    basic = base64.b64encode(f"{user}:{secret}".encode()).decode()
     request = urllib.request.Request(
         config["token_url"],
         data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
@@ -114,17 +178,24 @@ def fetch_token(config, cacert=None):
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT, context=context) as response:
-            payload = response.read()
+        with _build_opener(context).open(request, timeout=REQUEST_TIMEOUT) as response:
+            payload = response.read(MAX_RESPONSE_BYTES + 1)
+    except TokenError:
+        raise
     except urllib.error.HTTPError as e:
         # Never read or print the body: some IdPs echo the client id/secret.
         raise TokenError(f"token endpoint returned HTTP {e.code}") from None
     except urllib.error.URLError:
         raise TokenError("token endpoint request failed") from None
+    except http.client.HTTPException:
+        # Truncated/garbled responses must still be one-line failures, not tracebacks.
+        raise TokenError("token endpoint response was malformed") from None
 
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise TokenError("token endpoint response is too large")
     try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
+        data = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         raise TokenError("token endpoint response is not valid JSON") from None
     if not isinstance(data, dict):
         raise TokenError("token endpoint response is not a JSON object")

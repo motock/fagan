@@ -41,8 +41,12 @@ class _TokenHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length).decode("utf-8")
         self.server.requests.append({"headers": dict(self.headers), "body": body})
-        payload = json.dumps(self.server.body).encode("utf-8")
+        raw = getattr(self.server, "raw_body", None)
+        payload = raw if raw is not None else json.dumps(self.server.body).encode("utf-8")
         self.send_response(self.server.status)
+        location = getattr(self.server, "location", None)
+        if location:
+            self.send_header("Location", location)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -187,3 +191,90 @@ def test_config_path_from_environment(token_server, tmp_path, monkeypatch, capsy
 
     assert helper.main(["--insecure-http"]) == 0
     assert capsys.readouterr().out == '{"Authorization": "Bearer tok-123"}\n'
+
+
+def test_non_utf8_response_body_fails_with_one_line(token_server, tmp_path, capsys):
+    """A non-UTF-8 body must be a one-line exit 1, not a UnicodeDecodeError traceback."""
+    cfg = write_config(tmp_path, token_server.url)
+    token_server.status = 200
+    token_server.raw_body = b'{"access_token": "\xff\xfe"}'
+    helper = load_helper()
+
+    assert helper.main(["--config", str(cfg), "--insecure-http"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len(captured.err.strip().splitlines()) == 1
+
+
+def test_insecure_http_is_refused_for_non_loopback_hosts(tmp_path, capsys):
+    cfg = write_config(tmp_path, "http://idp.example.test/token")
+    helper = load_helper()
+
+    assert helper.main(["--config", str(cfg), "--insecure-http"]) == 2
+    captured = capsys.readouterr()
+    assert "token_url" in captured.err
+    assert captured.out == ""
+    assert "client-secret" not in captured.err
+
+
+class _RecordingHandler(BaseHTTPRequestHandler):
+    """Would hand out a token: it must never be reached after a redirect."""
+
+    def _record_and_answer(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length).decode("utf-8")
+        self.server.requests.append(
+            {"method": self.command, "headers": dict(self.headers), "body": body}
+        )
+        payload = json.dumps({"access_token": "tok-stolen"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    # urllib downgrades a redirected POST to a GET, so both verbs must be
+    # recorded: missing the GET here would hide the credential leak.
+    do_POST = _record_and_answer
+    do_GET = _record_and_answer
+
+    def log_message(self, *args):  # keep pytest output clean
+        pass
+
+
+def test_redirect_is_refused_and_never_reaches_the_other_origin(tmp_path, capsys):
+    """A 302 must be a hard failure: the Basic secret must not reach the target."""
+    sink = HTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    sink.requests = []
+    sink_thread = threading.Thread(target=sink.serve_forever, daemon=True)
+    sink_thread.start()
+
+    origin = HTTPServer(("127.0.0.1", 0), _TokenHandler)
+    origin.status = 302
+    origin.body = {"access_token": "tok-ignored"}
+    origin.location = f"http://127.0.0.1:{sink.server_port}/steal"
+    origin.requests = []
+    origin_thread = threading.Thread(target=origin.serve_forever, daemon=True)
+    origin_thread.start()
+    try:
+        cfg = write_config(
+            tmp_path, f"http://127.0.0.1:{origin.server_port}/token"
+        )
+        helper = load_helper()
+
+        assert helper.main(["--config", str(cfg), "--insecure-http"]) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert len(captured.err.strip().splitlines()) == 1
+        assert "client-secret" not in captured.err
+        assert "client-secret" not in captured.out
+        assert base64.b64encode(b"client-id:client-secret").decode() not in (
+            captured.err
+        )
+        assert len(origin.requests) == 1
+        assert sink.requests == []
+    finally:
+        for server, thread in ((origin, origin_thread), (sink, sink_thread)):
+            server.shutdown()
+            server.server_close()
+            thread.join()

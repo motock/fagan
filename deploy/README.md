@@ -72,6 +72,9 @@ public hostname through with the default `$host` form gets a 403.
 
 | Variable | Default in the image | Meaning |
 | -------- | -------------------- | ------- |
+| `AGENTS_DIR` | `/app/agents` | Where the persona `.md` files live (`COPY ... agents ./agents` under `WORKDIR /app`). Leaving it unset makes `pipeline/paths.py` fall back to `~/.claude/agents`, which does not exist in this image. |
+| `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` | `pipeline` | Author and committer name for the commits the server makes. |
+| `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` | `pipeline@localhost` | Author and committer email for the commits the server makes. |
 | `PIPELINE_MCP_TRANSPORT` | `streamable-http` | HTTP MCP transport. The entrypoint accepts only this value; the stdio server is the other image. |
 | `PIPELINE_IDENTITY_PROVIDER` | `oidc` | Bearer-token verification. `pipeline/remote_transport.py` refuses to open a socket without an OIDC provider, so this must be `oidc`. |
 | `PIPELINE_POLICY_ENFORCE` | `1` | Tool-policy enforcement. The transport also refuses to start with this off. |
@@ -88,6 +91,11 @@ environment variables are visible to `docker inspect` and to every process in
 the container, while a file mount can be rotated and permission-restricted
 independently of the image. `.pipeline.env` in the repo root is the operator
 reference for the remaining (non-secret) settings.
+
+Commits the server makes (the WIP checkpoint commit, plan bookkeeping) carry
+the `GIT_AUTHOR_*` / `GIT_COMMITTER_*` identity above; an operator deploying on
+behalf of a real team should override all four with the same variable names at
+`docker run -e` / compose `environment:`.
 
 ## Volumes
 
@@ -110,6 +118,11 @@ creates its shared-secret file at `.dashboard_api_key` inside the repo root on
 first use, so a root-owned `/app` would make the index route return 500. That
 file is part of the container's writable layer, not of the volume: it is
 regenerated when the container is replaced.
+
+`/app/.venv` is a symlink to `/opt/venv`, not a second virtualenv: the local
+dispatch harness launches `<repo>/.venv/bin/python3`, which inside this image
+is `/app/.venv/bin/python3`, while the virtualenv built by the image lives at
+`/opt/venv`.
 
 ## Health
 

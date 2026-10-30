@@ -40,9 +40,9 @@ publish without consuming. The fetch loops run on the bus's own asyncio loop
 thread, so a consumer shares the connection the bus already owns; no extra
 thread or loop is created here.
 
-Logs name the event type and the handler only. A payload, a plan path or an
-exception's text could carry anything at all, so none of them is formatted into
-a message (Secure-by-Design).
+Logs name the event type, the handler and the failed handler's exception
+*class*. A payload, a plan path or an exception's text could carry anything at
+all, so none of them is formatted into a message (Secure-by-Design).
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ async def _dead_letter(
     if subject is not None:
         _write_dead_letter_record(event_type, plan, event, event_id, attempts)
 
-    logger.error(
+    logger.warning(
         "dead-lettering a %s event: handler %s failed (%s)",
         event_type,
         failed_handler,

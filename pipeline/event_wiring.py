@@ -225,11 +225,12 @@ class DispatchingJsonlEventBus(JsonlEventBus):
             try:
                 handler(event)
             except Exception as exc:  # noqa: BLE001
+                error_type = type(exc).__name__
                 logger.error(
                     "Event handler failed for event type %s (%s)",
                     event.get("type"),
-                    type(exc).__name__,
-                    extra={"error_type": type(exc).__name__},
+                    error_type,
+                    extra={"error_type": error_type},
                 )
 
 

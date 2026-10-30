@@ -62,22 +62,36 @@ def _error_records(caplog) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.levelno == logging.ERROR]
 
 
-def _assert_named_failure(caplog) -> logging.LogRecord:
-    """Return the single ERROR record and assert it names ``RuntimeError``."""
-    errors = _error_records(caplog)
-    assert errors, (
-        "a failing handler produced no ERROR record: "
+def _failure_records(caplog) -> list[logging.LogRecord]:
+    """Every record that names a failure, whatever level it was logged at."""
+    return [
+        record for record in caplog.records if getattr(record, "error_type", None)
+    ]
+
+
+def _assert_named_failure(caplog, level: int = logging.ERROR) -> logging.LogRecord:
+    """Return the record that names ``RuntimeError`` and assert it is at *level*.
+
+    ``level`` is a parameter because the durable consumer's dead-letter line is
+    pinned at WARNING by ``tests/integration/test_nats_consumer.py``: that line
+    is operator-facing and an alert filter may key on its level, so SG-06 adds
+    the class name to it without changing how loudly it is reported.
+    """
+    records = [record for record in caplog.records if record.levelno == level]
+    assert records, (
+        f"a failing handler produced no {logging.getLevelName(level)} record: "
         f"records were {[(r.levelname, r.getMessage()) for r in caplog.records]!r}"
     )
     named = [
         record
-        for record in errors
+        for record in records
         if "RuntimeError" in record.getMessage()
         and getattr(record, "error_type", None) == "RuntimeError"
     ]
     assert named, (
-        "no ERROR record both named the exception class in its message and carried "
-        f"error_type='RuntimeError'; got {[(r.getMessage(), getattr(r, 'error_type', None)) for r in errors]!r}"
+        f"no {logging.getLevelName(level)} record both named the exception class in "
+        "its message and carried error_type='RuntimeError'; got "
+        f"{[(r.getMessage(), getattr(r, 'error_type', None)) for r in records]!r}"
     )
     for record in caplog.records:
         _assert_no_secret(record)
@@ -265,7 +279,13 @@ def test_consumer_dead_letter_names_the_exception_class(caplog):
 
     _deliver(_consumer([_raise_secret]), _agent_done_message())
 
-    record = _assert_named_failure(caplog)
+    # The dead-letter line is pinned at WARNING: tests/integration/test_nats_consumer.py
+    # filters WARNING for it and an operator's alert may key on that level, so
+    # SG-06 adds the class name without raising how loudly it is reported.
+    record = _assert_named_failure(caplog, level=logging.WARNING)
+    assert record.levelno == logging.WARNING, (
+        f"the dead-letter line must stay at WARNING, got {record.levelname}"
+    )
     assert record.getMessage().endswith("(RuntimeError)"), (
         f"the class name must be appended to the message, got {record.getMessage()!r}"
     )
@@ -279,7 +299,7 @@ def test_consumer_dead_letter_never_logs_the_exception_text(caplog):
 
     _deliver(_consumer([_raise_secret]), _agent_done_message())
 
-    _assert_named_failure(caplog)
+    _assert_named_failure(caplog, level=logging.WARNING)
     for record in caplog.records:
         _assert_no_secret(record)
     assert all(record.exc_info is None for record in caplog.records), (
@@ -289,7 +309,6 @@ def test_consumer_dead_letter_never_logs_the_exception_text(caplog):
 
 def test_consumer_logs_no_error_when_the_handler_returns(caplog):
     consumer = _consumer([_noop])
-    _deliver(consumer, _agent_done_message())  # a failing delivery first
     caplog.set_level(logging.DEBUG)
     caplog.clear()
 
@@ -300,8 +319,9 @@ def test_consumer_logs_no_error_when_the_handler_returns(caplog):
     assert _error_records(caplog) == [], (
         f"a handler that returns must log no ERROR: {[r.getMessage() for r in caplog.records]!r}"
     )
-    assert [r.error_type for r in caplog.records if hasattr(r, "error_type")] == [], (
-        "the class name of an earlier failure must not stick to a later delivery"
+    assert _failure_records(caplog) == [], (
+        "no record may name a failure when every handler returned: "
+        f"{[(r.levelname, r.getMessage()) for r in caplog.records]!r}"
     )
 
 
@@ -319,14 +339,14 @@ def test_consumer_runs_handlers_in_order_and_reports_the_failing_one(caplog):
     _deliver(_consumer([first, _raise_secret]), message)
 
     assert seen == ["first"], "handlers run in the recorded order"
-    record = _assert_named_failure(caplog)
+    record = _assert_named_failure(caplog, level=logging.WARNING)
     assert "_raise_secret" in record.getMessage(), (
         f"the failing handler must be named, got {record.getMessage()!r}"
     )
     assert message.acked == 1, "a dead-lettered delivery is acked only afterwards"
 
 
-def test_consumer_redelivery_without_dead_letter_logs_no_error(caplog):
+def test_consumer_redelivery_without_dead_letter_logs_no_failure(caplog):
     # A redelivery below the delivery limit is nacked for a retry and has no
     # log line of its own; the class name travels only through the return value.
     caplog.set_level(logging.DEBUG)
@@ -335,8 +355,9 @@ def test_consumer_redelivery_without_dead_letter_logs_no_error(caplog):
     _deliver(_consumer([_raise_secret]), message)
 
     assert message.naks, "a failed delivery below the limit must be nacked"
-    assert _error_records(caplog) == [], (
-        f"a retry is logged at no more than WARNING: {[r.getMessage() for r in caplog.records]!r}"
+    assert _failure_records(caplog) == [], (
+        "a retry must not log the failure: "
+        f"{[(r.levelname, r.getMessage()) for r in caplog.records]!r}"
     )
 
 
@@ -347,8 +368,10 @@ def test_consumer_delivery_is_always_the_same_for_one_message(handler, caplog):
 
     _deliver(_consumer([handler]), _agent_done_message())
 
-    errors = _error_records(caplog)
     if handler is _raise_secret:
-        _assert_named_failure(caplog)
+        _assert_named_failure(caplog, level=logging.WARNING)
     else:
-        assert errors == []
+        assert _failure_records(caplog) == [], (
+            "a returning handler must leave no error_type behind: "
+            f"{[(r.levelname, r.getMessage()) for r in caplog.records]!r}"
+        )

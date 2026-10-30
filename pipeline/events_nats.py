@@ -419,11 +419,12 @@ class NatsEventBus(EventBus):
                 # The type and the exception's class, never the payload or the
                 # exception text: a handler failure must be diagnosable without
                 # leaking event contents.
+                error_type = type(exc).__name__
                 logger.error(
                     "Event handler failed for event type %s (%s)",
                     event_type,
-                    type(exc).__name__,
-                    extra={"error_type": type(exc).__name__},
+                    error_type,
+                    extra={"error_type": error_type},
                 )
 
     # -- private loop lifecycle ---------------------------------------------

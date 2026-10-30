@@ -65,7 +65,7 @@ def test_provider_chat_turn_extracts_message_from_envelope(monkeypatch):
             return {"message": {"role": "assistant", "content": "hi"},
                     "prompt_eval_count": 3, "eval_count": 5}
 
-    monkeypatch.setattr(la.inference_providers, "get_local_provider", lambda: _FakeProvider())
+    monkeypatch.setattr(la.inference_providers, "get_local_provider", lambda name=None: _FakeProvider())
     msg = la._provider_chat_turn([{"role": "user", "content": "hi"}])
     assert msg == {"role": "assistant", "content": "hi"}
     assert captured["model"] == la.MODEL

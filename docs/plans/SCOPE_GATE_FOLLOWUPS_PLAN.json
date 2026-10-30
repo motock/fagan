@@ -31,18 +31,6 @@
           ]
         },
         {
-          "key": "SF-03",
-          "summary": "Strip PIPELINE_ANTHROPIC_API_KEY from dispatched-agent environments",
-          "description": "Defense in depth: add the operator key carrier to the agent secret denylist so a dispatched agent never inherits it.",
-          "agent_instructions": "WHAT: `deploy/entrypoint.sh` (story SA-08 of plan `standalone-server`) exports the operator's Anthropic key as `PIPELINE_ANTHROPIC_API_KEY` for the `claude` CLI. `app/backend_claude.py` (story SA-09) converts it to `ANTHROPIC_API_KEY` for the `claude` subprocess and pops the carrier, but the raw name still sits in the server process environment, so every dispatched agent spawned through `pipeline/execution.py` inherits it. `_AGENT_SECRET_ENV` is the frozenset of variable names stripped from an agent's child environment; `PIPELINE_ANTHROPIC_API_KEY` is not in it. SA-09 identified this, correctly found it outside its `files` scope, reverted it and deferred it to this story.\n\nCHANGE - `pipeline/execution.py`: add `\"PIPELINE_ANTHROPIC_API_KEY\"` to the `_AGENT_SECRET_ENV` frozenset, with a comment saying why: the claude driver converts it to ANTHROPIC_API_KEY and drops the carrier, but a prompt-injected agent must never see the raw mounted secret name either. Place the entry beside the other provider credentials, before the closing brace. Do not change `_strip_agent_secrets`, `_local_agent_env` or any other function - they are already correct and this is the only missing entry.\n\nTESTS (new file tests/unit/test_agent_secret_env.py), each a separate test:\n- `\"PIPELINE_ANTHROPIC_API_KEY\" in pipeline.execution._AGENT_SECRET_ENV` (membership, never an exact-set or count assertion: the frozenset is cumulative and later stories add entries);\n- `_local_agent_env({\"PIPELINE_ANTHROPIC_API_KEY\": \"sk-x\", \"PATH\": \"/bin\"})` returns `{\"PATH\": \"/bin\"}` - grades the wiring that actually strips the env, not just the constant;\n- `_local_agent_env` with `None` materialises `os.environ` and still omits `PIPELINE_ANTHROPIC_API_KEY` when that variable is set in the test's monkeypatched environment;\n- `_strip_agent_secrets` keeps a non-secret variable such as `PIPELINE_MODEL_REGISTRY_PATH`.\n\nEngineering rules: write the failing test first and confirm it fails on the assertion (not an import error), then implement. Run the full suite (`.venv/bin/python -m pytest -q`) and `.venv/bin/python -m ruff check .` before finishing. Keep every touched .py file under 1000 lines. Never log or echo a secret. Do not modify any existing test; if one pins `_AGENT_SECRET_ENV` by exact equality or count it will fail - that is the pre-authorized-conflict case, so stop and report it via `SCOPE-CONFLICT: <path> :: <why>` rather than editing it.",
-          "dependencies": [],
-          "persona": "software-engineer",
-          "risk": "medium",
-          "files": [
-            "pipeline/execution.py"
-          ]
-        },
-        {
           "key": "SF-04",
           "summary": "Gate dispatch on the backend the stories will actually use, not on Claude's usage",
           "description": "A tripped Claude usage gate currently pauses and interrupts a plan whose stories all route to ollama.",

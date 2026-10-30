@@ -29,12 +29,16 @@ reason ("triage attempts at cap") reads as an agent failure.
 |---|---|---|---|
 | SF-01 | Park a scope-gate miss as a plan defect instead of spending the rework budget | `pipeline/scope_gate_park.py` (new), `pipeline/review_orchestrator.py` | high |
 | SF-02 | Warn at ingest when a brief names a production path the scope omits | `pipeline/scope_headroom.py`, `pipeline/ingest.py` | low |
-| SF-03 | Strip `PIPELINE_ANTHROPIC_API_KEY` from dispatched-agent environments | `pipeline/execution.py` | medium |
 | SF-04 | Gate dispatch on the backend the stories will actually use, not on Claude's usage | `pipeline/usage.py`, `pipeline/advance.py`, `pipeline/stall_scan.py` | high |
 
-No dependencies between them; they touch disjoint files. SF-03 is the
-defense-in-depth item that `standalone-server`'s SA-09 correctly deferred and
-names in its brief — if the key changes, change it in both places.
+No dependencies between them; they touch disjoint files. There was a fourth
+story, SF-03, for the `PIPELINE_ANTHROPIC_API_KEY` entry in
+`pipeline/execution.py`. It is **withdrawn**: on 2026-10-30 the operator chose
+to close that exposure inside `standalone-server`'s SA-09 instead, so the
+deploying story never merges while the runtime still mounts credentials it
+does not strip. SA-09 now owns both halves — the child-env scrubbing in
+`app/backend_claude.py` and the `_AGENT_SECRET_ENV` entries — and lists
+`pipeline/execution.py` in its `files`.
 
 SF-04 was added the same day, after the standalone plan froze for 40 minutes
 with three dispatch-eligible stories: `_role_resource_ok("dispatch")` defaults

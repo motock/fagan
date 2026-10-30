@@ -22,6 +22,16 @@ one during startup, and 401-ing it would prevent the app from booting). An
 ``websocket``, is closed without reaching the wrapped app -- a WebSocket route
 on the mounted app would otherwise be reachable unauthenticated.
 
+``PIPELINE_MCP_RESOURCE_URL`` (this server's public URL) turns on RFC 9728
+discovery: the well-known protected-resource path answers unauthenticated with
+the resource identifier, the authorization server, and the bearer method, and a
+401 challenge points at it with ``resource_metadata=``. Without that pointer a
+client that checks RFC 9728 first has no way to start its login flow. The
+endpoint is public by design, is not a failed authentication, and is not
+audited; unset, the path falls through to the ordinary 401 and behaviour is
+exactly as before. A malformed value refuses to serve rather than publishing an
+identifier no client would accept.
+
 Two token buckets bound the gate (``pipeline.rate_limit``): a failed-auth bucket
 per resolved client address, checked *before* token verification so a blocked
 client costs no JWKS work, and a request bucket per authenticated subject. Going
@@ -40,14 +50,21 @@ refetches keys per request is a denial-of-service amplifier.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.transport_security import TransportSecuritySettings
 
 from app.identity import IdentityError
-from app.oidc import IDENTITY_PROVIDER_ENV, OidcProvider, build_identity_provider
+from app.oidc import (
+    IDENTITY_PROVIDER_ENV,
+    OIDC_ISSUER_ENV,
+    OidcProvider,
+    build_identity_provider,
+)
 
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 from .audit import append_host_audit
@@ -70,6 +87,13 @@ logger = logging.getLogger("pipeline.remote_transport")
 
 #: Longest request path copied into a log record; paths are attacker-controlled.
 _MAX_LOGGED_PATH = 256
+
+#: Public URL of this MCP resource, e.g. ``https://pipeline.example.com/mcp``.
+#: Unset disables RFC 9728 metadata publication entirely.
+RESOURCE_URL_ENV = "PIPELINE_MCP_RESOURCE_URL"
+
+#: Well-known path an RFC 9728 client fetches to find the authorization server.
+RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 
 
 def _header_values(scope: dict[str, Any], name: str) -> list[str]:
@@ -94,6 +118,66 @@ def _client_ip(scope: dict[str, Any]) -> str:
     if isinstance(client, (tuple, list)) and client:
         return str(client[0])
     return ""
+
+
+def parse_resource_url(environ: dict[str, str] | None = None) -> str | None:
+    """Return the configured public resource URL, or ``None`` when unset.
+
+    RFC 9728 requires the ``resource`` value to identify this server exactly,
+    so it must be an absolute ``https://`` URL: a bearer token sent over a
+    plaintext transport is already lost, and a mismatched identifier makes
+    clients reject the metadata. Query strings, fragments and userinfo are
+    refused too - they are not part of a resource identifier, and echoing a
+    userinfo credential back in an error message would leak it, so no value is
+    ever echoed here. An unset variable disables the endpoint rather than
+    inventing an identifier the operator did not publish.
+    """
+    env = os.environ if environ is None else environ
+    raw = str(env.get(RESOURCE_URL_ENV, "")).strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise SystemExit(
+            f"{RESOURCE_URL_ENV} must be an absolute https:// URL naming this "
+            "resource, e.g. https://pipeline.example.com/mcp"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise SystemExit(f"{RESOURCE_URL_ENV} must not carry userinfo")
+    if parsed.query:
+        raise SystemExit(f"{RESOURCE_URL_ENV} must not carry a query string")
+    if parsed.fragment:
+        raise SystemExit(f"{RESOURCE_URL_ENV} must not carry a fragment")
+    return raw
+
+
+def resource_metadata_paths(resource_url: str | None) -> frozenset[str]:
+    """Return the RFC 9728 paths that publish this resource's metadata.
+
+    RFC 9728 section 3.1 defines the bare well-known path and a path-suffixed
+    form for a resource that lives under a prefix; clients try the suffixed
+    form first, so both must answer for the deployment to be discoverable.
+    """
+    if resource_url is None:
+        return frozenset()
+    suffix = urlparse(resource_url).path or ""
+    return frozenset({RESOURCE_METADATA_PATH, RESOURCE_METADATA_PATH + suffix})
+
+
+def resource_metadata_document(resource_url: str, issuer: str) -> dict[str, Any]:
+    """Return the protected-resource metadata document (RFC 9728 section 2)."""
+    return {
+        "resource": resource_url,
+        "authorization_servers": [issuer] if issuer else [],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["openid"],
+    }
+
+
+def resource_metadata_url(resource_url: str) -> str:
+    """Return the metadata URL a 401 challenge points the client at."""
+    parsed = urlparse(resource_url)
+    return f"{parsed.scheme}://{parsed.netloc}{RESOURCE_METADATA_PATH}{parsed.path or ''}"
 
 
 def build_rate_limiter(
@@ -131,7 +215,10 @@ def _logged_path(scope: dict[str, Any]) -> str:
 
 
 async def _send_unauthorized(
-    send: Any, correlation: str, retry_after: int | None = None
+    send: Any,
+    correlation: str,
+    retry_after: int | None = None,
+    resource_metadata: str | None = None,
 ) -> None:
     """Send the fixed rejection body. The credential is never echoed.
 
@@ -139,6 +226,10 @@ async def _send_unauthorized(
     correlation header, plus ``Retry-After``. Neither form carries a limit
     value, a subject, a client address or a credential, so a throttled caller
     learns only that it must wait.
+
+    With *resource_metadata* set the challenge points at the published RFC 9728
+    document, so a client can discover the authorization server instead of
+    being told only that a bearer token is wanted.
     """
     body = b'{"detail":"Unauthorized"}'
     headers = [
@@ -150,7 +241,14 @@ async def _send_unauthorized(
         # RFC 6750 3: a bearer-protected resource must challenge, and
         # MCP clients use this header to discover the authorization
         # server, so omitting it blocks a conformant client's bootstrap.
-        headers.append((b"www-authenticate", b"Bearer"))
+        # RFC 9728 5.1: the resource_metadata parameter is what turns that
+        # challenge into a pointer at the authorization server.
+        challenge = (
+            b"Bearer"
+            if resource_metadata is None
+            else b'Bearer resource_metadata="' + resource_metadata.encode("utf-8") + b'"'
+        )
+        headers.append((b"www-authenticate", challenge))
     else:
         headers.append(
             (b"retry-after", str(max(1, int(retry_after))).encode("ascii"))
@@ -161,6 +259,24 @@ async def _send_unauthorized(
             "type": "http.response.start",
             "status": 401 if retry_after is None else 429,
             "headers": headers,
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _send_method_not_allowed(send: Any) -> None:
+    """Send the 405 for a non-GET request to the metadata path (RFC 7231 6.5.5)."""
+    body = b'{"detail":"Method Not Allowed"}'
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 405,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"allow", b"GET"),
+                (b"cache-control", b"no-store"),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -191,9 +307,27 @@ class BearerAuthMiddleware:
                 "remote mcp transport requires an OidcProvider; refusing to serve "
                 f"with {type(provider).__name__}"
             )
+        env = os.environ if environ is None else environ
         self._app = app
         self._provider = provider
-        self._limiter = build_rate_limiter(clock=clock, environ=environ)
+        self._limiter = build_rate_limiter(clock=clock, environ=env)
+        # The resource identifier is resolved once, at construction: a
+        # malformed value refuses to serve instead of answering every request
+        # with a document no client can use.
+        resource_url = parse_resource_url(env)
+        self._metadata_paths = resource_metadata_paths(resource_url)
+        self._metadata_url = (
+            None if resource_url is None else resource_metadata_url(resource_url)
+        )
+        self._metadata_body = (
+            None
+            if resource_url is None
+            else json.dumps(
+                resource_metadata_document(
+                    resource_url, str(env.get(OIDC_ISSUER_ENV, "")).strip()
+                )
+            ).encode("utf-8")
+        )
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
@@ -202,6 +336,17 @@ class BearerAuthMiddleware:
             return
         if scope_type != "http":
             await self._deny_non_http(scope, send)
+            return
+
+        # RFC 9728 metadata must be readable by a client that has no token yet,
+        # so this branch answers before the limiter and credential checks: it
+        # is public by design and a read of it is not a failed authentication.
+        path = str(scope.get("path") or "")
+        if path in self._metadata_paths:
+            if str(scope.get("method") or "").upper() == "GET":
+                await self._send_metadata(send)
+            else:
+                await _send_method_not_allowed(send)
             return
 
         correlation = request_correlation_id(_header(scope, "x-correlation-id"))
@@ -227,7 +372,9 @@ class BearerAuthMiddleware:
                 detail=reason or "credential rejected",
             )
             self._limiter.record_failed_auth(client_ip)
-            await _send_unauthorized(send, correlation)
+            await _send_unauthorized(
+                send, correlation, resource_metadata=self._metadata_url
+            )
             return
 
         admission = self._limiter.check_request(principal.subject)
@@ -316,6 +463,28 @@ class BearerAuthMiddleware:
         except OSError:
             logger.warning("host audit append failed for rate_limited")
 
+    async def _send_metadata(self, send: Any) -> None:
+        """Answer the public RFC 9728 metadata GET.
+
+        Deliberately unauthenticated and unlogged: it names only the resource,
+        the issuer and the bearer method, and a client with no credential yet
+        has to read it to begin a login. It never reaches the wrapped app and
+        never counts as a failed authentication.
+        """
+        body = self._metadata_body or b"{}"
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
     def _audit(
         self,
         scope: dict[str, Any],
@@ -355,7 +524,7 @@ class BearerAuthMiddleware:
         if scope.get("type") == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
-        await _send_unauthorized(send, correlation)
+        await _send_unauthorized(send, correlation, resource_metadata=self._metadata_url)
 
 
 TRANSPORT_ENV = "PIPELINE_MCP_TRANSPORT"
@@ -417,6 +586,10 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     """
     env = os.environ if environ is None else environ
     transport, host, port = _settings_from_env(env)
+    # Resolved before the provider and before any socket is opened: a malformed
+    # resource identifier must stop the process, not surface as a 500 on the
+    # first client's discovery request. ``None`` means metadata stays disabled.
+    parse_resource_url(env)
     provider = build_identity_provider(lambda: "", env)
     if not isinstance(provider, OidcProvider):
         raise SystemExit("refusing to serve MCP over HTTP without an OIDC provider")

@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Mint a short-lived MCP access token from a long-lived client credential.
+
+For clients and scripts that cannot run a browser OAuth flow. The long-lived
+secret is a per-user Keycloak client secret kept in a 0600 file; this helper
+mints a fresh access token on every call and prints it.
+
+  - default: a JSON object of headers, for Claude Code's MCP ``headersHelper``::
+
+        {"Authorization": "Bearer <token>"}
+
+  - ``--raw``: the bare token, for shell use::
+
+        export PIPELINE_MCP_TOKEN=$(mcp-token --raw)
+
+Config file: ``--config``, else ``PIPELINE_MCP_CREDENTIALS``, else
+``~/.config/pipeline/mcp-client.json`` with keys ``token_url``, ``client_id``
+and ``client_secret``. The file must not be group/other accessible.
+
+Exit codes: 0 success, 2 configuration problem, 1 token/HTTP problem. Secrets
+and response bodies are never printed or logged.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import ssl
+import stat
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+DEFAULT_CONFIG_PATH = "~/.config/pipeline/mcp-client.json"
+REQUIRED_KEYS = ("token_url", "client_id", "client_secret")
+REQUEST_TIMEOUT = 8
+
+
+class ConfigError(Exception):
+    """The credentials file or its contents cannot be used."""
+
+
+class TokenError(Exception):
+    """The token endpoint was unreachable, refused, or answered unusably."""
+
+
+def load_config(path, allow_insecure_http):
+    """Read and validate the credentials file, returning its three keys."""
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise ConfigError(f"config file not found or not a regular file: {p}")
+
+    mode = stat.S_IMODE(p.stat().st_mode)
+    if mode & 0o077:
+        raise ConfigError(
+            f"config file must not be group/other accessible (mode {oct(mode)}): {p}"
+        )
+
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError:
+        raise ConfigError(f"config file is not valid JSON: {p}") from None
+    if not isinstance(data, dict):
+        raise ConfigError(f"config file must contain a JSON object: {p}")
+
+    for key in REQUIRED_KEYS:
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"config file is missing a non-empty {key}: {p}")
+
+    if not allow_insecure_http:
+        scheme = urllib.parse.urlsplit(data["token_url"]).scheme.lower()
+        if scheme != "https":
+            raise ConfigError(
+                f"token_url must be https (pass --insecure-http only for tests): {p}"
+            )
+
+    return {
+        "token_url": data["token_url"],
+        "client_id": data["client_id"],
+        "client_secret": data["client_secret"],
+    }
+
+
+def _build_context(cacert):
+    if cacert:
+        try:
+            return ssl.create_default_context(cafile=cacert)
+        except OSError:
+            raise TokenError(f"cannot load CA bundle: {cacert}") from None
+    return ssl.create_default_context()
+
+
+def fetch_token(config, cacert=None):
+    """Request a client-credentials token and return just the token string."""
+    context = _build_context(cacert)
+
+    basic = base64.b64encode(
+        f"{config['client_id']}:{config['client_secret']}".encode()
+    ).decode()
+    request = urllib.request.Request(
+        config["token_url"],
+        data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT, context=context) as response:
+            payload = response.read()
+    except urllib.error.HTTPError as e:
+        # Never read or print the body: some IdPs echo the client id/secret.
+        raise TokenError(f"token endpoint returned HTTP {e.code}") from None
+    except urllib.error.URLError:
+        raise TokenError("token endpoint request failed") from None
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        raise TokenError("token endpoint response is not valid JSON") from None
+    if not isinstance(data, dict):
+        raise TokenError("token endpoint response is not a JSON object")
+
+    token = data.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise TokenError("token endpoint response missing access_token")
+    return token
+
+
+def main(argv=None):
+    """Run the helper; return 0 success, 2 config problem, 1 token problem."""
+    parser = argparse.ArgumentParser(
+        prog="mcp-token",
+        description="Mint a short-lived MCP access token from a client credential.",
+    )
+    parser.add_argument(
+        "--config",
+        help="credentials file (default: $PIPELINE_MCP_CREDENTIALS or "
+        f"{DEFAULT_CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="print only the bare token instead of a JSON headers object",
+    )
+    parser.add_argument(
+        "--insecure-http",
+        action="store_true",
+        help="allow a plain http token_url (tests only)",
+    )
+    parser.add_argument("--cacert", help="CA bundle for the token endpoint (or $PIPELINE_MCP_CACERT)")
+    args = parser.parse_args(argv)
+
+    config_path = (
+        args.config or os.environ.get("PIPELINE_MCP_CREDENTIALS") or DEFAULT_CONFIG_PATH
+    )
+    cacert = args.cacert or os.environ.get("PIPELINE_MCP_CACERT") or None
+
+    try:
+        config = load_config(config_path, args.insecure_http)
+        token = fetch_token(config, cacert)
+    except ConfigError as e:
+        print(f"mcp-token: {e}", file=sys.stderr)
+        return 2
+    except TokenError as e:
+        print(f"mcp-token: {e}", file=sys.stderr)
+        return 1
+
+    if args.raw:
+        print(token)
+    else:
+        print(json.dumps({"Authorization": f"Bearer {token}"}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

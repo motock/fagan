@@ -462,6 +462,10 @@ def validate_workspace(raw: str | None) -> dict:
     """
     try:
         path = normalize_workspace_path(raw)
+        # SA-03: a workspace is a server path, so it must satisfy the opt-in
+        # PIPELINE_ALLOWED_REPO_ROOTS allowlist too (a no-op when unset).
+        # Raised inside this try so the denial returns the sanitized result.
+        check_repo_root_allowed(str(path))
     except ValueError as exc:
         return {"ok": False, "path": "", "error": sanitize_error_message(exc)}
 

@@ -95,6 +95,28 @@ def remote_effective_config(result: dict, plan_name: str | None) -> dict:
     return {"ok": True, "roles": result.get("roles", [])}
 
 
+#: The refusal returned when a remote plan author names a server path. A
+#: remote caller must describe its repository by URL; a path in the plan
+#: (``repo_root``) or a ``workspace`` argument would point the server at a
+#: directory of the caller's choosing on this host.
+REMOTE_PLAN_PATH_ERROR = "a remote plan must name repo_url, not repo_root or a workspace"
+
+
+def remote_plan_path_error(plan: dict, workspace: Any) -> str | None:
+    """Return the refusal for a remote plan naming a server path, else ``None``.
+
+    Presence decides, never truthiness: ``"repo_root": ""`` or ``None`` is
+    still a caller-supplied path field, and an empty-string ``workspace`` is
+    still a workspace argument, so both are refused. Refusing only truthy
+    values would let a caller probe the field and leave the intent ambiguous.
+    """
+    if workspace is not None:
+        return REMOTE_PLAN_PATH_ERROR
+    if "repo_root" in plan:
+        return REMOTE_PLAN_PATH_ERROR
+    return None
+
+
 def remote_dashboard_config(roles: Any) -> dict:
     """Return the dashboard ``/api/config`` payload for a network caller.
 

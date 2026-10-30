@@ -36,11 +36,15 @@ def _is_declared_tag(model: str, provider: str) -> bool:
     recognised as a concrete model rather than rewritten to
     PIPELINE_LOCAL_MODEL_DEFAULT by _resolve_local_model.
 
-    Fails CLOSED (False) on a missing/malformed/unreadable registry - an
-    unreadable registry must degrade to the old behaviour, never raise into
-    the dispatch path. Deliberately does not catch bare Exception (ruff
-    BLE001). role_registry is imported inside the function so this module
-    stays cheap to import.
+    Fails CLOSED (False) on the registry errors callers can actually hit in
+    the dispatch path: a RoleRegistryError from invalid JSON or a bad roles.*
+    reference, an OSError reading the file, and a ValueError from a bad
+    PIPELINE_MODEL_REGISTRY_PATH override. A structurally odd but valid-JSON
+    registry is handled by the shape checks below, not by this except clause.
+    Anything else is a programming error and is left to raise rather than
+    swallowed - deliberately does not catch bare Exception (ruff BLE001).
+    role_registry is imported inside the function so this module stays cheap
+    to import.
     """
     from app import role_registry
 

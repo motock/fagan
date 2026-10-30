@@ -734,6 +734,13 @@ class PipelineService(PlanApprovalMixin):
         if not isinstance(plan, dict):
             return {"ok": False, "error": "Plan JSON must be a JSON object"}
 
+        # SA-03: a remote author must name repo_url; refuse server paths before
+        # any write so a refusal leaves no partial plan behind.
+        if remote_scope.is_network_principal(current_principal()):
+            err = remote_scope.remote_plan_path_error(plan, workspace)
+            if err is not None:
+                return {"ok": False, "error": err}
+
         if workspace is not None:
             ws_result = validate_workspace(workspace)
             if not ws_result.get("ok"):

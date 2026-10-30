@@ -45,8 +45,11 @@ endpoint.
    allow-list.
 4. Create allow-list: :func:`create_workspace` only creates inside
    :data:`ALLOWED_CREATE_ROOTS` (default: the system temp dir and the user's
-   home).  ``validate_workspace`` is deliberately NOT allow-listed so
-   existing legitimate repositories anywhere remain validatable.
+   home).  ``validate_workspace`` does not apply that create allow-list, so
+   existing legitimate repositories anywhere remain validatable -- but it does
+   apply the opt-in ``PIPELINE_ALLOWED_REPO_ROOTS`` allowlist (a no-op when
+   the variable is unset or blank), so any workspace the server resolves or
+   validates is confined to the operator's configured roots.
 5. Fail closed: every security check (symlink inspection, deny/allow root
    resolution, repo-root detection) is wrapped so that an unexpected value
    or a filesystem error results in DENIAL, never acceptance.
@@ -462,6 +465,10 @@ def validate_workspace(raw: str | None) -> dict:
     """
     try:
         path = normalize_workspace_path(raw)
+        # SA-03: a workspace is a server path, so it must satisfy the opt-in
+        # PIPELINE_ALLOWED_REPO_ROOTS allowlist too (a no-op when unset).
+        # Raised inside this try so the denial returns the sanitized result.
+        check_repo_root_allowed(str(path))
     except ValueError as exc:
         return {"ok": False, "path": "", "error": sanitize_error_message(exc)}
 

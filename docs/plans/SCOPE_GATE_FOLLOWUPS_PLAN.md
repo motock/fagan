@@ -30,10 +30,20 @@ reason ("triage attempts at cap") reads as an agent failure.
 | SF-01 | Park a scope-gate miss as a plan defect instead of spending the rework budget | `pipeline/scope_gate_park.py` (new), `pipeline/review_orchestrator.py` | high |
 | SF-02 | Warn at ingest when a brief names a production path the scope omits | `pipeline/scope_headroom.py`, `pipeline/ingest.py` | low |
 | SF-03 | Strip `PIPELINE_ANTHROPIC_API_KEY` from dispatched-agent environments | `pipeline/execution.py` | medium |
+| SF-04 | Gate dispatch on the backend the stories will actually use, not on Claude's usage | `pipeline/usage.py`, `pipeline/advance.py`, `pipeline/stall_scan.py` | high |
 
 No dependencies between them; they touch disjoint files. SF-03 is the
 defense-in-depth item that `standalone-server`'s SA-09 correctly deferred and
 names in its brief — if the key changes, change it in both places.
+
+SF-04 was added the same day, after the standalone plan froze for 40 minutes
+with three dispatch-eligible stories: `_role_resource_ok("dispatch")` defaults
+to the `claude` backend, so a tripped Claude usage gate set
+`advance.py`'s plan-wide `dispatch_ok=False`, which skips the whole dispatch
+loop and interrupts in-progress stories — while every story in that plan routes
+to `ollama` and `ollama`'s own gate was green. The operator workaround was
+pinning `PIPELINE_BACKEND_DISPATCH=ollama` and restarting the daemon; the story
+removes the need for that.
 
 SF-01 parks immediately when the amendment guardrail refuses every path, and
 on the second identical violation otherwise, so a legitimate one-off drift

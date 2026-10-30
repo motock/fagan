@@ -28,6 +28,33 @@ _LOCAL_DEFAULT_MODEL = next(
 )
 
 
+def _is_declared_tag(model: str, provider: str) -> bool:
+    """True when model is the tag of a model declared for provider, else False.
+
+    Real LM Studio / MLX model ids are frequently bare words with neither ':'
+    nor '/' ("scripted-dispatch"), so a registry-declared tag must be
+    recognised as a concrete model rather than rewritten to
+    PIPELINE_LOCAL_MODEL_DEFAULT by _resolve_local_model.
+
+    Fails CLOSED (False) on a missing/malformed/unreadable registry - an
+    unreadable registry must degrade to the old behaviour, never raise into
+    the dispatch path. Deliberately does not catch bare Exception (ruff
+    BLE001). role_registry is imported inside the function so this module
+    stays cheap to import.
+    """
+    from app import role_registry
+
+    try:
+        registry = role_registry.load_registry()
+    except (role_registry.RoleRegistryError, OSError, ValueError):
+        return False
+    models = registry.get("providers", {}).get(provider, {}).get("models", {})
+    return any(
+        isinstance(spec, dict) and spec.get("tag") == model
+        for spec in models.values()
+    )
+
+
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
     # or '/' (LiteLLM's vendor/model form, e.g. "openai/gpt-5-mini") is
@@ -38,6 +65,12 @@ def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # PIPELINE_LOCAL_REVIEW_MODEL override). Tier names are always bare
     # lowercase words, so neither separator can appear in a legitimate tier.
     if ":" in tier or "/" in tier:
+        return tier
+    # A registry-declared tag (e.g. the smoke stack's "scripted-dispatch") is
+    # also already a concrete model: the registry pinned a role to exactly
+    # this tag, so rewriting it to PIPELINE_LOCAL_MODEL_DEFAULT would run a
+    # different model than the role declared.
+    if tier and _is_declared_tag(tier, provider):
         return tier
     default = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
     env_var = _LOCAL_TIER_ENV.get(tier.lower())

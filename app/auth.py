@@ -41,6 +41,7 @@ import logging
 import os
 import re
 import secrets
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Header, HTTPException
@@ -192,12 +193,9 @@ _HOSTNAME_RE = re.compile(
     r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*"
 )
 
-# Invalid allowlist entries already warned about, so a bad value logs once
-# rather than on every request.
-_warned_invalid_hosts: set[str] = set()
-
 
 def _is_plain_host(entry: str) -> bool:
+    """True when ``entry`` is a bare hostname or IP literal (already lower-cased)."""
     try:
         ipaddress.ip_address(entry)
         return True
@@ -205,20 +203,31 @@ def _is_plain_host(entry: str) -> bool:
         return _HOSTNAME_RE.fullmatch(entry) is not None
 
 
+@lru_cache(maxsize=256)
+def _warn_invalid_host_once(entry: str) -> None:
+    """Warn about a malformed allowlist entry, once per distinct value.
+
+    ``host_is_allowed`` runs on every request, so without the cache a single
+    typo in the environment variable would log on every page load. The entry
+    is a hostname, never a secret, so it is safe to log.
+    """
+    logger.warning(
+        "Ignoring invalid dashboard allowed-host entry",
+        extra={"env_var": ALLOWED_HOSTS_ENV, "entry": entry},
+    )
+
+
 def _configured_allowed_hosts() -> set[str]:
-    hosts = set()
+    """Hostnames from ``PIPELINE_DASHBOARD_ALLOWED_HOSTS``; invalid entries ignored."""
+    hosts: set[str] = set()
     for raw in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
         entry = raw.strip().lower()
         if not entry:
             continue
         if _is_plain_host(entry):
             hosts.add(entry)
-        elif entry not in _warned_invalid_hosts:
-            _warned_invalid_hosts.add(entry)
-            logger.warning(
-                "Ignoring invalid dashboard allowed-host entry",
-                extra={"env_var": ALLOWED_HOSTS_ENV, "entry": raw.strip()},
-            )
+        else:
+            _warn_invalid_host_once(entry)
     return hosts
 
 

@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from app.auth import host_is_allowed
+from app.auth import _warn_invalid_host_once, host_is_allowed
 
 ENV = "PIPELINE_DASHBOARD_ALLOWED_HOSTS"
 
@@ -13,6 +13,9 @@ ENV = "PIPELINE_DASHBOARD_ALLOWED_HOSTS"
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
+    # The warn-once cache is process-global; reset it so the warning
+    # assertions below do not depend on test execution order.
+    _warn_invalid_host_once.cache_clear()
 
 
 def test_unset_refuses_public_hostname():

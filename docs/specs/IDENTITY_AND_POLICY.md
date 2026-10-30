@@ -491,7 +491,8 @@ worth having.
 `delegates` are additionally allowed `plan:approve`, `plan:reject`,
 `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`,
 `story:mark_done`, `story:merge`, `decision:answer` and `config:write` on that
-plan; ownership grants nothing else. `plan:ingest` is the exception that gives
+plan. Ownership adds authority for exactly those ten plan-scoped actions and
+subtracts none. `plan:ingest` is the exception that gives
 ownership its start: an authenticated principal may ingest a *present* resource
 with no owner — a legacy plan, or a plan with no manifest yet — and becomes its
 owner (ADR 0006); it may also re-ingest a plan it owns, while a plan owned by

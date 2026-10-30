@@ -237,10 +237,27 @@ class GitHubForge(Forge):
         ``bucket`` values and the check-runs ``status``/``conclusion`` pair -
         into the canonical states. Raises :class:`CIStatusUnreadable` when the
         status cannot be read or a value is outside the known vocabulary.
+
+        With a non-empty ``sha`` and a positive ``PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS``
+        (default 90, ``0`` disables) a fresh entry of the per-repository rollup
+        cache answers instead of the REST call. The cache only ever holds what
+        GitHub reported for that exact sha and an aged entry is ignored, so a
+        cache hit can never report a failing sha as passing; a miss simply
+        runs the REST call unchanged.
         """
         from .ci import _scoped_repo_cwd
 
         cwd = _scoped_repo_cwd()
+        if sha:
+            from . import ci_rollup
+
+            max_age = ci_rollup.max_age_seconds()
+            if max_age > 0:
+                cached = ci_rollup.cached_snapshot(
+                    cwd, sha, ci_rollup.state_root(), max_age
+                )
+                if cached is not None:
+                    return cached
         try:
             if sha:
                 proc = subprocess.run(

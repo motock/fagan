@@ -83,9 +83,18 @@ def test_runtime_stage_creates_venv_symlink() -> None:
 
     assert "/app/.venv" in runtime
     normalized = re.sub(r"\s+", " ", runtime)
-    assert "ln -s /opt/venv /app/.venv" in normalized, (
-        "the runtime stage must link /app/.venv to /opt/venv"
+    # The `&&` connective is part of the assertion: the preceding line ends in
+    # a backslash, so without it the text is one long `chmod` command that
+    # receives `ln -s /opt/venv /app/.venv` as extra arguments and creates no
+    # symlink at all - which a bare substring check would happily accept.
+    assert "&& ln -s /opt/venv /app/.venv" in normalized, (
+        "the runtime stage must link /app/.venv to /opt/venv as its own command"
     )
+    # Created as root, before the image drops to the unprivileged user: after
+    # `USER 10001` the `ln` would fail on /app's ownership.
+    assert normalized.index("ln -s /opt/venv /app/.venv") < normalized.index(
+        "USER 10001:10001"
+    ), "the symlink must be created before the image drops to USER 10001"
 
 
 def test_new_env_names_are_not_secret_looking() -> None:

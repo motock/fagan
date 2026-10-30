@@ -18,13 +18,14 @@ import logging
 import os
 from typing import Any
 
-from . import cross_plan, plan_approval
+from . import cross_plan, plan_approval, review_job
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
     _adjudicate_merges,
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
+from .advance_review import review_or_collect
 from .concurrency import (
     PlanLockReacquireTimeout,
     _has_live_test_author_phase,
@@ -896,7 +897,19 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # re-read per iteration.
             for key in list(stories.keys()):
                 fresh_story = json.loads(manifest_path.read_text())["stories"].get(key)
-                if fresh_story is None or fresh_story["status"] != "tests_passed":
+                if fresh_story is None:
+                    continue
+                # The detached path also sees a story an operator moved out of
+                # tests_passed while its review job was live: that job must be
+                # cancelled. review_or_collect starts a job only for a
+                # tests_passed story, so passing a moved story on is safe.
+                if review_job.detached_enabled() and (
+                    fresh_story["status"] == "tests_passed"
+                    or fresh_story.get("review_job")
+                ):
+                    review_or_collect(plan_name, key, fresh_story, manifest_path, summary)
+                    continue
+                if fresh_story["status"] != "tests_passed":
                     continue
                 with _released_plan_lock(plan_name):
                     rv = review_story(plan_name, key)

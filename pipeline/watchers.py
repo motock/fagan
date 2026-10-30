@@ -197,6 +197,7 @@ def _manifest_status_counts(manifest: dict) -> dict[str, int]:
 JOB_RESULT_FIELDS: tuple[tuple[str, ...], ...] = (
     ("grading_result_path",),
     ("merge_reverify", "result_path"),
+    ("review_job", "result_path"),
 )
 
 #: Result stamps already announced to the bus this process:

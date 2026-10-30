@@ -30,7 +30,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 import subprocess
 import tempfile
@@ -417,58 +416,3 @@ def cached_snapshot(
     if not isinstance(states, dict):
         return None
     return CISnapshot({str(name): str(state) for name, state in states.items()})
-
-
-# ---------------------------------------------------------------------------
-# Settings the readers share: where the cache lives and how old it may be.
-# ---------------------------------------------------------------------------
-
-#: Env var holding the cache max age in seconds. ``0`` disables the read.
-MAX_AGE_ENV = "PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS"
-#: Max age of a cache entry when the operator sets nothing.
-DEFAULT_MAX_AGE_SECONDS = 90.0
-
-
-def max_age_seconds() -> float:
-    """The configured cache max age in seconds.
-
-    Read at call time so an operator override needs no restart. A malformed,
-    non-finite or negative value is an operator mistake, not a reason to stop
-    reading CI: it logs a WARNING and falls back to
-    :data:`DEFAULT_MAX_AGE_SECONDS`. ``0`` is legal and disables the cache
-    read entirely, so every caller falls back to the REST path.
-    """
-    raw = os.environ.get(MAX_AGE_ENV)
-    if raw is None:
-        return DEFAULT_MAX_AGE_SECONDS
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        value = None
-    if value is None or not math.isfinite(value) or value < 0:
-        _LOGGER.warning(
-            "invalid CI rollup cache max age setting; using the default",
-            extra={"setting": MAX_AGE_ENV, "default_seconds": DEFAULT_MAX_AGE_SECONDS},
-        )
-        return DEFAULT_MAX_AGE_SECONDS
-    return value
-
-
-def state_root(manifest_root: Path | str | None = None) -> Path:
-    """The pipeline-owned state root the rollup cache lives under.
-
-    Same rule as the detached grading channel: an absolute
-    ``PIPELINE_STATE_DIR`` wins, a relative one resolves against the manifests
-    base (never the process CWD, which differs between tick kinds), and with
-    no override the manifests base itself. ``manifest_root`` defaults to
-    :data:`pipeline.paths.PLAN_DIR`, read at call time so a test or a scoped
-    plan sees the patched value.
-    """
-    from . import paths
-
-    base = Path(paths.PLAN_DIR if manifest_root is None else manifest_root)
-    override = os.environ.get("PIPELINE_STATE_DIR")
-    if not override:
-        return base
-    root = Path(override)
-    return root if root.is_absolute() else base / root

@@ -19,7 +19,15 @@ import stat
 import time
 from datetime import UTC, datetime
 
-from . import audit_anchor, ci_rollup, cross_plan, paths, security_audit, wake
+from . import (
+    audit_anchor,
+    ci_rollup,
+    cross_plan,
+    forge_github,
+    paths,
+    security_audit,
+    wake,
+)
 from .ci import CANCELLED, FAIL, PASS, PENDING, _aggregate_ci_states
 from .events import make_event
 from .forge import CIStatusUnreadable
@@ -336,7 +344,9 @@ def _refresh_ci_rollups(
             )
             continue
         try:
-            ci_rollup.store_rollup(repo_root, rollup, ci_rollup.state_root())
+            ci_rollup.store_rollup(
+                repo_root, rollup, forge_github.ci_rollup_state_root()
+            )
         except OSError as exc:
             # The wake below uses the payload in hand; only the cache misses
             # out, and the next interval stores it again.

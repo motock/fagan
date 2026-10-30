@@ -26,13 +26,25 @@ import pytest
 # pipeline.server is imported explicitly first: a pre-existing import cycle
 # makes some pipeline modules unimportable cold in any other order.
 import pipeline.server  # noqa: F401
-from pipeline import ci_rollup, paths, watchers
+from pipeline import ci_rollup, forge_github, paths, watchers
 from pipeline.forge import FAIL, PASS, PENDING, CISnapshot, CIStatusUnreadable
 from pipeline.forge_github import GitHubForge
 
 MAX_AGE_ENV = "PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS"
 INTERVAL_ENV = "PIPELINE_CI_ROLLUP_INTERVAL_SECONDS"
 SHA = "a" * 40
+
+
+def test_state_root_follows_the_detached_grade_rule(tmp_path, monkeypatch):
+    """An absolute override wins; a relative one sits under the manifests base."""
+    plans = tmp_path / "plans"
+    monkeypatch.setattr(paths, "PLAN_DIR", plans)
+    monkeypatch.setenv("PIPELINE_STATE_DIR", str(tmp_path / "abs"))
+    assert forge_github.ci_rollup_state_root() == tmp_path / "abs"
+    monkeypatch.setenv("PIPELINE_STATE_DIR", "rel")
+    assert forge_github.ci_rollup_state_root() == plans / "rel"
+    monkeypatch.delenv("PIPELINE_STATE_DIR")
+    assert forge_github.ci_rollup_state_root() == plans
 
 
 class FakeBus:

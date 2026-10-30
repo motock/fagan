@@ -145,6 +145,24 @@ class LocalInferenceProvider(Protocol):
         ...
 
 
+def ollama_auth_kwargs() -> dict:
+    """Auth kwargs for an Ollama request: a bearer token, but only when set.
+
+    https://ollama.com needs ``Authorization: Bearer <OLLAMA_API_KEY>`` while
+    a local http://host.docker.internal:11434 endpoint needs no key at all.
+    Read at call time (never cached at import: a test that removes the env
+    var must see the header disappear on the very next call). Returns ``{}``
+    when the variable is unset, empty, or whitespace-only, so callers can
+    spread it without ever sending a keyless ``Authorization`` header. The
+    value is stripped: a stray trailing space in the env var would otherwise
+    produce a malformed token. Never log the returned header.
+    """
+    key = os.environ.get("OLLAMA_API_KEY", "").strip()
+    if key:
+        return {"headers": {"Authorization": f"Bearer {key}"}}
+    return {}
+
+
 class OllamaProvider:
     """Ollama's native /api/chat endpoint (not the OpenAI-compatible /v1
     surface - only the native API accepts `options.num_ctx`, which matters
@@ -172,7 +190,10 @@ class OllamaProvider:
         wire_timeout = (
             timeout if timeout is not None else resolve_role_call_timeout()
         )
-        resp = httpx.post(f"{endpoint}/api/chat", json=body, timeout=wire_timeout)
+        resp = httpx.post(
+            f"{endpoint}/api/chat", json=body, timeout=wire_timeout,
+            **ollama_auth_kwargs(),
+        )
         # Detect 429 before raise_for_status() converts it to a generic
         # HTTPError - Ollama-cloud (and any upstream proxy) rate-limits per
         # host, so a 429 is a transient "defer and retry" signal, not a
@@ -187,7 +208,8 @@ class OllamaProvider:
 
     def loaded_models(self, endpoint: str) -> set[str]:
         try:
-            resp = httpx.get(f"{endpoint}/api/ps", timeout=5)
+            resp = httpx.get(
+                f"{endpoint}/api/ps", timeout=5, **ollama_auth_kwargs())
             resp.raise_for_status()
             payload = resp.json()
         except (httpx.HTTPError, ValueError):
@@ -201,7 +223,8 @@ class OllamaProvider:
 
     def reachable(self, endpoint: str) -> tuple[bool, str]:
         try:
-            resp = httpx.get(f"{endpoint}/api/tags", timeout=10)
+            resp = httpx.get(
+                f"{endpoint}/api/tags", timeout=10, **ollama_auth_kwargs())
             resp.raise_for_status()
             return True, ""
         except httpx.HTTPError as e:

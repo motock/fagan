@@ -79,6 +79,7 @@ def _stream_one_turn_impl(origin, payload):
     prompt_eval_count = None
     with httpx.stream(
         "POST", f"{origin['ENDPOINT']}/api/chat", json=payload,
+        **origin["inference_providers"].ollama_auth_kwargs(),
         timeout=httpx.Timeout(connect=origin["CONNECT_TIMEOUT_SECONDS"], read=origin["READ_SILENCE_SECONDS"],
                               write=10.0, pool=10.0),
     ) as r:

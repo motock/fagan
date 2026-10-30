@@ -8,8 +8,8 @@ three pieces of that flow:
   credentials, no port/query/fragment, exactly ``/<owner>/<repo>[.git]``).
 * :func:`managed_path` maps a URL to ``<root>/<host>/<owner>/<repo>`` and refuses
   any path that escapes the root.
-* :func:`ensure_clone` clones into that path, or re-verifies an existing clone,
-  fast-forwards it and pins the worktree onto the fetched commit.
+* :func:`ensure_clone` clones into that path, or refreshes an existing clone and
+  pins its worktree onto the fetched commit.
 
 Security properties:
 
@@ -17,18 +17,28 @@ Security properties:
   string that is validated is the string git acts on. git receives a
   re-assembled, normalised URL (``https://<host>/<owner>/<repo>``), never the
   raw input, and ``--`` separates it from the options in the argv list.
-* Credentials never enter a URL, an argv list, ``.git/config`` or a log line:
-  when ``PIPELINE_GIT_TOKEN_FILE`` names a private regular file owned by the
+* Credentials never enter a URL, an argv list, ``.git/config`` or a log line.
+  When ``PIPELINE_GIT_TOKEN_FILE`` names a private regular file owned by the
   current user, a 0700 ``GIT_ASKPASS`` helper in a private temp directory reads
-  the token from that file itself. The token is never in the child environment,
-  so ``/proc/<pid>/environ`` cannot leak it.
-* The git child gets a minimal environment (``PATH``, ``HOME``, ``LANG``,
-  ``TMPDIR`` plus git plumbing) rather than the pipeline's own, so provider keys
-  and dashboard secrets are not exposed to repository-supplied helpers.
-* An existing managed clone is only trusted after ``.git`` is confirmed to be a
-  real directory (not a symlink) and ``remote.origin.url`` is confirmed to match
-  the requested repository; the worktree is then reset onto the fetched commit
-  and cleaned, so callers never read content from an unverified origin.
+  the token from that file itself; the token is never placed in the child
+  environment, so ``/proc/<pid>/environ`` cannot leak it.
+* The git child gets a minimal environment (no pipeline secrets) and cannot
+  read user or system git configuration: ``GIT_CONFIG_GLOBAL`` and
+  ``GIT_CONFIG_SYSTEM`` point at ``/dev/null``, ``GIT_CONFIG_NOSYSTEM=1``, and
+  the child's ``HOME`` is a private scratch directory. Hostile settings such as
+  ``url.<base>.insteadOf`` or ``http.proxy`` therefore cannot rewrite a URL.
+* A pre-existing managed clone is *not* trusted on the strength of
+  ``remote.origin.url`` alone. :func:`_audit_local_config` reads every local
+  config entry with ``git config --local --list`` and accepts only a
+  deny-by-default allow-list whose values are re-checked; the origin URL must
+  equal the canonical URL and occur exactly once. Any other key -
+  ``url.*.insteadOf``, ``http.proxy``, ``core.gitproxy``, ``core.worktree``,
+  ``credential.*``, ``core.hooksPath``, ... - refuses the refresh.
+* ``fetch`` is given the canonical URL and an explicit refspec on the argv, so
+  the ``origin`` remote configuration is never consulted for the transport.
+* ``reset`` and ``clean`` run with ``-c core.worktree=<realpath(target)>`` and
+  ``-c core.bare=false`` forced on the argv, so a stale ``core.worktree`` in the
+  clone's own config cannot make git write or delete outside the managed root.
 
 Environment:
 
@@ -37,7 +47,7 @@ Environment:
 * ``PIPELINE_REPOS_ROOT`` - required root of the managed volume.
 * ``PIPELINE_GIT_TOKEN_FILE`` - optional path to a 0600 file holding a token.
 * ``PIPELINE_REPO_URL_ALLOW_FILE`` - test-only escape hatch (see
-  :func:`parse_repo_url`); off by default.
+  :func:`parse_repo_url`); off by default, must never be set in production.
 """
 
 from __future__ import annotations
@@ -50,7 +60,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from urllib.parse import SplitResult, urlsplit
 
@@ -58,7 +68,9 @@ LOG = logging.getLogger(__name__)
 
 DEFAULT_REPO_URL_HOSTS = "github.com"
 DEFAULT_CLONE_TIMEOUT = 600
+
 _FILE_HOST = "local"
+_ORIGIN_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
 
 _ALLOWED_SCHEMES = ("https",)
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._-]+")
@@ -66,19 +78,31 @@ _PATH_RE = re.compile(r"/([^/]+)/([^/]+)")
 _URL_CREDENTIALS_RE = re.compile(r"https://[^\s@]*@")
 _WHITESPACE_RE = re.compile(r"\s")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_CHILD_ENV_KEYS = ("PATH", "HOME", "LANG", "TMPDIR")
-# Defence in depth against repository-controlled configuration: no credential
-# helper, hooks or filesystem monitor from a tree this module did not create.
-_SAFE_GIT_OPTS = (
-    "-c",
-    "credential.helper=",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=",
+_BRANCH_REF_RE = re.compile(r"refs/heads/[A-Za-z0-9._/@+-]+")
+
+# Local config keys a clone made by this module may legitimately carry. This is
+# a deny-by-default allow-list: every other key refuses the refresh, because a
+# key such as ``url.<base>.insteadOf`` rewrites the transport while
+# ``remote.origin.url`` still reads the legitimate value.
+_CONFIG_EXACT_KEYS = frozenset(
+    {
+        "core.repositoryformatversion",
+        "core.filemode",
+        "core.bare",
+        "core.logallrefupdates",
+        "core.ignorecase",
+        "core.precomposeunicode",
+        "core.symlinks",
+        "gc.auto",
+        "gc.autodetach",
+    }
 )
+_CONFIG_PREFIXES = ("extensions.",)
+_CONFIG_BOOLEANS = frozenset({"core.filemode", "core.logallrefupdates"})
+
 # The helper reads the token from the file named in the child env, so the token
-# itself never appears in the environment or in the script.
+# itself never appears in the environment or in the script. The https username
+# is fixed: the token is never put into a URL.
 _ASKPASS_SCRIPT = """#!/bin/sh
 case "$1" in
   *Username*) printf '%s\\n' 'x-access-token' ;;
@@ -115,10 +139,20 @@ def _config(environ: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if environ is None else environ
 
 
+def _redact(text: str) -> str:
+    """Replace any credential embedded in an https URL with ``***``."""
+    return _URL_CREDENTIALS_RE.sub("https://***@", text)
+
+
+def _sanitize(text: str) -> str:
+    """Strip control characters and hide credentials in untrusted text."""
+    return _redact(_CONTROL_RE.sub("", text))
+
+
 def _loggable(text: str) -> str:
     """One sanitised line of untrusted text, safe to put in a log record."""
     for raw in text.splitlines():
-        line = _sanitize(_CONTROL_RE.sub("", raw)).strip()
+        line = _sanitize(raw).strip()
         if line:
             return line[:200]
     return ""
@@ -157,7 +191,7 @@ def parse_repo_url(
     TEST-ONLY: when ``PIPELINE_REPO_URL_ALLOW_FILE=1`` a
     ``file:///abs/path/<owner>/<repo>.git`` URL is also accepted and reports the
     host ``local``. This exists so unit tests can drive a real bare repo; it is
-    off by default and must not be enabled in production. Traversal segments
+    off by default, must not be enabled in production, and traversal segments
     (``.``/``..``) are still rejected in that branch.
     """
     env = _config(environ)
@@ -256,139 +290,137 @@ def _canonical_url(url: str, env: Mapping[str, str]) -> str:
 def managed_path(url: str, environ: Mapping[str, str] | None = None) -> Path:
     """Return ``<PIPELINE_REPOS_ROOT>/<host>/<owner>/<repo>`` for ``url``.
 
-    Never creates anything. Raises :class:`RepoUrlError` when
-    ``PIPELINE_REPOS_ROOT`` is unset or when the resolved target would land
-    outside the resolved root (a symlinked component, say).
+    Raises :class:`RepoUrlError` when ``PIPELINE_REPOS_ROOT`` is unset or when
+    the resolved target would fall outside the resolved root (a symlinked host
+    or owner directory must not redirect the clone out of the volume).
     """
     env = _config(environ)
-    root_value = env.get("PIPELINE_REPOS_ROOT", "").strip()
-    if not root_value:
-        raise _deny(url, "PIPELINE_REPOS_ROOT is not set")
     host, owner, repo = parse_repo_url(url, env)
-    root = Path(root_value)
+    raw_root = env.get("PIPELINE_REPOS_ROOT")
+    if not raw_root:
+        raise RepoUrlError(
+            "PIPELINE_REPOS_ROOT is required to compute a managed repository path"
+        )
+    root = Path(raw_root)
     target = root / host / owner / repo
-    root_resolved = os.path.realpath(root)
-    target_resolved = os.path.realpath(target)
-    try:
-        inside = os.path.commonpath([root_resolved, target_resolved]) == root_resolved
-    except ValueError:  # different drives (Windows); treat as outside
-        inside = False
-    if not inside or target_resolved == root_resolved:
-        raise _deny(
-            url,
-            f"repository path for {_redact_url(url)} escapes PIPELINE_REPOS_ROOT",
+    resolved_root = Path(os.path.realpath(root))
+    resolved_target = Path(os.path.realpath(target))
+    if resolved_target == resolved_root or not resolved_target.is_relative_to(
+        resolved_root
+    ):
+        raise RepoUrlError(
+            f"managed repository path for {_redact(url)} escapes PIPELINE_REPOS_ROOT"
         )
     return target
 
 
-def _sanitize(text: str) -> str:
-    """Replace any ``https://<anything>@`` credential prefix with ``https://***@``."""
-    return _URL_CREDENTIALS_RE.sub("https://***@", text)
+# --- git plumbing ----------------------------------------------------------
 
 
-def _redact_url(url: str) -> str:
-    """Drop userinfo from ``url`` so it can be named in an error or a log line."""
-    return _sanitize(_CONTROL_RE.sub("", url))
+def _child_env(auth: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build the minimal environment handed to every git child process.
+
+    The pipeline's own environment is never inherited wholesale, and git's user
+    and system configuration are neutralised so a ``~/.gitconfig`` carrying
+    ``insteadOf`` or ``http.proxy`` cannot rewrite a transport.
+    """
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_SSH_COMMAND": "false",
+    }
+    if auth:
+        env.update(auth)
+    return env
 
 
 def _token_file(env: Mapping[str, str]) -> Path | None:
-    """Validate ``PIPELINE_GIT_TOKEN_FILE`` and return it, or ``None`` when unset.
-
-    The file must be a regular file owned by the current user and closed to
-    group and world access; anything else is refused before git runs.
-    """
-    raw = env.get("PIPELINE_GIT_TOKEN_FILE", "").strip()
+    """Validate ``PIPELINE_GIT_TOKEN_FILE`` and return it without reading it."""
+    raw = env.get("PIPELINE_GIT_TOKEN_FILE")
     if not raw:
         return None
     path = Path(raw)
     try:
-        info = path.stat()
-    except OSError as exc:
+        info = path.lstat()
+    except OSError:
         raise RepoCloneError(
-            f"could not read PIPELINE_GIT_TOKEN_FILE ({type(exc).__name__})"
+            "PIPELINE_GIT_TOKEN_FILE does not name a readable file"
         ) from None
     if not stat.S_ISREG(info.st_mode):
-        # A FIFO or device would block, or stream forever.
         raise RepoCloneError("PIPELINE_GIT_TOKEN_FILE must be a regular file")
     if info.st_mode & 0o077:
         raise RepoCloneError(
             "PIPELINE_GIT_TOKEN_FILE must not be group or world accessible"
         )
-    getuid = getattr(os, "getuid", None)
-    if getuid is not None and info.st_uid != getuid():
+    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
         raise RepoCloneError(
             "PIPELINE_GIT_TOKEN_FILE must be owned by the current user"
         )
-    try:
-        token = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise RepoCloneError(
-            f"could not read PIPELINE_GIT_TOKEN_FILE ({type(exc).__name__})"
-        ) from None
-    if not token:
+    if info.st_size == 0:
         raise RepoCloneError("PIPELINE_GIT_TOKEN_FILE is empty")
     return path
 
 
-def _child_env(
-    env: Mapping[str, str], extra: Mapping[str, str] | None = None
-) -> dict[str, str]:
-    """Build the minimal environment handed to git.
-
-    The pipeline's own environment (provider keys, dashboard keys) is never
-    copied: only the keys git needs to run, plus the askpass plumbing.
-    """
-    child: dict[str, str] = {}
-    for key in _CHILD_ENV_KEYS:
-        value = env.get(key) or os.environ.get(key)
-        if value:
-            child[key] = value
-    child.setdefault("PATH", os.defpath)
-    if "HOME" not in child:
-        child["HOME"] = str(Path.home())
-    child["GIT_TERMINAL_PROMPT"] = "0"
-    child["GIT_CONFIG_NOSYSTEM"] = "1"
-    if extra:
-        child.update(extra)
-    return child
-
-
 @contextlib.contextmanager
-def _askpass(token_path: Path | None) -> Iterator[dict[str, str]]:
-    """Yield the child-env entries that let git ask for credentials.
-
-    The 0700 helper script lives in a private temp directory, reads the token
-    from ``PIPELINE_GIT_TOKEN_FILE`` (never from its own environment) and the
-    directory is removed again on both the success and the failure path.
-    """
-    extra: dict[str, str] = {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
-    if token_path is None:
-        yield extra
-        return
-    directory = Path(tempfile.mkdtemp(prefix="pipeline-askpass-"))
+def _askpass(token: Path | None) -> Iterator[dict[str, str]]:
+    """Yield the git credential environment; never yield the token itself."""
+    directory = Path(tempfile.mkdtemp(prefix="pipeline-git-"))
+    os.chmod(directory, 0o700)
     try:
-        directory.chmod(0o700)
         script = directory / "askpass.sh"
-        script.write_text(_ASKPASS_SCRIPT, encoding="utf-8")
-        script.chmod(0o700)
-        extra["GIT_ASKPASS"] = str(script)
-        extra["PIPELINE_GIT_TOKEN_FILE"] = str(token_path)
-        yield extra
+        script.write_text(_ASKPASS_SCRIPT)
+        os.chmod(script, 0o700)
+        auth = {
+            "GIT_ASKPASS": str(script),
+            "GIT_TERMINAL_PROMPT": "0",
+            # A scratch HOME keeps user-level hooks and templates out of reach.
+            "HOME": str(directory),
+        }
+        if token is not None:
+            auth["PIPELINE_GIT_TOKEN_FILE"] = str(token)
+        yield auth
     finally:
+        # ``finally`` so a failed clone never leaves a live token file behind.
         shutil.rmtree(directory, ignore_errors=True)
 
 
+def _safe_opts(target: Path) -> list[str]:
+    """Command-line config that outranks any repository-local setting."""
+    root = os.path.realpath(str(target))
+    return [
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=",
+        "-c",
+        "core.sshCommand=false",
+        # Defence in depth for the worktree escape: the worktree is ours, not
+        # the one a stale clone's own config may name.
+        "-c",
+        "core.bare=false",
+        "-c",
+        f"core.worktree={root}",
+    ]
+
+
 def _run(
-    argv: Sequence[str],
+    argv: list[str],
     child_env: Mapping[str, str],
     timeout: float,
     operation: str,
     safe_url: str,
 ) -> str:
-    """Run one git command and translate every failure into RepoCloneError."""
+    """Run one git command from an argv list and return its stdout."""
     try:
         proc = subprocess.run(
-            list(argv),
+            argv,
             check=False,
             capture_output=True,
             text=True,
@@ -396,13 +428,26 @@ def _run(
             env=dict(child_env),
         )
     except subprocess.TimeoutExpired:
-        raise RepoCloneError(
-            f"git {operation} timed out after {timeout:g}s for {safe_url}"
-        ) from None
+        LOG.warning(
+            "git command timed out",
+            extra={
+                "event": "repo_git_timeout",
+                "operation": operation,
+                "url": safe_url,
+            },
+        )
+        raise RepoCloneError(f"git {operation} timed out for {safe_url}") from None
     except OSError as exc:
-        raise RepoCloneError(
-            f"git {operation} could not start for {safe_url} ({type(exc).__name__})"
-        ) from None
+        LOG.warning(
+            "git command could not start",
+            extra={
+                "event": "repo_git_unavailable",
+                "operation": operation,
+                "url": safe_url,
+                "reason": type(exc).__name__,
+            },
+        )
+        raise RepoCloneError(f"git {operation} failed for {safe_url}") from None
     if proc.returncode != 0:
         LOG.warning(
             "git command failed",
@@ -410,20 +455,22 @@ def _run(
                 "event": "repo_git_failure",
                 "operation": operation,
                 "url": safe_url,
-                "stderr": _loggable(proc.stderr),
+                # git echoes the URL from the remote it was given, so a
+                # credential pasted into it must be stripped before logging.
+                "stderr": _loggable(proc.stderr or proc.stdout or ""),
             },
         )
         raise RepoCloneError(f"git {operation} failed for {safe_url}")
-    return proc.stdout
+    return proc.stdout or ""
 
 
 def _try_output(
-    argv: Sequence[str], child_env: Mapping[str, str], timeout: float
+    argv: list[str], child_env: Mapping[str, str], timeout: float
 ) -> str | None:
-    """Return stripped stdout, or ``None`` when git exits non-zero."""
+    """Run a read-only git command, returning stripped stdout or ``None``."""
     try:
         proc = subprocess.run(
-            list(argv),
+            argv,
             check=False,
             capture_output=True,
             text=True,
@@ -434,75 +481,265 @@ def _try_output(
         return None
     if proc.returncode != 0:
         return None
-    return proc.stdout.strip()
+    return (proc.stdout or "").strip()
 
 
-def _url_key(url: str) -> tuple[str, str, str]:
-    """Comparison key for a URL: scheme, host and path without ``.git``/slash."""
-    split = urlsplit(url.strip())
-    path = split.path.rstrip("/").removesuffix(".git")
-    return split.scheme.lower(), (split.hostname or "").lower(), path
+def _config_entries(raw: str) -> list[tuple[str, str]]:
+    """Split ``git config --local --list -z`` output into (key, value) pairs."""
+    entries: list[tuple[str, str]] = []
+    for record in raw.split("\0"):
+        if not record:
+            continue
+        key, _, value = record.partition("\n")
+        entries.append((key.strip(), value))
+    return entries
 
 
-def _verify_existing(target: Path, canonical: str, safe_url: str) -> None:
-    """Refuse an existing managed path that is not a genuine clone of ``canonical``."""
-    git_dir = target / ".git"
-    if git_dir.is_symlink() or not git_dir.is_dir():
-        raise RepoCloneError(
-            f"git fetch refused: {target} is not a managed clone of {safe_url}"
+def _untrusted(target: Path, key: str) -> RepoCloneError:
+    LOG.warning(
+        "refusing to refresh an untrusted clone",
+        extra={
+            "event": "repo_config_untrusted",
+            "path": str(target),
+            "key": _loggable(key),
+        },
+    )
+    return RepoCloneError(
+        f"git fetch refused: the existing clone at {target} carries an "
+        "unexpected local git configuration"
+    )
+
+
+def _audit_local_config(
+    target: Path, canonical: str, child_env: Mapping[str, str], timeout: float
+) -> None:
+    """Refuse an existing clone whose local config is not exactly what we wrote.
+
+    A clone this module created carries a handful of keys. Anything else - most
+    importantly ``url.*.insteadOf`` (which rewrites the URL a separate ``git
+    fetch`` resolves), ``http.proxy``/``core.gitproxy`` (which MITM it),
+    ``core.worktree`` or a duplicate ``remote.origin.url`` - means the tree is
+    not trustworthy, so the refresh is refused instead of fetching from it.
+    """
+    entries = _config_entries(
+        _run(
+            [
+                "git",
+                *_safe_opts(target),
+                "-C",
+                str(target),
+                "config",
+                "--local",
+                "--list",
+                "-z",
+            ],
+            child_env,
+            timeout,
+            "fetch",
+            str(target),
         )
-    origin = _try_output(
+    )
+    origins: list[str] = []
+    fetches: list[str] = []
+    for key, value in entries:
+        lowered = key.lower()
+        if lowered == "remote.origin.url":
+            origins.append(value)
+            continue
+        if lowered == "remote.origin.fetch":
+            fetches.append(value)
+            continue
+        if lowered == "remote.origin.tagopt":
+            # ``git clone --no-tags`` records this; anything else is unexpected.
+            if value != "--no-tags":
+                raise _untrusted(target, key)
+            continue
+        if lowered == "core.bare":
+            if value.lower() != "false":
+                raise _untrusted(target, key)
+            continue
+        if lowered in _CONFIG_EXACT_KEYS:
+            if lowered in _CONFIG_BOOLEANS and value.lower() not in ("true", "false"):
+                raise _untrusted(target, key)
+            continue
+        if lowered.startswith("branch.") and lowered.endswith(".remote"):
+            if value.lower() != "origin":
+                raise _untrusted(target, key)
+            continue
+        if lowered.startswith("branch.") and lowered.endswith(".merge"):
+            if not _BRANCH_REF_RE.fullmatch(value):
+                raise _untrusted(target, key)
+            continue
+        if any(lowered.startswith(prefix) for prefix in _CONFIG_PREFIXES):
+            continue
+        raise _untrusted(target, key)
+    if origins != [canonical]:
+        raise _untrusted(target, "remote.origin.url")
+    if fetches != [_ORIGIN_REFSPEC]:
+        raise _untrusted(target, "remote.origin.fetch")
+
+
+def _is_existing_clone(target: Path, safe_url: str) -> bool:
+    """Return True when ``target`` holds a clone; refuse anything ambiguous."""
+    git_dir = target / ".git"
+    if git_dir.is_symlink():
+        raise RepoCloneError(
+            f"git clone refused: {target} has a symlinked .git, not a managed clone"
+        )
+    if git_dir.is_dir():
+        return True
+    if target.is_dir():
+        try:
+            populated = any(target.iterdir())
+        except OSError:
+            populated = True
+        if populated:
+            raise RepoCloneError(
+                f"git clone refused: {target} exists and is not a managed clone "
+                f"of {safe_url}"
+            )
+    return False
+
+
+def _make_dirs(path: Path) -> None:
+    """Create ``path`` and its parents with mode 0750, whatever the umask is."""
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o750)
+        except FileExistsError:
+            continue
+        os.chmod(directory, 0o750)
+
+
+def _clone(
+    target: Path,
+    canonical: str,
+    safe_url: str,
+    child_env: Mapping[str, str],
+    timeout: float,
+) -> None:
+    _make_dirs(target.parent)
+    _run(
         [
             "git",
-            *_SAFE_GIT_OPTS,
+            *_safe_opts(target),
+            "clone",
+            "--no-tags",
+            "--",
+            canonical,
+            str(target),
+        ],
+        child_env,
+        timeout,
+        "clone",
+        safe_url,
+    )
+
+
+def _refresh(
+    target: Path,
+    canonical: str,
+    safe_url: str,
+    child_env: Mapping[str, str],
+    timeout: float,
+) -> None:
+    """Fetch with an explicit URL and refspec, then pin the worktree onto it."""
+    _audit_local_config(target, canonical, child_env, timeout)
+    _run(
+        [
+            "git",
+            *_safe_opts(target),
             "-C",
             str(target),
-            "config",
-            "--get",
-            "remote.origin.url",
+            "fetch",
+            "--prune",
+            "--no-tags",
+            "--",
+            # The canonical URL and refspec are on the argv: the ``origin``
+            # remote's configuration is not consulted for the transport, so an
+            # ``insteadOf`` rewrite has nothing to attach to.
+            canonical,
+            _ORIGIN_REFSPEC,
         ],
-        _child_env({}),
-        30,
+        child_env,
+        timeout,
+        "fetch",
+        safe_url,
     )
-    if origin is None or _url_key(origin) != _url_key(canonical):
-        LOG.warning(
-            "refusing to fetch from a substituted origin",
-            extra={
-                "event": "repo_origin_mismatch",
-                "url": safe_url,
-                "path": str(target),
-            },
-        )
-        raise RepoCloneError(
-            f"git fetch refused: existing clone at {target} does not track {safe_url}"
-        )
+    commit = _fetched_commit(target, child_env, timeout)
+    if not commit:
+        raise RepoCloneError(f"git fetch failed for {safe_url}: no fetched commit")
+    _run(
+        [
+            "git",
+            *_safe_opts(target),
+            "-C",
+            str(target),
+            "reset",
+            "--hard",
+            "--quiet",
+            commit,
+        ],
+        child_env,
+        timeout,
+        "fetch",
+        safe_url,
+    )
+    # ``-xffd`` removes untracked and ignored files so a caller never reads
+    # content an agent wrote into the tree; ``core.worktree`` is forced by
+    # ``_safe_opts`` so this cannot leave the managed root.
+    _run(
+        ["git", *_safe_opts(target), "-C", str(target), "clean", "-xffd"],
+        child_env,
+        timeout,
+        "fetch",
+        safe_url,
+    )
 
 
-def _resolve_fetched_commit(
-    target: Path, child_env: Mapping[str, str], timeout: float, safe_url: str
-) -> str:
-    """Return the commit the fetched ``origin/HEAD`` (or ``HEAD``) points at."""
-    for rev in ("refs/remotes/origin/HEAD", "HEAD"):
+def _fetched_commit(
+    target: Path, child_env: Mapping[str, str], timeout: float
+) -> str | None:
+    for rev in ("refs/remotes/origin/HEAD", "FETCH_HEAD", "HEAD"):
         sha = _try_output(
-            ["git", *_SAFE_GIT_OPTS, "-C", str(target), "rev-parse", "--verify", rev],
+            [
+                "git",
+                *_safe_opts(target),
+                "-C",
+                str(target),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                rev,
+            ],
             child_env,
             timeout,
         )
         if sha:
             return sha
-    LOG.warning(
-        "could not resolve the fetched commit",
-        extra={"event": "repo_resolve_failed", "url": safe_url, "path": str(target)},
-    )
-    raise RepoCloneError(f"git fetch failed for {safe_url}: no fetched commit found")
+    return None
 
 
 def _head_commit(
     target: Path, child_env: Mapping[str, str], timeout: float, safe_url: str
 ) -> str:
-    """Return the checked-out commit of ``target`` or raise RepoCloneError."""
     head = _try_output(
-        ["git", *_SAFE_GIT_OPTS, "-C", str(target), "rev-parse", "--verify", "HEAD"],
+        [
+            "git",
+            *_safe_opts(target),
+            "-C",
+            str(target),
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ],
         child_env,
         timeout,
     )
@@ -512,91 +749,38 @@ def _head_commit(
 
 
 def ensure_clone(
-    url: str,
-    environ: Mapping[str, str] | None = None,
-    timeout: float = DEFAULT_CLONE_TIMEOUT,
-) -> ClonedRepo:
-    """Clone ``url`` into its managed path, or refresh and pin an existing clone.
+    url: str, environ: Mapping[str, str] | None = None, timeout: float = 600
+) -> Path:
+    """Clone ``url`` into its managed path, or refresh that path, and pin it.
 
-    Returns the managed path as a :class:`ClonedRepo`, whose ``commit`` is the
-    full SHA the worktree is checked out at. Raises :class:`RepoUrlError` for an
-    unacceptable URL or configuration and :class:`RepoCloneError` when git
-    fails; neither message ever carries a credential.
+    Returns a :class:`ClonedRepo` whose ``commit`` is the checked-out SHA. Any
+    git failure, timeout or missing binary raises :class:`RepoCloneError`; the
+    message names the URL with any credential redacted and never carries git's
+    stderr.
     """
     env = _config(environ)
-    canonical = _canonical_url(url, env)
     target = managed_path(url, env)
-    safe_url = _redact_url(canonical)
-    token_path = _token_file(env)
-    with _askpass(token_path) as extra_env:
-        child_env = _child_env(env, extra_env)
-        if (target / ".git").exists():
-            _verify_existing(target, canonical, safe_url)
-            _run(
-                ["git", *_SAFE_GIT_OPTS, "-C", str(target), "fetch", "--prune", "origin"],
-                child_env,
-                timeout,
-                "fetch",
-                safe_url,
-            )
-            commit = _resolve_fetched_commit(target, child_env, timeout, safe_url)
-            _run(
-                ["git", *_SAFE_GIT_OPTS, "-C", str(target), "reset", "--hard", commit],
-                child_env,
-                timeout,
-                "reset",
-                safe_url,
-            )
-            _run(
-                ["git", *_SAFE_GIT_OPTS, "-C", str(target), "clean", "-xffd"],
-                child_env,
-                timeout,
-                "clean",
-                safe_url,
-            )
-            LOG.info(
-                "fetched plan repository",
-                extra={
-                    "event": "repo_fetched",
-                    "url": safe_url,
-                    "path": str(target),
-                    "commit": commit,
-                },
-            )
+    canonical = _canonical_url(url, env)
+    safe_url = _redact(canonical)
+    token = _token_file(env)
+    with _askpass(token) as auth:
+        child_env = _child_env(auth)
+        if _is_existing_clone(target, safe_url):
+            _refresh(target, canonical, safe_url, child_env, timeout)
+            operation = "fetch"
         else:
-            if target.exists() and any(target.iterdir()):
-                # Not a managed clone and not empty: never let git write into a
-                # tree somebody else prepared at the canonical path.
-                raise RepoCloneError(
-                    f"git clone refused: {target} exists but is not a managed "
-                    f"clone of {safe_url}"
-                )
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-            _run(
-                [
-                    "git",
-                    *_SAFE_GIT_OPTS,
-                    "clone",
-                    "--no-tags",
-                    "--",
-                    canonical,
-                    str(target),
-                ],
-                child_env,
-                timeout,
-                "clone",
-                safe_url,
-            )
-            commit = _head_commit(target, child_env, timeout, safe_url)
-            LOG.info(
-                "cloned plan repository",
-                extra={
-                    "event": "repo_cloned",
-                    "url": safe_url,
-                    "path": str(target),
-                    "commit": commit,
-                },
-            )
-    repo = ClonedRepo(target)
+            _clone(target, canonical, safe_url, child_env, timeout)
+            operation = "clone"
+        commit = _head_commit(target, child_env, timeout, safe_url)
+    LOG.info(
+        "repository ready",
+        extra={
+            "event": "repo_cloned" if operation == "clone" else "repo_fetched",
+            "url": safe_url,
+            "path": str(target),
+            "commit": commit,
+        },
+    )
+    repo = ClonedRepo(str(target))
     repo._commit = commit
     return repo

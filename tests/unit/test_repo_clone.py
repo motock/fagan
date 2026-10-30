@@ -575,3 +575,137 @@ def test_askpass_script_answers_username_then_token(tmp_path: Path) -> None:
     assert user == "x-access-token"
     assert secret == FAKE_TOKEN
     assert not script.exists()
+
+
+# --- hardening: an existing clone's local config is not trusted ------------
+
+
+def _managed_clone(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
+    """Clone a seeded bare repo through ensure_clone and return its details."""
+    bare = tmp_path / "bare" / "acme" / "widget.git"
+    _seed_bare(bare, tmp_path / "seed-work")
+    root = tmp_path / "repos"
+    env = _env(root)
+    url = f"file://{bare}"
+    return ensure_clone(url, environ=env), env, url
+
+
+def _fake_managed_clone(target: Path, origin: str) -> None:
+    """Build a managed clone whose local config carries ``origin``."""
+    target.mkdir(parents=True)
+    _git("init", "-q", str(target))
+    _git("remote", "add", "origin", origin, cwd=target)
+    _git(
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/*:refs/remotes/origin/*",
+        cwd=target,
+    )
+    _git("config", "remote.origin.tagopt", "--no-tags", cwd=target)
+
+
+def test_ensure_clone_refuses_local_insteadof_rewrite(tmp_path: Path) -> None:
+    """An insteadOf rewrite changes the URL *fetch* resolves, not origin.url."""
+    target, env, url = _managed_clone(tmp_path)
+    evil = tmp_path / "evil" / "acme" / "widget.git"
+    _seed_bare(evil, tmp_path / "evil-work", message="evil")
+    _git("config", "--add", f"url.file://{evil}.insteadOf", url, cwd=target)
+    (target / "planted.txt").write_text("attacker content\n")
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    message = str(excinfo.value)
+    assert "configuration" in message
+    assert "evil" not in message
+
+
+def test_ensure_clone_refuses_duplicate_origin_url(tmp_path: Path) -> None:
+    """A second remote.origin.url is the multi-valued variant of a swap.
+
+    ``git config --get`` returns the *last* value, so the attacker URL is added
+    first and the legitimate one last: the old key comparison then passed while
+    the fetch used the configuration as a whole.
+    """
+    target, env, url = _managed_clone(tmp_path)
+    other = tmp_path / "other" / "acme" / "widget.git"
+    _seed_bare(other, tmp_path / "other-work", message="other")
+    _git("config", "--unset-all", "remote.origin.url", cwd=target)
+    _git("config", "--add", "remote.origin.url", f"file://{other}", cwd=target)
+    _git("config", "--add", "remote.origin.url", url, cwd=target)
+
+    with pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=env)
+
+
+def test_ensure_clone_refuses_core_worktree_outside_root(tmp_path: Path) -> None:
+    """clean -xffd must never reach a worktree the clone's config points at."""
+    target, env, url = _managed_clone(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    important = outside / "important.txt"
+    important.write_text("must survive\n")
+    _git("config", "core.worktree", str(outside), cwd=target)
+
+    with pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=env)
+
+    assert important.is_file()
+    assert important.read_text() == "must survive\n"
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://github.com:8443/acme/widget",
+        "https://user:pw@github.com/acme/widget",
+    ],
+)
+def test_ensure_clone_refuses_origin_url_with_userinfo_or_port(
+    tmp_path: Path, origin: str
+) -> None:
+    root = tmp_path / "repos"
+    target = root / "github.com" / "acme" / "widget"
+    _fake_managed_clone(target, origin)
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone("https://github.com/acme/widget", environ=_env(root))
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_refresh_argv_forces_worktree_and_uses_the_canonical_url(
+    tmp_path: Path, bare_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fetch/reset/clean carry core.worktree and never resolve the origin remote."""
+    url, _, _ = bare_repo
+    env = _env(tmp_path / "repos")
+    ensure_clone(url, environ=env)  # create the clone for real
+
+    from pipeline import repo_clone
+
+    seen: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(argv, **kwargs):
+        seen.append(list(argv))
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(repo_clone.subprocess, "run", spy)
+    ensure_clone(url, environ=env)
+
+    mutations = [
+        argv
+        for argv in seen
+        if {"fetch", "reset", "clean"} & set(argv)
+    ]
+    assert mutations, "the second call must fetch"
+    for argv in mutations:
+        joined = " ".join(argv)
+        assert "core.worktree=" in joined
+        assert "core.bare=false" in argv
+    fetches = [argv for argv in seen if "fetch" in argv]
+    assert fetches, "the second call must fetch"
+    assert url in fetches[0]
+    assert "origin" not in fetches[0]
+    assert fetches[0][-1] == "+refs/heads/*:refs/remotes/origin/*"

@@ -116,7 +116,7 @@ COPY --chown=10001:10001 agents ./agents
 COPY --chown=10001:10001 global-rules ./global-rules
 COPY --chown=10001:10001 static ./static
 COPY --chown=10001:10001 model_registry.json pyproject.toml ./
-COPY --chown=10001:10001 deploy/entrypoint.sh ./deploy/entrypoint.sh
+COPY --chown=0:0 deploy/entrypoint.sh ./deploy/entrypoint.sh
 # The entrypoint sources its credential loader from deploy/lib; without it the
 # script refuses to start (fail closed), so the library must ship in the image.
 # It is root-owned and read-only on purpose: the process uid (10001) is the uid
@@ -126,7 +126,14 @@ COPY --chown=10001:10001 deploy/entrypoint.sh ./deploy/entrypoint.sh
 # outside the runtime uid's reach.
 COPY --chown=0:0 deploy/lib/operator_env.sh ./deploy/lib/operator_env.sh
 
-RUN chmod 0755 ./deploy/entrypoint.sh \
+# Both start-up scripts are root-owned and non-writable by the runtime uid, in
+# one layer: PID 1's script is the *caller* that sources the credential loader by
+# the time the operator secrets are exported, and uid 10001 - the uid agent
+# children run as - must not be able to edit either file. A code-executing agent
+# that could rewrite them would get its own code re-run at the next container
+# start, with every mounted secret in scope. Root keeps read/exec; nothing writes
+# these files at runtime.
+RUN chmod 0555 ./deploy/entrypoint.sh \
  && chmod 0444 ./deploy/lib/operator_env.sh \
  && ln -s /opt/venv /app/.venv \
  && chown 10001:10001 /app \

@@ -184,10 +184,19 @@ load_operator_credentials() {
     fi
 
     # The clone path takes the token *path*, not the value, so the same mounted
-    # file serves both the forge CLI and repo_clone.
-    if [ -z "${PIPELINE_GIT_TOKEN_FILE:-}" ] && [ -e /run/secrets/gh_token ]; then
-        PIPELINE_GIT_TOKEN_FILE=/run/secrets/gh_token
-        export PIPELINE_GIT_TOKEN_FILE
+    # file serves both the forge CLI and repo_clone. Derive it from the resolved
+    # GH_TOKEN_FILE instead of hardcoding the default: an operator who points
+    # GH_TOKEN_FILE elsewhere would otherwise leave the clone path aimed at an
+    # empty (or stale) /run/secrets/gh_token. Only a path that actually yielded a
+    # token is adopted, so an empty mount stays an absent credential.
+    if [ -z "${PIPELINE_GIT_TOKEN_FILE:-}" ] && [ -n "${GH_TOKEN:-}" ]; then
+        _git_token_path=$(secret_file_path GH_TOKEN_FILE /run/secrets/gh_token) \
+            || _git_token_path=
+        if [ -n "$_git_token_path" ] && [ -e "$_git_token_path" ]; then
+            PIPELINE_GIT_TOKEN_FILE=$_git_token_path
+            export PIPELINE_GIT_TOKEN_FILE
+        fi
+        unset _git_token_path
     fi
 }
 
@@ -195,15 +204,26 @@ load_operator_credentials() {
 # touch lives under PIPELINE_ALLOWED_REPO_ROOTS, which defaults to it.
 #
 # Mutable state belongs on the volume, so the directory is created with least
-# privilege rather than inherited from the umask. Unlike a mounted credential, a
-# root that cannot be created is fatal: a warning would leave
-# PIPELINE_ALLOWED_REPO_ROOTS pointing at a path that does not exist, and
-# pipeline.workspace.check_repo_root_allowed() resolves the allowlist entry
-# without requiring it to exist - so the clone trust boundary would fail open at
-# the first clone instead of at start-up. The container mounts its volume at
-# /var/lib/pipeline (deploy/compose.yaml), so the default path is creatable
-# there.
+# privilege rather than inherited from the umask.
+#
+# Failure is treated differently for the two cases, because they mean different
+# things:
+# - An operator-supplied PIPELINE_REPOS_ROOT that cannot be created or tightened
+#   is a misconfiguration on the trust boundary, so it is fatal. A warning would
+#   leave PIPELINE_ALLOWED_REPO_ROOTS pointing at a path that does not exist, and
+#   pipeline.workspace.check_repo_root_allowed() resolves allowlist entries
+#   without requiring them to exist.
+# - The image default (/var/lib/pipeline/repos) may simply be absent on a
+#   developer host that runs the script outside the image. It stays best effort
+#   rather than an abort, and it is not a fail-open: pipeline.repo_clone.
+#   _make_dirs() creates the root and its parents mode 0750 at clone time, and
+#   only beneath a path the allowlist already admitted.
 ensure_repos_root() {
+    if [ -n "${PIPELINE_REPOS_ROOT:-}" ]; then
+        _repos_root_explicit=1
+    else
+        _repos_root_explicit=
+    fi
     PIPELINE_REPOS_ROOT="${PIPELINE_REPOS_ROOT:-/var/lib/pipeline/repos}"
     # This path is operator-supplied and the mode tightening below mutates
     # whatever it resolves to, which for a bind mount is a host directory. A
@@ -216,10 +236,13 @@ ensure_repos_root() {
     if [ ! -d "$PIPELINE_REPOS_ROOT" ]; then
         [ ! -e "$PIPELINE_REPOS_ROOT" ] \
             || die "PIPELINE_REPOS_ROOT exists but is not a directory"
-        mkdir -p "$PIPELINE_REPOS_ROOT" 2>/dev/null \
-            || die "PIPELINE_REPOS_ROOT could not be created; mount a writable volume"
-        chmod 0750 "$PIPELINE_REPOS_ROOT" 2>/dev/null \
-            || die "PIPELINE_REPOS_ROOT could not be set to 0750"
+        if mkdir -p "$PIPELINE_REPOS_ROOT" 2>/dev/null \
+            && chmod 0750 "$PIPELINE_REPOS_ROOT" 2>/dev/null; then :; else
+            if [ -n "$_repos_root_explicit" ]; then
+                die "PIPELINE_REPOS_ROOT could not be created with mode 0750; mount a writable volume"
+            fi
+            log "warning: PIPELINE_REPOS_ROOT could not be created; the clone path creates it at clone time"
+        fi
     fi
     # A pre-existing root is the clone trust boundary, so it gets the same
     # fail-closed treatment as a mounted secret: tighten it to the created mode

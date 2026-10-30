@@ -173,6 +173,44 @@ def test_preset_git_token_file_is_kept(tmp_path: Path) -> None:
     assert result.stdout.strip() == str(preset)
 
 
+def test_git_token_file_follows_an_overridden_gh_token_file(tmp_path: Path) -> None:
+    # The default used to be hardcoded to /run/secrets/gh_token, so an operator
+    # who pointed GH_TOKEN_FILE elsewhere left the clone path aimed at the
+    # default mount: an empty file (repo_clone refuses it as empty) or a stale
+    # token. The path now follows the resolved GH_TOKEN_FILE.
+    env = _base_env(tmp_path)
+    del env["PIPELINE_GIT_TOKEN_FILE"]
+    custom = _secret(tmp_path / "custom-gh", "ghp_example_token\n")
+    env["GH_TOKEN_FILE"] = str(custom)
+
+    result = _run("printenv PIPELINE_GIT_TOKEN_FILE", env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(custom)
+
+
+def test_git_token_file_stays_unset_when_the_forge_token_is_empty(
+    tmp_path: Path,
+) -> None:
+    # An empty mount must not become a token path: repo_clone raises "is empty"
+    # on it, so adopting it would turn an unused credential into a clone
+    # failure.
+    env = _base_env(tmp_path)
+    del env["PIPELINE_GIT_TOKEN_FILE"]
+    empty = tmp_path / "empty-gh"
+    empty.write_text("", encoding="utf-8")
+    empty.chmod(0o600)
+    env["GH_TOKEN_FILE"] = str(empty)
+
+    result = _run(
+        'printenv PIPELINE_GIT_TOKEN_FILE || echo __UNSET__',
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "__UNSET__"
+
+
 def test_group_readable_secret_file_is_refused_without_echoing_it(
     tmp_path: Path,
 ) -> None:

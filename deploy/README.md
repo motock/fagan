@@ -106,11 +106,13 @@ them under the names the backends read. The loader is
 [`deploy/entrypoint.sh`](entrypoint.sh) sources before it starts anything; the
 split exists so the loader is testable without any "skip the process start"
 switch in the script that runs in production (a switch is fail-open under
-`dash`, where an executed script that returns early exits `0`). The library
-ships **root-owned and read-only (`0444`)** in the image while the entrypoint
-ships owned by uid 10001: the runtime uid is the uid agent children run as, so a
-code-executing agent that could rewrite the sourced loader would get its own
-code re-run at the next container start with every mounted secret in scope.
+`dash`, where an executed script that returns early exits `0`). Both start-up
+scripts ship **root-owned and non-writable** in the image
+(`deploy/entrypoint.sh` `0555`, `deploy/lib/operator_env.sh` `0444`): the runtime
+uid is the uid agent children run as, and a code-executing agent that could
+rewrite either file would get its own code re-run at the next container start,
+with every mounted secret already exported into that process. Hardening only the
+sourced library would leave the *caller* mutable on the same trust boundary.
 Never pass any of these as an environment value: an environment value shows up
 in `docker inspect` and in `/proc/<pid>/environ` of every child, including the
 agents.
@@ -183,17 +185,28 @@ agents.
 - When `GH_TOKEN` is set (from the file only) and `PIPELINE_FORGE` is unset, the
   entrypoint exports `PIPELINE_FORGE=github`. An explicit `PIPELINE_FORGE=gitlab`
   is kept.
-- When `PIPELINE_GIT_TOKEN_FILE` is unset and `/run/secrets/gh_token` exists,
-  it is exported as `/run/secrets/gh_token`. The repo-clone story (SA-05, not
-  implemented yet) is expected to read that *path*, not the value, so the token
-  itself never has to be placed in `git`'s environment. Until it lands, nothing
-  in the image reads `PIPELINE_GIT_TOKEN_FILE`.
+- When `PIPELINE_GIT_TOKEN_FILE` is unset and `GH_TOKEN` was loaded from a secret
+  file, it is exported as the resolved `GH_TOKEN_FILE` path (default
+  `/run/secrets/gh_token`), so overriding `GH_TOKEN_FILE` moves both. The
+  repo-clone story (SA-05, not implemented yet) is expected to read that *path*,
+  not the value, so the token itself never has to be placed in `git`'s
+  environment. Until it lands, nothing in the image reads
+  `PIPELINE_GIT_TOKEN_FILE`.
+- `PIPELINE_GIT_TOKEN_FILE` itself is **accepted verbatim from the ambient
+  environment** — the "a credential never comes from an environment value"
+  invariant above covers the four secret files, not this path. That is
+  defensible because `pipeline/repo_clone.py::_token_file` re-validates it with
+  `lstat` before use: regular file, no group/other bits, owner == euid, and
+  non-empty. But note the consequence: an ambient `PIPELINE_GIT_TOKEN_FILE` can
+  point the askpass helper at any `0600` file the uid owns — including the OIDC
+  client secret — and have its contents sent to the forge. Do not let an
+  untrusted party set it.
 
 Repo defaults the entrypoint sets (both exported, both overridable):
 
 | Variable | Default | Meaning |
 | -------- | ------- | ------- |
-| `PIPELINE_REPOS_ROOT` | `/var/lib/pipeline/repos` | The directory SA-05 (the repo-clone story, not implemented yet) will clone into, laid out as `<host>/<owner>/<repo>`. Created at start with mode `0750` on the mounted volume; a pre-existing root is `chmod 750`-ed, and the entrypoint refuses to start if group write or any other-user access remains (it is the clone trust boundary). Creation is **fatal, not best effort**: a root that cannot be created or tightened stops the container, so `PIPELINE_ALLOWED_REPO_ROOTS` can never point at a path that does not exist. The volume must therefore be writable by the container uid (see [Volumes](#volumes)). A **symlinked** root is refused rather than followed, and a root that is itself a **mount point** is refused when its mode is too loose instead of being `chmod`-ed — for a bind mount that would mutate the host directory the operator owns, so the operator sets the mode on the volume. |
+| `PIPELINE_REPOS_ROOT` | `/var/lib/pipeline/repos` | The directory SA-05 (the repo-clone story, not implemented yet) will clone into, laid out as `<host>/<owner>/<repo>`. Created at start with mode `0750` on the mounted volume; a pre-existing root is `chmod 750`-ed, and the entrypoint refuses to start if group write or any other-user access remains (it is the clone trust boundary). A root **you set** that cannot be created or tightened is fatal, so `PIPELINE_ALLOWED_REPO_ROOTS` never points at a path that does not exist; the image default stays best effort, which is not a fail-open because `pipeline/repo_clone.py::_make_dirs()` creates the root and its parents mode `0750` at clone time, under a path the allowlist already admitted. The volume must therefore be writable by the container uid (see [Volumes](#volumes)). A **symlinked** root is refused rather than followed, and a root that is itself a **mount point** is refused when its mode is too loose instead of being `chmod`-ed — for a bind mount that would mutate the host directory the operator owns, so the operator sets the mode on the volume. |
 | `PIPELINE_ALLOWED_REPO_ROOTS` | `$PIPELINE_REPOS_ROOT` | The `pipeline/workspace.py` allowlist a plan's `repo_root` must live under. Defaulting it to the repos root means the dashboard's decompose route and the scheduler are confined to the directory the server owns; a preset value is kept as-is. |
 
 ## Volumes
@@ -205,10 +218,11 @@ Repo defaults the entrypoint sets (both exported, both overridable):
 - `worktrees/` — the git worktree root (`WORKTREE_ROOT`);
 - `repos/` — `PIPELINE_REPOS_ROOT`, created by the entrypoint on first start
   with mode `0750`: the directory SA-05 clones into and the
-  `PIPELINE_ALLOWED_REPO_ROOTS` default. Creation is fatal rather than best
-  effort — a clone root that does not exist would fail open at the first clone
-  — so the volume must be writable by uid 10001 and a bind-mounted directory
-  must already carry mode `0750`.
+  `PIPELINE_ALLOWED_REPO_ROOTS` default. An operator-supplied root that cannot
+  be created or tightened is fatal (`pipeline/repo_clone.py::_make_dirs()`
+  creates the image default at clone time, mode `0750`), so the volume must be
+  writable by uid 10001 and a bind-mounted directory must already carry mode
+  `0750`.
 
 Mount a named volume (as above) or a host path. Without one, plans and
 worktrees are lost when the container is replaced, and the entrypoint's

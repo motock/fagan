@@ -20,6 +20,10 @@
 # The OIDC client secret is never an environment value: it is read from the
 # file named by PIPELINE_OIDC_CLIENT_SECRET_FILE, which the operator mounts
 # (for example from a Docker/Kubernetes secret at /run/secrets/...).
+#
+# The operator's forge and model credentials are mounted the same way and
+# loaded by deploy/lib/operator_env.sh, which this script sources before it
+# starts anything (see deploy/README.md, "Credentials").
 set -eu
 
 DASHBOARD_HOST="${DASHBOARD_HOST:-0.0.0.0}"
@@ -37,15 +41,28 @@ export PIPELINE_MCP_HOST PIPELINE_MCP_PORT PIPELINE_MCP_TRANSPORT
 export PIPELINE_IDENTITY_PROVIDER PIPELINE_POLICY_ENFORCE
 export PIPELINE_OIDC_CLIENT_SECRET_FILE
 
-log() {
-    # Action + subject only: no paths, tokens or payloads (Secure by Design).
-    echo "entrypoint: $*" >&2
-}
+# The credential loader and the repository roots live in a sourced library, not
+# in this file. That is a security property, not tidiness: this script must have
+# no "stop before the process start" branch for a stray variable, a rename or a
+# wrapper to reach, because under dash - /bin/sh in this image - an executed
+# script that returns early exits *0* and leaves a container that looks healthy
+# with the dashboard, the MCP transport and the scheduler all absent. Keeping
+# the shared code in a library gives a test nothing to bypass.
+#
+# log, die, stat_mode, stat_uid, load_secret and the start-up helpers all come
+# from there; this script sources it before its first message.
+_entrypoint_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd) \
+    || { echo "entrypoint: fatal: cannot resolve this script's directory" >&2; exit 1; }
+_operator_env="$_entrypoint_dir/lib/operator_env.sh"
+[ -r "$_operator_env" ] \
+    || { echo "entrypoint: fatal: $_operator_env is missing; the image must ship deploy/lib" >&2; exit 1; }
+. "$_operator_env"
+unset _entrypoint_dir _operator_env
 
-die() {
-    log "fatal: $1"
-    exit 1
-}
+# Operator credentials from the mounted secret files, then the repo roots the
+# clone path is confined to (SA-05 relies on both).
+load_operator_credentials
+ensure_repos_root
 
 # Fail fast when the deployment forgot to mount the OIDC client credential.
 # Bearer-token verification itself is JWKS-only (pipeline/remote_transport.py

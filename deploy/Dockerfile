@@ -117,8 +117,17 @@ COPY --chown=10001:10001 global-rules ./global-rules
 COPY --chown=10001:10001 static ./static
 COPY --chown=10001:10001 model_registry.json pyproject.toml ./
 COPY --chown=10001:10001 deploy/entrypoint.sh ./deploy/entrypoint.sh
+# The entrypoint sources its credential loader from deploy/lib; without it the
+# script refuses to start (fail closed), so the library must ship in the image.
+# It is root-owned and read-only on purpose: the process uid (10001) is the uid
+# agent children run as, and a code-executing agent that could rewrite this file
+# would re-run its own code at the next container start, with every mounted
+# secret in scope. Read-only root ownership keeps the sourced credential loader
+# outside the runtime uid's reach.
+COPY --chown=0:0 deploy/lib/operator_env.sh ./deploy/lib/operator_env.sh
 
 RUN chmod 0755 ./deploy/entrypoint.sh \
+ && chmod 0444 ./deploy/lib/operator_env.sh \
  && ln -s /opt/venv /app/.venv \
  && chown 10001:10001 /app \
  && install -d -o 10001 -g 10001 -m 0750 \

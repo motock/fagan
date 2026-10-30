@@ -55,32 +55,8 @@ class _ServerRef:
         self._name = name
 
     def _value(self):
-        """Resolve *name* from the live server module, cheaply where possible.
-
-        ``pipeline.server`` pulls in mcp + pydantic, which is seconds of import
-        time on a cold start. Anything that only needs a path constant -- most
-        importantly the ``_plan_lock`` in a freshly spawned advance child --
-        would pay that whole cost before it can take its flock, and a child
-        that spends its entire deadline importing is indistinguishable from
-        one that never started. The constants themselves are defined in
-        ``pipeline.paths``, which server re-exports, so when the server module
-        is not already imported the values are identical and the cheap module
-        is authoritative. Once server *is* imported -- every test -- it wins,
-        so ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` still
-        lands exactly as before.
-        """
-        import sys
-
-        server = sys.modules.get("pipeline.server")
-        if server is None:
-            from . import paths as _paths
-
-            if hasattr(_paths, self._name):
-                return getattr(_paths, self._name)
-            from . import server as _server
-
-            return getattr(_server, self._name)
-        return getattr(server, self._name)
+        from . import server as _server
+        return getattr(_server, self._name)
 
     def __getattr__(self, attr: str):
         return getattr(self._value(), attr)

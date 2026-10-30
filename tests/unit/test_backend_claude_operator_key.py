@@ -11,7 +11,10 @@ import time
 
 import pytest
 
-from app.backend_claude import _first_party_claude_env
+from app.backend_claude import (
+    _CLAUDE_AGENT_UNUSED_SECRETS,
+    _first_party_claude_env,
+)
 from pipeline import execution
 
 # Env vars reset for every case. This is a clean-environment fixture, NOT a
@@ -27,9 +30,9 @@ _ENV_VARS_TO_RESET = (
     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
     "PIPELINE_ANTHROPIC_API_KEY", "PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV",
     "CLAUDE_CODE_OAUTH_TOKEN",
-    # Credentials the CLI itself never uses (see _AGENT_UNUSED_SECRETS).
-    "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
-    "OLLAMA_API_KEY", "PIPELINE_MODEL_REGISTRY_PATH",
+    # Credentials the CLI itself never uses (see _CLAUDE_AGENT_UNUSED_SECRETS).
+    *_CLAUDE_AGENT_UNUSED_SECRETS,
+    "PIPELINE_MODEL_REGISTRY_PATH",
 )
 
 # Prints the child's environment *variable names only* -- never a value --
@@ -201,10 +204,7 @@ def test_spawn_harness_child_env_carries_converted_key_only(
 # child's /proc/self/environ: forge write access, or the operator's Ollama
 # account. Asserted by membership only where the denylist is concerned -- the
 # frozenset is cumulative and this story must not pin its exact contents.
-_AGENT_UNUSED_SECRETS = (
-    "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
-    "OLLAMA_API_KEY",
-)
+_AGENT_UNUSED_SECRETS = _CLAUDE_AGENT_UNUSED_SECRETS
 
 
 @pytest.mark.parametrize("var", _AGENT_UNUSED_SECRETS)
@@ -223,6 +223,23 @@ def test_should_keep_non_secret_variable(monkeypatch):
     env = _first_party_claude_env()
 
     assert env["PIPELINE_MODEL_REGISTRY_PATH"] == "/tmp/registry.json"
+
+
+def test_cli_drop_list_covers_the_agent_denylist():
+    """No credential may be denylisted for agents yet still reach the CLI child.
+
+    The carrier is excluded because it is converted to ANTHROPIC_API_KEY and
+    dropped by name; everything else in the agent denylist must also be
+    dropped from the `claude` subprocess env, or the CLI's model-driven Bash
+    tool keeps reading it out of /proc/self/environ.
+    """
+    missing = (
+        set(execution._AGENT_SECRET_ENV)
+        - {"PIPELINE_ANTHROPIC_API_KEY"}
+        - set(_CLAUDE_AGENT_UNUSED_SECRETS)
+    )
+
+    assert missing == set()
 
 
 @pytest.mark.parametrize("var", _AGENT_UNUSED_SECRETS)

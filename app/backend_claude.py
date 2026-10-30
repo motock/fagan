@@ -39,12 +39,13 @@ _CLAUDE_PROVIDER_REDIRECT_VARS = (
 # Credentials the `claude` CLI never uses itself, but which a dispatched agent
 # (whose Bash tool is model-driven) could exfiltrate from the child's
 # environment to gain forge write access or the operator's model account.
-# Kept in sync with pipeline.execution._AGENT_SECRET_ENV, which strips them
-# from every agent child; this list covers the `claude` subprocess env too so
-# neither path leaks them.
+# This list must cover every name in pipeline.execution._AGENT_SECRET_ENV
+# except PIPELINE_ANTHROPIC_API_KEY, which is converted and dropped separately
+# above; a test asserts that relation, so a credential added to the agent
+# denylist cannot silently keep leaking to the `claude` subprocess.
 _CLAUDE_AGENT_UNUSED_SECRETS = (
     "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
-    "OLLAMA_API_KEY",
+    "PLANE_API_KEY", "PIPELINE_NOTIFY_EMAIL_PASSWORD", "OLLAMA_API_KEY",
 )
 
 

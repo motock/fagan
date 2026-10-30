@@ -7,6 +7,7 @@ exporting them onto ``_server`` at import time.
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -15,6 +16,187 @@ from pathlib import Path
 
 from .build_detect import failed_node_ids
 from .parsers import _atomic_write_json
+
+logger = logging.getLogger(__name__)
+
+# SA-19: how many detached grades one tick may have in flight at once, and
+# optionally how many xdist workers each of them gets. Both live here rather
+# than in pipeline/story_status.py so that module keeps its size.
+MAX_CONCURRENT_GRADES_VAR = "PIPELINE_MAX_CONCURRENT_GRADES"
+GRADE_XDIST_WORKERS_VAR = "PIPELINE_GRADE_XDIST_WORKERS"
+
+# Invalid values already warned about, keyed by (variable, raw value). A tick
+# re-reads these variables every poll; warning on every tick would print the
+# same line ~60 times a minute. Keyed on the RAW string (not the parsed int):
+# "abc" and "0" both parse to the same fallback and must still warn once each.
+_WARNED_INVALID_VALUES: set[tuple[str, str]] = set()
+
+
+def _warn_invalid_once(variable: str, raw: str, fallback: str) -> None:
+    """WARN about one invalid value of *variable*, once per distinct raw value."""
+    key = (variable, raw)
+    if key in _WARNED_INVALID_VALUES:
+        return
+    _WARNED_INVALID_VALUES.add(key)
+    logger.warning(
+        "Ignoring invalid %s=%r, using %s",
+        variable,
+        raw,
+        fallback,
+        extra={"variable": variable, "value": raw},
+    )
+
+
+def max_concurrent_grades(environ=None) -> int:
+    """How many detached grades may run at once (default 1).
+
+    ``PIPELINE_MAX_CONCURRENT_GRADES`` must be a positive integer; anything
+    else (0, -1, "x", "") falls back to 1 with a once-per-value WARN. An
+    unset variable is the documented default, not an error.
+    """
+    if environ is None:
+        environ = os.environ
+    raw = environ.get(MAX_CONCURRENT_GRADES_VAR)
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        _warn_invalid_once(MAX_CONCURRENT_GRADES_VAR, raw, "1")
+        return 1
+    if value < 1:
+        _warn_invalid_once(MAX_CONCURRENT_GRADES_VAR, raw, "1")
+        return 1
+    return value
+
+
+def xdist_workers(environ=None) -> int | None:
+    """The optional xdist worker count for a detached grade, or None.
+
+    ``PIPELINE_GRADE_XDIST_WORKERS`` set to a positive integer overrides the
+    ``-n auto`` in pytest's addopts (a later ``-n`` wins). Unset means "leave
+    the command alone"; an invalid value is ignored with a WARN.
+    """
+    if environ is None:
+        environ = os.environ
+    raw = environ.get(GRADE_XDIST_WORKERS_VAR)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        _warn_invalid_once(
+            GRADE_XDIST_WORKERS_VAR, raw, "the configured default"
+        )
+        return None
+    if value < 1:
+        _warn_invalid_once(
+            GRADE_XDIST_WORKERS_VAR, raw, "the configured default"
+        )
+        return None
+    return value
+
+
+def _invokes_pytest(cmd) -> bool:
+    """True when *cmd* runs pytest (``...pytest`` or ``-m pytest``)."""
+    if not isinstance(cmd, (list, tuple)):
+        return False
+    for index, token in enumerate(cmd):
+        if not isinstance(token, str):
+            continue
+        if token.endswith("pytest"):
+            return True
+        if token == "-m" and index + 1 < len(cmd) and cmd[index + 1] == "pytest":
+            return True
+    return False
+
+
+def _with_xdist_workers(cmd, workers):
+    """A NEW command list with ``-n <workers>`` appended, or *cmd* unchanged.
+
+    Never mutates *cmd*: the caller passes the same list on every tick, so an
+    in-place append would leak the flag into a later run that unset the
+    variable.
+    """
+    if workers is None or not _invokes_pytest(cmd):
+        return cmd
+    return [*cmd, "-n", str(workers)]
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Is *pid* a live, non-zombie process?
+
+    Factored verbatim out of the detached-grade lifecycle's probe so the
+    concurrency counter and the grade poll agree on what "alive" means:
+    ``os.kill(pid, 0)`` then ``ps -o stat=`` (os.kill succeeds for zombies
+    too). A pid we may not signal counts as alive (keep polling); any other
+    probe failure also counts as alive (fail-safe: never start a duplicate
+    grade over a process we cannot inspect).
+    """
+    try:
+        os.kill(pid, 0)
+        ps = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        stat = ps.stdout.strip()
+        return bool(stat) and not stat.startswith("Z")
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def live_grade_count(state_root: Path, exclude: Path | None = None) -> int:
+    """How many OTHER stories hold a live detached grade under *state_root*.
+
+    Scans only ``*.manifest.json`` files directly under *state_root* (the
+    directory holding this story's manifest - the same base the grading
+    channel uses; deliberately NOT recursive) and counts the stories whose
+    ``grading_pid`` is a live, non-zombie process. Unreadable/malformed
+    manifests and ones without a ``grading_pid`` are skipped, as is the
+    caller's own manifest (*exclude*), so a story cannot block itself.
+    """
+    count = 0
+    try:
+        paths = sorted(state_root.glob("*.manifest.json"))
+    except OSError:
+        return 0
+    excluded = None
+    if exclude is not None:
+        try:
+            excluded = Path(exclude).resolve()
+        except OSError:
+            excluded = None
+    for path in paths:
+        try:
+            if excluded is not None and path.resolve() == excluded:
+                continue
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            # Unreadable or malformed manifest: not a grade we can count.
+            continue
+        stories: list[dict] = []
+        if isinstance(data, dict):
+            raw_stories = data.get("stories")
+            if isinstance(raw_stories, dict):
+                stories.extend(
+                    s for s in raw_stories.values() if isinstance(s, dict)
+                )
+            elif "grading_pid" in data:
+                stories.append(data)
+        for story in stories:
+            grade_pid = story.get("grading_pid")
+            if grade_pid is None or not _is_pid_alive(grade_pid):
+                continue
+            count += 1
+            break
+    return count
 
 
 def _baseline_exempted_failures(story: dict, test_result) -> list[str] | None:
@@ -142,7 +324,13 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 
 
 
-def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifest_path, test_cmd, test_dir, test_env):
+def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
+                              manifest_path, test_cmd, test_dir, test_env,
+                              _pid_alive=_is_pid_alive,
+                              _live_count=live_grade_count,
+                              _cap=max_concurrent_grades,
+                              _workers=xdist_workers,
+                              _apply_xdist=_with_xdist_workers):
     """Run check_story_status's detached-grade lifecycle with pipeline.server's globals.
 
     Rebound onto pipeline.server.__dict__ in pipeline/story_status.py exactly like
@@ -151,35 +339,31 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
     resolve to pipeline.server's (pytest-conditional) exports rather than this
     module's own.
 
+    The SA-19 helpers arrive as default arguments because
+    types.FunctionType(...) preserves __defaults__ when story_status rebinds
+    this function onto pipeline.server's globals, so a rebound body still
+    reaches them. Bare-name reads of them would NameError there.
+
     Returns (early_result, test_result): early_result is the dict
     check_story_status must return immediately, else None; test_result is None
     when the caller must grade synchronously.
     """
+    # A caller whose namespace exports a (possibly patched) copy wins over the
+    # default: the tests patch pipeline.detached_grade._is_pid_alive et al. and
+    # call this function unrebound.
+    _probe = globals().get("_is_pid_alive") or _pid_alive
+    _count_live = globals().get("live_grade_count") or _live_count
+    _grade_cap = globals().get("max_concurrent_grades") or _cap
+    _grade_workers = globals().get("xdist_workers") or _workers
+    _xdist_cmd = globals().get("_with_xdist_workers") or _apply_xdist
+
     grading_pid = story.get("grading_pid")
     grading_alive = False
     if grading_pid is not None:
-        try:
-            os.kill(grading_pid, 0)
-            # os.kill succeeds for zombie (defunct) processes too — check ps
-            # stat (same idiom as the story-pid liveness probe above).
-            ps = subprocess.run(
-                ["ps", "-p", str(grading_pid), "-o", "stat="],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            grade_stat = ps.stdout.strip()
-            grading_alive = bool(grade_stat) and not grade_stat.startswith("Z")
-        except ProcessLookupError:
-            grading_alive = False
-        except PermissionError:
-            # The pid exists but we may not signal it: keep polling rather
-            # than crash the tick (mirrors collect_detached_grade).
-            grading_alive = True
-        except (OSError, subprocess.SubprocessError):
-            # Probe failure: presume the grade is still in flight so the tick
-            # stays read-only.
-            grading_alive = True
+        # Same probe as live_grade_count: os.kill(pid, 0) then ps -o stat=
+        # (os.kill succeeds for zombies too). Factored out so the concurrency
+        # cap and this poll cannot disagree on what "alive" means.
+        grading_alive = _probe(grading_pid)
 
     # Follow-up ticks must not re-grade an already-graded story: once the
     # post-grade logic has run, the grading bookkeeping is consumed and the
@@ -226,6 +410,21 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
             # (mode 0o700) and the collector reads ONLY the persisted path.
             # The guard below refuses to aim the hardened channel back into
             # the worktree, so a regression cannot silently move it back.
+            # SA-19: one tick used to start EVERY finished story's grade at
+            # once, each fanning out to all cores via pytest's `-n auto`; on
+            # 2026-10-30 that put ~70 xdist workers on 10 cores and turned a
+            # two-minute suite into thirteen. Bound the number of grades in
+            # flight: if the cap is already reached, leave the story exactly
+            # as it is (still in_progress, no grading fields, no manifest
+            # write) and pick it up on a later tick. `grading_queued` is safe:
+            # check_story_status returns this dict verbatim and the only
+            # status pipeline/advance.py branches on is "failed" - a queued
+            # story falls through with "grading" and simply stays in_progress.
+            _in_flight = _count_live(
+                Path(manifest_path).parent, exclude=Path(manifest_path)
+            )
+            if _in_flight >= _grade_cap():
+                return {"status": "grading_queued", "pid": pid}, None
             env_root = os.environ.get("PIPELINE_STATE_DIR")
             manifest_root = Path(manifest_path).parent
             if env_root:
@@ -249,7 +448,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
                     )
             try:
                 grade_pid = starter(
-                    test_cmd,
+                    _xdist_cmd(test_cmd, _grade_workers()),
                     str(test_dir),
                     test_env,
                     str(result_path),

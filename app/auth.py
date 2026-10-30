@@ -36,9 +36,12 @@ The rule this module enforces, stated plainly:
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import re
 import secrets
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Header, HTTPException
@@ -184,15 +187,61 @@ def require_ui_origin(x_pipeline_origin: str | None) -> None:
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+ALLOWED_HOSTS_ENV = "PIPELINE_DASHBOARD_ALLOWED_HOSTS"
+
+_HOSTNAME_RE = re.compile(
+    r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*"
+)
+
+
+def _is_plain_host(entry: str) -> bool:
+    """True when ``entry`` is a bare hostname or IP literal (already lower-cased)."""
+    try:
+        ipaddress.ip_address(entry)
+        return True
+    except ValueError:
+        return _HOSTNAME_RE.fullmatch(entry) is not None
+
+
+@lru_cache(maxsize=256)
+def _warn_invalid_host_once(entry: str) -> None:
+    """Warn about a malformed allowlist entry, once per distinct value.
+
+    ``host_is_allowed`` runs on every request, so without the cache a single
+    typo in the environment variable would log on every page load. The entry
+    is a hostname, never a secret, so it is safe to log.
+    """
+    logger.warning(
+        "Ignoring invalid dashboard allowed-host entry",
+        extra={"env_var": ALLOWED_HOSTS_ENV, "entry": entry},
+    )
+
+
+def _configured_allowed_hosts() -> set[str]:
+    """Hostnames from ``PIPELINE_DASHBOARD_ALLOWED_HOSTS``; invalid entries ignored."""
+    hosts: set[str] = set()
+    for raw in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
+        entry = raw.strip().lower()
+        if not entry:
+            continue
+        if _is_plain_host(entry):
+            hosts.add(entry)
+        else:
+            _warn_invalid_host_once(entry)
+    return hosts
+
 
 def host_is_allowed(host_header: str | None, server_host: str | None) -> bool:
-    """True when the Host header names this server or a loopback alias.
+    """True when the Host header names this server or an allowed alias.
 
     The index route hands the API key to the browser, so a DNS-rebinding
     page must not be able to read it under an attacker-chosen hostname.
     Compare the header's hostname against the ASGI server host (the
-    socket actually bound) plus the loopback aliases; never trust a
-    wildcard.
+    socket actually bound), the loopback aliases, and any hostnames the
+    operator lists in ``PIPELINE_DASHBOARD_ALLOWED_HOSTS`` (for a
+    dashboard behind a reverse proxy). That allowlist takes explicit
+    names only — an entry with a wildcard, scheme, port or path is
+    ignored with a warning — so a wildcard is still never trusted.
     """
     from urllib.parse import urlsplit
 
@@ -202,4 +251,5 @@ def host_is_allowed(host_header: str | None, server_host: str | None) -> bool:
     allowed = set(_LOOPBACK_HOSTS)
     if server_host:
         allowed.add(server_host)
+    allowed |= _configured_allowed_hosts()
     return hostname in allowed

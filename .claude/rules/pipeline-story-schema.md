@@ -40,9 +40,9 @@
 - `backend` (optional): pins this story's provider regardless of `PIPELINE_BACKEND_DISPATCH`; `ingest_plan` rejects an unrecognized value.
 - `tdd_split` (runtime, dispatcher-written — do NOT set by hand): `true` once the test-author phase succeeds; the oracle tamper check (`pipeline/ci.py:428-442`) reads it to keep a split story's acceptance fixture read-only, and re-ingest resets it. `[no-new-tests]`, not this, controls whether the phase runs.
 - `files` (optional): repo-relative POSIX paths of the PRODUCTION files (docs included) the story may change; test files are never listed and always allowed. Absent means undeclared; empty means no production file may change. Entries must be non-empty `str` with no `/` prefix, no `\`, no `..`; duplicates rejected.
-- `blocked_by` (optional): cross-plan prerequisites, `"<plan>:<story_key>"` strings (the key may contain colons). Absent or `null` is valid; a malformed entry is rejected at `ingest_plan` naming the summary and the entry. The referenced plan/story need not exist yet; re-ingest refreshes it.
+- `blocked_by` (optional): cross-plan prerequisites, `"<plan>:<story_key>"` strings (the key may contain colons). Absent or `null` is valid; a non-list or a malformed entry is rejected at `ingest_plan`, naming the story summary and the offending entry. The referenced plan/story need not exist yet; re-ingest refreshes it.
 - `key` (optional): an explicit story key that must be unique across plans. `ingest_plan` rejects a key matching (case-insensitively) another plan's story that is not done/merged or whose worktree still exists, since the branch (`agent/<key>`) and worktree path are keyed by the story key alone. Omitting `key` mints a UUID, which never collides.
-- `role_config` (optional, plan-level — a sibling of `epics`): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration".
+- `role_config` (optional, plan-level — a sibling of `epics`): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" and `model_registry.json` for the available providers/models.
 - `preflight_override` (optional, plan-level): a non-empty reason string admitting non-Claude stories whose brief lacks a real `Preflight:` line; every use is notified as event `preflight_override`. `ingest_plan` rejects non-Claude stories with no such line and no override.
 - `dispatch_lease_expires_at` / `dispatch_lease_owner_pid` (runtime, written by `pipeline/dispatch_lease.py` — do NOT set by hand): the lease stopping a released plan lock from double-dispatching a story (LOCKSTARVE-B2). The timestamp is ISO-8601 UTC (`now + PIPELINE_DISPATCH_LEASE_TTL_SECONDS`, default 1800); the pid is the claimer's `os.getpid()`, diagnostic only. Missing, malformed, or expired is re-claimable; a live lease is never stolen.
 
@@ -85,7 +85,7 @@ Before writing an `acceptance` fixture, check: if `agent_instructions` requires 
 
 ## Cumulative artifacts: registries, dispatch tables, and prompt strings a chain of stories grows together
 
-When several stories each add in sequence to the SAME shared artifact — a registry dict, a `__all__` list, a system-prompt string, or a file several UI stories edit in turn — never let one story's tests assert its exact total contents (equality on a set/list, a substring pinned to that story's additions, a total count, a byte-for-byte SHA-256). Assert only what THAT story added: membership (`"x" in registry`), a sorted/set comparison, or a structural relationship to a stable anchor (e.g. "this entry appears before the fixed closing sentence") — never the whole enumeration.
+When several stories add in sequence to the SAME shared artifact — a registry dict, an `__all__` list, a system-prompt string, or a file several UI stories edit in turn — no story's tests may assert its exact total contents (set/list equality, a substring pinned to that story's additions, a total count, a byte-for-byte SHA-256). Assert only what THAT story added: membership (`"x" in registry`), a sorted/set comparison, or a structural relationship to a stable anchor (e.g. "this entry appears before the fixed closing sentence") — never the whole enumeration.
 
 Three documented, independent occurrences, same root cause:
 
@@ -95,7 +95,7 @@ Three documented, independent occurrences, same root cause:
 
 **How to apply at plan-authoring time:**
 
-- When 3+ stories are chained on a shared production artifact (see "Local (non-Claude) dispatch" below on chaining them sequentially), scan their `agent_instructions` for "add an entry to X" and check whether the implied test asserts the OLD exact state or the growing state.
+- When 3+ stories are chained on a shared production artifact (chain them sequentially — see "Local (non-Claude) dispatch" below), scan their `agent_instructions` for "add an entry to X" and check whether the implied test asserts the OLD exact state or the growing state.
 - State explicitly in `agent_instructions`, for every story in such a chain: *"`<artifact>` is cumulative — later sibling stories add more. Your tests must assert only what YOU add (membership / ordering relative to a fixed anchor), never the total contents, exact count, or exact full-string match."*
 - An **insertion anchor** ("insert immediately before the exact sentence '...'") guides the *implementer*, not the *test*: anchor the implementation, assert only the delta.
 - If an artifact is regenerable from the registry it enumerates, build it programmatically: the test asserts the generator once and no later story can leave it stale.

@@ -279,9 +279,9 @@ def test_ingest_branch_does_not_change_other_actions() -> None:
 #
 # ADR 0009 makes the plan's owner the accountable party for that plan and lets
 # it approve its own plan, so starting the work it approved is the same
-# authority: `plan:dispatch` joins the ownership grant. `plan:pause` stays
-# outside it on purpose — nothing in the current stack asks an owner to pause
-# its own plan, and every action added to the grant widens authority.
+# authority: `plan:dispatch` joins the ownership grant. The ADR 0009
+# amendment of 2026-10-30 later added the plan-scoped actions, `plan:pause`
+# among them, so a remote owner can run its own plan end to end.
 
 
 def test_owner_may_dispatch_the_plan_it_owns() -> None:

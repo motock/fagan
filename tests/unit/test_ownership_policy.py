@@ -1,10 +1,11 @@
 """Ownership as an additional authority in the local policy (OWN-02).
 
 A plan's ``owner`` and ``delegates`` reach :class:`app.policy.LocalPolicy`
-through :class:`app.policy.Resource`. They grant exactly the five actions a
+through :class:`app.policy.Resource`. They grant exactly the ten actions a
 plan's owner governs -- ``plan:approve``, ``plan:reject``, ``plan:dispatch``,
-``story:merge`` and ``decision:answer`` --
-and never take anything away: every principal the role rules allowed before is
+``story:merge``, ``decision:answer``, ``story:patch``, ``story:interrupt``,
+``story:mark_done``, ``plan:pause`` and plan-scoped ``config:write`` (ADR 0009
+amendment 2026-10-30) -- and never take anything away: every principal the role rules allowed before is
 still allowed, and a plan with no owner (every plan written before OWN-01)
 behaves exactly as it does today.
 """
@@ -32,7 +33,9 @@ ACTIONS = (
     "config:write",
 )
 
-#: The five actions a plan's owner governs.
+#: The original five owner-governed actions (OWN-02); the plan-scoped five
+#: added by the ADR 0009 amendment are covered in
+#: test_policy_owner_plan_scoped_actions.py.
 OWNER_GATED = (
     "plan:approve",
     "plan:reject",

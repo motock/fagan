@@ -5,18 +5,32 @@ This module implements ``scan_done_markers`` which scans a manifest for
 ``.agent_done`` marker files written by dispatched agents and publishes an
 ``agent_done`` event on the supplied EventBus.  The function is intentionally
 lightweight: it never runs tests, grades stories, mutates the manifest or
-touches any external processes.
+touches any external processes. The only network-touching work in this module
+is the rollup refresh in ``scan_all_plans`` (one ``gh`` query per repository
+per ``PIPELINE_CI_ROLLUP_INTERVAL_SECONDS``), which is wrapped so it can never
+break the sweep.
 """
 
 import json
 import logging
+import math
 import os
 import stat
 import time
 from datetime import UTC, datetime
 
-from . import audit_anchor, cross_plan, paths, security_audit, wake
+from . import (
+    audit_anchor,
+    ci_rollup,
+    cross_plan,
+    forge_github,
+    paths,
+    security_audit,
+    wake,
+)
+from .ci import CANCELLED, FAIL, PASS, PENDING, _aggregate_ci_states
 from .events import make_event
+from .forge import CIStatusUnreadable
 from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
@@ -212,6 +226,174 @@ _PUBLISHED_JOB_RESULTS: set[tuple[str, str, str, int]] = set()
 #: The manifest cache in :mod:`pipeline.cross_plan` holds only the latest parse,
 #: so the transition *into* ``done`` can only be seen by keeping it here.
 _PREVIOUS_STATUS: dict[str, dict[str, str]] = {}
+
+#: Env var holding the per-repository rollup refresh interval, in seconds.
+CI_ROLLUP_INTERVAL_ENV = "PIPELINE_CI_ROLLUP_INTERVAL_SECONDS"
+#: Interval between two rollup refreshes of one repository when unset.
+DEFAULT_CI_ROLLUP_INTERVAL_SECONDS = 30.0
+
+#: Last rollup refresh per repository root, in process: the interval is a
+#: budget over ``gh api graphql`` calls, so it must survive across scans.
+_LAST_ROLLUP_REFRESH: dict[str, float] = {}
+
+#: ``(plan, story key) -> (sha, aggregate state)`` from the previous refresh.
+#: Only a transition *out of* pending (or a first sighting, whose previous
+#: state is absent) wakes the plan: the scan runs about once a second and must
+#: not re-wake a story whose CI has long finished.
+_PREVIOUS_CI_STATE: dict[tuple[str, str], tuple[str, str]] = {}
+
+#: Aggregate states that mean "CI is no longer running". ``UNREADABLE`` - the
+#: rollup of an empty snapshot, i.e. checks that have not registered yet - is
+#: deliberately excluded: it is pending in every way that matters, and a wake
+#: on it would be a wake per scan forever.
+_TERMINAL_CI_STATES = frozenset({PASS, FAIL, CANCELLED})
+
+
+def _ci_rollup_now() -> float:
+    """Clock seam for the rollup interval, read per scan."""
+    return time.time()
+
+
+def _ci_rollup_interval_seconds() -> float:
+    """The configured per-repository refresh interval, in seconds.
+
+    A malformed, non-finite or negative value logs a WARNING and falls back to
+    :data:`DEFAULT_CI_ROLLUP_INTERVAL_SECONDS`; ``0`` refreshes on every scan.
+    """
+    raw = os.environ.get(CI_ROLLUP_INTERVAL_ENV)
+    if raw is None:
+        return DEFAULT_CI_ROLLUP_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or not math.isfinite(value) or value < 0:
+        logger.warning(
+            "invalid CI rollup interval setting; using the default",
+            extra={
+                "setting": CI_ROLLUP_INTERVAL_ENV,
+                "default_seconds": DEFAULT_CI_ROLLUP_INTERVAL_SECONDS,
+            },
+        )
+        return DEFAULT_CI_ROLLUP_INTERVAL_SECONDS
+    return value
+
+
+def _pending_ci_stories(manifests: dict[str, dict]) -> dict[str, list[tuple[str, str, str]]]:
+    """``repo_root -> [(plan, story key, ci_pending_sha)]`` for pending CI.
+
+    ``ci_pending_sha`` is what :mod:`pipeline.advance_merge` records while a
+    pushed sha's checks are still running, so a ``pr_open`` story carrying it
+    is exactly the work one rollup refresh can unblock.
+    """
+    pending: dict[str, list[tuple[str, str, str]]] = {}
+    for plan_name, manifest in manifests.items():
+        if not isinstance(manifest, dict):
+            continue
+        repo_root = manifest.get("repo_root")
+        if not isinstance(repo_root, str) or not repo_root:
+            continue
+        for story_key, story in _stories(manifest).items():
+            if not isinstance(story, dict) or story.get("status") != "pr_open":
+                continue
+            sha = story.get("ci_pending_sha")
+            if not isinstance(sha, str) or not sha:
+                continue
+            pending.setdefault(repo_root, []).append(
+                (plan_name, str(story_key), sha)
+            )
+    return pending
+
+
+def _refresh_ci_rollups(
+    manifests: dict[str, dict], bus, events: list[dict]
+) -> None:
+    """Refresh one rollup per repository and wake plans whose CI finished.
+
+    For each repository with a pending-CI story, at most one ``fetch_rollup``
+    per :data:`CI_ROLLUP_INTERVAL_ENV` interval (default 30s) - one GraphQL
+    query per repository per interval, so 120 per hour per repository at the
+    default. The result is stored for ``checks_snapshot`` to serve.
+
+    After a refresh, one ``reconcile`` event with ``{"reason": "ci_complete"}``
+    is published per story whose sha's aggregate state is terminal (see
+    :data:`_TERMINAL_CI_STATES`) and was pending or unknown at the previous
+    refresh. A sha the rollup does not list (beyond its page window, or
+    unclassifiable) keeps its last known state and is left to the REST path;
+    the merge gate re-reads the manifest and decides everything itself.
+    """
+    pending = _pending_ci_stories(manifests)
+    now = _ci_rollup_now()
+    interval = _ci_rollup_interval_seconds()
+    refreshed: dict[str, dict] = {}
+
+    for repo_root, stories in pending.items():
+        last = _LAST_ROLLUP_REFRESH.get(repo_root)
+        if last is not None and now - last < interval:
+            continue
+        # Stamped BEFORE the fetch: a failing ``gh`` must not be retried by
+        # every ~1s scan, and the interval bounds the call budget either way.
+        _LAST_ROLLUP_REFRESH[repo_root] = now
+        try:
+            rollup = ci_rollup.fetch_rollup(repo_root)
+        except CIStatusUnreadable as exc:
+            logger.warning(
+                "CI rollup refresh failed: %s",
+                type(exc).__name__,
+                extra={"plans": len({plan for plan, _, _ in stories})},
+            )
+            continue
+        try:
+            ci_rollup.store_rollup(
+                repo_root, rollup, forge_github.ci_rollup_state_root()
+            )
+        except OSError as exc:
+            # The wake below uses the payload in hand; only the cache misses
+            # out, and the next interval stores it again.
+            logger.warning(
+                "CI rollup store failed: %s",
+                type(exc).__name__,
+                extra={"plans": len({plan for plan, _, _ in stories})},
+            )
+        refreshed[repo_root] = rollup
+
+    for repo_root, rollup in refreshed.items():
+        for plan_name, story_key, sha in pending[repo_root]:
+            snapshot = rollup.get(sha)
+            if snapshot is None:
+                # Absent from the rollup: REST decides for this sha, so keep
+                # the last known state for a later refresh to compare against.
+                continue
+            state = _aggregate_ci_states(snapshot)
+            key = (plan_name, story_key)
+            previous = _PREVIOUS_CI_STATE.get(key)
+            _PREVIOUS_CI_STATE[key] = (sha, state)
+            if state not in _TERMINAL_CI_STATES:
+                continue
+            if previous is not None and previous[0] == sha and previous[1] != PENDING:
+                continue
+            event = make_event(
+                "reconcile", plan_name, payload={"reason": "ci_complete"}
+            )
+            bus.publish(event)
+            events.append(event)
+            logger.info(
+                "woke plan: CI finished",
+                extra={"plan": plan_name, "story": story_key},
+            )
+
+    # Bound the maps by the live pending stories: a story that left ``pr_open``
+    # (or a repository with none left) starts from "unknown" next time.
+    live_stories = {
+        (plan, story)
+        for stories in pending.values()
+        for plan, story, _ in stories
+    }
+    for key in [key for key in _PREVIOUS_CI_STATE if key not in live_stories]:
+        del _PREVIOUS_CI_STATE[key]
+    for repo_root in [root for root in _LAST_ROLLUP_REFRESH if root not in pending]:
+        del _LAST_ROLLUP_REFRESH[repo_root]
+
 
 
 def _stories(manifest: dict) -> dict:
@@ -445,6 +627,16 @@ def scan_all_plans(bus):
         repo_root = manifest.get("repo_root")
         if repo_root and os.path.isdir(repo_root):
             repo_plans.setdefault(repo_root, plan_name)
+    # Serve CI from the per-repository rollup: refresh it at most once per
+    # repository per interval and wake each plan once when its pending sha
+    # stops running. Wrapped: a broken fetch must never break the sweep.
+    try:
+        _refresh_ci_rollups(manifests, bus, events)
+    except Exception as exc:  # noqa: BLE001 - one broken CI pass must not stop the sweep
+        logger.warning(
+            "CI rollup refresh pass failed: %s",
+            type(exc).__name__,
+        )
     # Cross-process operator wakes (approve, resume, ingest, set status, patch,
     # mark done) arrive as one marker file per plan written by the MCP server or
     # dashboard; nothing in-process crosses to this scheduler on the default bus.

@@ -22,6 +22,9 @@ local rebase and the force-push that publish the rewritten branch, so
 
 from __future__ import annotations
 
+import logging
+import math
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -237,10 +240,27 @@ class GitHubForge(Forge):
         ``bucket`` values and the check-runs ``status``/``conclusion`` pair -
         into the canonical states. Raises :class:`CIStatusUnreadable` when the
         status cannot be read or a value is outside the known vocabulary.
+
+        With a non-empty ``sha`` and a positive ``PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS``
+        (default 90, ``0`` disables) a fresh entry of the per-repository rollup
+        cache answers instead of the REST call. The cache only ever holds what
+        GitHub reported for that exact sha and an aged entry is ignored, so a
+        cache hit can never report a failing sha as passing; a miss simply
+        runs the REST call unchanged.
         """
         from .ci import _scoped_repo_cwd
 
         cwd = _scoped_repo_cwd()
+        if sha:
+            from . import ci_rollup
+
+            max_age = ci_rollup_max_age_seconds()
+            if max_age > 0:
+                cached = ci_rollup.cached_snapshot(
+                    cwd, sha, ci_rollup_state_root(), max_age
+                )
+                if cached is not None:
+                    return cached
         try:
             if sha:
                 proc = subprocess.run(
@@ -491,6 +511,66 @@ class GitHubForge(Forge):
             "pushed_sha": pushed_sha,
             "auto_resolved": auto_resolved,
         }
+
+
+# ---------------------------------------------------------------------------
+# CI rollup cache settings: how old an entry may be and where it lives.
+# ---------------------------------------------------------------------------
+
+_LOGGER = logging.getLogger(__name__)
+
+#: Env var holding the cache max age in seconds. ``0`` disables the read.
+CI_ROLLUP_MAX_AGE_ENV = "PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS"
+#: Max age of a cache entry when the operator sets nothing.
+DEFAULT_CI_ROLLUP_MAX_AGE_SECONDS = 90.0
+
+
+def ci_rollup_max_age_seconds() -> float:
+    """The configured CI rollup cache max age, in seconds.
+
+    Read at call time so an operator override needs no restart. A malformed,
+    non-finite or negative value is an operator mistake, not a reason to stop
+    reading CI: it logs a WARNING and falls back to
+    :data:`DEFAULT_CI_ROLLUP_MAX_AGE_SECONDS`. ``0`` is legal and disables the
+    cache read, so every call falls back to the REST path.
+    """
+    raw = os.environ.get(CI_ROLLUP_MAX_AGE_ENV)
+    if raw is None:
+        return DEFAULT_CI_ROLLUP_MAX_AGE_SECONDS
+    try:
+        value: float | None = float(raw)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or not math.isfinite(value) or value < 0:
+        _LOGGER.warning(
+            "invalid CI rollup cache max age setting; using the default",
+            extra={
+                "setting": CI_ROLLUP_MAX_AGE_ENV,
+                "default_seconds": DEFAULT_CI_ROLLUP_MAX_AGE_SECONDS,
+            },
+        )
+        return DEFAULT_CI_ROLLUP_MAX_AGE_SECONDS
+    return value
+
+
+def ci_rollup_state_root(manifest_root: Path | str | None = None) -> Path:
+    """The pipeline-owned state root the rollup cache lives under.
+
+    The detached grading channel's rule: an absolute ``PIPELINE_STATE_DIR``
+    wins, a relative one resolves against the manifests base (never the
+    process CWD, which differs between tick kinds), and with no override the
+    manifests base itself. ``manifest_root`` defaults to
+    :data:`pipeline.paths.PLAN_DIR`, read at call time so a scoped plan or a
+    test that patches it is honoured.
+    """
+    from . import paths
+
+    base = Path(paths.PLAN_DIR if manifest_root is None else manifest_root)
+    override = os.environ.get("PIPELINE_STATE_DIR")
+    if not override:
+        return base
+    root = Path(override)
+    return root if root.is_absolute() else base / root
 
 
 __all__ = ["GitHubForge"]

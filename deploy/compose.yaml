@@ -134,9 +134,10 @@ services:
     #
     #   1. materialise the OIDC client-secret file the image entrypoint asserts;
     #   2. write the scripted-model registry and point the pipeline at it;
-    #   3. start the scheduler daemon, the only durable event-bus consumer
-    #      (ADR 0010), and hand over with `exec` so signals and exit status
-    #      reach the image entrypoint unchanged.
+    #   3. hand over to the image entrypoint with `exec` so signals and exit
+    #      status pass through unchanged. That entrypoint starts the scheduler
+    #      daemon (the only durable event-bus consumer, ADR 0010) and supervises
+    #      it alongside the dashboard and the MCP transport.
     #
     # The git origin is *not* seeded here: Docker creates a fresh named volume
     # root-owned, so a process running as the image's non-root uid cannot write
@@ -190,10 +191,6 @@ services:
             "overlord": {"provider": "lmstudio", "model": "scripted-overlord"},
             "planner": {"provider": "lmstudio", "model": "scripted-decompose"}}}' > "$$registry"
           export PIPELINE_MODEL_REGISTRY_PATH="$$registry"
-        fi
-        if [ "$${PIPELINE_SCHEDULER_DAEMON:-0}" = "1" ]; then
-          echo "compose: starting the scheduler daemon (the only durable event-bus consumer)"
-          python -m pipeline.scheduler_daemon &
         fi
         exec /app/deploy/entrypoint.sh
     volumes:

@@ -203,8 +203,9 @@ def test_dockerfile_runs_as_non_root_and_never_returns_to_root() -> None:
 
 # ---------------------------------------------------------------------------
 # deploy/compose.yaml -- the pipeline service's startup shim, which is where the
-# stack-specific wiring lives: the OIDC secret file, the scripted-model registry
-# and the scheduler daemon, then the hand-off to the image's own entrypoint.
+# stack-specific wiring lives: the OIDC secret file and the scripted-model
+# registry, then the hand-off to the image's own entrypoint (which is what starts
+# and supervises the scheduler daemon; see test_entrypoint_scheduler.py).
 # ---------------------------------------------------------------------------
 
 
@@ -218,7 +219,7 @@ def _pipeline_entrypoint_script() -> str:
     block = raw.split("    entrypoint:", 1)
     assert len(block) == 2, (
         "the pipeline service must declare an `entrypoint:` shim: the stack's "
-        "wiring (scripted registry, scheduler daemon) has to run "
+        "wiring (OIDC secret file, scripted registry) has to run "
         "before the image's own entrypoint"
     )
     script = block[1].split("    volumes:", 1)[0]
@@ -411,7 +412,6 @@ def test_compose_entrypoint_defers_shell_expansion_to_the_container() -> None:
         "$$registry",
         "$${PIPELINE_MCP_CLIENT_SECRET:-}",
         "$${PIPELINE_SCRIPTED_MODEL:-0}",
-        "$${PIPELINE_SCHEDULER_DAEMON:-0}",
     ):
         assert escaped in text, (
             f"deploy/compose.yaml must escape {escaped!r} for the container shell; "

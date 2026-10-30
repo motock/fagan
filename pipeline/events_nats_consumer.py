@@ -334,10 +334,11 @@ async def _deliver(consumer: _Consumer, message) -> None:
         await message.ack()
         return
 
-    failed_handler = await asyncio.to_thread(_run_handlers, consumer, event)
-    if failed_handler is None:
+    failure = await asyncio.to_thread(_run_handlers, consumer, event)
+    if failure is None:
         await message.ack()
         return
+    failed_handler, error_type = failure
 
     limit = max_deliver()
     if attempts > limit:
@@ -346,25 +347,29 @@ async def _deliver(consumer: _Consumer, message) -> None:
         await message.ack()
         return
     if attempts == limit:
-        await _dead_letter(consumer, message, event, attempts, failed_handler)
+        await _dead_letter(
+            consumer, message, event, attempts, failed_handler, error_type
+        )
         await message.ack()
         return
     await message.nak(delay=_backoff_delay(attempts))
 
 
-def _run_handlers(consumer: _Consumer, event: dict) -> str | None:
-    """Run every recorded handler in order; name the one that failed.
+def _run_handlers(consumer: _Consumer, event: dict) -> tuple[str, str] | None:
+    """Run every recorded handler in order; name the one that failed, and how.
 
     Handlers run off the bus's loop (the caller awaits a worker thread), so a
     slow handler cannot stall the connection the consumer is fetching from.
     Returns ``None`` when all of them returned -- including a handler that
-    refused the event, which is a decision, not a failure.
+    refused the event, which is a decision, not a failure. A failure returns
+    ``(handler name, exception class name)``: the class, never the exception's
+    text, which could carry anything at all.
     """
     for handler in list(consumer.bus._handlers.get(consumer.event_type, ())):
         try:
             handler(event)
-        except Exception:  # noqa: BLE001 - the broker redelivers the message
-            return _handler_name(handler)
+        except Exception as exc:  # noqa: BLE001 - the broker redelivers the message
+            return _handler_name(handler), type(exc).__name__
     return None
 
 
@@ -379,6 +384,7 @@ async def _dead_letter(
     event: dict,
     attempts: int,
     failed_handler: str,
+    error_type: str,
 ) -> None:
     """Republish the raw message and record the dead letter exactly once."""
     event_type = consumer.event_type
@@ -403,8 +409,12 @@ async def _dead_letter(
     if subject is not None:
         _write_dead_letter_record(event_type, plan, event, event_id, attempts)
 
-    logger.warning(
-        "dead-lettering a %s event: handler %s failed", event_type, failed_handler
+    logger.error(
+        "dead-lettering a %s event: handler %s failed (%s)",
+        event_type,
+        failed_handler,
+        error_type,
+        extra={"error_type": error_type},
     )
 
 

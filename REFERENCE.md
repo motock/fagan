@@ -2637,8 +2637,7 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
 
 - the mutating tools, each of whose service path calls `authorize` itself, so
   the policy decides — `advance_all_plans`, `advance_pipeline`, `approve_merge`,
-  `approve_plan`, `checkpoint`, `checkpoint_story`, `decompose_plan`,
-  `dispatch_story`, `ingest_plan`, `interrupt_story`, `mark_story_done`,
+  `approve_plan`, `checkpoint`, `checkpoint_story`, `dispatch_story`, `ingest_plan`, `interrupt_story`, `mark_story_done`,
   `mark_story_in_progress`, `patch_plan`, `patch_story`, `pause_plan`,
   `record_security_audit`, `reject_plan`, `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
@@ -2656,9 +2655,12 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   principals' authentication attempts. `check_usage` stays host-level and
   unfiltered: it reports deployment-wide counters that belong to no plan.
 
-Every registered tool is on the allowlist, so every tool is remotely callable,
-and each one decides through the policy. The mutating tools ask for these
-actions: `save_plan` asks `plan:ingest`; `decompose_plan` asks a host-scoped
+Every registered tool except `decompose_plan` is on the allowlist, so every
+one of them is remotely callable and decides through the policy.
+`decompose_plan` is refused outright, by default deny: it drafts a plan from
+text and has no plan to authorize, and the one host-scoped grant it could ask
+for, `plan:ingest`, is held by every authenticated caller on an ownerless
+resource. The mutating tools ask for these actions: `save_plan` asks
 `plan:ingest`; `review_story`, `advance_pipeline` and `mark_story_in_progress`
 ask `plan:dispatch`; `request_decision`, `set_story_status`, `checkpoint` and
 `checkpoint_story` ask `story:patch`; `patch_plan` asks `config:write` scoped to
@@ -2672,13 +2674,13 @@ granted to a remote caller, so it stays refused for every remote principal.
 one, or naming a hidden plan, gets the hidden-plan refusal before the handler
 runs. A remote caller receives only the `roles` section of the snapshot.
 
-`save_plan` and `decompose_plan` refuse a server path from a remote caller. A
-`workspace` argument that is not `None` is refused before the handler runs, and
-`save_plan` also refuses a plan carrying a `repo_root` key, whatever its value.
-The remote caller must name a `repo_url` instead.
+`save_plan` refuses a server path from a remote caller. A `workspace` argument
+that is not `None` is refused before the handler runs, and `save_plan` also
+refuses a plan carrying a `repo_root` key, whatever its value. The remote caller
+must name a `repo_url` instead.
 
-A call the policy refuses — a name outside the allowlist, or a `workspace`
-argument on `save_plan` or `decompose_plan` — gets an `isError` result saying
+A call the policy refuses — a name outside the allowlist (`decompose_plan`
+included), or a `workspace` argument on `save_plan` — gets an `isError` result saying
 the tool is not available over the remote transport. `<PLAN_DIR>/.audit.host.jsonl`
 gains a `tool:call` record with outcome `denied` (naming the tool and the
 subject, each truncated to 64 characters). A failed audit append never changes

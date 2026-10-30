@@ -47,9 +47,10 @@ owns or is a delegate of, per ``app.policy.can_view``:
 * ``advance_all_plans`` runs for every plan, but its result keeps only the plans
   the caller may see. Each invisible plan's advance is refused by its own
   ``plan:dispatch`` check, so the filter hides names and does not gate work;
-* ``save_plan`` and ``decompose_plan`` are refused when their ``workspace``
-  argument is set. A server-side path from the network is never trusted, and
-  ``PipelineService.decompose_plan`` cannot be gated in place.
+* ``save_plan`` is refused when its ``workspace`` argument is set. A server-side
+  path from the network is never trusted. ``decompose_plan`` is refused outright:
+  it is host-scoped, with no plan to authorize, and ``REMOTE_HOST_REFUSED`` lists
+  it so the refusal is a recorded decision rather than an omission.
 """
 
 from __future__ import annotations
@@ -77,7 +78,6 @@ REMOTE_ENFORCED = frozenset(
         "approve_plan",
         "checkpoint",
         "checkpoint_story",
-        "decompose_plan",
         "dispatch_story",
         "ingest_plan",
         "interrupt_story",
@@ -115,9 +115,16 @@ REMOTE_READ = frozenset(
 
 _REFUSAL = "This tool is not available over the remote transport."
 
+#: Host-scoped tools no remote principal may call. Kept out of REMOTE_ENFORCED
+#: because their service path has no plan to authorize, and the only host-scoped
+#: grant to a plan action (``plan:ingest``) is held by every authenticated
+#: principal on an ownerless resource, so it cannot stand for the decision. They
+#: are refused by default deny before the handler runs.
+REMOTE_HOST_REFUSED = frozenset({"decompose_plan"})
+
 #: Tools that accept a server-side ``workspace`` path, which a remote caller may
 #: not supply. Refused when the argument is present and not ``None``.
-WORKSPACE_REFUSED = frozenset({"decompose_plan", "save_plan"})
+WORKSPACE_REFUSED = frozenset({"save_plan"})
 
 #: The single refusal a plan-scoped read returns for a plan the caller may not
 #: see -- deliberately identical to the one for a plan that does not exist, so

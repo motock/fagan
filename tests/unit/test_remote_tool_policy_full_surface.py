@@ -27,6 +27,7 @@ from pipeline.actor import bind_principal
 from pipeline.audit import HOST_AUDIT_FILE
 from pipeline.remote_tool_policy import (
     REMOTE_ENFORCED,
+    REMOTE_HOST_REFUSED,
     REMOTE_READ,
     remote_tool_allowed,
     remote_tool_policy,
@@ -43,7 +44,6 @@ NEWLY_EXPOSED = [
     "advance_pipeline",
     "checkpoint",
     "checkpoint_story",
-    "decompose_plan",
     "get_effective_config",
     "mark_story_in_progress",
     "patch_plan",
@@ -142,11 +142,15 @@ def test_remote_tool_allowed_refuses_a_missing_name() -> None:
     assert remote_tool_allowed(None) is False
 
 
+def test_remote_tool_allowed_refuses_decompose_plan() -> None:
+    assert remote_tool_allowed("decompose_plan") is False
+
+
 def test_every_registered_tool_has_a_remote_policy_decision() -> None:
     # A tool added to the server without a remote decision would be silently
     # refused; this fails instead, so the decision is made when the tool lands.
     registered = set(server.mcp._tool_manager._tools)
-    assert registered <= REMOTE_ENFORCED | REMOTE_READ
+    assert registered <= REMOTE_ENFORCED | REMOTE_READ | REMOTE_HOST_REFUSED
 
 
 # --- save_plan / decompose_plan workspace ---------------------------------
@@ -174,16 +178,33 @@ def test_refused_workspace_is_audited_as_a_denied_tool_call(tmp_path: Path) -> N
     ] == [("tool:call", "denied", "save_plan")]
 
 
-@pytest.mark.parametrize("name", sorted(ARGUMENTS_BY_TOOL))
-def test_call_without_workspace_reaches_the_handler(name: str) -> None:
-    _, recorder = _call({"name": name, "arguments": ARGUMENTS_BY_TOOL[name]}, ALICE)
+def test_save_plan_without_workspace_reaches_the_handler() -> None:
+    _, recorder = _call({"name": "save_plan", "arguments": ARGUMENTS_BY_TOOL["save_plan"]}, ALICE)
     assert recorder.calls == 1
 
 
-@pytest.mark.parametrize("name", sorted(ARGUMENTS_BY_TOOL))
-def test_call_with_null_workspace_reaches_the_handler(name: str) -> None:
-    arguments = {**ARGUMENTS_BY_TOOL[name], "workspace": None}
-    _, recorder = _call({"name": name, "arguments": arguments}, ALICE)
+# --- decompose_plan is host-scoped: no remote principal may run it ---------
+
+
+def test_decompose_plan_without_workspace_is_refused_for_a_remote_principal() -> None:
+    arguments = ARGUMENTS_BY_TOOL["decompose_plan"]
+    result, recorder = _call({"name": "decompose_plan", "arguments": arguments}, ALICE)
+    assert (result["isError"], recorder.calls) == (True, 0)
+
+
+def test_decompose_plan_refusal_is_audited_as_a_denied_tool_call(tmp_path: Path) -> None:
+    arguments = ARGUMENTS_BY_TOOL["decompose_plan"]
+    _call({"name": "decompose_plan", "arguments": arguments}, ALICE)
+    assert [
+        (r["action"], r["outcome"], r["detail"]["tool"])
+        for r in _audit_records(tmp_path)
+        if r["action"] == "tool:call"
+    ] == [("tool:call", "denied", "decompose_plan")]
+
+
+def test_save_plan_with_null_workspace_reaches_the_handler() -> None:
+    arguments = {**ARGUMENTS_BY_TOOL["save_plan"], "workspace": None}
+    _, recorder = _call({"name": "save_plan", "arguments": arguments}, ALICE)
     assert recorder.calls == 1
 
 
@@ -218,3 +239,4 @@ def test_get_effective_config_with_a_visible_plan_reaches_the_handler() -> None:
     arguments = {"plan_name": "alpha"}
     _, recorder = _call({"name": "get_effective_config", "arguments": arguments}, ALICE)
     assert recorder.calls == 1
+

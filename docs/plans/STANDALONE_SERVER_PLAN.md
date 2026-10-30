@@ -216,7 +216,8 @@
 
 Epic 1, SA-04 and SA-19 can start as soon as Phase A merges. SA-05 waits on SA-03 and
 SA-04. Epic 3 waits on SG-01 and SG-05, the Dockerfile and entrypoint stories.
-SA-11 waits on SA-07, SA-08 and SA-12. Epic 5 waits on SA-13. Epic 6 is last.
+SA-11 waits on SA-07, SA-08 and SA-12. Epic 5 waits on SA-13. Epic 6 closes
+out the install path and comes last among the epics that depend on it.
 
 ## Open questions
 

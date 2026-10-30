@@ -220,6 +220,10 @@ _AGENT_SECRET_ENV = frozenset({
     "GITLAB_TOKEN",
     "GLAB_TOKEN",
     "CI_JOB_TOKEN",
+    # The operator-supplied Anthropic key (standalone-server secret file). The
+    # claude driver converts it to ANTHROPIC_API_KEY and drops this name, but a
+    # prompt-injected agent must never see the raw mounted secret either way.
+    "PIPELINE_ANTHROPIC_API_KEY",
 })
 
 

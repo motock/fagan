@@ -33,7 +33,15 @@ Security properties:
   deny-by-default allow-list whose values are re-checked; the origin URL must
   equal the canonical URL and occur exactly once. Any other key -
   ``url.*.insteadOf``, ``http.proxy``, ``core.gitproxy``, ``core.worktree``,
-  ``credential.*``, ``core.hooksPath``, ... - refuses the refresh.
+  ``credential.*``, ``core.hooksPath``, ... - refuses the refresh, and so does
+  every ``extensions.*`` key. ``extensions.worktreeConfig`` in particular is
+  never allowed: it makes git read ``<git-common-dir>/config.worktree``, a
+  scope ``git config --local --list`` does not report, so the audit explicitly
+  refuses a clone that carries that file.
+* The fetch transport is forced off on the argv as well: ``-c http.proxy=``,
+  ``-c https.proxy=`` and ``-c http.followRedirects=false`` are set alongside
+  the other ``_safe_opts`` values, so a proxy or redirect value that ever
+  slipped past the audit still cannot be honoured.
 * ``fetch`` is given the canonical URL and an explicit refspec on the argv, so
   the ``origin`` remote configuration is never consulted for the transport.
 * ``reset`` and ``clean`` run with ``-c core.worktree=<realpath(target)>`` and
@@ -97,7 +105,12 @@ _CONFIG_EXACT_KEYS = frozenset(
         "gc.autodetach",
     }
 )
-_CONFIG_PREFIXES = ("extensions.",)
+# ``extensions.*`` is deliberately *not* allow-listed, not even by prefix:
+# ``extensions.worktreeConfig`` makes git additionally read
+# ``<git-common-dir>/config.worktree``, and ``git config --local --list`` does
+# not report that scope, so a key hidden there would never reach the audit.
+# A sha256 repository (``extensions.objectFormat=sha256``) is not supported
+# either; supporting one would need an exact key + allowed-value pair here.
 _CONFIG_BOOLEANS = frozenset({"core.filemode", "core.logallrefupdates"})
 
 # The helper reads the token from the file named in the child env, so the token
@@ -171,11 +184,10 @@ def _deny(url: str, reason: str) -> RepoUrlError:
     return RepoUrlError(reason)
 
 
-def _reject_path_segment(segment: str) -> None:
-    if not _SEGMENT_RE.fullmatch(segment):
-        raise RepoUrlError(f"invalid path segment {segment!r}")
-    if segment in (".", ".."):
-        raise RepoUrlError(f"invalid path segment {segment!r}")
+def _reject_path_segment(url: str, segment: str) -> None:
+    """Reject a ``.``/``..`` or otherwise unusable path segment, with an audit."""
+    if segment in (".", "..") or not _SEGMENT_RE.fullmatch(segment):
+        raise _deny(url, f"invalid path segment {segment!r}")
 
 
 def parse_repo_url(
@@ -225,7 +237,7 @@ def parse_repo_url(
         raise _deny(url, "repository URL has a malformed port") from None
     if port not in (None, 443):
         raise _deny(url, f"repository URL port {port!r} is not allowed")
-    owner, repo = _split_path(split.path)
+    owner, repo = _split_path(url, split.path)
     return host, owner, repo
 
 
@@ -240,8 +252,8 @@ def _parse_file_url(
         raise _deny(url, "repository URL must not carry a query or fragment")
     segments = _file_segments(url, split.path)
     owner, repo = segments[-2], segments[-1].removesuffix(".git")
-    _reject_path_segment(owner)
-    _reject_path_segment(repo)
+    _reject_path_segment(url, owner)
+    _reject_path_segment(url, repo)
     return _FILE_HOST, owner, repo
 
 
@@ -267,14 +279,14 @@ def _allowed_hosts(env: Mapping[str, str]) -> frozenset[str]:
     return frozenset(hosts)
 
 
-def _split_path(path: str) -> tuple[str, str]:
+def _split_path(url: str, path: str) -> tuple[str, str]:
     match = _PATH_RE.fullmatch(path)
     if match is None:
-        raise RepoUrlError("repository URL path must be exactly /<owner>/<repo>")
+        raise _deny(url, "repository URL path must be exactly /<owner>/<repo>")
     owner, repo = match.group(1), match.group(2)
     repo = repo.removesuffix(".git")
-    _reject_path_segment(owner)
-    _reject_path_segment(repo)
+    _reject_path_segment(url, owner)
+    _reject_path_segment(url, repo)
     return owner, repo
 
 
@@ -395,6 +407,15 @@ def _safe_opts(target: Path) -> list[str]:
     return [
         "-c",
         "credential.helper=",
+        # Defence in depth for the transport: even if the config audit were
+        # loosened, ``fetch`` cannot be routed through a proxy or redirected to
+        # another host by a value that slipped past it.
+        "-c",
+        "http.proxy=",
+        "-c",
+        "https.proxy=",
+        "-c",
+        "http.followRedirects=false",
         "-c",
         "core.hooksPath=/dev/null",
         "-c",
@@ -510,6 +531,54 @@ def _untrusted(target: Path, key: str) -> RepoCloneError:
     )
 
 
+def _git_common_dir(
+    target: Path, child_env: Mapping[str, str], timeout: float
+) -> Path | None:
+    """Return the clone's common git dir (``.git`` for a normal clone)."""
+    output = _try_output(
+        ["git", *_safe_opts(target), "-C", str(target), "rev-parse", "--git-common-dir"],
+        child_env,
+        timeout,
+    )
+    if not output:
+        return None
+    common = Path(output)
+    if not common.is_absolute():
+        common = target / common
+    return common
+
+
+def _refuse_worktree_config(
+    target: Path, child_env: Mapping[str, str], timeout: float
+) -> None:
+    """Refuse a clone that carries a ``<git-common-dir>/config.worktree`` file.
+
+    ``git config --local --list`` reads the local scope only, so keys in the
+    worktree scope are invisible to :func:`_audit_local_config`. The file
+    exists only when somebody enabled ``extensions.worktreeConfig``, which a
+    clone this module creates never does; treat its mere presence as hostile.
+    The check runs before the local-config audit so the refusal does not depend
+    on that audit still rejecting ``extensions.*``. A clone whose common dir
+    cannot even be resolved (a rewritten repository format, say) is refused the
+    same way: it is not a clone this module wrote.
+    """
+    common = _git_common_dir(target, child_env, timeout)
+    if common is not None and not os.path.lexists(str(common / "config.worktree")):
+        return
+    LOG.warning(
+        "refusing to refresh an untrusted clone",
+        extra={
+            "event": "repo_config_untrusted",
+            "path": str(target),
+            "key": "config.worktree",
+        },
+    )
+    raise RepoCloneError(
+        f"git fetch refused: the existing clone at {target} carries a git "
+        "configuration this module does not trust"
+    )
+
+
 def _audit_local_config(
     target: Path, canonical: str, child_env: Mapping[str, str], timeout: float
 ) -> None:
@@ -520,7 +589,11 @@ def _audit_local_config(
     fetch`` resolves), ``http.proxy``/``core.gitproxy`` (which MITM it),
     ``core.worktree`` or a duplicate ``remote.origin.url`` - means the tree is
     not trustworthy, so the refresh is refused instead of fetching from it.
+
+    A ``config.worktree`` file is refused before anything else is read, because
+    its keys live in a scope ``git config --local --list`` never reports.
     """
+    _refuse_worktree_config(target, child_env, timeout)
     entries = _config_entries(
         _run(
             [
@@ -570,8 +643,11 @@ def _audit_local_config(
             if not _BRANCH_REF_RE.fullmatch(value):
                 raise _untrusted(target, key)
             continue
-        if any(lowered.startswith(prefix) for prefix in _CONFIG_PREFIXES):
-            continue
+        if lowered.startswith("extensions."):
+            # ``extensions.worktreeConfig`` would make git read
+            # ``config.worktree``, a scope this audit cannot see; no other
+            # extension is one this module creates.
+            raise _untrusted(target, key)
         raise _untrusted(target, key)
     if origins != [canonical]:
         raise _untrusted(target, "remote.origin.url")

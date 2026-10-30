@@ -24,6 +24,7 @@ from pipeline.repo_clone import (
     RepoCloneError,
     RepoUrlError,
     _askpass,
+    _safe_opts,
     _sanitize,
     ensure_clone,
     managed_path,
@@ -709,3 +710,125 @@ def test_refresh_argv_forces_worktree_and_uses_the_canonical_url(
     assert url in fetches[0]
     assert "origin" not in fetches[0]
     assert fetches[0][-1] == "+refs/heads/*:refs/remotes/origin/*"
+
+
+# --- hardening: extensions.* and the worktree config scope -----------------
+
+
+def test_ensure_clone_refuses_extensions_worktreeconfig(tmp_path: Path) -> None:
+    """``extensions.worktreeConfig`` makes git read a scope the audit cannot see.
+
+    ``git config --local --list`` never reports keys from ``config.worktree``,
+    so allowing this extension would let an attacker hide ``http.proxy`` /
+    ``url.*.insteadOf`` outside the audited scope.
+    """
+    target, env, url = _managed_clone(tmp_path)
+    _git("config", "extensions.worktreeConfig", "true", cwd=target)
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_ensure_clone_refuses_any_extension_key(tmp_path: Path) -> None:
+    """Deny-by-default: no ``extensions.*`` key is neutral, so none is allowed."""
+    target, env, url = _managed_clone(tmp_path)
+    _git("config", "extensions.objectFormat", "sha256", cwd=target)
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_ensure_clone_refuses_present_worktree_config(tmp_path: Path) -> None:
+    """A ``<git-common-dir>/config.worktree`` file refuses the refresh outright.
+
+    Even without the extension key, the presence of the file signals a tree
+    somebody else configured; its contents are invisible to ``--local``.
+    """
+    target, env, url = _managed_clone(tmp_path)
+    (target / ".git" / "config.worktree").write_text(
+        "[http]\n\tproxy = http://attacker.invalid:8080\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_ensure_clone_refuses_proxy_hidden_in_worktree_scope(tmp_path: Path) -> None:
+    """The full exploit: enable the extension, hide ``http.proxy`` beside it.
+
+    Neither key is visible to ``git config --local --list``; the refresh must be
+    refused before any fetch is attempted.
+    """
+    target, env, url = _managed_clone(tmp_path)
+    _git("config", "extensions.worktreeConfig", "true", cwd=target)
+    (target / ".git" / "config.worktree").write_text(
+        "[http]\n\tproxy = http://attacker.invalid:8080\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_ensure_clone_refuses_http_proxy_in_local_config(tmp_path: Path) -> None:
+    """``http.proxy`` in the audited scope is refused (baseline for the above)."""
+    target, env, url = _managed_clone(tmp_path)
+    _git("config", "http.proxy", "http://attacker.invalid:8080", cwd=target)
+
+    with pytest.raises(RepoCloneError) as excinfo:
+        ensure_clone(url, environ=env)
+
+    assert "configuration" in str(excinfo.value)
+
+
+def test_ensure_clone_logs_untrusted_config_for_extensions(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Refusals are audited as ``repo_config_untrusted`` with the offending key."""
+    target, env, url = _managed_clone(tmp_path)
+    _git("config", "extensions.worktreeConfig", "true", cwd=target)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(RepoCloneError):
+        ensure_clone(url, environ=env)
+
+    records = [
+        record for record in caplog.records if getattr(record, "event", "") ==
+        "repo_config_untrusted"
+    ]
+    assert records
+    assert any("extensions.worktreeconfig" in str(
+        getattr(record, "key", "")
+    ).lower() for record in records)
+
+
+def test_parse_repo_url_audits_every_rejection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every rejection emits ``repo_url_rejected``, including a bad segment."""
+    for url in (
+        "https://github.com/../r",
+        "https://github.com/o/..",
+        "https://github.com/o/r/extra",
+        "https://github.com/o/r?x=1",
+    ):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING), pytest.raises(RepoUrlError):
+            parse_repo_url(url, environ={})
+        events = [getattr(record, "event", "") for record in caplog.records]
+        assert "repo_url_rejected" in events, url
+
+
+def test_safe_opts_forces_the_transport_off(tmp_path: Path) -> None:
+    """Defence in depth: even a loosened audit cannot honour a proxy rewrite."""
+    opts = _safe_opts(tmp_path / "repos" / "local" / "acme" / "widget")
+    for setting in ("http.proxy=", "https.proxy=", "http.followRedirects=false"):
+        assert setting in opts, setting

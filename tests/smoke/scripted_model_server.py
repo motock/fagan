@@ -16,6 +16,12 @@ the server root (the SDK appends ``/chat/completions`` itself). The request
 body fields this server reads are ``model`` (the role carrier) and ``messages``
 (counted for the usage block); everything else is ignored.
 
+``GET {base_url}/v1/models`` and ``GET {base_url}/api/v0/models`` - the two
+read-only model-list probes ``app/inference_providers.LMStudioProvider`` issues
+(``reachable()`` and ``loaded_models()``) before a role call - answer
+``{"object": "list", "data": [...]}`` with one ``state: "loaded"`` entry per
+role. A probe never consumes a scripted answer: no cursor moves.
+
 The response is the envelope the drivers translate - ``object``,
 ``choices[0].message.{role,content,tool_calls}``,
 ``choices[0].finish_reason`` and ``usage.{prompt_tokens,completion_tokens}`` -
@@ -118,6 +124,7 @@ from pathlib import Path
 
 __all__ = [
     "ENDPOINT_PATH",
+    "MODEL_LIST_PATHS",
     "ROLE_NAMES",
     "ScriptedModelServer",
     "UnknownRoleError",
@@ -136,6 +143,13 @@ ENDPOINT_PATH = "/v1/chat/completions"
 
 #: Accepted paths: the canonical one plus the route a root ``api_base`` yields.
 _ACCEPTED_PATHS = frozenset({ENDPOINT_PATH, "/chat/completions"})
+
+#: The model-list probes a local-inference driver issues before a role call:
+#: ``LMStudioProvider.reachable()`` reads ``/v1/models`` and its
+#: ``loaded_models()`` reads LM Studio's own ``/api/v0/models``. Both are GETs
+#: on paths outside :data:`_ACCEPTED_PATHS`, so they are answered separately -
+#: a probe that 404s would read "backend unreachable" mid-run.
+MODEL_LIST_PATHS = frozenset({"/v1/models", "/api/v0/models"})
 
 #: Every role this backend can serve.
 ROLE_NAMES = ("decompose", "review", "overlord", "dispatch")
@@ -542,6 +556,12 @@ class ScriptedModelServer:
 
     def _dispatch(self, handler: BaseHTTPRequestHandler, *, method: str) -> None:
         path = urllib.parse.urlsplit(handler.path).path.rstrip("/") or "/"
+        # A model-list probe is read-only: answer it before the
+        # chat-completions path check, and without touching a role cursor, so
+        # probing never consumes a scripted answer.
+        if method == "GET" and path in MODEL_LIST_PATHS:
+            self._send_json(handler, 200, self._model_list())
+            return
         if path not in _ACCEPTED_PATHS:
             self._send_error(handler, 404, "unknown endpoint for action=chat.completions")
             return
@@ -570,6 +590,21 @@ class ScriptedModelServer:
                                    sequence)
         _LOGGER.info("scripted model response role=%s status=200", role)
         self._send_json(handler, 200, payload)
+
+    def _model_list(self) -> dict:
+        """The model list both probes read: one loaded entry per role.
+
+        ``LMStudioProvider.loaded_models()`` keeps only entries whose ``state``
+        is ``"loaded"``, so every entry claims that state - a scripted run has
+        no model loading to wait for.
+        """
+        return {
+            "object": "list",
+            "data": [
+                {"id": f"scripted-{role}", "object": "model", "state": "loaded"}
+                for role in ROLE_NAMES
+            ],
+        }
 
     def _next_entry(self, role: str) -> tuple:
         """Read-then-advance one role's cursor; raise ``LookupError`` when empty.

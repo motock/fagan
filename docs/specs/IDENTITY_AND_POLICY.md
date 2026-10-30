@@ -155,7 +155,7 @@ Imports `app.identity` only — never `app.auth` (an adapter concern) and never
 | `Action` | `str` enum of the eleven mutating actions ADR 0009 authorizes: `plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`. |
 | `Resource` | Frozen dataclass for the ADR 0009 scope chain: `tenant`, `team`, `repo`, `plan`, `story`, plus the plan's ownership — `owner` (a subject, `""` when the plan has none) and `delegates` (a tuple of subjects, empty by default). Ownership is empty for every plan written before OWN-01. |
 | `Authorizer` | Protocol for `allow(principal, action, resource) -> bool`. |
-| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything. A plan's ownership is an **additional** authority for exactly the ten actions its owner governs — `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `story:mark_done`, `story:merge`, `decision:answer`, `config:write` — where `resource.owner` and any subject in `resource.delegates` are allowed those ten actions even with no role at all. Host-scoped `config:write` is decided against an empty-owner resource, so it stays local-operator only (ADR 0009 amendment 2026-10-30). Ownership is never a subtraction: every principal the role rules already allow stays allowed, a plan with no owner (`owner == ""`) and no delegates falls through to the role rule unchanged, and the ownership grant is scoped to those ten actions only. Every other principal is denied every other action, with two exceptions. One is `plan:ingest`: an authenticated principal (its `auth_method` is neither empty nor `none`, so never `ANONYMOUS`) may ingest a *present* resource with no owner — a legacy plan, or a plan with no manifest yet — and becomes that plan's owner (ADR 0006); it may also re-ingest a plan it already owns, while a plan owned by someone else stays closed to it. The grant needs a resource: a caller that passes none (`resource is None`, or omits the argument) is denied, because a missing resource is not evidence that the plan is new. The local operator is unaffected, since its check runs first. The other is a reserved `system:` subject (the scheduler and worker principals `app/identity.py` defines), which is decided by its row of `SYSTEM_PRINCIPAL_GRANTS` before ownership is read, so it holds exactly those actions and a manifest naming it `owner` or `delegate` never widens them. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
+| `LocalPolicy` | The local single-operator policy: the `local-operator` subject may do everything. A plan's ownership is an **additional** authority for exactly the five actions its owner governs — `plan:approve`, `plan:reject`, `plan:dispatch`, `story:merge`, `decision:answer` — where `resource.owner` and any subject in `resource.delegates` are allowed those five actions even with no role at all. Ownership is never a subtraction: every principal the role rules already allow stays allowed, a plan with no owner (`owner == ""`) and no delegates falls through to the role rule unchanged, and the ownership grant is scoped to those five actions only. Every other principal is denied every other action, with two exceptions. One is `plan:ingest`: an authenticated principal (its `auth_method` is neither empty nor `none`, so never `ANONYMOUS`) may ingest a *present* resource with no owner — a legacy plan, or a plan with no manifest yet — and becomes that plan's owner (ADR 0006); it may also re-ingest a plan it already owns, while a plan owned by someone else stays closed to it. The grant needs a resource: a caller that passes none (`resource is None`, or omits the argument) is denied, because a missing resource is not evidence that the plan is new. The local operator is unaffected, since its check runs first. The other is a reserved `system:` subject (the scheduler and worker principals `app/identity.py` defines), which is decided by its row of `SYSTEM_PRINCIPAL_GRANTS` before ownership is read, so it holds exactly those actions and a manifest naming it `owner` or `delegate` never widens them. A `None` principal, an unknown action, or a non-`Action`/non-string action is denied without raising. |
 | `default_authorizer()` | Returns the authorizer for this deployment — `LocalPolicy()` today. |
 | `is_allowed(authorizer, principal, action, resource)` | The wrapper every future call site uses: asks the authorizer and **fails closed** on any error, logging a warning that names the action and the principal subject. A policy that raises lands denied, never propagates. |
 
@@ -489,23 +489,18 @@ worth having.
 
 `LocalPolicy` allows the local operator every action. A plan's `owner` and its
 `delegates` are additionally allowed `plan:approve`, `plan:reject`,
-`plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`,
-`story:mark_done`, `story:merge`, `decision:answer` and `config:write` on that
-plan; ownership grants nothing else. `plan:ingest` is the exception that gives
-ownership its start: an authenticated principal may ingest a *present* resource with no
+`plan:dispatch`, `story:merge` and `decision:answer` on that plan; ownership
+grants nothing else. `plan:ingest` is the exception that gives ownership its
+start: an authenticated principal may ingest a *present* resource with no
 owner — a legacy plan, or a plan with no manifest yet — and becomes its owner
 (ADR 0006); it may also re-ingest a plan it owns, while a plan owned by someone
 else stays closed to it. The grant needs a resource: a caller that passes none
 is denied, because a missing resource is not evidence that the plan is new.
 The local operator is unaffected, since its check runs first. An unauthenticated
 caller (`ANONYMOUS`, `auth_method` `none`) may never ingest.
-The plan-scoped actions (`plan:pause`, `story:patch`, `story:interrupt`,
-`story:mark_done`, `config:write`) joined the grant in ADR 0009's 2026-10-30
-amendment: a standalone server has no local operator at the client, so a
-remote owner must be able to run its own plan end to end. Host-scoped
-`config:write` (`set_role_default`, `record_security_audit`) is decided through
-`refusal_for_host_config` against a resource with no owner and no delegates,
-which the ownership grant never matches, so it stays local-operator only.
+`plan:pause` stays outside the ownership grant on purpose: nothing in the current
+stack asks an owner to pause its own plan, and every action added to the grant
+widens authority.
 
 **Dashboard responses.** A dashboard route whose service call is refused answers
 `403` with the detail `not authorized: <action>` (the action only, never the

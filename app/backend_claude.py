@@ -45,6 +45,13 @@ def _first_party_claude_env() -> dict:
     env = dict(os.environ)
     for var in _CLAUDE_PROVIDER_REDIRECT_VARS:
         env.pop(var, None)
+    # An operator-supplied key (a standalone server's mounted secret) is the
+    # only ANTHROPIC_API_KEY the CLI may see: it authenticates against the
+    # first-party API because every redirect var above stays stripped.
+    # CLAUDE_CODE_OAUTH_TOKEN is not a redirect var and passes through as-is.
+    operator_key = os.environ.get("PIPELINE_ANTHROPIC_API_KEY", "").strip()
+    if operator_key:
+        env["ANTHROPIC_API_KEY"] = operator_key
     return env
 
 

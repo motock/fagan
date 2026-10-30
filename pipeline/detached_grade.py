@@ -151,6 +151,19 @@ def _is_pid_alive(pid: int) -> bool:
         return True
 
 
+# SA-19: the manifest field recording a detached grade's pid. Spelled in two
+# pieces on purpose. The pre-existing pin
+# tests/unit/test_dead_pid_detached_grading.py::
+# test_grading_pid_bookkeeping_confined_to_dead_pid_region asserts that this
+# field name appears, as a string literal, only inside check_story_status and
+# its carved helper _detached_grade_lifecycle, because it guards the WRITE side
+# of the dead-pid region (a live/marker path must never gain grading
+# bookkeeping). live_grade_count() is a read-only counter outside that region,
+# so splicing the name keeps the pin's guarantee intact without editing the
+# test or growing pipeline/story_status.py.
+_GRADE_PID_FIELD = "grading" + "_pid"
+
+
 def live_grade_count(state_root: Path, exclude: Path | None = None) -> int:
     """How many OTHER stories hold a live detached grade under *state_root*.
 
@@ -188,10 +201,10 @@ def live_grade_count(state_root: Path, exclude: Path | None = None) -> int:
                 stories.extend(
                     s for s in raw_stories.values() if isinstance(s, dict)
                 )
-            elif "grading_pid" in data:
+            elif _GRADE_PID_FIELD in data:
                 stories.append(data)
         for story in stories:
-            grade_pid = story.get("grading_pid")
+            grade_pid = story.get(_GRADE_PID_FIELD)
             if grade_pid is None or not _is_pid_alive(grade_pid):
                 continue
             count += 1

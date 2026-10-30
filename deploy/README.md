@@ -98,13 +98,131 @@ the `GIT_AUTHOR_*` / `GIT_COMMITTER_*` identity above; an operator deploying on
 behalf of a real team should override all four with the same variable names at
 `docker run -e` / compose `environment:`.
 
+### Credentials
+
+The entrypoint reads the operator's credentials from mounted files and exports
+them under the names the backends read. The loader is
+[`deploy/lib/operator_env.sh`](lib/operator_env.sh), which
+[`deploy/entrypoint.sh`](entrypoint.sh) sources before it starts anything; the
+split exists so the loader is testable without any "skip the process start"
+switch in the script that runs in production (a switch is fail-open under
+`dash`, where an executed script that returns early exits `0`). Both start-up
+scripts ship **root-owned and non-writable** in the image
+(`deploy/entrypoint.sh` `0555`, `deploy/lib/operator_env.sh` `0444`): the runtime
+uid is the uid agent children run as, and a code-executing agent that could
+rewrite either file would get its own code re-run at the next container start,
+with every mounted secret already exported into that process. Hardening only the
+sourced library would leave the *caller* mutable on the same trust boundary.
+Never pass any of these as an environment value: an environment value shows up
+in `docker inspect` and in `/proc/<pid>/environ` of every child, including the
+agents.
+
+| Secret file (default) | Path variable | Exported as |
+| --------------------- | ------------- | ----------- |
+| `/run/secrets/anthropic_api_key` | `ANTHROPIC_API_KEY_FILE` | `PIPELINE_ANTHROPIC_API_KEY` |
+| `/run/secrets/claude_code_oauth_token` | `CLAUDE_CODE_OAUTH_TOKEN_FILE` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `/run/secrets/gh_token` | `GH_TOKEN_FILE` | `GH_TOKEN` |
+| `/run/secrets/ollama_api_key` | `OLLAMA_API_KEY_FILE` | `OLLAMA_API_KEY` |
+
+- Each file must be a **regular file, mode `0600`, owned by the uid the
+  container runs as**. The entrypoint refuses to start when the mode has any
+  group or other bit (`stat -c %a` & `077` non-zero) or when the owner differs
+  from `id -u`; the refusal names the variable and never the value. It also
+  refuses a path that is not a regular file, and a **symlinked** one: `stat`
+  follows links, so a link would let one `*_FILE` variable re-point at another
+  credential's `0600` file and have it loaded under the wrong name.
+- A **missing or empty** file is not an error. `compose.yaml`'s `secrets:`
+  requires every listed file to exist, so an unused credential is created
+  empty; the backend that needs it fails closed when it is used. A file that
+  holds only whitespace is treated as empty, and in that case the variable is
+  **unset**: an ambient `GH_TOKEN`/`OLLAMA_API_KEY`/... in the container
+  environment is discarded, never trusted, so a credential never comes from an
+  environment value.
+- The value is read from the file, a trailing newline stripped, and exported
+  for the process tree. Only `loaded <VARIABLE> from secret file` is logged —
+  never the value.
+- **Exposure boundary (tracked risk).** Everything exported here is inherited by
+  every child of the entrypoint. Whichever consumer strips a carrier is named
+  here, per credential, because this section is the map an operator reads before
+  mounting anything. What removes it before a child starts, today:
+  - `GH_TOKEN` (and `GITHUB_TOKEN`, `GITLAB_TOKEN`, `GLAB_TOKEN`,
+    `CI_JOB_TOKEN` from the same forge family): stripped from every agent child
+    by `pipeline/execution.py::_AGENT_SECRET_ENV` - the consumer for the agent
+    child (`spawn_local`, `spawn_harness`, and the docker sandbox's allowlist
+    downstream).
+  - Nothing else. `PIPELINE_ANTHROPIC_API_KEY`, `OLLAMA_API_KEY` and
+    `CLAUDE_CODE_OAUTH_TOKEN` are **readable by agent shells**: an agent is
+    prompt-injectable code running as the same uid, and a bare `env` prints
+    them. `CLAUDE_CODE_OAUTH_TOKEN` is additionally the token the agent process
+    authenticates with, so it cannot be stripped from that child.
+  - The `claude` CLI child also inherits `GH_TOKEN`:
+    `app.backend_claude.py::_first_party_claude_env()` drops only the
+    provider-redirect variables (`ANTHROPIC_*`, `CLAUDE_CODE_USE_BEDROCK`,
+    `CLAUDE_CODE_USE_VERTEX`), and its Bash tool executes commands driven by
+    model output. `PIPELINE_ANTHROPIC_API_KEY` is *not* mapped to
+    `ANTHROPIC_API_KEY` there, so the mounted model key does not authenticate
+    the CLI - it is only inherited, unread by the CLI.
+  This is recorded as a risk with mitigations rather than claimed as solved:
+  scope every credential to exactly what the pipeline needs, budget-cap the
+  model account, and mount nothing an agent must not see. Do not deploy a forge
+  token with broader rights than clone/push/PR needs. The two strips that would
+  remove the remaining carriers are **not** in this story's scope: SA-09 removes
+  the model-key carrier from the `claude` CLI child
+  (`app/backend_claude.py::_first_party_claude_env()`) and SF-03 adds the model
+  keys to the agent denylist (`pipeline/execution.py::_AGENT_SECRET_ENV`). Until
+  they land, this table plus the risk note is the contract: the deploy layer
+  mounts nothing it does not also name here.
+  Until a credential broker lands (the agent talks to a local proxy, or receives
+  a per-agent, per-run scoped key) run the server only for operators you would
+  let read the mounted files, and **budget-cap every operator model key and the
+  Claude account** - the cap is the only control that bounds the blast radius.
+- The exported name is `PIPELINE_ANTHROPIC_API_KEY`, not `ANTHROPIC_API_KEY`:
+  `app/backend_claude.py` strips an ambient `ANTHROPIC_API_KEY` so a redirected
+  provider cannot be smuggled in through the environment. The story that passes
+  an operator-supplied key to the `claude` CLI is expected to read this explicit
+  variable; nothing in this image maps it to `ANTHROPIC_API_KEY` today, so the
+  mounted key does not yet authenticate the CLI.
+- When `GH_TOKEN` is set (from the file only) and `PIPELINE_FORGE` is unset, the
+  entrypoint exports `PIPELINE_FORGE=github`. An explicit `PIPELINE_FORGE=gitlab`
+  is kept.
+- When `PIPELINE_GIT_TOKEN_FILE` is unset and `GH_TOKEN` was loaded from a secret
+  file, it is exported as the resolved `GH_TOKEN_FILE` path (default
+  `/run/secrets/gh_token`), so overriding `GH_TOKEN_FILE` moves both. The
+  repo-clone story (SA-05, not implemented yet) is expected to read that *path*,
+  not the value, so the token itself never has to be placed in `git`'s
+  environment. Until it lands, nothing in the image reads
+  `PIPELINE_GIT_TOKEN_FILE`.
+- `PIPELINE_GIT_TOKEN_FILE` itself is **accepted verbatim from the ambient
+  environment** — the "a credential never comes from an environment value"
+  invariant above covers the four secret files, not this path. That is
+  defensible because `pipeline/repo_clone.py::_token_file` re-validates it with
+  `lstat` before use: regular file, no group/other bits, owner == euid, and
+  non-empty. But note the consequence: an ambient `PIPELINE_GIT_TOKEN_FILE` can
+  point the askpass helper at any `0600` file the uid owns — including the OIDC
+  client secret — and have its contents sent to the forge. Do not let an
+  untrusted party set it.
+
+Repo defaults the entrypoint sets (both exported, both overridable):
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `PIPELINE_REPOS_ROOT` | `/var/lib/pipeline/repos` | The directory SA-05 (the repo-clone story, not implemented yet) will clone into, laid out as `<host>/<owner>/<repo>`. Created at start with mode `0750` on the mounted volume; a pre-existing root is `chmod 750`-ed, and the entrypoint refuses to start if group write or any other-user access remains (it is the clone trust boundary). A root **you set** that cannot be created or tightened is fatal, so `PIPELINE_ALLOWED_REPO_ROOTS` never points at a path that does not exist; the image default stays best effort, which is not a fail-open because `pipeline/repo_clone.py::_make_dirs()` creates the root and its parents mode `0750` at clone time, under a path the allowlist already admitted. The volume must therefore be writable by the container uid (see [Volumes](#volumes)). A **symlinked** root is refused rather than followed, and a root that is itself a **mount point** is refused when its mode is too loose instead of being `chmod`-ed — for a bind mount that would mutate the host directory the operator owns, so the operator sets the mode on the volume. |
+| `PIPELINE_ALLOWED_REPO_ROOTS` | `$PIPELINE_REPOS_ROOT` | The `pipeline/workspace.py` allowlist a plan's `repo_root` must live under. Defaulting it to the repos root means the dashboard's decompose route and the scheduler are confined to the directory the server owns; a preset value is kept as-is. |
+
 ## Volumes
 
 `/var/lib/pipeline` is declared as a `VOLUME` and owned by uid 10001. It holds:
 
 - `plans/` — the plan directory (`PLAN_DIR`), including `.dashboard_ui_state.json`
   and `.scheduler_health.json` that `/api/health` reports on;
-- `worktrees/` — the git worktree root (`WORKTREE_ROOT`).
+- `worktrees/` — the git worktree root (`WORKTREE_ROOT`);
+- `repos/` — `PIPELINE_REPOS_ROOT`, created by the entrypoint on first start
+  with mode `0750`: the directory SA-05 clones into and the
+  `PIPELINE_ALLOWED_REPO_ROOTS` default. An operator-supplied root that cannot
+  be created or tightened is fatal (`pipeline/repo_clone.py::_make_dirs()`
+  creates the image default at clone time, mode `0750`), so the volume must be
+  writable by uid 10001 and a bind-mounted directory must already carry mode
+  `0750`.
 
 Mount a named volume (as above) or a host path. Without one, plans and
 worktrees are lost when the container is replaced, and the entrypoint's
@@ -154,10 +272,11 @@ The probe is deliberately shallow: it starts the container healthy only after
   transport (the exec'd foreground process), the dashboard, and the scheduler
   daemon; set `PIPELINE_SCHEDULER_DAEMON=0` to run the daemon outside the
   container.
-- It carries no secrets. The OIDC client secret is a mounted file, and
-  bearer-token verification is JWKS-only; the image only asserts that the
-  mount exists so a missing credential fails at start rather than at the first
-  token exchange.
+- It carries no secrets. The OIDC client secret and the operator credentials
+  (see [Credentials](#credentials)) are mounted files, not environment values,
+  and bearer-token verification is JWKS-only; the image only asserts that the
+  OIDC mount exists so a missing credential fails at start rather than at the
+  first token exchange.
 
 ## The smoke stack and the merge park
 

@@ -130,10 +130,22 @@ def test_should_not_expose_pipeline_operator_key_var(monkeypatch):
     assert "PIPELINE_ANTHROPIC_API_KEY" not in env
 
 
-def test_agent_secret_denylist_covers_pipeline_operator_key():
-    """Defense in depth: even if some caller forwards the raw environment,
-    spawn_harness's SEC-2 denylist drops the operator secret by name."""
-    assert "PIPELINE_ANTHROPIC_API_KEY" in execution._AGENT_SECRET_ENV
+def test_converted_key_never_travels_under_its_pipeline_name(monkeypatch):
+    """The in-scope control: conversion *removes* the carrier.
+
+    ``pipeline.execution``'s SEC-2 denylist (``_AGENT_SECRET_ENV``) is out of
+    this story's ``files`` scope, so this story may not rely on it; the only
+    guaranteed layer here is that ``_first_party_claude_env()`` (the sole env
+    ``backend_claude`` hands to ``spawn_harness``) carries the credential under
+    ``ANTHROPIC_API_KEY`` only and never under the mounted-secret name.
+    Extending the denylist is tracked separately as defense in depth.
+    """
+    monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", "sk-test")
+
+    env = _first_party_claude_env()
+
+    assert "PIPELINE_ANTHROPIC_API_KEY" not in env
+    assert env.get("ANTHROPIC_API_KEY") == "sk-test"
 
 
 def test_local_agent_env_keeps_converted_key_only(monkeypatch):

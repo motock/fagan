@@ -6,6 +6,17 @@ project (see the README's
 open an issue to discuss anything non-trivial before investing time in a PR —
 there's no roadmap review process beyond that.
 
+## Contribution licensing
+
+By submitting a contribution to this repository you grant the project
+owner (Jesse Carroll) a perpetual, worldwide, non-exclusive, royalty-free
+right, with the right to sublicense, to use, reproduce, modify, distribute
+and otherwise exploit your contribution under any license the owner
+chooses — including this repository's AGPL-3.0-only license and the
+commercial terms of Fagan Enterprise. Contributions that do not carry this
+grant cannot be merged. The project currently contains no third-party
+contributions; this policy exists to keep that sustainable.
+
 ## Ground rules
 
 This repo's own engineering standard is [`CLAUDE.md`](CLAUDE.md) — it governs

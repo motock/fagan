@@ -667,6 +667,14 @@ stories are sized and reviewed.
 
 ## License
 
-Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
+Fagan is licensed under the GNU Affero General Public License, Version 3.0
+only — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases through commit
+`98550bb` were licensed Apache-2.0; [LICENSE-APACHE](LICENSE-APACHE) is the
+text that governed those releases.
+
+Fagan Enterprise — the standalone server distribution — is offered under
+separate commercial terms. The AGPL of this repository governs the
+open-source core; if you run an unmodified build as a network service, AGPL
+§13 asks that you offer users the source, and pointing here at the exact
+commit you run suffices for unmodified builds.
 

@@ -2635,39 +2635,57 @@ it does not decide what they may call. So `serve()` installs a second
 middleware, `pipeline.remote_tool_policy.remote_tool_policy`, and a remote
 principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
 
-- the remote allowlist of mutating tools: the ten tools whose service path
-  calls `authorize` itself, so the policy decides — `approve_merge`,
-  `approve_plan`, `dispatch_story`, `ingest_plan`, `interrupt_story`,
-  `mark_story_done`, `patch_story`, `pause_plan`, `reject_plan` and
-  `resume_plan`;
-- seven read-only tools — `check_story_status`, `check_usage`, `get_story_diff`,
-  `list_decisions`, `list_plans`, `list_ready_stories` and `verify_audit`. Reads
-  are scoped to the plans the caller may see (`app.policy.can_view`): the
-  plan-scoped tools (`check_story_status`, `get_story_diff`, `list_decisions`,
-  `list_ready_stories`) refuse before their handler runs unless the caller owns
-  or is a delegate of the plan, and return one fixed refusal that is identical
-  for a plan that does not exist and one the caller may not see, so the reply is
-  no existence oracle; `list_plans` and `verify_audit` are filtered to visible
-  plans, and `verify_audit` drops its `host` entry for every remote caller
-  because that chain records other principals' authentication attempts.
-  `check_usage` stays host-level and unfiltered: it reports deployment-wide
-  counters that belong to no plan.
+- the mutating tools, each of whose service path calls `authorize` itself, so
+  the policy decides — `advance_all_plans`, `advance_pipeline`, `approve_merge`,
+  `approve_plan`, `checkpoint`, `checkpoint_story`, `dispatch_story`, `ingest_plan`, `interrupt_story`, `mark_story_done`,
+  `mark_story_in_progress`, `patch_plan`, `patch_story`, `pause_plan`,
+  `record_security_audit`, `reject_plan`, `request_decision`, `resume_plan`,
+  `review_story`, `save_plan` and `set_story_status`;
+- eight read-only tools — `check_story_status`, `check_usage`,
+  `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
+  `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
+  caller may see (`app.policy.can_view`): the plan-scoped tools
+  (`check_story_status`, `get_effective_config`, `get_story_diff`,
+  `list_decisions`, `list_ready_stories`) refuse before their handler runs
+  unless the caller owns or is a delegate of the plan, and return one fixed
+  refusal that is identical for a plan that does not exist and one the caller
+  may not see, so the reply is no existence oracle; `list_plans` and
+  `verify_audit` are filtered to visible plans, and `verify_audit` drops its
+  `host` entry for every remote caller because that chain records other
+  principals' authentication attempts. `check_usage` stays host-level and
+  unfiltered: it reports deployment-wide counters that belong to no plan.
 
-`patch_plan` is **not** on this allowlist, so a remote caller is refused
-before its handler runs. Its service path is nevertheless gated the same way
-as the mutating tools above: it edits only a plan's `role_config`, so it
-requires `config:write` exactly as `set_plan_role_config` does, and returns a
-fail-closed `{ok: false}` refusal when the policy says no.
+Every registered tool except `decompose_plan` is on the allowlist, so every
+one of them is remotely callable and decides through the policy.
+`decompose_plan` is refused outright, by default deny: it drafts a plan from
+text and has no plan to authorize, and the one host-scoped grant it could ask
+for, `plan:ingest`, is held by every authenticated caller on an ownerless
+resource. The mutating tools ask for these actions: `save_plan` asks
+`plan:ingest`; `review_story`, `advance_pipeline` and `mark_story_in_progress`
+ask `plan:dispatch`; `request_decision`, `set_story_status`, `checkpoint` and
+`checkpoint_story` ask `story:patch`; `patch_plan` asks `config:write` scoped to
+its plan. `advance_all_plans` advances only plans the caller may see: its
+result is filtered to those plans, and each invisible plan's advance is refused
+by its own `plan:dispatch` check, so the filter hides names rather than gating
+work. `record_security_audit` asks a host-scoped `config:write`, which is never
+granted to a remote caller, so it stays refused for every remote principal.
 
-Every other tool — including `save_plan`, `set_story_status`,
-`record_security_audit`, `review_story`, `advance_all_plans` and
-`decompose_plan` — is refused before its handler runs: the caller gets an
-`isError` result saying the tool is not available over the remote transport,
-and `<PLAN_DIR>/.audit.host.jsonl` gains a `tool:call` record with outcome
-`denied` (naming the tool and the subject, each truncated to 64 characters). A
-failed audit append never changes the decision: the refusal is returned anyway.
-A refusal from a call that arrives with no principal bound to its context is
-recorded with the subject `unbound`.
+`get_effective_config` requires a `plan_name` the caller may see: a call without
+one, or naming a hidden plan, gets the hidden-plan refusal before the handler
+runs. A remote caller receives only the `roles` section of the snapshot.
+
+`save_plan` refuses a server path from a remote caller. A `workspace` argument
+that is not `None` is refused before the handler runs, and `save_plan` also
+refuses a plan carrying a `repo_root` key, whatever its value. The remote caller
+must name a `repo_url` instead.
+
+A call the policy refuses — a name outside the allowlist (`decompose_plan`
+included), or a `workspace` argument on `save_plan` — gets an `isError` result saying
+the tool is not available over the remote transport. `<PLAN_DIR>/.audit.host.jsonl`
+gains a `tool:call` record with outcome `denied` (naming the tool and the
+subject, each truncated to 64 characters). A failed audit append never changes
+the decision: the refusal is returned anyway. A refusal from a call that arrives
+with no principal bound to its context is recorded with the subject `unbound`.
 
 There is no subject-based exemption. Because `serve()` only installs this
 middleware behind the OIDC gate, every `tools/call` that reaches it came from

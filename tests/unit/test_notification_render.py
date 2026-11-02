@@ -47,8 +47,8 @@ def test_missing_event_falls_back_to_plan_complete():
     assert r.event is None
 
 
-def test_unknown_event_falls_back_to_plan_complete():
-    assert render_notification(_record("mystery")).subject == "[pipeline] plan complete: p"
+def test_unknown_event_uses_a_humanized_label():
+    assert render_notification(_record("mystery")).subject == "[pipeline] mystery: p"
 
 
 def test_story_level_event_with_key_appends_key():

@@ -15,17 +15,20 @@ Contract under test (PLANNOTIFY-08):
 
 * Subject shapes:
 
-  - ``plan_completed`` and ANY unrecognized/missing event (the fallback):
+  - ``plan_completed``, and a missing/None/EMPTY event (the legacy fallback):
         ``[pipeline] plan complete: <plan>``
   - story-level events (story_parked, dispatch_failed, tests_failed,
     agent_gave_up):
         ``[pipeline] <label>: <plan>/<story_key>``
     where ``story_key = record.get("story_key") or payload.get("story_key")``.
     A missing or empty story_key degrades to ``[pipeline] <label>: <plan>``.
+  - any OTHER present event renders its own name, humanized
+    (``totally_unknown_event`` -> ``[pipeline] totally unknown event: ...``),
+    never the plan-complete fallback.
 
 Two hard constraints this file also grades:
 
-A. The fallback subject for a missing/None/unknown event stays EXACTLY
+A. The fallback subject for a missing/None/EMPTY event stays EXACTLY
    ``[pipeline] plan complete: <plan>`` -- records spooled before this change
    carry no event key and are still in flight (delivery is at-least-once).
 B. No ninth ``os.environ.get("PIPELINE_NOTIFY_EMAIL_...")`` call is added to
@@ -414,7 +417,7 @@ def test_event_empty_string_keeps_legacy_subject(monkeypatch):
     assert subject == "[pipeline] plan complete: PLAN-42"
 
 
-def test_unrecognized_event_keeps_legacy_subject(monkeypatch):
+def test_unrecognized_event_uses_a_humanized_label(monkeypatch):
     subject = _subject_for(
         monkeypatch,
         {
@@ -423,7 +426,7 @@ def test_unrecognized_event_keeps_legacy_subject(monkeypatch):
             "payload": {"event": "totally_unknown_event", "message": "hi"},
         },
     )
-    assert subject == "[pipeline] plan complete: PLAN-42"
+    assert subject == "[pipeline] totally unknown event: PLAN-42/STORY-7"
 
 
 def test_legacy_record_without_plan_renders_without_raising(monkeypatch):

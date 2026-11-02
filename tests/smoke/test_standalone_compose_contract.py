@@ -225,6 +225,7 @@ def test_gitignore_excludes_secrets_dir_and_env_file() -> None:
 
     assert "deploy/standalone/secrets/" in lines
     assert "deploy/standalone/.env" in lines
+    assert "deploy/standalone/import/" in lines
 
 
 def test_compose_has_no_literal_secret_value() -> None:

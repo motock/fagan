@@ -120,7 +120,7 @@ def _detect_returning(worktree, cmd):
 
 def _prepare(tmp_path, monkeypatch, cmd):
     """Real git worktree + a real, controlled test command."""
-    monkeypatch.delenv("PIPELINE_REVERIFY_FULL_SUITE", raising=False)
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     worktree = _git_worktree(tmp_path)
     monkeypatch.setattr(ci, "detect_test_command", _detect_returning(worktree, cmd))
     return worktree

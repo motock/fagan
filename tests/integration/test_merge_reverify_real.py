@@ -98,10 +98,10 @@ def test_real_job_reports_pass_then_fail(tmp_path, monkeypatch):
     plan_dir = tmp_path / "plans"
     monkeypatch.setenv("PIPELINE_SKIP_ENV_FILE", "1")
     monkeypatch.setenv("PLAN_DIR", str(plan_dir))
-    # An operator (or a container) may globally opt out of the full-suite
-    # re-verify; this check exists to prove a real suite runs, so clear the
-    # opt-out for the child process, which inherits this environment.
-    monkeypatch.delenv("PIPELINE_REVERIFY_FULL_SUITE", raising=False)
+    # The full-suite re-verify is opt-in (CI is the default full-suite gate);
+    # this check exists to prove a real suite runs, so opt in for the child
+    # process, which inherits this environment.
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
 
     worktree = _make_worktree(
         tmp_path,

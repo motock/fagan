@@ -287,13 +287,14 @@ def _reverify_acceptance(
     story declares an ``acceptance`` block *and* the runner can be safely
     scoped (pytest path arguments, cargo ``--test``, npm/yarn node ``--test`` –
     see :func:`_scope_test_cmd_to_acceptance`).  If no acceptance block is
-    present, or scoping is not possible, the full test suite is executed.
+    present, the suite is skipped by default (see below); if acceptance paths
+    are present but scoping is not possible, the full test suite is executed.
 
-    The MBW safety net ensures that a story without an explicit acceptance
-    block still gets the rebased branch's full test suite re‑run before merge –
-    this protects against accidental regressions in the mainline tests.  An
-    operator may opt out of the full‑suite run by setting the environment
-    variable ``PIPELINE_REVERIFY_FULL_SUITE=0``.
+    A story without an acceptance block re-verifies the build only (see
+    _reverify_build) and relies on the repository's CI for the suite: every
+    merge path polls the PR's checks and fails closed, and CI runs the full
+    suite.  An operator may opt back IN to a local full-suite re-run by
+    setting PIPELINE_REVERIFY_FULL_SUITE=1; the default is scoped/skip.
 
     ``story_key`` (when given) lets a no-acceptance story additionally pull
     in its own new/modified tests/test_*.py files that the full-suite
@@ -328,8 +329,9 @@ def _reverify_acceptance(
     if scoped is not None:
         test_cmd = scoped
     elif not acceptance:
-        # No acceptance block: run the full suite unless the operator opted out.
-        if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "1") == "0":
+        # No acceptance block: the local suite run is opt-in (CI is the
+        # authoritative full-suite gate), so skip unless the operator opted in.
+        if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "0") == "0":
             return {"state": "none", "error": ""}
         if story_key and _is_pytest_cmd(test_cmd):
             from .server import _default_branch

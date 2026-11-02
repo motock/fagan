@@ -686,6 +686,7 @@ def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, mon
 
 
 def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     # Gap 1: stories without an acceptance block (the common case for
     # real-project stories) get the rebased branch's full test suite
     # re-run before merge, not a silent "none" pass. The 1 MBW in the
@@ -712,6 +713,7 @@ def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypa
 
 
 def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     # The "no acceptance block" arm returns pass on rc=0, not "none" -
     # the MBW safety net only catches real failures; a clean suite
     # merges normally.
@@ -791,6 +793,7 @@ def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatc
 def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
     monkeypatch, tmp_path,
 ):
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     # Mode 42 done-bar blindspot, merge-gate side: a no-acceptance story
     # whose deliverable lives under tests/ gets its own new tests/test_*.py
     # file appended to the full-suite re-run when story_key is given, so a
@@ -819,6 +822,7 @@ def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
 def test_reverify_acceptance_no_story_key_leaves_full_suite_unscoped(
     monkeypatch, tmp_path,
 ):
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     # Backward-compat default: callers that don't pass story_key (the
     # pre-existing 2-arg call shape) get the plain full suite, unchanged.
     seen_cmd = {}
@@ -867,6 +871,7 @@ def test_reverify_acceptance_does_not_augment_when_acceptance_block_present(
 def test_reverify_acceptance_skips_augmentation_for_non_pytest_runner(
     monkeypatch, tmp_path,
 ):
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
     # A non-pytest full-suite command (e.g. mvn) must not have
     # _added_pytest_test_paths' output appended - it only knows how to
     # extend a pytest invocation.
@@ -929,5 +934,21 @@ def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
     result = p._reverify_acceptance(story, str(tmp_path))
 
     assert result == {"state": "pass", "error": ""}
+
+
+def test_reverify_acceptance_skips_full_suite_by_default(monkeypatch, tmp_path):
+    # CI is the authoritative full-suite gate (approve_merge and the scheduler
+    # merge path both poll `gh pr checks` and merge only on green), so the local
+    # full-suite re-run is opt-in: a no-acceptance story re-verifies the build
+    # only unless the operator sets PIPELINE_REVERIFY_FULL_SUITE=1.
+    def _boom_run(*a, **k):
+        raise AssertionError("the full suite must not run unless opted in")
+    monkeypatch.delenv("PIPELINE_REVERIFY_FULL_SUITE", raising=False)
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+
+    assert result == {"state": "none", "error": ""}
 
 

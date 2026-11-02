@@ -175,6 +175,36 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     )
 
 
+def test_documentation_teaches_the_port_wildcard_form() -> None:
+    """The operator doc must not send readers back into the 421 defect.
+
+    An operator who follows ``docs/DEPLOY_STANDALONE.md`` to override
+    ``PIPELINE_MCP_ALLOWED_HOSTS`` has to learn the ``host:*`` form: the MCP
+    transport compares the full ``Host`` header, port included, so a bare
+    hostname rejects every proxied request.
+    """
+    doc = _text(REPO_ROOT / "docs" / "DEPLOY_STANDALONE.md")
+
+    rows = [line for line in doc.splitlines() if line.startswith("| `PIPELINE_MCP_ALLOWED_HOSTS`")]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert "${PUBLIC_HOSTNAME}:*" in row, row
+    assert "`pipeline.example.com:*`" in row, row
+    assert "set by compose to `${PUBLIC_HOSTNAME}`;" not in row, row
+
+    section = doc.split("### 421 Invalid Host", 1)
+    assert len(section) == 2, "the 421 Invalid Host troubleshooting section is missing"
+    host_guidance = section[1].split("\n## ", 1)[0]
+    assert "PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com:*" in host_guidance, (
+        "the 421 guidance must show the `host:*` form; a bare hostname never "
+        "matches a `Host` header that carries a port"
+    )
+    assert "PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com," not in host_guidance
+    # The ban on a bare `*` stays: it is about accepting everything, not about
+    # the port wildcard above.
+    assert "adding `*`" in host_guidance, host_guidance
+
+
 def test_every_secret_is_a_file_under_secrets_dir() -> None:
     body = _top_block(_text(COMPOSE), "secrets")
     entries = dict(re.findall(r"^  (\w+):[ \t]*\n\s+file:\s*(\S+)", body, re.MULTILINE))

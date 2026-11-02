@@ -79,14 +79,6 @@ first pipeline user, the code hosts, the Ollama endpoint and the CLI callback
 port, and reads every secret with `read -rs` (no echo). Re-running it is safe:
 it keeps existing values and never silently rotates a generated credential.
 
-The one thing it will not keep is an example placeholder. If `.env` or a file
-under `secrets/` still holds a `change-me…`/`changeme…` value — copied from an
-old `.env.example`, hand-edited in, or left by an earlier installer — the
-installer names the variable or file and aborts without writing anything.
-Delete that line (or that secret file) and re-run: the placeholder is a
-credential published in this repository, so carrying it forward would leave the
-stack running with a known secret.
-
 For a scripted install (CI, or a machine with no TTY):
 
 ```sh

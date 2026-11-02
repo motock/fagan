@@ -323,7 +323,8 @@ services:
   # consumes from; the `nats` CLI's `-js` flag also switches the durable-consumer
   # contract (ack after handler return, redelivery with backoff) on.
   #
-  # The broker shares the pipeline container's network namespace and is therefore
+  # The broker joins the pipeline container's network namespace (which is attached
+  # to the compose project network) and binds to 127.0.0.1 there, so it is
   # loopback-only. Two reasons, both structural rather than stylistic:
   #
   #   * pipeline/events_nats.py refuses a plaintext nats:// URL that names
@@ -346,11 +347,11 @@ services:
     # serving, which takes the whole stack down with it: the pipeline's event
     # bus and the monitoring endpoint deploy/smoke/smoke.sh polls for
     # JetStream consumer counts (`/jsz?consumers=true`) both disappear. The
-    # monitor therefore binds 0.0.0.0 *inside this container's network
-    # namespace*, which is the pipeline container's own namespace; the pipeline
-    # service publishes no host port, so 8222 stays reachable only from inside
-    # the stack.
-    command: ["-js", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
+    # monitoring endpoint follows the client listen address set by -a, so
+    # -a 127.0.0.1 keeps both 4222 and 8222 reachable only from processes in
+    # the pipeline container - never from another container on the compose
+    # project network and never from the host.
+    command: ["-js", "-a", "127.0.0.1", "-p", "4222", "-m", "8222"]
     network_mode: "service:pipeline"
     depends_on:
       pipeline:

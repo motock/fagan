@@ -27,13 +27,18 @@
 #   --gh-token-file PATH         file holding a GitHub token
 #   --ollama-key-file PATH       file holding an Ollama API key
 #   --first-user-password-file PATH  file holding the first user's password
-#   --state-dir DIR              where .env and secrets/ are written (default:
-#                                deploy/standalone)
+#   --state-dir DIR              where .env, secrets/ and import/realm.json are
+#                                written (default: deploy/standalone)
 #   --non-interactive            never prompt; take everything from flags/env and
 #                                secrets only from files (required for CI)
 #   --dry-run                    do steps 2-3 only: write the state directory and
 #                                print the compose command instead of running it
 #   -h, --help                   show this help and exit 0
+#
+# Render-only mode (no Docker, no sudo, no state directory):
+#   bash deploy/install.sh --render-realm SRC DST
+# Resolves every ${env.*} placeholder in SRC into DST (mode 0600) and exits.
+# Missing or empty variables abort with the variable's name on stderr.
 #
 # Secrets are never accepted on the command line and never printed. Interactive
 # mode reads them with `read -rs` (no echo); non-interactive mode reads them only
@@ -94,6 +99,16 @@ render_realm() { # $1 template, $2 rendered file
     printf 'render_realm: template not found: %s\n' "$src" >&2
     return 1
   fi
+  # Rendering onto the template would replace the tracked file with resolved
+  # client secrets and make every later run fail on "no placeholders found".
+  if [ "$dst" -ef "$src" ]; then
+    printf 'render_realm: refusing to overwrite the template: %s\n' "$dst" >&2
+    return 1
+  fi
+  if ! mkdir -p -- "$(dirname -- "$dst")"; then
+    printf 'render_realm: cannot create the directory for %s\n' "$dst" >&2
+    return 1
+  fi
   # `|| true` because grep exits 1 on no match and pipefail would end the
   # function before the friendly message below could be printed.
   names="$(grep -o '\${env\.[A-Za-z_][A-Za-z0-9_]*}' "$src" | sort -u || true)"
@@ -135,10 +150,11 @@ render_realm() { # $1 template, $2 rendered file
     return 1
   fi
   chmod 0600 "$tmp"
-  mv -- "$tmp" "$dst" || {
+  if ! mv -- "$tmp" "$dst"; then
+    printf 'render_realm: cannot write %s\n' "$dst" >&2
     rm -f -- "$tmp" "$tmp.new"
     return 1
-  }
+  fi
   chmod 0600 "$dst"
 }
 
@@ -535,13 +551,21 @@ PIPELINE_MCP_CLIENT_SECRET="$MCP_CLIENT_SECRET"
 export PIPELINE_PUBLIC_URL PIPELINE_CLI_CALLBACK_PORT PIPELINE_OIDC_AUDIENCE
 export PIPELINE_DASHBOARD_CLIENT_SECRET PIPELINE_MCP_CLIENT_SECRET
 
-render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$STATE_DIR/realm.json"
-log "install.sh: rendered $STATE_DIR/realm.json"
+# Render into a subdirectory of the state dir, never beside the template:
+# STATE_DIR defaults to $SCRIPT_DIR/standalone, so "$STATE_DIR/realm.json" would
+# be the tracked template itself. A first run would then overwrite realm.json
+# with resolved client secrets and a re-run (documented as safe) would abort with
+# "no ${env.*} placeholders found". import/ only ever holds rendered files.
+RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"
+mkdir -p -- "$STATE_DIR/import"
+chmod 700 "$STATE_DIR/import"
+render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"
+log "install.sh: rendered $RENDERED_REALM_FILE"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   log "install.sh: dry run; state written, Docker not touched"
   printf 'STANDALONE_REALM_FILE=%s docker compose -f %s up -d --build --wait\n' \
-    "$STATE_DIR/realm.json" "$COMPOSE_REL"
+    "$RENDERED_REALM_FILE" "$COMPOSE_REL"
   printf '# then poll https://%s:%s/realms/%s/.well-known/openid-configuration\n' \
     "$HOSTNAME" "$PORT" "$REALM"
   exit 0
@@ -567,7 +591,7 @@ fi
 
 log "install.sh: starting the stack (this builds the pipeline image on first run)"
 # Must be exported in this shell: compose aborts on ${STANDALONE_REALM_FILE:?...}.
-export STANDALONE_REALM_FILE="$STATE_DIR/realm.json"
+export STANDALONE_REALM_FILE="$RENDERED_REALM_FILE"
 compose up -d --build --wait
 
 ready_url="https://$HOSTNAME:$PORT/realms/$REALM/.well-known/openid-configuration"

@@ -160,7 +160,8 @@ def test_compose_and_installer_share_the_rendered_realm_contract() -> None:
         "compose must mount the rendered realm, not the unresolved template"
     )
     assert "export STANDALONE_REALM_FILE=" in installer
-    assert 'STANDALONE_REALM_FILE="$STATE_DIR/realm.json"' in installer
+    assert 'RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"' in installer
+    assert 'STANDALONE_REALM_FILE="$RENDERED_REALM_FILE"' in installer
 
     usage = subprocess.run(
         ["bash", str(INSTALL_SH), "--render-realm"],
@@ -172,3 +173,75 @@ def test_compose_and_installer_share_the_rendered_realm_contract() -> None:
     )
     assert usage.returncode != 0
     assert "--render-realm" in usage.stderr
+
+
+def test_render_destination_is_never_the_realm_template(tmp_path: Path) -> None:
+    """The default STATE_DIR is the template's own directory.
+
+    Rendering to ``$STATE_DIR/realm.json`` therefore overwrote the tracked
+    template with resolved client secrets on the first run (and made every
+    re-run abort with "no placeholders found"). The render must target a distinct
+    path, and even an explicit src==dst must be refused without touching the file.
+    """
+    installer = INSTALL_SH.read_text(encoding="utf-8")
+    default_state_dir = INSTALL_SH.parent / "standalone"
+    rendered = default_state_dir / "import" / "realm.json"
+
+    assert rendered != TEMPLATE, "the render destination must differ from the template"
+    assert 'RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"' in installer
+    assert (
+        'render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"'
+        in installer
+    )
+
+    before = TEMPLATE.read_text(encoding="utf-8")
+    assert "${env." in before
+    scratch = tmp_path / "realm.json"
+    scratch.write_text(before, encoding="utf-8")
+
+    result = run_render(scratch, scratch, sample_env())
+
+    assert result.returncode != 0
+    assert "refusing to overwrite the template" in result.stderr
+    assert scratch.read_text(encoding="utf-8") == before, (
+        "the renderer overwrote its own source template"
+    )
+
+
+def test_installer_render_step_leaves_the_template_intact(tmp_path: Path) -> None:
+    """A full ``--dry-run`` must render beside, not onto, the tracked template."""
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+    env = sample_env()
+    env["HOME"] = str(home)
+    before = TEMPLATE.read_text(encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(INSTALL_SH),
+            "--dry-run",
+            "--non-interactive",
+            "--state-dir",
+            str(state_dir),
+        ],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = state_dir / "import" / "realm.json"
+    assert rendered.is_file(), "the installer must render into import/ under the state dir"
+    assert "${env." not in rendered.read_text(encoding="utf-8")
+    assert not (state_dir / "realm.json").exists(), (
+        "rendering into the state dir root would overwrite the template when the "
+        "state dir is deploy/standalone (the default)"
+    )
+    assert TEMPLATE.read_text(encoding="utf-8") == before, (
+        "a dry run mutated the tracked realm template"
+    )

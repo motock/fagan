@@ -220,6 +220,25 @@ def test_env_example_documents_the_operator_variables() -> None:
         assert re.search(rf"^#?\s*{name}=", env, re.MULTILINE), name
 
 
+def test_env_example_render_recipe_writes_where_compose_mounts() -> None:
+    env = _text(ENV_EXAMPLE)
+
+    recipe = [ln for ln in env.splitlines() if "--render-realm" in ln]
+    assert len(recipe) == 1, "expected exactly one --render-realm recipe"
+    args = recipe[0].split("--render-realm", 1)[1].split()
+    assert len(args) == 2, "--render-realm takes SRC and DST"
+    documented_dst = args[1]
+
+    match = re.search(r"^STANDALONE_REALM_FILE=(.*)$", env, re.MULTILINE)
+    assert match, "no STANDALONE_REALM_FILE= line"
+    mounted = match.group(1).strip().strip("\"'")
+    # Compose resolves relative paths against deploy/standalone/, the caller of
+    # the recipe runs from the repo root.
+    relative = mounted.removeprefix("./")
+
+    assert documented_dst == f"deploy/standalone/{relative}"
+
+
 def test_gitignore_excludes_secrets_dir_and_env_file() -> None:
     lines = {ln.strip() for ln in _text(GITIGNORE).splitlines()}
 

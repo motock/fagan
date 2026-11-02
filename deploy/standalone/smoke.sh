@@ -46,7 +46,8 @@
 # Environment (all optional; defaults suit CI):
 #   STANDALONE_SMOKE_POLL_TIMEOUT_S   terminal-state deadline           (600)
 #   STANDALONE_SMOKE_POLL_INTERVAL_S  seconds between polls               (5)
-#   STANDALONE_SMOKE_KEEP             "1" leaves the temp dir in place     (unset)
+#   STANDALONE_SMOKE_KEEP             "1" leaves the stack *and* the temp dir
+#                                     in place, for inspection            (unset)
 #
 # Usage:
 #   bash deploy/standalone/smoke.sh
@@ -139,7 +140,11 @@ cleanup() {
     export PIPELINE_CLI_CALLBACK_PORT="${PIPELINE_CLI_CALLBACK_PORT:-33418}"
     export PIPELINE_DASHBOARD_CLIENT_SECRET="${PIPELINE_DASHBOARD_CLIENT_SECRET:-unused}"
     export PIPELINE_MCP_CLIENT_SECRET="${PIPELINE_MCP_CLIENT_SECRET:-unused}"
-    docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" down -v >/dev/null 2>&1 || true
+    if [ "${STANDALONE_SMOKE_KEEP:-0}" = "1" ]; then
+        log "STANDALONE_SMOKE_KEEP=1: leaving the stack up. Inspect with: docker compose -f \"$BASE_COMPOSE\" -f \"$OVERRIDE\" ps"
+    else
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" down -v >/dev/null 2>&1 || true
+    fi
     if [ -n "$SUDO" ] && [ -d "$TMP" ]; then
         # The escalated install leaves root-owned files (the state dir, the CA,
         # the client credentials) behind.
@@ -382,11 +387,15 @@ start_model_server() {
 # runs as root; otherwise it warns and the pipeline's entrypoint dies on the first
 # file ("secret file is not owned by this user"). A throwaway state dir is owned
 # by the runner, so the install has to escalate - the same `sudo chown -R
-# 10001:10001` install.sh tells a non-root operator to run.
-if [ "$(id -u)" -ne 0 ]; then
+# 10001:10001` install.sh tells a non-root operator to run. macOS is the exception:
+# Docker Desktop maps the bind mount to the container's uid, so root ownership is
+# neither created nor needed, and an unattended local run must not prompt for sudo.
+if [ "$(id -u)" -ne 0 ] && [ "$(uname -s)" != "Darwin" ]; then
     command -v sudo >/dev/null 2>&1 ||
         fail "sudo is required: deploy/lib/operator_env.sh accepts secret files owned only by uid 10001"
     SUDO="sudo"
+elif [ "$(uname -s)" = "Darwin" ]; then
+    log "macOS: Docker Desktop maps bind mounts to the container uid; no sudo needed"
 fi
 
 # Values the installer and compose need, written to a 0600 file and sourced by
@@ -411,7 +420,6 @@ seed_credentials() {
         printf 'PIPELINE_STATE_DIR=%s\n' "$STATE_DIR"
         printf 'HOME=%s\n' "$HOME"
         printf 'XDG_CONFIG_HOME=%s\n' "$XDG_CONFIG_HOME"
-        printf 'PATH=%s\n' "$PATH"
     } >"$ENV_FILE"
     chmod 600 "$ENV_FILE"
     # install.sh reuses values it finds in $STATE_DIR/.env instead of generating
@@ -666,6 +674,12 @@ start_model_server
 write_override
 seed_credentials
 install_shim
+# PATH goes into the same 0600 file, but only now: install_shim prepends $TMP/bin,
+# and the escalated `$SUDO bash -c` sources this file (env_reset drops an exported
+# PATH), so a write before the shim install would send install.sh at the real
+# docker and the compose override would never be applied. Appended, never
+# rewritten: seed_credentials truncated the file above.
+printf 'PATH=%s\n' "$PATH" >>"$ENV_FILE"
 run_installer
 
 STEP="mcp-initialize"

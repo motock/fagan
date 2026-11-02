@@ -35,10 +35,6 @@ node_modules
 # writes (generated client secrets). Never commit either.
 deploy/standalone/secrets/
 deploy/standalone/.env
-# The rendered Keycloak realm: deploy/install.sh writes the resolved copy (with
-# real client secrets substituted) under the state directory, which defaults to
-# deploy/standalone/import/. Never commit it.
-deploy/standalone/import/
 
 # Operator's personal per-role model routing (provider/model chosen per
 # role), selected via PIPELINE_MODEL_REGISTRY_PATH (app/role_registry.py's

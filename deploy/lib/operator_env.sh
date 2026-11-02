@@ -75,6 +75,42 @@ secret_file_path() {
     esac
 }
 
+# Credentials that arrive as environment values can only be checked for shape,
+# not provenance, so the check is narrow: the placeholder text the example file
+# used to ship. Compose's `:?` guard rejects only an *empty* required value,
+# which is why deploy/standalone/.env.example keeps those entries empty; this
+# function covers the other route - a hand-edited .env, a shared env file or an
+# orchestrator that fills the same names from a template. A placeholder that
+# survives satisfies every guard and is substituted verbatim into realm.json at
+# import, i.e. a confidential MCP client whose secret is published in this
+# repository (the full remote tool surface for anyone who can reach the TLS
+# front door) plus a published IdP admin bootstrap password.
+#
+# Unset, empty and whitespace-only values are not an error here: compose reports
+# those with the variable's own message, and the pipeline image may legitimately
+# run without any of these three (the smoke stack sets two, a k8s install may set
+# none). Name only - the value never reaches a log line, here or in `die`.
+assert_no_placeholder_credentials() {
+    # No eval: the three names are spelled out and their values only ever travel
+    # as data, so an operator-supplied value cannot be re-parsed as shell.
+    for _placeholder_pair in \
+        "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-}" \
+        "PIPELINE_DASHBOARD_CLIENT_SECRET=${PIPELINE_DASHBOARD_CLIENT_SECRET:-}" \
+        "PIPELINE_MCP_CLIENT_SECRET=${PIPELINE_MCP_CLIENT_SECRET:-}"; do
+        _placeholder_name=${_placeholder_pair%%=*}
+        _placeholder_value=${_placeholder_pair#*=}
+        # Case-insensitive and substring, so " Change-Me-x " and "changeme" are
+        # caught as well; surrounding whitespace needs no trimming.
+        case "$_placeholder_value" in
+            *[Cc][Hh][Aa][Nn][Gg][Ee]-[Mm][Ee]* | \
+            *[Cc][Hh][Aa][Nn][Gg][Ee][Mm][Ee]*)
+                die "$_placeholder_name holds the example placeholder; generate a real credential"
+                ;;
+        esac
+    done
+    unset _placeholder_pair _placeholder_name _placeholder_value
+}
+
 # load_secret <ENV_NAME> <FILE_ENV_NAME> <default path>
 #
 # The value is exported into this process, so every child of the entrypoint

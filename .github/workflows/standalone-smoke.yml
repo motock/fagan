@@ -1,0 +1,65 @@
+name: Standalone smoke
+
+# End-to-end grade for the operator path: `deploy/install.sh --non-interactive`
+# against deploy/standalone/compose.yaml, then a `repo_url` plan driven through
+# the MCP transport by deploy/standalone/smoke.sh. deploy/smoke/smoke.sh grades
+# the dev smoke stack; this is the only job that runs the installer for real.
+#
+# ADVISORY FOR NOW: gated on the repository variable `ENABLE_STANDALONE_SMOKE_CI`
+# and OFF by default, so it does not block a merge while the run is being brought
+# to green. The comparison is explicit (`== 'true'`): a bare
+# `vars.ENABLE_STANDALONE_SMOKE_CI` is true for the string "false", which would
+# run the job for operators who explicitly disabled it.
+#
+# Every `uses:` is pinned to a full 40-character commit SHA - a tag is a mutable
+# ref, and this job builds and runs the pipeline image.
+# tests/smoke/test_standalone_smoke_contract.py enforces the pinning and the gate.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/**'
+      - 'pipeline/remote_*.py'
+  workflow_dispatch:
+
+# Least privilege: this job only reads the checkout. It publishes nothing, so no
+# write scope and no `packages` permission is declared.
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-smoke:
+    name: Install the standalone stack and run a repo_url plan
+    # Advisory until the run is green; see the header.
+    if: vars.ENABLE_STANDALONE_SMOKE_CI == 'true'
+    runs-on: ubuntu-24.04
+    # A wedged `compose up --wait` or a story that never settles would otherwise
+    # hold a runner for the 6-hour default. The smoke script's own poll deadline
+    # is 10 minutes; the rest is install and teardown headroom.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The installer builds deploy/Dockerfile with the compose plugin, so only
+      # buildx is prepared here: `compose up --build` uses the default builder.
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Run the standalone install and smoke
+        # The script prints only step names ("token minted", the story state) and
+        # registers its own EXIT trap, which runs `down -v` even on failure. The
+        # sed is belt and braces: no bearer token, secret or password reaches the
+        # log if a diagnostic ever grows one.
+        run: |
+          set -o pipefail
+          bash deploy/standalone/smoke.sh 2>&1 \
+            | sed -E 's/(Bearer )[^" ]*/\1<redacted>/g; s/((client_)?secret|password|token)=[^ &"]*/\1=<redacted>/g'
+
+      - name: Show the stack's logs on failure
+        if: failure()
+        run: |
+          docker compose -f deploy/standalone/compose.yaml ps || true
+          docker compose -f deploy/standalone/compose.yaml logs --tail 200 || true

@@ -246,3 +246,71 @@ def test_secret_inputs_are_file_flags_only(flag: str, tmp_path: Path) -> None:
     )
     # And the script refuses it explicitly rather than silently prompting.
     assert "is not accepted" in script
+
+
+def test_existing_env_placeholder_is_refused_without_writing(tmp_path: Path) -> None:
+    """A .env carrying the old example constants must not be reused or rewritten."""
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+    state_dir.mkdir()
+    env_file = state_dir / ".env"
+    seeded = "KEYCLOAK_ADMIN_PASSWORD=change-me-keycloak-admin\n"
+    env_file.write_text(seeded, encoding="utf-8")
+
+    proc = _run("--dry-run", "--non-interactive", "--state-dir", str(state_dir), home=home)
+
+    assert proc.returncode != 0, "a published placeholder must abort the install"
+    out = proc.stdout + proc.stderr
+    assert "KEYCLOAK_ADMIN_PASSWORD" in out, "the refusal must name the variable"
+    assert "change-me-keycloak-admin" not in out, "the refusal must not echo the value"
+    assert env_file.read_text(encoding="utf-8") == seeded, "a refused run must write nothing"
+    secrets_dir = state_dir / "secrets"
+    assert not secrets_dir.exists() or list(secrets_dir.iterdir()) == [], (
+        "a refused run must write no secret files"
+    )
+
+
+def test_existing_secret_file_placeholder_is_refused(tmp_path: Path) -> None:
+    """A placeholder already sitting in secrets/ must not be mounted on re-run."""
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+    secrets_dir = state_dir / "secrets"
+    secrets_dir.mkdir(parents=True)
+    secret_file = secrets_dir / "oidc_client_secret"
+    seeded = "change-me-dashboard-client-secret"
+    secret_file.write_text(seeded, encoding="utf-8")
+
+    proc = _run("--dry-run", "--non-interactive", "--state-dir", str(state_dir), home=home)
+
+    assert proc.returncode != 0, "a published placeholder must abort the install"
+    out = proc.stdout + proc.stderr
+    assert "oidc_client_secret" in out, "the refusal must name the secret file"
+    assert seeded not in out, "the refusal must not echo the value"
+    assert secret_file.read_text(encoding="utf-8") == seeded
+
+
+def test_env_copied_from_the_shipped_example_installs(tmp_path: Path) -> None:
+    """The documented copy-the-example workflow must generate real credentials."""
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+    state_dir.mkdir()
+    example = REPO_ROOT / "deploy" / "standalone" / ".env.example"
+    (state_dir / ".env").write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+
+    proc = _run("--dry-run", "--non-interactive", "--state-dir", str(state_dir), home=home)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    env_text = (state_dir / ".env").read_text(encoding="utf-8")
+    for key in (
+        "KEYCLOAK_ADMIN_PASSWORD",
+        "PIPELINE_DASHBOARD_CLIENT_SECRET",
+        "PIPELINE_MCP_CLIENT_SECRET",
+    ):
+        match = re.search(rf"^{key}=(.*)$", env_text, re.MULTILINE)
+        assert match, f"{key} missing from .env"
+        value = match.group(1).strip()
+        assert value, f"{key} stayed empty after a copy-the-example install"
+        assert "change-me" not in value.lower()

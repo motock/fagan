@@ -77,6 +77,84 @@ fail() {
   printf 'install.sh: %s\n' "$*" >&2
   exit 1
 }
+
+# ---------------------------------------------------------------------------
+# Realm rendering (SA-G1).
+#
+# Keycloak's --import-realm substitutes ${env.*} only for variables that exist;
+# anything unresolved is imported as literal text, which is how a redirect URI
+# or a client secret ends up being the string "${env.PIPELINE_PUBLIC_URL}". So
+# the template is rendered here, before the stack starts, and compose mounts the
+# rendered copy (STANDALONE_REALM_FILE).
+# ---------------------------------------------------------------------------
+
+render_realm() { # $1 template, $2 rendered file
+  local src="$1" dst="$2" tmp names placeholder name val remaining
+  if [ ! -f "$src" ]; then
+    printf 'render_realm: template not found: %s\n' "$src" >&2
+    return 1
+  fi
+  # `|| true` because grep exits 1 on no match and pipefail would end the
+  # function before the friendly message below could be printed.
+  names="$(grep -o '\${env\.[A-Za-z_][A-Za-z0-9_]*}' "$src" | sort -u || true)"
+  if [ -z "$names" ]; then
+    printf 'render_realm: no ${env.*} placeholders found in %s\n' "$src" >&2
+    return 1
+  fi
+  # Render into a temp file and only publish it once everything resolved, so a
+  # failed run leaves neither a partial realm.json nor a stale temp file behind.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/render_realm.XXXXXX")" || return 1
+  if ! cp -- "$src" "$tmp"; then
+    printf 'render_realm: cannot read %s\n' "$src" >&2
+    rm -f -- "$tmp"
+    return 1
+  fi
+  while IFS= read -r placeholder; do
+    name="${placeholder#\$\{env.}"
+    name="${name%\}}"
+    eval "val=\${$name-}"
+    if [ -z "$val" ]; then
+      printf 'render_realm: required variable %s is unset or empty\n' "$name" >&2
+      rm -f -- "$tmp" "$tmp.new"
+      return 1
+    fi
+    # Portable sed: `sed -i` needs `-i ''` on macOS, so rewrite via a temp file.
+    if ! sed "s|${placeholder}|${val}|g" "$tmp" >"$tmp.new"; then
+      printf 'render_realm: failed to substitute %s\n' "$name" >&2
+      rm -f -- "$tmp" "$tmp.new"
+      return 1
+    fi
+    mv -- "$tmp.new" "$tmp"
+  done <<<"$names"
+  # A value containing `&` or a `|` can round-trip the placeholder back in; never
+  # install a realm Keycloak would import with unresolved text.
+  if grep -q '\${env\.' "$tmp"; then
+    remaining="$(grep -c '\${env\.' "$tmp" || true)"
+    printf 'render_realm: %s placeholders remain in %s\n' "$remaining" "$dst" >&2
+    rm -f -- "$tmp" "$tmp.new"
+    return 1
+  fi
+  chmod 0600 "$tmp"
+  mv -- "$tmp" "$dst" || {
+    rm -f -- "$tmp" "$tmp.new"
+    return 1
+  }
+  chmod 0600 "$dst"
+}
+
+# `install.sh --render-realm SRC DST` only renders the template and stops: no
+# docker, no compose, no sudo, no state directory. Handled before any other
+# argument parsing so it cannot be reached after the stack has been touched.
+if [ "${1-}" = "--render-realm" ]; then
+  if [ "$#" -ne 3 ] || [ -z "${2-}" ] || [ -z "${3-}" ]; then
+    printf 'install.sh: usage: bash deploy/install.sh --render-realm SRC DST\n' >&2
+    exit 2
+  fi
+  render_status=0
+  render_realm "$2" "$3" || render_status=$?
+  exit "$render_status"
+fi
+
 warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
 
 usage() {
@@ -445,9 +523,25 @@ chmod 600 "$ENV_FILE"
 
 log "install.sh: wrote $ENV_FILE and $SECRETS_DIR (mode 0600)"
 
+# The realm template references the same ${env.*} names compose passes to
+# Keycloak. Export this run's resolved values and render the template here: an
+# import that saw a literal placeholder would produce dead redirect URIs and
+# client secrets, so a rendering failure aborts before Docker is touched.
+PIPELINE_PUBLIC_URL="https://$HOSTNAME:$PORT"
+PIPELINE_CLI_CALLBACK_PORT="$CALLBACK_PORT"
+PIPELINE_OIDC_AUDIENCE="$MCP_AUDIENCE"
+PIPELINE_DASHBOARD_CLIENT_SECRET="$DASHBOARD_CLIENT_SECRET"
+PIPELINE_MCP_CLIENT_SECRET="$MCP_CLIENT_SECRET"
+export PIPELINE_PUBLIC_URL PIPELINE_CLI_CALLBACK_PORT PIPELINE_OIDC_AUDIENCE
+export PIPELINE_DASHBOARD_CLIENT_SECRET PIPELINE_MCP_CLIENT_SECRET
+
+render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$STATE_DIR/realm.json"
+log "install.sh: rendered $STATE_DIR/realm.json"
+
 if [ "$DRY_RUN" -eq 1 ]; then
   log "install.sh: dry run; state written, Docker not touched"
-  printf 'docker compose -f %s up -d --build --wait\n' "$COMPOSE_REL"
+  printf 'STANDALONE_REALM_FILE=%s docker compose -f %s up -d --build --wait\n' \
+    "$STATE_DIR/realm.json" "$COMPOSE_REL"
   printf '# then poll https://%s:%s/realms/%s/.well-known/openid-configuration\n' \
     "$HOSTNAME" "$PORT" "$REALM"
   exit 0
@@ -472,6 +566,8 @@ else
 fi
 
 log "install.sh: starting the stack (this builds the pipeline image on first run)"
+# Must be exported in this shell: compose aborts on ${STANDALONE_REALM_FILE:?...}.
+export STANDALONE_REALM_FILE="$STATE_DIR/realm.json"
 compose up -d --build --wait
 
 ready_url="https://$HOSTNAME:$PORT/realms/$REALM/.well-known/openid-configuration"

@@ -100,10 +100,11 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # IdP: Keycloak in production start mode with the realm imported from
-  # ./realm.json. The H2 database lives in keycloak-data, so users, sessions and
-  # any admin change survive a restart. --import-realm only creates a realm that
-  # does not exist yet; later edits go through the admin console.
+  # IdP: Keycloak in production start mode with the realm imported from the
+  # rendered copy of the realm template that deploy/install.sh writes
+  # (STANDALONE_REALM_FILE). The H2 database lives in keycloak-data, so users,
+  # sessions and any admin change survive a restart. --import-realm only creates
+  # a realm that does not exist yet; later edits go through the admin console.
   # ---------------------------------------------------------------------------
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.7
@@ -131,7 +132,8 @@ services:
       PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET in .env}
       PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET in .env}
     volumes:
-      - ./realm.json:/opt/keycloak/data/import/realm.json:ro
+      # Rendered by deploy/install.sh --render-realm (see STANDALONE_REALM_FILE).
+      - ${STANDALONE_REALM_FILE:?STANDALONE_REALM_FILE must point at the rendered realm}:/opt/keycloak/data/import/realm.json:ro
       - keycloak-data:/opt/keycloak/data
     restart: unless-stopped
 

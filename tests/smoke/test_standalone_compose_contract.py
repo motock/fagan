@@ -101,7 +101,7 @@ def test_keycloak_trusts_the_proxy_and_persists_its_data() -> None:
     assert "KC_PROXY_HEADERS" in block and "xforwarded" in block
     assert "KC_HTTP_ENABLED" in block
     assert "keycloak-data:/opt/keycloak/data" in block
-    assert "./realm.json" in block
+    assert "STANDALONE_REALM_FILE" in block
 
 
 def test_proxy_and_nats_images_match_the_smoke_stack() -> None:

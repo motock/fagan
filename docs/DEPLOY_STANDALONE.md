@@ -832,3 +832,124 @@ PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com,pipeline.internal
 Leaving it empty makes the transport fall back to the SDK default instead of
 accepting everything, so an empty list is not a workaround. And do not "fix"
 this by adding `*`: the point of the check is to make a rebinding attack fail.
+
+## Standalone install smoke test
+
+`deploy/standalone/smoke.sh` grades the whole operator path in a throwaway state
+directory: it runs `deploy/install.sh --non-interactive`, then saves, ingests,
+approves and dispatches a `repo_url` plan through the MCP transport over HTTPS
+and polls the story to a terminal state. Run it before you trust an install, and
+run it locally before you turn on its CI job.
+
+### Prerequisites
+
+- Docker with the Compose **v2** plugin. This is the first thing the script
+  checks; without it, it stops with `the Docker Compose v2 plugin is missing`.
+- A shell with the tools the script uses on `PATH`: `bash`, `python3`, `openssl`,
+  `git` and `curl`. The script's header lists its requirements.
+- Free host ports. The stack publishes exactly one port, from
+  `deploy/standalone/compose.yaml`:
+
+  ```yaml
+  ports:
+    - "${PUBLIC_PORT:-8443}:8443"
+  ```
+
+  Caddy listens on that port, and its site address is `{$PUBLIC_HOSTNAME}:8443`
+  (`deploy/standalone/Caddyfile`), so every URL the run touches is on that one
+  host and port:
+  - `https://{$PUBLIC_HOSTNAME}:8443/realms/pipeline` — the Keycloak realm, which
+    is also the OIDC issuer the pipeline is configured with
+  - `https://{$PUBLIC_HOSTNAME}:8443/mcp` — the MCP transport
+  - `https://{$PUBLIC_HOSTNAME}:8443/.well-known/oauth-protected-resource` — the
+    RFC 9728 metadata document
+  - everything else on the site is the dashboard (`pipeline:8000` inside the
+    network), and the `/realms/*` and `/resources/*` paths go to `keycloak:8080`.
+    `proxy:8443` is the same site under its in-network name, which the pipeline
+    uses to fetch its JWKS.
+
+  The smoke run is fixed to that address: the script assigns
+  `PUBLIC_HOSTNAME=localhost` and `PUBLIC_PORT=8443` itself, ignoring any value
+  you export, so every run binds `https://localhost:8443`. It verifies Caddy's
+  internal CA rather than skipping verification.
+- No sudo is required on macOS: Docker Desktop maps the bind mount to the
+  container uid, so the pipeline's uid 10001 can read the secret files without a
+  `chown`. Do not prefix the command with it on macOS — the script detects
+  Darwin and skips the escalation entirely.
+
+### Running it
+
+```sh
+bash deploy/standalone/smoke.sh
+```
+
+The run tears the stack down when it ends, successfully or not: the `EXIT` trap
+runs `docker compose … down -v`, so a failure at any step still leaves a clean
+compose project and the next run does not hit "port already allocated".
+
+To keep the stack and the temporary state directory for inspection, set the keep
+flag:
+
+```sh
+STANDALONE_SMOKE_KEEP=1 bash deploy/standalone/smoke.sh
+```
+
+With the flag set, the run leaves both in place and prints the inspect command
+with the paths it used:
+
+```sh
+docker compose -f <checkout>/deploy/standalone/compose.yaml -f <temp dir>/override.yaml ps
+```
+
+Paste the printed line as-is. The first `-f` is the operator's compose file and
+the second is the throwaway override that points the stack at the scripted model
+backend; the stack is not reachable with the base file alone.
+
+### What a green run prints
+
+The last line is the verdict:
+
+```text
+standalone-smoke: PASSED: the standalone install ran a repo_url plan to a terminal state
+```
+
+Before it, the run walks through the stages it completed — for example
+`seeded the bare repository`, `save_plan accepted the repo_url plan`,
+`ingest_plan cloned the file:// repository`, `approve_plan succeeded`,
+`oauth-protected-resource metadata is served`, and
+`story SMOKE-1 reached <state>`. Any failure prints `FAILED: <step>: <reason>`
+and exits non-zero.
+
+### Verification checklist
+
+Tick these off against the log of a run you did not keep, or against the stack
+of a `STANDALONE_SMOKE_KEEP=1` run:
+
+- [ ] Containers are up: `docker compose -f deploy/standalone/compose.yaml ps` lists `pipeline`, `keycloak`, `proxy` and `nats` running. Only `proxy` and `pipeline` report health (`proxy` waits for the exported CA root, `pipeline` probes a credential-free dashboard route); `keycloak` and `nats` define no healthcheck and show no health status.
+- [ ] The install completed: the log shows `install.sh: starting the stack` and the readiness wait returning, with no `FAILED:` line.
+- [ ] The realm was rendered and imported: the log shows `install.sh: rendered` the realm file, then `install.sh: configuring Keycloak (pipeline realm)`.
+- [ ] Login is reachable at the Caddy URL: `https://{$PUBLIC_HOSTNAME}:8443/realms/pipeline/.well-known/openid-configuration` answers, and you reached it through Caddy rather than a `curl -k` bypass.
+- [ ] Teardown happened: after a run without `STANDALONE_SMOKE_KEEP=1`, `docker compose -f deploy/standalone/compose.yaml ps` shows no containers and the volumes are gone.
+
+### Enabling the CI gate
+
+`.github/workflows/standalone-smoke.yml` runs this same script on a
+`pull_request` that touches `deploy/**` or `pipeline/remote_*.py`, and on
+`workflow_dispatch`. The job is gated on a repository variable and **skipped by
+default** (`if: vars.ENABLE_STANDALONE_SMOKE_CI == 'true'`), so it does not block
+a merge until you turn it on.
+
+Turn it on only after one green local run:
+
+1. Open the repository on GitHub and go to **Settings → Secrets and variables →
+   Actions → Variables**.
+2. Add a repository variable named `ENABLE_STANDALONE_SMOKE_CI` with the value
+   `true`. The comparison is an exact string equality: `1`, `TRUE` or `yes`
+   leaves the job skipped.
+3. Re-run the workflow, or open a pull request that touches `deploy/**`, and
+   confirm the job now appears instead of being skipped.
+
+Do not edit the workflow file to change the gate. Set the variable: removing the
+`if:` condition would run the job for every operator on every matching pull
+request, and `tests/smoke/test_standalone_smoke_contract.py` enforces the gate
+and the pinned action SHAs.

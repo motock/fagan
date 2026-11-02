@@ -415,6 +415,11 @@ Host** even though the certificate, the DNS and the login all work.
 
 ## 5. Connecting clients
 
+> Remote-only setup at a glance — the OpenCode and Claude Code configs, the
+> internal CA export, the removed local entry and the remote tool policy — is
+> collected in [Connecting MCP clients (remote)](#connecting-mcp-clients-remote).
+> This section is the long form: OAuth and helper modes, credentials, redirects.
+
 Both clients support two modes. OAuth mode opens a browser, signs a human in,
 and stores the resulting token itself — the right choice for a person at a
 workstation. Helper mode (`mcp-token`) mints a token from a per-user Keycloak
@@ -953,3 +958,90 @@ Do not edit the workflow file to change the gate. Set the variable: removing the
 `if:` condition would run the job for every operator on every matching pull
 request, and `tests/smoke/test_standalone_smoke_contract.py` enforces the gate
 and the pinned action SHAs.
+
+## Connecting MCP clients (remote)
+
+The standalone stack is remote-only: the MCP server runs inside the `pipeline`
+container and is reachable solely through the Caddy front door. The site address
+in `deploy/standalone/Caddyfile` is `{$PUBLIC_HOSTNAME}:8443`, the paths
+`/mcp*` and `/.well-known/oauth-protected-resource*` reverse-proxy to the
+pipeline's MCP port, and the published port in `deploy/standalone/compose.yaml`
+is `"${PUBLIC_PORT:-8443}:8443"`. With the default `PUBLIC_PORT`, that gives:
+
+```
+https://{$PUBLIC_HOSTNAME}:8443/mcp
+```
+
+Replace `{$PUBLIC_HOSTNAME}` with the `PUBLIC_HOSTNAME` you put in `.env` — the
+same token the Caddyfile site address uses. Only if you changed `PUBLIC_PORT`
+does the `:8443` change, and `PIPELINE_MCP_RESOURCE_URL` has to change with it
+(§4, "The public origin, worked through").
+
+### OpenCode
+
+In `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "pipeline": {
+      "type": "remote",
+      "url": "https://{$PUBLIC_HOSTNAME}:8443/mcp",
+      "oauth": { "clientId": "pipeline-cli" }
+    }
+  }
+}
+```
+
+`pipeline-cli` is the public PKCE client defined in
+`deploy/standalone/realm.json`: no secret belongs in this file. The key line is
+`type: "remote"` (spelled `"type": "remote"` in JSON above) — without it OpenCode
+expects a local server to launch. OpenCode completes the browser flow at its own
+loopback callback, which the realm already lists as a redirect URI on that
+client.
+
+### Claude Code
+
+The certificate comes from Caddy's own CA (mounted into the proxy container at
+`/data/caddy/pki/authorities/local/root.crt`), not from a public root. Export the
+copy the install made (§5, "Trusting the certificate first") so Node — and
+therefore Claude Code — can validate the endpoint:
+
+```sh
+export NODE_EXTRA_CA_CERTS=~/.config/pipeline/ca.crt
+claude mcp add --transport http pipeline https://{$PUBLIC_HOSTNAME}:8443/mcp
+```
+
+`NODE_EXTRA_CA_CERTS` must point at that internal CA from the standalone
+deployment; the public trust store will not validate this endpoint, and the
+symptom is an `UNABLE_TO_VERIFY_LEAF_SIGNATURE` error rather than a login prompt
+(§8, "Untrusted CA"). Add `--client-id pipeline-cli --callback-port 33418` to
+start the OAuth browser flow at registration time.
+
+### Removed: local stdio entry
+
+The previous local configuration launched the pipeline server as a child
+process — an `mcpServers` entry naming an interpreter and a server script — and
+it has been removed, not deprecated. The server is remote-only now: it lives
+behind Caddy in a container, holds the state directory and the credentials, and
+has no stdio transport listening. A client started from a local script has
+nothing to connect to, so configure the remote URL above instead.
+
+### Remote tool policy
+
+A remote call arrives over the network and runs against the server's own state
+and checkouts, not the caller's disk. `pipeline/remote_tool_policy.py` encodes
+that boundary, and §6 ("Which tools a remote caller may use") lists the whole
+surface. The rules that bite first:
+
+- **Plans must pass `repo_url`** — an `https://` URL on a host listed in
+  `PIPELINE_REPO_URL_HOSTS`. `repo_root` and `workspace` are refused from a
+  remote caller: those name paths on the caller's machine, which the server
+  cannot see.
+- **Reads are scoped to that repository.** `list_plans`, `verify_audit` and the
+  per-plan reads only return plans, runs and audit entries belonging to the
+  repositories the caller can see.
+- **`decompose_plan` and `record_security_audit` are refused over the remote
+  transport.** Both act on the host's own checkout and host-scoped
+  configuration, so they stay local-operator tools; a separate follow-up plan
+  covers making them remote-capable.

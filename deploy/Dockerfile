@@ -141,8 +141,11 @@ RUN chmod 0555 ./deploy/entrypoint.sh \
         /var/lib/pipeline/plans /var/lib/pipeline/worktrees /var/lib/pipeline/repos \
  && chown 10001:10001 /var/lib/pipeline
 
-# Mutable state: plans, worktrees, scheduler health. Mount a named volume or a
-# host path here, or every restart starts from an empty plan directory.
+# Mutable state: plans, worktrees, the repo clone root, scheduler health. Mount a
+# named volume or a host path here, or every restart starts from an empty plan
+# directory. The remote `save_plan` clones the operator's repository into
+# /var/lib/pipeline/repos, so that root must exist and belong to uid 10001 before
+# the first write.
 VOLUME ["/var/lib/pipeline"]
 
 # --------------------------------------------------------------------------

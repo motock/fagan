@@ -156,6 +156,17 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
         "`localhost:8443` Caddy forwards and every request gets 421 Misdirected "
         "Request. The dashboard check strips the port, so it stays portless."
     )
+    assert (
+        "PIPELINE_MCP_ALLOWED_HOSTS: "
+        "${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*" in block
+    ), (
+        "PIPELINE_MCP_ALLOWED_HOSTS must also keep the bare public host entry: the "
+        "MCP SDK matches a `:*` entry only when the incoming Host carries a port "
+        "(host.startswith(base + \":\")), and the documented PUBLIC_PORT=443 "
+        "deployment sends `Host: <hostname>` with no port. Keeping only `:*` would "
+        "turn the 8443 fix into a 421 on 443. Caddy has no header_up Host, so the "
+        "client's Host header is what reaches the server."
+    )
     assert "${PUBLIC_PORT:-8443}" in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
 

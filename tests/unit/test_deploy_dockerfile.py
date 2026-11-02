@@ -168,7 +168,9 @@ def test_plan_dir_and_worktree_root_live_on_a_declared_volume() -> None:
     # PermissionError (observed in the first end-to-end smoke run), so both the
     # state root and the clone root must belong to the runtime uid.
     runs = " ".join(_instructions(text, "RUN"))
-    assert re.search(r"install -d[^;&]*/var/lib/pipeline/repos", runs), (
+    assert re.search(
+        r"install -d -o 10001 -g 10001 -m 0750[^;&]*/var/lib/pipeline/repos", runs
+    ), (
         "the final RUN must `install -d` /var/lib/pipeline/repos alongside plans "
         "and worktrees: the remote save_plan clone mkdirs it at runtime"
     )

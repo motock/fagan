@@ -28,9 +28,13 @@ keeps the service file (already long, and touched by several later stories)
 to a three-line delegation.
 """
 
+import json
+from pathlib import Path
 from typing import Any
 
 from app.identity import LOCAL_OPERATOR, SYSTEM_AUTH_METHOD
+
+from . import repo_clone
 
 #: The refusal returned to a remote caller who named no plan. A remote caller
 #: must say which plan it is asking about; there is no "the" plan for it.
@@ -129,3 +133,86 @@ def remote_dashboard_config(roles: Any) -> dict:
     snapshot later is not disclosed by default.
     """
     return {"roles": roles}
+
+
+#: The refusal returned when a plan names both ``repo_url`` and ``repo_root``.
+#: The two fields say the same thing -- where the code is -- in two different
+#: ways; letting a plan carry both leaves the reader guessing which one the
+#: server honoured, so it is ambiguous input and refused.
+REPO_URL_AND_ROOT_ERROR = "a plan names repo_url or repo_root, not both"
+
+
+def resolve_repo_url(plan: dict) -> dict | None:
+    """Clone :func:`plan`'s ``repo_url`` and point its ``repo_root`` at the clone.
+
+    Returns ``None`` on success, or when the plan names no ``repo_url`` (the
+    caller keeps today's behaviour: a local plan may name ``repo_root``
+    directly). Returns an error dict and leaves *plan* untouched when:
+
+    * the plan names both ``repo_url`` and ``repo_root`` -- two answers to the
+      same question;
+    * ``repo_url`` is not a non-empty string;
+    * :func:`pipeline.repo_clone.ensure_clone` refuses the URL
+      (:class:`~pipeline.repo_clone.RepoUrlError`) or git fails
+      (:class:`~pipeline.repo_clone.RepoCloneError`).
+
+    Applies to every principal, not just a network caller: a local operator
+    may name ``repo_url`` too, and the clone has the same meaning for both.
+    The plan's ``repo_root`` becomes the managed path so the callers that
+    follow -- the ``PIPELINE_ALLOWED_REPO_ROOTS`` check in ``save_plan``, then
+    dispatch -- see exactly one, server-chosen location.
+    """
+    if "repo_url" not in plan:
+        return None
+    if "repo_root" in plan:
+        return {"ok": False, "error": REPO_URL_AND_ROOT_ERROR}
+    url = plan["repo_url"]
+    err = _invalid_repo_url(url)
+    if err is not None:
+        return err
+    path, err = _ensure_clone(url)
+    if err is not None:
+        return err
+    plan["repo_root"] = str(path)
+    return None
+
+
+def refresh_saved_plan_clone(plan_path: Any) -> dict | None:
+    """Re-fetch the clone named by a saved plan's ``repo_url``, or return ``None``.
+
+    Called by ``ingest_plan`` so a long-lived server ingests a fresh checkout,
+    not whatever was cloned when the plan was saved. The plan file is read,
+    never written: its ``repo_root`` is the save-time managed path and does not
+    need to change.
+
+    A plan with no ``repo_url`` -- or one that cannot be read at all -- is left
+    to ``_ingest_plan_impl``, which owns the unreadable-plan refusal, so this
+    hook never turns another caller's contract into a different error.
+    """
+    try:
+        saved = json.loads(Path(plan_path).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(saved, dict) or "repo_url" not in saved:
+        return None
+    url = saved["repo_url"]
+    err = _invalid_repo_url(url)
+    if err is not None:
+        return err
+    _, err = _ensure_clone(url)
+    return err
+
+
+def _ensure_clone(url: str) -> tuple[Any, dict | None]:
+    """Clone *url*, returning ``(path, None)`` or ``(None, error_dict)``."""
+    try:
+        return repo_clone.ensure_clone(url), None
+    except (repo_clone.RepoUrlError, repo_clone.RepoCloneError) as exc:
+        return None, {"ok": False, "error": str(exc)}
+
+
+def _invalid_repo_url(url: Any) -> dict | None:
+    """Refuse a ``repo_url`` that is not a non-empty string, else ``None``."""
+    if isinstance(url, str) and url:
+        return None
+    return {"ok": False, "error": "a plan's repo_url must be a non-empty string"}

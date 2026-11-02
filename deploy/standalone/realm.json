@@ -79,7 +79,7 @@
     {
       "clientId": "pipeline-cli",
       "name": "Pipeline CLI (Claude Code and OpenCode)",
-      "description": "Public PKCE client for MCP clients that sign a human in through the browser. Claude Code pre-registers http://localhost:<callback-port>/callback; OpenCode uses http://127.0.0.1:19876/mcp/oauth/callback. No secret: a public client holds none, and PKCE S256 binds the code to the caller.",
+      "description": "Fagan pipeline CLI client used by the local CLI and remote MCP clients.",
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,

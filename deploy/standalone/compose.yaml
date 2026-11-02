@@ -14,8 +14,11 @@
 #     does not check it), so the installer creates every file, leaving the unused
 #     ones empty. The entrypoint loader (deploy/lib/operator_env.sh) treats an
 #     empty file as absent.
-#   - deploy/standalone/realm.json: the realm template, and
-#     deploy/standalone/model_registry.json: a copy of the repo's registry.
+#   - deploy/standalone/realm.json: the tracked realm template. It keeps its
+#     ${env.*} placeholders; deploy/install.sh renders a resolved copy into its
+#     state directory (by default deploy/standalone/import/realm.json, gitignored)
+#     and compose mounts that copy through STANDALONE_REALM_FILE.
+#   - deploy/standalone/model_registry.json: a copy of the repo's registry.
 #
 # Every image tag is exact (no `latest`), so an upgrade is a reviewed edit.
 
@@ -100,10 +103,11 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # IdP: Keycloak in production start mode with the realm imported from
-  # ./realm.json. The H2 database lives in keycloak-data, so users, sessions and
-  # any admin change survive a restart. --import-realm only creates a realm that
-  # does not exist yet; later edits go through the admin console.
+  # IdP: Keycloak in production start mode with the realm imported from the
+  # rendered copy of the realm template that deploy/install.sh writes
+  # (STANDALONE_REALM_FILE). The H2 database lives in keycloak-data, so users,
+  # sessions and any admin change survive a restart. --import-realm only creates
+  # a realm that does not exist yet; later edits go through the admin console.
   # ---------------------------------------------------------------------------
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.7
@@ -122,16 +126,13 @@ services:
       # Bootstrap admin only; created on first start, then managed in the console.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
-      # Values realm.json references through ${env.*}. Import substitutes only
-      # variables that exist, so each one is required rather than defaulted: an
-      # absent value would leave the placeholder text as the client secret.
-      PIPELINE_PUBLIC_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}
-      PIPELINE_CLI_CALLBACK_PORT: ${PIPELINE_CLI_CALLBACK_PORT:?set PIPELINE_CLI_CALLBACK_PORT in .env}
-      PIPELINE_OIDC_AUDIENCE: ${PIPELINE_OIDC_AUDIENCE:-pipeline-mcp}
-      PIPELINE_DASHBOARD_CLIENT_SECRET: ${PIPELINE_DASHBOARD_CLIENT_SECRET:?set PIPELINE_DASHBOARD_CLIENT_SECRET in .env}
-      PIPELINE_MCP_CLIENT_SECRET: ${PIPELINE_MCP_CLIENT_SECRET:?set PIPELINE_MCP_CLIENT_SECRET in .env}
+      # No PIPELINE_* variables here: deploy/install.sh renders the realm
+      # template before the stack starts and mounts the resolved copy through
+      # STANDALONE_REALM_FILE, so Keycloak no longer has to substitute ${env.*}
+      # at import time. A placeholder that survived rendering aborts the install.
     volumes:
-      - ./realm.json:/opt/keycloak/data/import/realm.json:ro
+      # Rendered by deploy/install.sh --render-realm (see STANDALONE_REALM_FILE).
+      - ${STANDALONE_REALM_FILE:?STANDALONE_REALM_FILE must point at the rendered realm}:/opt/keycloak/data/import/realm.json:ro
       - keycloak-data:/opt/keycloak/data
     restart: unless-stopped
 

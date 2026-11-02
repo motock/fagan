@@ -152,6 +152,27 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     assert "${PUBLIC_HOSTNAME}" in block
     assert "${PUBLIC_PORT:-8443}" in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
+    # The MCP SDK's TransportSecuritySettings compares the *full* Host header,
+    # port included: an allowed entry of `localhost` never matches
+    # `localhost:8443`, so every proxied request would get 421 Misdirected
+    # Request. The wildcard is the port -- `${PUBLIC_HOSTNAME}:*` -- and not a
+    # Compose default (`${PUBLIC_HOSTNAME:*}` would set the value to `*`).
+    assert "${PUBLIC_HOSTNAME}:*" in block, (
+        "PIPELINE_MCP_ALLOWED_HOSTS must allow the public hostname with any "
+        "port (`${PUBLIC_HOSTNAME}:*`); a bare hostname rejects every request "
+        "through Caddy with 421 Misdirected Request"
+    )
+    # The dashboard's host check strips the port before comparing, so its
+    # entry must stay a bare hostname: `localhost:*` would never match
+    # `localhost` and later requests would fail with 421.
+    assert re.search(
+        r"^[ \t]*PIPELINE_DASHBOARD_ALLOWED_HOSTS:[ \t]*\$\{PUBLIC_HOSTNAME\}[ \t]*$",
+        block,
+        re.MULTILINE,
+    ), (
+        "PIPELINE_DASHBOARD_ALLOWED_HOSTS must stay `${PUBLIC_HOSTNAME}`: its "
+        "check strips the port, so a `:*` wildcard would break it"
+    )
 
 
 def test_every_secret_is_a_file_under_secrets_dir() -> None:

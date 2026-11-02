@@ -275,5 +275,30 @@ def test_dockerfile_ignores_nothing_needed_at_runtime() -> None:
     )
 
 
+def test_runtime_user_can_create_the_plan_clone_root() -> None:
+    """A remote ``save_plan`` clones the plan's repo beneath ``/var/lib/pipeline``.
+
+    The container runs as uid 10001. ``/var/lib/pipeline`` is created by the
+    base image as ``root:root``, so unless the final ``RUN`` both creates the
+    clone root and chowns the state root to the runtime uid, the first
+    ``save_plan`` raises ``PermissionError`` (errno 13) on
+    ``mkdir('/var/lib/pipeline/repos/<plan-id>')``.
+    """
+    text = _dockerfile()
+    runs = _instructions(text, "RUN")
+    install = [run for run in runs if "/var/lib/pipeline" in run]
+    assert install, "no RUN instruction provisions /var/lib/pipeline"
+    block = install[-1]
+
+    assert re.search(r"install\s+-d\b[^;]*?/var/lib/pipeline/repos\b", block), (
+        "install -d must create /var/lib/pipeline/repos, or the runtime uid "
+        f"cannot create it when the first plan clone runs; got {block!r}"
+    )
+    assert "chown 10001:10001 /var/lib/pipeline" in block, (
+        "/var/lib/pipeline must be owned by the runtime uid, or a later "
+        "save_plan cannot create its own plan directory under repos/"
+    )
+
+
 def _entrypoint() -> str:
     return _read(ENTRYPOINT)

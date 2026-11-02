@@ -249,7 +249,7 @@ PY
 # A bare repository with one commit on `main`, which is all a clone needs.
 seed_repository() {
     STEP="seed-repo"
-    git init --bare -q "$TMP/repo.git"
+    git init --bare -q --initial-branch=main "$TMP/repo.git"
     git init -q -b main "$TMP/seed"
     git -C "$TMP/seed" -c user.name='standalone smoke' \
         -c user.email='smoke@example.invalid' commit -q --allow-empty -m 'chore: seed the smoke repository'
@@ -424,7 +424,7 @@ seed_credentials() {
     chmod 600 "$ENV_FILE"
     # install.sh reuses values it finds in $STATE_DIR/.env instead of generating
     # different ones for the secret files, so seed the same three secrets there.
-    grep -E '^(KEYCLOAK_ADMIN_PASSWORD|PIPELINE_DASHBOARD_CLIENT_SECRET|PIPELINE_MCP_CLIENT_SECRET|PIPELINE_CLI_CALLBACK_PORT)=' \
+    grep -E '^(KEYCLOAK_ADMIN|KEYCLOAK_ADMIN_PASSWORD|PIPELINE_DASHBOARD_CLIENT_SECRET|PIPELINE_MCP_CLIENT_SECRET|PIPELINE_CLI_CALLBACK_PORT)=' \
         "$ENV_FILE" >"$STATE_DIR/.env"
     chmod 600 "$STATE_DIR/.env"
     log "seeded throwaway stack credentials"

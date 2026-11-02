@@ -138,7 +138,8 @@ RUN chmod 0555 ./deploy/entrypoint.sh \
  && ln -s /opt/venv /app/.venv \
  && chown 10001:10001 /app \
  && install -d -o 10001 -g 10001 -m 0750 \
-        /var/lib/pipeline/plans /var/lib/pipeline/worktrees
+        /var/lib/pipeline/plans /var/lib/pipeline/worktrees /var/lib/pipeline/repos \
+ && chown 10001:10001 /var/lib/pipeline
 
 # Mutable state: plans, worktrees, scheduler health. Mount a named volume or a
 # host path here, or every restart starts from an empty plan directory.

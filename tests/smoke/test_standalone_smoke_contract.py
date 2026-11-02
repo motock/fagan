@@ -68,6 +68,65 @@ def test_script_parses():
     assert proc.returncode == 0, f"bash -n rejected {SCRIPT}:\n{proc.stderr}"
 
 
+def _seed_pattern() -> str:
+    """The alternation of ``seed_credentials``' grep, split into its keys."""
+    match = re.search(r"grep -E '\^\(([^)]*)\)=", _smoke_text())
+    assert match, (
+        "seed_credentials must grep the generated stack env into the state .env "
+        "that install.sh's resolve() reads"
+    )
+    return match.group(1)
+
+
+def test_seed_credentials_seeds_the_admin_user():
+    """install.sh logs in as the admin ``stack.env`` names.
+
+    ``resolve()`` reads only the *state* ``.env``, so a pattern that omits
+    ``KEYCLOAK_ADMIN`` makes the installer fall back to ``admin`` while the
+    container's bootstrap admin (from ``stack.env``) is something else -- and
+    ``kcadm`` fails with ``invalid_grant``.
+    """
+    keys = _seed_pattern().split("|")
+    assert "KEYCLOAK_ADMIN" in keys, (
+        "the seeded state .env must carry KEYCLOAK_ADMIN; without it install.sh "
+        f"defaults ADMIN_USER to `admin` and kcadm fails with invalid_grant ({keys})"
+    )
+    for key in (
+        "KEYCLOAK_ADMIN_PASSWORD",
+        "PIPELINE_DASHBOARD_CLIENT_SECRET",
+        "PIPELINE_MCP_CLIENT_SECRET",
+        "PIPELINE_CLI_CALLBACK_PORT",
+    ):
+        assert key in keys, f"{key} must stay in the seeded set, got {keys}"
+
+    text = _smoke_text()
+    assert '>"$STATE_DIR/.env"' in text, (
+        "the seed must truncate the state .env; `>>` would duplicate keys"
+    )
+    assert '>>"$STATE_DIR/.env"' not in text, (
+        "appending duplicates keys in the state .env, where the last one wins; "
+        "the seed must truncate"
+    )
+
+
+def test_seeded_bare_repository_points_head_at_main():
+    """The seed pushes a commit to ``main``, so the bare repo's HEAD must be main.
+
+    Default ``git init`` leaves ``HEAD -> refs/heads/master``; a commit pushed
+    to ``main`` is then unreachable and the container's clone reports "no
+    commit found".
+    """
+    init = re.search(r"git init --bare[^\n]*", _smoke_text())
+    assert init, "seed_repository must create the bare clone source"
+    assert "--initial-branch=main" in init.group(0), (
+        "the bare repo must be initialised with --initial-branch=main so its "
+        f"HEAD matches the branch the seed pushes to; got {init.group(0)!r}"
+    )
+    assert "push -q origin HEAD:main" in _smoke_text(), (
+        "the seed must keep pushing to `main`, the branch HEAD now points at"
+    )
+
+
 def test_script_registers_a_teardown_trap():
     assert SCRIPT.exists(), f"{SCRIPT} missing"
     text = SCRIPT.read_text(encoding="utf-8")

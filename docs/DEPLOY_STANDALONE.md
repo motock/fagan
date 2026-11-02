@@ -378,7 +378,7 @@ breaks when the value is wrong.
 | `PUBLIC_HOSTNAME` | The name every client uses | none — required, else compose refuses to start | `pipeline.example.com` | Baked into the OIDC issuer, both redirect URIs and the certificate. Changing it later invalidates every issued token and session. |
 | `PUBLIC_PORT` | The TLS port clients reach | `8443` | `8443` | Published as `${PUBLIC_PORT}:8443` and interpolated into the issuer and resource URL. A port that does not match what clients dial is a 401 (§8), not a redirect. |
 | `PIPELINE_DASHBOARD_ALLOWED_HOSTS` | `Host` header allowlist for the dashboard | set by compose to `${PUBLIC_HOSTNAME}` | `pipeline.example.com,pipeline.internal` | Comma-separated. A `Host` not on the list is refused; an empty list disables the check. |
-| `PIPELINE_MCP_ALLOWED_HOSTS` | `Host` header allowlist for the MCP transport (DNS-rebinding protection) | set by compose to `${PUBLIC_HOSTNAME}:*`; unset means the SDK default | `pipeline.example.com:*` | A request whose `Host` is not listed gets **421 Invalid Host** (§8). The transport compares the full `Host` header *including the port*, so an entry needs the `:*` suffix to match `pipeline.example.com:8443`; a bare hostname never does. Leaving `PUBLIC_HOSTNAME` out when you override this list also gives 421. |
+| `PIPELINE_MCP_ALLOWED_HOSTS` | `Host` header allowlist for the MCP transport (DNS-rebinding protection) | set by compose to `${PUBLIC_HOSTNAME}`; unset means the SDK default | `pipeline.example.com` | A request whose `Host` is not listed gets **421 Invalid Host** (§8). Setting `PUBLIC_HOSTNAME` alone is not enough if you override this list and leave the host out. |
 | `PIPELINE_MCP_RESOURCE_URL` | The RFC 9728 identifier for this MCP server | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT}/mcp` | `https://pipeline.example.com:8443/mcp` | Must be absolute `https://`, with no userinfo, query or fragment, or the transport refuses to start. It is what a 401 challenge advertises as `resource_metadata`; a mismatch leaves clients unable to start a login flow (§8). |
 | `PIPELINE_REPO_URL_HOSTS` | Hosts the pipeline may clone from | `github.com` | `github.com,git.example.com` | Comma-separated, hosts only, no scheme. A plan naming any other host is refused at clone time. Only `https://` URLs are accepted. |
 | `PIPELINE_REPOS_ROOT` | Root of the managed clone volume | `/var/lib/pipeline/repos` (image default, on `pipeline-state`) | `/var/lib/pipeline/repos` | Where `https://<host>/<owner>/<repo>` is cloned. Must be a real directory, not a symlink; an explicit value that cannot be created is fatal. |
@@ -823,30 +823,20 @@ not in `PIPELINE_MCP_ALLOWED_HOSTS`. This is the SDK's DNS-rebinding protection,
 and it fires on the `Host` header the client sent, not on DNS.
 
 Example: `PUBLIC_HOSTNAME=pipeline.example.com`, the certificate and DNS are
-correct, and a request that arrives with `Host: 127.0.0.1` gets 421. So does one
-arriving through a load balancer or an `ssh -L` tunnel that rewrites `Host`, or
-one sent to an IP literal.
+correct, the allowed-hosts list contains it — and a request that arrives with
+`Host: 127.0.0.1` gets 421. So does one arriving through a load balancer or an
+`ssh -L` tunnel that rewrites `Host`, or one sent to an IP literal.
 
-The comparison is against the **full** `Host` header, port included: an entry of
-`pipeline.example.com` never matches a request whose header reads
-`pipeline.example.com:8443`, so every proxied request gets 421. Each entry
-therefore needs the SDK's `:*` suffix — "any port" — unless your clients really
-do send the bare name.
-
-Add every name clients legitimately use, comma-separated and each with the port
-wildcard, then restart the pipeline container:
+Add every name clients legitimately use, comma-separated, and restart the
+pipeline container:
 
 ```sh
-PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com:*,pipeline.internal:*
+PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com,pipeline.internal
 ```
-
-Compose already sets this to `${PUBLIC_HOSTNAME}:*` for the public name, so you
-only need to override it to add names.
 
 Leaving it empty makes the transport fall back to the SDK default instead of
 accepting everything, so an empty list is not a workaround. And do not "fix"
-this by adding `*` on its own: the point of the check is to make a rebinding
-attack fail. The `:*` suffix above is a port wildcard, not that.
+this by adding `*`: the point of the check is to make a rebinding attack fail.
 
 ## Standalone install smoke test
 

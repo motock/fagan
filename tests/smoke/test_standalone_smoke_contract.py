@@ -209,3 +209,54 @@ def test_teardown_is_skipped_when_the_keep_flag_is_set():
         "the keep branch must print the exact command that shows the stack, "
         f"i.e. {INSPECT_COMMAND!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# SA-G4: the first end-to-end smoke run exposed four runtime defects that only
+# a live stack shows. These assert the two that live in smoke.sh itself.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_credentials_copies_the_admin_username_too():
+    """install.sh's resolve() reads only the state .env, never stack.env.
+
+    The container's bootstrap admin is whatever ``KEYCLOAK_ADMIN`` stack.env
+    carries (``smoke-admin`` in the smoke stack).  If the state .env omits it,
+    resolve() falls back to ``admin`` and every kcadm call fails with
+    ``invalid_grant``, which is exactly what the first live run hit.
+    """
+    text = _smoke_text()
+    seed = re.search(
+        r"grep -E ['\"]\^\(([^)]*)\)=.*?\"\$ENV_FILE\"\s*>\s*\"\$STATE_DIR/\.env\"",
+        text,
+        re.DOTALL,
+    )
+    assert seed is not None, (
+        "smoke.sh must seed the state .env by grepping $ENV_FILE; the pattern "
+        "could not be found"
+    )
+    names = set(seed.group(1).split("|"))
+    assert "KEYCLOAK_ADMIN" in names, (
+        "the seed grep must include KEYCLOAK_ADMIN: without it install.sh's "
+        "resolve() defaults ADMIN_USER to `admin` while the container's "
+        "bootstrap admin comes from stack.env, so kcadm fails with invalid_grant"
+    )
+    # Negative case: the password-only form is what the bug looked like.
+    assert "KEYCLOAK_ADMIN_PASSWORD" in names
+
+
+def test_seeded_bare_repository_points_at_the_branch_with_the_commit():
+    """The seed pushes to `main`; a default-initialised bare HEAD is `master`.
+
+    ``git clone`` of such a repo reports "no commit found" because HEAD names a
+    branch that does not exist.  The bare repo must be initialised on the same
+    branch the seed pushes to.
+    """
+    text = _smoke_text()
+    bare = re.search(r"git init --bare[^\n]*", text)
+    assert bare is not None, "smoke.sh must create the bare seed repository"
+    assert "--initial-branch=main" in bare.group(0), (
+        f"the bare repo must be initialised on `main`; got {bare.group(0)!r}. "
+        "Without it HEAD points at `master` and cloning the pushed `main` "
+        'reports "no commit found"'
+    )

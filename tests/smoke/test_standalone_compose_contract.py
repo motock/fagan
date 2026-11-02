@@ -152,6 +152,16 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     assert "${PUBLIC_HOSTNAME}" in block
     assert "${PUBLIC_PORT:-8443}" in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
+    assert re.search(
+        r"^\s*PIPELINE_MCP_ALLOWED_HOSTS:\s*\$\{PUBLIC_HOSTNAME\}:\*\s*$",
+        block,
+        re.MULTILINE,
+    ), (
+        "PIPELINE_MCP_ALLOWED_HOSTS must use the SDK's trailing `:*` wildcard "
+        "form: the MCP transport compares the full Host header including the "
+        "port, so a bare `${PUBLIC_HOSTNAME}` never matches `localhost:8443` and "
+        "every proxied request gets 421 Misdirected Request"
+    )
 
 
 def test_every_secret_is_a_file_under_secrets_dir() -> None:

@@ -277,3 +277,33 @@ def test_dockerfile_ignores_nothing_needed_at_runtime() -> None:
 
 def _entrypoint() -> str:
     return _read(ENTRYPOINT)
+
+
+def test_state_directories_are_created_and_owned_by_the_runtime_user() -> None:
+    """The image runs as uid 10001, so every directory it writes must be its own.
+
+    Two live failures motivate this: ``/var/lib/pipeline`` is created by Docker
+    (as root) when the VOLUME is mounted, and ``pipeline/remote``'s save_plan
+    clones repositories under ``repos/`` inside it.  A ``repos/`` directory
+    created at runtime by uid 10001 under a root-owned ``/var/lib/pipeline``
+    raises ``PermissionError``.  The RUN that creates ``plans/`` and
+    ``worktrees/`` must therefore create ``repos/`` too, and must chown the
+    state root itself.
+    """
+    runs = _instructions(_dockerfile(), "RUN")
+    state_run = next(
+        (run for run in runs if "install -d" in run and "/var/lib/pipeline" in run),
+        None,
+    )
+    assert state_run is not None, (
+        "deploy/Dockerfile must create the state directories with `install -d`"
+    )
+    assert "/var/lib/pipeline/repos" in state_run, (
+        "the RUN must create /var/lib/pipeline/repos: the remote save_plan "
+        "clone mkdirs it at runtime as uid 10001, which fails on a root-owned "
+        "parent"
+    )
+    assert "chown 10001:10001 /var/lib/pipeline" in state_run, (
+        "the RUN must chown the state root to the runtime uid, not just its "
+        "children: Docker creates a freshly mounted volume root-owned"
+    )

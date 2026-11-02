@@ -868,9 +868,10 @@ run it locally before you turn on its CI job.
     `proxy:8443` is the same site under its in-network name, which the pipeline
     uses to fetch its JWKS.
 
-  The script defaults to `PUBLIC_HOSTNAME=localhost` with the published port
-  `8443`, and it verifies Caddy's internal CA rather than skipping verification.
-  Export `PUBLIC_HOSTNAME` (and `PUBLIC_PORT`) to try a different name.
+  The smoke run is fixed to that address: the script assigns
+  `PUBLIC_HOSTNAME=localhost` and `PUBLIC_PORT=8443` itself, ignoring any value
+  you export, so every run binds `https://localhost:8443`. It verifies Caddy's
+  internal CA rather than skipping verification.
 - No sudo is required on macOS: Docker Desktop maps the bind mount to the
   container uid, so the pipeline's uid 10001 can read the secret files without a
   `chown`. Do not prefix the command with it on macOS — the script detects
@@ -924,7 +925,7 @@ and exits non-zero.
 Tick these off against the log of a run you did not keep, or against the stack
 of a `STANDALONE_SMOKE_KEEP=1` run:
 
-- [ ] Containers are up: `docker compose -f deploy/standalone/compose.yaml ps` lists `pipeline`, `keycloak`, `caddy` and `nats` running, and the healthchecks passing.
+- [ ] Containers are up: `docker compose -f deploy/standalone/compose.yaml ps` lists `pipeline`, `keycloak`, `proxy` and `nats` running. Only `proxy` and `pipeline` report health (`proxy` waits for the exported CA root, `pipeline` probes a credential-free dashboard route); `keycloak` and `nats` define no healthcheck and show no health status.
 - [ ] The install completed: the log shows `install.sh: starting the stack` and the readiness wait returning, with no `FAILED:` line.
 - [ ] The realm was rendered and imported: the log shows `install.sh: rendered` the realm file, then `install.sh: configuring Keycloak (pipeline realm)`.
 - [ ] Login is reachable at the Caddy URL: `https://{$PUBLIC_HOSTNAME}:8443/realms/pipeline/.well-known/openid-configuration` answers, and you reached it through Caddy rather than a `curl -k` bypass.

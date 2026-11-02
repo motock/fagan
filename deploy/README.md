@@ -146,6 +146,18 @@ agents.
 - The value is read from the file, a trailing newline stripped, and exported
   for the process tree. Only `loaded <VARIABLE> from secret file` is logged —
   never the value.
+- **No example placeholder starts the container.** After sourcing the loader
+  and before `load_operator_credentials`, the entrypoint calls
+  `assert_no_placeholder_credentials`, which refuses a `change-me…`/`changeme…`
+  value (case-insensitive, substring, so padded and mixed-case values are
+  caught) in `KEYCLOAK_ADMIN_PASSWORD`, `PIPELINE_DASHBOARD_CLIENT_SECRET` or
+  `PIPELINE_MCP_CLIENT_SECRET` and exits non-zero naming the variable only. A
+  placeholder is a credential published in this repository, and `realm.json`
+  substitutes those three verbatim at import, so the alternative is a running
+  stack whose confidential MCP client has a known secret. This guard owns
+  placeholder *shape*; compose's `${VAR:?}` guard in
+  `deploy/standalone/compose.yaml` still owns *presence* (unset or empty), and
+  the two are meant to overlap.
 - **Exposure boundary (tracked risk).** Everything exported here is inherited by
   every child of the entrypoint. Whichever consumer strips a carrier is named
   here, per credential, because this section is the map an operator reads before

@@ -174,13 +174,13 @@ RUN set -eux; \
     CLAUDE_CODE_VERSION=2.1.301; \
     case "${TARGETARCH:-$(uname -m)}" in \
         amd64|x86_64) \
-            GH_ARCH=linux_amd64; \
+            GH_ARCH=amd64; \
             NODE_ARCH=x64; \
             GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386; \
             NODE_SHA256=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008; \
             ;; \
         arm64|aarch64) \
-            GH_ARCH=linux_arm64; \
+            GH_ARCH=arm64; \
             NODE_ARCH=arm64; \
             GH_SHA256=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484; \
             NODE_SHA256=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143; \

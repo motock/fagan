@@ -415,6 +415,11 @@ Host** even though the certificate, the DNS and the login all work.
 
 ## 5. Connecting clients
 
+> Remote-only setup at a glance — the OpenCode and Claude Code configs, the
+> internal CA export, the removed local entry and the remote tool policy — is
+> collected in [Connecting MCP clients (remote)](#connecting-mcp-clients-remote).
+> This section is the long form: OAuth and helper modes, credentials, redirects.
+
 Both clients support two modes. OAuth mode opens a browser, signs a human in,
 and stores the resulting token itself — the right choice for a person at a
 workstation. Helper mode (`mcp-token`) mints a token from a per-user Keycloak

@@ -9,6 +9,13 @@ in practice.
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed AGPL-3.0-only (GNU Affero General Public License v3.0) from
+  Apache-2.0. Releases through commit `98550bb` remain Apache-2.0; see
+  NOTICE for the boundary and LICENSE-APACHE for the prior text. A
+  contribution grant now covers all merged contributions (CONTRIBUTING.md).
+
 ### Added
 
 **Setup**

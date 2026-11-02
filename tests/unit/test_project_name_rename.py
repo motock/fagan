@@ -40,7 +40,7 @@ def test_notice_first_line_is_fagan():
 def test_notice_keeps_copyright_and_license():
     text = NOTICE.read_text(encoding="utf-8")
     assert "Copyright 2026 Jesse Carroll" in text
-    assert "Apache License" in text
+    assert "Affero General Public License" in text
 
 
 def test_pipeline_docstring_first_line_is_fagan():

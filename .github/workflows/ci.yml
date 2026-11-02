@@ -178,3 +178,18 @@ jobs:
 
       - name: Check file line limits
         run: python scripts/check_line_limit.py
+
+  image:
+    name: Build the server image
+    # The only other build of deploy/Dockerfile is the post-merge publish job
+    # in smoke.yml, which fails after the merge and gates nothing (25 red
+    # runs, 2026-10-30 to 2026-11-02, all on the doubled-`linux_` URL that
+    # merged unseen because no PR check ever built the image). Building here
+    # puts an image breakage on the pull request, where the merge gate polls
+    # `gh pr checks` and can refuse it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the server image
+        run: docker build -f deploy/Dockerfile .

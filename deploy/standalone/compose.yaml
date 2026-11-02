@@ -40,7 +40,8 @@ services:
     environment:
       # Event bus (ADR 0010). The scheduler daemon in this container is the only
       # durable consumer. `nats` shares this container's network namespace (see
-      # the nats service), so the broker is loopback and needs no credential.
+      # the nats service) and binds to 127.0.0.1 there, so the broker needs no
+      # credential.
       PIPELINE_EVENT_BUS: nats
       PIPELINE_NATS_URL: nats://127.0.0.1:4222
       PIPELINE_NATS_MANAGE_STREAM: "1"
@@ -188,14 +189,19 @@ services:
   # ---------------------------------------------------------------------------
   # NATS JetStream, the durable store the scheduler daemon consumes from.
   #
-  # The broker shares the pipeline container's network namespace and is
-  # therefore loopback-only. pipeline/events_nats.py refuses a plaintext nats://
-  # URL to any non-loopback host, and no other container can reach this broker.
+  # The broker joins the pipeline container's network namespace through
+  # network_mode: "service:pipeline", and that namespace is attached to the
+  # compose project network, so a 0.0.0.0 bind would expose 4222 and 8222 to
+  # every other service on that network. -a 127.0.0.1 binds the client
+  # listener to loopback inside the shared namespace, and the monitoring port
+  # (-m) follows that listen address, so only processes in the pipeline
+  # container can reach either port. pipeline/events_nats.py refuses a
+  # plaintext nats:// URL to any non-loopback host.
   # JetStream state lives in nats-data, so a restart keeps unconsumed events.
   # ---------------------------------------------------------------------------
   nats:
     image: nats:2.10.22
-    command: ["-js", "-sd", "/data", "-a", "0.0.0.0", "-p", "4222", "-m", "8222"]
+    command: ["-js", "-sd", "/data", "-a", "127.0.0.1", "-p", "4222", "-m", "8222"]
     network_mode: "service:pipeline"
     volumes:
       - nats-data:/data

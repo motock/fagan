@@ -156,6 +156,26 @@ def test_stack_env_path_write_lands_after_install_shim():
         "the compose override is never applied"
     )
 
+    # The state .env is the only env file install.sh's resolve() reads, so the
+    # credential seed has to carry every name the installer logs in with.
+    text = _smoke_text()
+    seeds = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("grep -E '^(")]
+    assert len(seeds) == 1, (
+        "expected exactly one anchored `grep -E '^(...)=` credential seed for the "
+        f"state .env; found {seeds}"
+    )
+    assert "KEYCLOAK_ADMIN|" in seeds[0], (
+        "seed_credentials must copy KEYCLOAK_ADMIN into the state .env: install.sh's "
+        "resolve() reads only that file, so without it ADMIN_USER falls back to "
+        "`admin` while the container bootstraps `smoke-admin` and kcadm fails "
+        "invalid_grant"
+    )
+    assert "git init --bare -q --initial-branch=main" in text, (
+        "seed_repository must init the bare repo with `--initial-branch=main`: the "
+        "seed commits to main, so a HEAD pointing at master leaves the later clone "
+        "reporting `no commit found`"
+    )
+
 
 def test_sudo_is_skipped_on_darwin():
     text = _smoke_text()

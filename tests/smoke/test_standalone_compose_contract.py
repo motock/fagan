@@ -150,6 +150,12 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     ):
         assert name in block, name
     assert "${PUBLIC_HOSTNAME}" in block
+    assert "${PUBLIC_HOSTNAME}:*" in block, (
+        "PIPELINE_MCP_ALLOWED_HOSTS must allow the public host with any port: the "
+        "MCP SDK compares the full Host header, so `localhost` never matches the "
+        "`localhost:8443` Caddy forwards and every request gets 421 Misdirected "
+        "Request. The dashboard check strips the port, so it stays portless."
+    )
     assert "${PUBLIC_PORT:-8443}" in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
 

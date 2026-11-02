@@ -70,7 +70,7 @@ services:
 
       # Public origin. Hosts the MCP transport and the dashboard accept; the
       # resource URL is the RFC 9728 identifier clients are told to request.
-      PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
+      PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}:*
       PIPELINE_DASHBOARD_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
       PIPELINE_MCP_RESOURCE_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/mcp
 

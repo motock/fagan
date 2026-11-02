@@ -162,6 +162,22 @@ def test_plan_dir_and_worktree_root_live_on_a_declared_volume() -> None:
             value == volume or value.startswith(volume + "/") for volume in declared
         ), f"{key}={value} must live inside a declared VOLUME ({volume_text})"
 
+    # The image runs as uid 10001, so it creates the repo clone root at runtime:
+    # the remote `save_plan` clones the operator's repository into
+    # /var/lib/pipeline/repos. A root-owned state root makes that mkdir fail with
+    # PermissionError (observed in the first end-to-end smoke run), so both the
+    # state root and the clone root must belong to the runtime uid.
+    runs = " ".join(_instructions(text, "RUN"))
+    assert re.search(r"install -d[^;&]*/var/lib/pipeline/repos", runs), (
+        "the final RUN must `install -d` /var/lib/pipeline/repos alongside plans "
+        "and worktrees: the remote save_plan clone mkdirs it at runtime"
+    )
+    assert "chown 10001:10001 /var/lib/pipeline" in runs, (
+        "the final RUN must `chown 10001:10001 /var/lib/pipeline`: the state root "
+        "is root:root by default, so uid 10001 cannot create the repo clone root "
+        "underneath it"
+    )
+
 
 def test_healthcheck_probes_a_credential_free_dashboard_route() -> None:
     """The probe runs inside the container with no credential available.

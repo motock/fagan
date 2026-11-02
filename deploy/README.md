@@ -13,6 +13,11 @@ Everything below is the contract the image enforces at start-up — the
 entrypoint refuses to run when a precondition is unmet rather than serving a
 half-configured process.
 
+For the multi-user standalone deployment — Keycloak, the TLS proxy, secret
+files, and Claude Code/OpenCode setup — follow
+[`docs/DEPLOY_STANDALONE.md`](../docs/DEPLOY_STANDALONE.md), which reproduces
+`deploy/install.sh` (and `deploy/standalone/compose.yaml`) step by step.
+
 ## Build
 
 The build context is the repo root (the Dockerfile copies `app/`, `pipeline/`,

@@ -577,6 +577,11 @@ class PipelineService(PlanApprovalMixin):
         refusal = authorize("plan:ingest", plan_name=plan_name)
         if refusal is not None:
             return refusal
+        # SA-05: a repo_url plan was cloned at save_plan; re-fetch that clone so
+        # ingest reads a fresh checkout. The plan file is not rewritten.
+        err = remote_scope.refresh_saved_plan_clone(PLAN_DIR / f"{plan_name}.json")
+        if err is not None:
+            return err
         result = _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
         return wake.after(plan_name, "ingest_plan", result)
 
@@ -740,6 +745,13 @@ class PipelineService(PlanApprovalMixin):
             err = remote_scope.remote_plan_path_error(plan, workspace)
             if err is not None:
                 return {"ok": False, "error": err}
+
+        # SA-05: a repo_url plan is cloned here and its repo_root replaced with
+        # the managed path, for any principal; the allow-list below then sees
+        # that path. A refusal leaves nothing written.
+        err = remote_scope.resolve_repo_url(plan)
+        if err is not None:
+            return err
 
         if workspace is not None:
             ws_result = validate_workspace(workspace)

@@ -16,8 +16,8 @@
 #     empty file as absent.
 #   - deploy/standalone/realm.json: the tracked realm template. It keeps its
 #     ${env.*} placeholders; deploy/install.sh renders a resolved copy into its
-#     state directory (by default deploy/standalone/import/realm.json, gitignored)
-#     and compose mounts that copy through STANDALONE_REALM_FILE.
+#     state directory (by default deploy/standalone/import/realm.json) and
+#     compose mounts that copy through STANDALONE_REALM_FILE.
 #   - deploy/standalone/model_registry.json: a copy of the repo's registry.
 #
 # Every image tag is exact (no `latest`), so an upgrade is a reviewed edit.

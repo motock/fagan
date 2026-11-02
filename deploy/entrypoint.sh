@@ -59,6 +59,12 @@ _operator_env="$_entrypoint_dir/lib/operator_env.sh"
 . "$_operator_env"
 unset _entrypoint_dir _operator_env
 
+# Refuse the example file's placeholder credentials before anything starts. The
+# example ships them empty on purpose so compose's `:?` guard fires first; this
+# catches a value that arrived some other way (a hand-edited .env, a shared env
+# file, a template). A `change-me-*` client secret is a published credential.
+assert_no_placeholder_credentials
+
 # Operator credentials from the mounted secret files, then the repo roots the
 # clone path is confined to (SA-05 relies on both).
 load_operator_credentials

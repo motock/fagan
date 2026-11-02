@@ -75,6 +75,27 @@ secret_file_path() {
     esac
 }
 
+assert_no_placeholder_credentials() {
+    # No eval: the three names are spelled out and their values only ever travel
+    # as data, so an operator-supplied value cannot be re-parsed as shell.
+    for _placeholder_pair in \
+        "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-}" \
+        "PIPELINE_DASHBOARD_CLIENT_SECRET=${PIPELINE_DASHBOARD_CLIENT_SECRET:-}" \
+        "PIPELINE_MCP_CLIENT_SECRET=${PIPELINE_MCP_CLIENT_SECRET:-}"; do
+        _placeholder_name=${_placeholder_pair%%=*}
+        _placeholder_value=${_placeholder_pair#*=}
+        # Case-insensitive and substring, so " Change-Me-x " and "changeme" are
+        # caught as well; surrounding whitespace needs no trimming.
+        case "$_placeholder_value" in
+            *[Cc][Hh][Aa][Nn][Gg][Ee]-[Mm][Ee]* | \
+            *[Cc][Hh][Aa][Nn][Gg][Ee][Mm][Ee]*)
+                die "$_placeholder_name holds the example placeholder; generate a real credential"
+                ;;
+        esac
+    done
+    unset _placeholder_pair _placeholder_name _placeholder_value
+}
+
 # load_secret <ENV_NAME> <FILE_ENV_NAME> <default path>
 #
 # The value is exported into this process, so every child of the entrypoint

@@ -353,10 +353,21 @@ rand_hex() {
   fi
 }
 
+looks_like_placeholder() { # $1 value -> 0 when it is the example placeholder
+  case "$1" in
+    *[Cc][Hh][Aa][Nn][Gg][Ee]-[Mm][Ee]* | \
+    *[Cc][Hh][Aa][Nn][Gg][Ee][Mm][Ee]*) return 0 ;;
+  esac
+  return 1
+}
+
 generated() { # $1 .env key -> existing value or a fresh random one
   local existing=""
   existing="$(env_get "$1" "$ENV_FILE" || true)"
   if [ -n "$existing" ]; then
+    if looks_like_placeholder "$existing"; then
+      fail "$1 in $ENV_FILE is still the example placeholder; delete the line and re-run"
+    fi
     printf '%s' "$existing"
   else
     rand_hex
@@ -370,6 +381,11 @@ MCP_CLIENT_SECRET="$(generated PIPELINE_MCP_CLIENT_SECRET)"
 write_secret_if_absent() { # $1 name, $2 value
   local path="$SECRETS_DIR/$1"
   if [ -s "$path" ]; then
+    # A kept value is about to be mounted as a credential: refuse a
+    # placeholder that arrived from a hand-edited file or an old installer.
+    if looks_like_placeholder "$(cat -- "$path")"; then
+      fail "$1 in $path is still the example placeholder; delete it and re-run"
+    fi
     # Keep the value: a re-run must never silently rotate a credential.
     # Make sure a umask accident cannot leave it group-readable.
     chmod 600 "$path" 2>/dev/null || true
@@ -378,6 +394,9 @@ write_secret_if_absent() { # $1 name, $2 value
   # A missing or still-empty file is filled from this run's input. An empty file
   # is how the compose stack represents "unused", so this is safe to overwrite.
   if [ -n "$2" ]; then
+    if looks_like_placeholder "$2"; then
+      fail "$1 is still the example placeholder; pass a real credential"
+    fi
     printf '%s' "$2" >"$path"
   elif [ ! -e "$path" ]; then
     : >"$path"

@@ -23,6 +23,8 @@ SECRET_NAMES = (
     "claude_code_oauth_token",
     "gh_token",
     "ollama_api_key",
+    "notify_email_password",
+    "slack_webhook_url",
 )
 
 
@@ -133,6 +135,41 @@ def test_pipeline_mounts_the_model_registry_read_only() -> None:
         r"\./model_registry\.json:/app/model_registry\.local\.json:ro", block
     )
     assert "PIPELINE_MODEL_REGISTRY_PATH" in block
+
+
+def test_pipeline_loads_the_notification_config_and_its_credentials() -> None:
+    """The notification config is a file mount; its credentials are secrets.
+
+    The notification config may name SMTP and Slack transports, so the pipeline
+    needs the rendered config and the two credential files. Neither credential
+    is an environment value: each is mounted as a compose secret and read by the
+    entrypoint loader, so it never appears in `environment:`, `command:` or a
+    log line.
+    """
+    block = _service(_text(COMPOSE), "pipeline")
+
+    assert "PIPELINE_NOTIFY_CONFIG_PATH: /etc/pipeline/notification.json" in block
+
+    # The volume string has four colons because of the `:?` interpolation
+    # guard, so split on neither `:` nor a fixed width: match the guard at the
+    # start and the read-only target at the end. A laxer assertion ("the name
+    # appears") would pass with the `:?` guard dropped, which silently mounts
+    # an empty path when STANDALONE_NOTIFY_CONFIG is unset.
+    mounts = [
+        entry
+        for entry in re.findall(r"^\s+-\s+(\S.*?)\s*$", block, re.MULTILINE)
+        if entry.startswith("${STANDALONE_NOTIFY_CONFIG:?")
+    ]
+    assert len(mounts) == 1, f"expected one notification config mount, got {mounts}"
+    assert mounts[0].endswith(":/etc/pipeline/notification.json:ro"), mounts[0]
+
+    secret_list = re.search(
+        r"^\s+secrets:\n((?:\s+-\s+\S+\n)+)", block, re.MULTILINE
+    )
+    assert secret_list, "pipeline service has no secrets list"
+    listed = re.findall(r"-\s+(\S+)", secret_list.group(1))
+    assert "notify_email_password" in listed, listed
+    assert "slack_webhook_url" in listed, listed
 
 
 def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:

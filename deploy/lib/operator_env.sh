@@ -61,7 +61,7 @@ is_mount_point() {
 # credential is therefore not an error here. The backend that needs it fails
 # closed when it is used.
 #
-# Path indirection without eval: only the four names this image mounts are
+# Path indirection without eval: only the six names this image mounts are
 # accepted, so no future edit can turn an operator-supplied value into a
 # re-parsed assignment.
 secret_file_path() {
@@ -71,6 +71,10 @@ secret_file_path() {
             printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN_FILE:-$2}" ;;
         GH_TOKEN_FILE) printf '%s' "${GH_TOKEN_FILE:-$2}" ;;
         OLLAMA_API_KEY_FILE) printf '%s' "${OLLAMA_API_KEY_FILE:-$2}" ;;
+        PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE)
+            printf '%s' "${PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE:-$2}" ;;
+        SLACK_WEBHOOK_URL_FILE)
+            printf '%s' "${SLACK_WEBHOOK_URL_FILE:-$2}" ;;
         *) return 1 ;;
     esac
 }
@@ -197,6 +201,8 @@ load_operator_credentials() {
     load_secret CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE /run/secrets/claude_code_oauth_token
     load_secret GH_TOKEN GH_TOKEN_FILE /run/secrets/gh_token
     load_secret OLLAMA_API_KEY OLLAMA_API_KEY_FILE /run/secrets/ollama_api_key
+    load_secret PIPELINE_NOTIFY_EMAIL_PASSWORD PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE /run/secrets/notify_email_password
+    load_secret SLACK_WEBHOOK_URL SLACK_WEBHOOK_URL_FILE /run/secrets/slack_webhook_url
 
     # A forge token is the github token unless the operator says otherwise.
     if [ -n "${GH_TOKEN:-}" ] && [ -z "${PIPELINE_FORGE:-}" ]; then

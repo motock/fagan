@@ -78,6 +78,10 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "GH_TOKEN_FILE": str(tmp_path / "absent-gh"),
         "OLLAMA_API_KEY_FILE": str(tmp_path / "absent-ollama"),
         "PIPELINE_GIT_TOKEN_FILE": str(tmp_path / "absent-git-token"),
+        "PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE": str(
+            tmp_path / "absent-notify-email-password"
+        ),
+        "SLACK_WEBHOOK_URL_FILE": str(tmp_path / "absent-slack-webhook-url"),
     }
 
 
@@ -635,3 +639,69 @@ def test_executed_entrypoint_reaches_its_startup_checks(
     assert result.returncode != 0
     assert "state directory is missing" in result.stderr
     assert "starting dashboard" not in result.stderr
+
+
+def test_notify_email_password_file_is_exported(tmp_path: Path) -> None:
+    # The notification transport password is a mounted file, never an
+    # environment value: the loader exports it from a private, owned file and
+    # logs the name only.
+    env = _base_env(tmp_path)
+    secret = _secret(tmp_path / "notify_email_password", "s3cr3t\n")
+    env["PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE"] = str(secret)
+
+    result = _run("printenv PIPELINE_NOTIFY_EMAIL_PASSWORD", env)
+
+    assert result.returncode == 0, result.stderr
+    # $(cat ...) strips the trailing newline; the value itself is preserved.
+    assert result.stdout.strip() == "s3cr3t"
+    assert "s3cr3t" not in result.stderr
+    assert "PIPELINE_NOTIFY_EMAIL_PASSWORD" in result.stderr
+
+
+def test_slack_webhook_url_file_is_exported(tmp_path: Path) -> None:
+    env = _base_env(tmp_path)
+    value = "https://hooks.example.com/T000/B000/XXXX"
+    secret = _secret(tmp_path / "slack_webhook_url", value + "\n")
+    env["SLACK_WEBHOOK_URL_FILE"] = str(secret)
+
+    result = _run("printenv SLACK_WEBHOOK_URL", env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value
+    assert value not in result.stderr
+
+
+def test_empty_notification_credential_file_leaves_the_variable_unset(
+    tmp_path: Path,
+) -> None:
+    # An empty file means "not mounted" (compose mounts a zero-length secret
+    # when the operator does not use this transport). It must leave the
+    # variable *absent*, not set-but-empty: `export VAR="$(cat file)"` would
+    # export an empty string, which downstream code reads as a configured
+    # credential.
+    env = _base_env(tmp_path)
+    secret = _secret(tmp_path / "notify_email_password", "")
+    env["PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE"] = str(secret)
+
+    result = _run("env", env)
+
+    assert result.returncode == 0, result.stderr
+    exported = {
+        line.split("=", 1)[0]
+        for line in result.stdout.splitlines()
+        if "=" in line
+    }
+    assert "PIPELINE_NOTIFY_EMAIL_PASSWORD" not in exported
+
+    # A fresh process must not inherit the previous call's "absent" verdict:
+    # each _run sources the library again, so a memoised or source-time-unset
+    # implementation would leave this genuinely mounted credential unread.
+    value = "https://hooks.example.com/T000/B000/XXXX"
+    env["SLACK_WEBHOOK_URL_FILE"] = str(
+        _secret(tmp_path / "slack_webhook_url", value + "\n")
+    )
+
+    result = _run("printenv SLACK_WEBHOOK_URL", env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value

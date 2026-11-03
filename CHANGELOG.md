@@ -11,6 +11,16 @@ in practice.
 
 ### Changed
 
+- The standalone stack now defaults `PIPELINE_PLAN_APPROVAL` on: compose
+  resolves `${PIPELINE_PLAN_APPROVAL-1}` and `install.sh` writes `1` for a fresh
+  install, so every plan must be approved before it can be dispatched
+  (ADR 0004, ADR 0007). Re-running the installer over an existing
+  `deploy/standalone/.env` that has no `PIPELINE_PLAN_APPROVAL` line leaves the
+  gate off and warns about it, so an upgrade does not strand plans ingested
+  before the gate existed. Operators who enable the gate on an existing server
+  must re-ingest and approve each plan once; see
+  `docs/DEPLOY_STANDALONE.md` §6 and §7. The server-level default outside the
+  standalone stack is unchanged.
 - Relicensed AGPL-3.0-only (GNU Affero General Public License v3.0) from
   Apache-2.0. Releases through commit `98550bb` remain Apache-2.0; see
   NOTICE for the boundary and LICENSE-APACHE for the prior text. A

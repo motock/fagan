@@ -647,6 +647,22 @@ container.
 After an upgrade, re-export the CA only if you recreated the stack from scratch;
 `caddy-data` keeps the same root CA across a restart.
 
+#### Plan approval on an existing server
+
+The `up -d` sequence above does not run the installer. Compose resolves
+`PIPELINE_PLAN_APPROVAL` as `${PIPELINE_PLAN_APPROVAL-1}`, so upgrading a
+`deploy/standalone/.env` that has no `PIPELINE_PLAN_APPROVAL` line turns the
+plan-approval gate **on**. Plans ingested before the upgrade carry no approval
+record, so they stop dispatching until they are approved. To keep the old
+behaviour, add `PIPELINE_PLAN_APPROVAL=0` to `deploy/standalone/.env` (or re-run
+`bash deploy/install.sh`, which writes `0` for you) *before* `up -d`.
+
+To turn the gate on for plans that already exist, set
+`PIPELINE_PLAN_APPROVAL=1`, run `up -d`, then for each existing plan run
+`ingest_plan` once and then `approve_plan`. `approve_plan` on its own is refused
+with `plan content changed; re-ingest before approving`, because a plan
+ingested while the gate was off has no stored digest to approve.
+
 ### Backup and restore
 
 Two volumes hold state you cannot rebuild: **`pipeline-state`** (plans,

@@ -606,9 +606,22 @@ chmod 644 "$NOTIFY_CONFIG_FILE"
 # would flip an operator's deliberate `PIPELINE_PLAN_APPROVAL=` (off, per
 # approval_enabled()) back to the default. Validate before the heredoc below
 # rewrites .env, so an unusable value aborts without touching the file.
+# SAD-02: an *existing* .env with no PIPELINE_PLAN_APPROVAL line belongs to an
+# install that predates the on-by-default gate. Every plan it has ingested so
+# far was ingested with the gate off, so it carries no `approval` block and
+# is_activatable() returns False: turning the gate on would stall the whole
+# server (advance/dispatch skip with plan_not_approved) with no in-band
+# explanation, and approve_plan alone cannot rescue such a plan -- _decide_plan
+# refuses it with "plan content changed; re-ingest before approving". So keep
+# the gate OFF for that install, write the 0 explicitly so the opt-out is loud
+# in .env (ADR 0004), and warn once in the log.
 PLAN_APPROVAL=1
+APPROVAL_UPGRADED=0
 if existing_approval="$(env_get PIPELINE_PLAN_APPROVAL "$ENV_FILE")"; then
   PLAN_APPROVAL="$existing_approval"
+elif [ -f "$ENV_FILE" ]; then
+  PLAN_APPROVAL=0
+  APPROVAL_UPGRADED=1
 fi
 case "$PLAN_APPROVAL" in
   ""|on|1|true|off|0|false) ;;
@@ -616,6 +629,9 @@ case "$PLAN_APPROVAL" in
     fail "PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL is not a value approval_enabled() accepts; use one of on, 1, true, off, 0, false, or empty for off"
     ;;
 esac
+if [ "$APPROVAL_UPGRADED" = 1 ]; then
+  warn "this existing install has no PIPELINE_PLAN_APPROVAL line in $ENV_FILE, so the plan-approval gate was kept off (PIPELINE_PLAN_APPROVAL=0): turning it on would stall every plan that was already ingested while it was off. To enable it, set PIPELINE_PLAN_APPROVAL=1 in $ENV_FILE and recreate the pipeline container; every already-ingested plan must then be re-ingested once (ingest_plan) and approved (approve_plan)."
+fi
 
 if [ -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE" 2>/dev/null || true

@@ -235,6 +235,7 @@ def _finish_login(config: core.OidcLoginConfig, request: Request) -> Response:
             issuer=config.issuer,
             audience=config.client_id,
             jwks_url=endpoints["jwks_uri"],
+            allow_private_jwks=config.allow_private,
         )
         principal = oidc.verify_token(id_token, settings)
     except IdentityError:

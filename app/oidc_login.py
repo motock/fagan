@@ -507,10 +507,12 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
                 raise OidcLoginError("discovery document incomplete")
             endpoints[name] = value
         # The browser is sent to authorization_endpoint, so it stays public.
-        # The token exchange is server-side, so it follows the internal base.
+        # The token exchange and the JWKS fetch are server-side, so they follow
+        # the internal base.
         endpoints["token_endpoint"] = _server_side_url(
             config, endpoints["token_endpoint"]
         )
+        endpoints["jwks_uri"] = _server_side_url(config, endpoints["jwks_uri"])
         # Optional: not every provider supports RP-initiated logout, and a value
         # that is not an https URL is ignored rather than followed. Logout is a
         # browser redirect, so it stays on the public origin.

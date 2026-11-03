@@ -706,9 +706,16 @@ compose() { (cd -- "$REPO_ROOT" && docker compose -f "$COMPOSE_REL" "$@"); }
 SECRETS_UID=10001
 if [ "$(id -u)" -eq 0 ]; then
   chown -R "$SECRETS_UID:$SECRETS_UID" "$SECRETS_DIR"
+  # notification.json is bind-mounted into the same container (as
+  # /etc/pipeline/notification.json) but lives in $STATE_DIR, so the recursive
+  # chown above misses it. It is written 0600 like the secrets, so on Linux --
+  # where a bind mount keeps the host owner and mode -- uid 10001 cannot read it:
+  # the loader raises and safe_load_notification_config degrades to "deliver
+  # nothing", i.e. notifications die silently. Hand it over like the secrets.
+  chown "$SECRETS_UID:$SECRETS_UID" "$NOTIFY_CONFIG_FILE"
 else
   warn "secret files are owned by uid $(id -u) but the pipeline container runs as uid $SECRETS_UID;"
-  warn "if the stack fails to start, run: sudo chown -R $SECRETS_UID:$SECRETS_UID $SECRETS_DIR"
+  warn "if the stack fails to start, run: sudo chown -R $SECRETS_UID:$SECRETS_UID $SECRETS_DIR $NOTIFY_CONFIG_FILE"
 fi
 
 log "install.sh: starting the stack (this builds the pipeline image on first run)"

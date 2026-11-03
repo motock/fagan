@@ -14,7 +14,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import oidc_login
+from app import oidc, oidc_login
+from app.identity import IdentityError
 
 ISSUER = "https://localhost:8443/realms/pipeline"
 INTERNAL = "https://proxy:8443"
@@ -110,6 +111,7 @@ def test_discovery_fetches_internally_but_keeps_public_browser_endpoints(monkeyp
 
     assert seen == {"url": INTERNAL_DISCOVERY, "allow_private": True}
     assert endpoints["token_endpoint"] == f"{INTERNAL}/realms/pipeline/protocol/openid-connect/token"
+    assert endpoints["jwks_uri"] == f"{INTERNAL}/realms/pipeline/protocol/openid-connect/certs"
     assert endpoints["authorization_endpoint"] == AUTHORIZATION_ENDPOINT
     assert endpoints["end_session_endpoint"].startswith(ISSUER)
 
@@ -176,3 +178,51 @@ def test_callback_passes_the_private_opt_in_to_the_token_exchange(tmp_path, monk
 
     assert response.status_code == 401
     assert seen == [(f"{INTERNAL}/realms/pipeline/protocol/openid-connect/token", True)]
+
+
+def test_callback_verifies_against_the_internal_jwks_with_the_opt_in(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_fetch(url, *, allow_private=False):
+        return _document()
+
+    def fake_post(url, form, *, allow_private=False):
+        return {"id_token": "an-id-token"}
+
+    def fake_verify(token, settings):
+        seen["token"] = token
+        seen["settings"] = settings
+        raise IdentityError("stop after recording the settings")
+
+    monkeypatch.setattr(oidc_login, "_fetch_json", fake_fetch)
+    monkeypatch.setattr(oidc_login, "_post_form", fake_post)
+    monkeypatch.setattr(oidc, "verify_token", fake_verify)
+
+    secret_file = tmp_path / "oidc_client_secret"
+    secret_file.write_text(CLIENT_SECRET + "\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = _config(
+        client_secret_file=str(secret_file),
+        internal_base_url=INTERNAL,
+        allow_private=True,
+    )
+    app = FastAPI()
+    oidc_login.mount_auth_routes(app, config)
+    client = TestClient(app, base_url="https://testserver")
+
+    login = client.get("/auth/login", follow_redirects=False)
+    state = parse_qs(urlsplit(login.headers["location"]).query)["state"][0]
+    response = client.get(
+        "/auth/callback",
+        params={"state": state, "code": "auth-code-123"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 401
+    assert seen["token"] == "an-id-token"
+    assert seen["settings"].issuer == ISSUER
+    assert seen["settings"].audience == CLIENT_ID
+    assert seen["settings"].jwks_url == (
+        f"{INTERNAL}/realms/pipeline/protocol/openid-connect/certs"
+    )
+    assert seen["settings"].allow_private_jwks is True

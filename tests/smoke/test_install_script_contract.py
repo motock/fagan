@@ -565,3 +565,45 @@ oncall@example.com
     out = proc.stdout + proc.stderr
     assert "SMTP host (blank to skip email)" in out
     assert "Notifications are optional" in out
+
+
+def test_notification_json_escapes_the_from_address(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    from_address = 'Ops "Oncall" <ops@example.com>'
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        "--notify-slack-webhook-file", str(hook),
+        "--notify-email-host", "smtp.example.com",
+        "--notify-email-from", from_address,
+        "--notify-email-to", "oncall@example.com",
+        "--notify-email-password-file", str(password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    _, data = _notify_config(state_dir)
+    assert data["instances"]["email"]["from"] == from_address
+
+
+def test_invalid_smtp_port_is_refused(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        "--notify-slack-webhook-file", str(hook),
+        "--notify-email-host", "smtp.example.com",
+        "--notify-email-port", "not-a-port",
+        "--notify-email-from", "ops@example.com",
+        "--notify-email-to", "oncall@example.com",
+        "--notify-email-password-file", str(password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "--notify-email-port" in out
+    assert "not-a-port" in out

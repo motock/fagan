@@ -338,6 +338,13 @@ resolve() { # $1 current value, $2 env key, $3 default -> prints value
   printf '%s' "$3"
 }
 
+json_escape() { # $1 string -> JSON string body
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
 HOSTNAME="$(resolve "$HOSTNAME" PUBLIC_HOSTNAME "$DEFAULT_HOSTNAME")"
 PORT="$(resolve "$PORT" PUBLIC_PORT "$DEFAULT_PORT")"
 ADMIN_USER="$(resolve "$ADMIN_USER" KEYCLOAK_ADMIN "$DEFAULT_ADMIN_USER")"
@@ -410,6 +417,7 @@ fi
 if [ -n "$NOTIFY_EMAIL_HOST" ]; then
   [ -n "$NOTIFY_EMAIL_FROM" ] || fail "--notify-email-from is required when email notifications are enabled"
   [ -n "$NOTIFY_EMAIL_TO" ] || fail "--notify-email-to is required when email notifications are enabled"
+  is_port "$NOTIFY_EMAIL_PORT" || fail "--notify-email-port must be a number between 1 and 65535 (got: $NOTIFY_EMAIL_PORT)"
 fi
 
 [ -n "$HOSTNAME" ] || fail "--hostname must not be empty"
@@ -569,7 +577,9 @@ NOTIFY_INSTANCES=""
 NOTIFY_ROUTE_TO=""
 if [ -n "$NOTIFY_EMAIL_HOST" ] && [ -n "$NOTIFY_EMAIL_FROM" ] && [ -n "$NOTIFY_EMAIL_TO" ]; then
   NOTIFY_INSTANCES="$(printf '"email":{"type":"email","host":"%s","port":%s,"user":"%s","from":"%s","to":["%s"],"password_env":"PIPELINE_NOTIFY_EMAIL_PASSWORD"}' \
-    "$NOTIFY_EMAIL_HOST" "$NOTIFY_EMAIL_PORT" "$NOTIFY_EMAIL_USER" "$NOTIFY_EMAIL_FROM" "$NOTIFY_EMAIL_TO")"
+    "$(json_escape "$NOTIFY_EMAIL_HOST")" "$NOTIFY_EMAIL_PORT" \
+    "$(json_escape "$NOTIFY_EMAIL_USER")" "$(json_escape "$NOTIFY_EMAIL_FROM")" \
+    "$(json_escape "$NOTIFY_EMAIL_TO")")"
   NOTIFY_ROUTE_TO='"email"'
 fi
 if [ -s "$SECRETS_DIR/slack_webhook_url" ]; then
@@ -741,13 +751,6 @@ keycloak_login() {
     compose exec -T keycloak bash -c \
       'IFS= read -r pw; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$1" --password "$pw"' \
       _ "$ADMIN_USER"
-}
-
-json_escape() { # $1 string -> JSON string body
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  printf '%s' "$s"
 }
 
 client_id_for() { # $1 keycloak clientId -> prints internal id, empty when absent

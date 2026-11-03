@@ -140,6 +140,20 @@ cleanup() {
     export PIPELINE_CLI_CALLBACK_PORT="${PIPELINE_CLI_CALLBACK_PORT:-33418}"
     export PIPELINE_DASHBOARD_CLIENT_SECRET="${PIPELINE_DASHBOARD_CLIENT_SECRET:-unused}"
     export PIPELINE_MCP_CLIENT_SECRET="${PIPELINE_MCP_CLIENT_SECRET:-unused}"
+    # A failed run must leave its evidence in the job output. The workflow's own
+    # "Show the stack's logs on failure" step runs a bare `docker compose logs`
+    # with no --env-file, so it dies on the `${VAR:?}` interpolation above, and
+    # the `down -v` below then removes the containers: without this dump a
+    # timeout such as "the IdP did not answer" leaves nothing to read.
+    if [ "$status" -ne 0 ]; then
+        # Compose refuses to interpolate compose.yaml without this one; the value
+        # only has to be non-empty (install.sh wrote the real one into $STATE_DIR).
+        export STANDALONE_NOTIFY_CONFIG="${STANDALONE_NOTIFY_CONFIG:-$TMP/state/notification.json}"
+        log "install failed (status $status): container state follows"
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" ps || true
+        log "last 200 log lines of keycloak, proxy and pipeline follow"
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" logs --tail 200 keycloak proxy pipeline || true
+    fi
     if [ "${STANDALONE_SMOKE_KEEP:-0}" = "1" ]; then
         log "STANDALONE_SMOKE_KEEP=1: leaving the stack up. Inspect with: docker compose -f \"$BASE_COMPOSE\" -f \"$OVERRIDE\" ps"
     else

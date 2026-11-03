@@ -791,6 +791,8 @@ fi
 log "install.sh: starting the stack (this builds the pipeline image on first run)"
 # Must be exported in this shell: compose aborts on ${STANDALONE_REALM_FILE:?...}.
 export STANDALONE_REALM_FILE="$RENDERED_REALM_FILE"
+# Same reason: compose() runs without --env-file, so export the notify config too.
+export STANDALONE_NOTIFY_CONFIG="$NOTIFY_CONFIG_FILE"
 compose up -d --build --wait
 
 ready_url="https://$HOSTNAME:$PORT/realms/$REALM/.well-known/openid-configuration"

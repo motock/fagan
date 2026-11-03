@@ -406,6 +406,7 @@ breaks when the value is wrong.
 | `PIPELINE_MODEL_REGISTRY_PATH` | Which model registry the server reads | `/app/model_registry.local.json` in the container, a read-only bind of `deploy/standalone/model_registry.json` (seeded once by the installer and kept on re-runs) | `/app/model_registry.local.json` | The registry resolves the model for each role. Point it at a file whose `roles.dispatch` entry names a model you can actually reach. |
 | `OLLAMA_ENDPOINT` | Base URL of a local model server | `http://host.docker.internal:11434` | `http://host.docker.internal:11434` | Passed to the container as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`. `host.docker.internal` resolves on Linux too, via the `host-gateway` extra host. |
 | `PIPELINE_CLI_CALLBACK_PORT` | Local port a CLI client's browser flow returns to | `33418` | `33418` | Substituted into the realm's `pipeline-cli` redirect URI as `http://localhost:<port>/callback`, so it must match `--callback-port` on the client (§5). Change it and the realm must be re-imported (§8). |
+| `PIPELINE_PLAN_APPROVAL` | Gate that requires a plan to be approved before it can be dispatched | `1` (fresh install) | `PIPELINE_PLAN_APPROVAL=0` | An unrecognised value makes ingest fail closed with an error naming the variable |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |
 
 ### The public origin, worked through
@@ -618,6 +619,47 @@ anyone with a valid token (the policy is default-deny, and a valid token buys
 nothing a plan's owner has not granted), and listing `record_security_audit` as
 remote-callable because it appears in the enforced set (it is enforced, and the
 enforcement refuses it).
+
+### Plan approval
+
+A fresh standalone install turns the plan-approval gate **on**. With the gate
+on, `ingest_plan` records `approval.status = pending_approval` on the plan,
+together with a digest of the authored content, and nothing dispatches until a
+human approves it: the scheduler tick and `dispatch_story` both refuse an
+unapproved plan. `approve_plan` moves the plan to `approved`; `reject_plan`
+records `changes_requested` with a reason. Any later authored change — a
+re-ingest, `patch_story` or `patch_plan` — resets the record to
+`pending_approval`, so an approved plan cannot be edited into something that was
+never reviewed. The full lifecycle, the manifest fields and the refusal
+messages are the contract in [PLAN_APPROVAL.md](specs/PLAN_APPROVAL.md).
+
+Approval goes through the same policy as every other mutating tool: it is
+allowed for the plan's owner (the authenticated principal who first ingested it,
+ADR 0006), for the subjects listed in the plan's top-level `delegates`, and for
+the local operator. A `system:` principal such as the scheduler never can.
+Self-approval is allowed but recorded — `self_approved` is set on the decision
+record — so it stays visible in the audit chain. This matches the `approve_plan`
+and `reject_plan` rows of the tool table above.
+
+The default comes from the compose file, which resolves
+`${PIPELINE_PLAN_APPROVAL-1}`, and from `install.sh`, which writes `1` into
+`deploy/standalone/.env`. Only the standalone stack defaults it on: outside
+that stack the server-level default is unchanged (off when unset), so the
+REFERENCE.md row still describes it correctly.
+
+To turn the gate off, set `PIPELINE_PLAN_APPROVAL=0` in
+`deploy/standalone/.env` and recreate the pipeline container:
+
+```sh
+docker compose -f deploy/standalone/compose.yaml up -d
+```
+
+An unrecognised value is not treated as on or off: ingest fails closed with an
+error that names the variable.
+
+If you are enabling the gate on a server that already has plans, see the
+Upgrading paragraph in §7 — each existing plan has to be re-ingested and
+approved once.
 
 ## 7. Upgrading, backup and token lifespan
 

@@ -196,7 +196,7 @@ secrets:
   # names ./secrets/<name> relative to deploy/standalone, so an install with a
   # separate --state-dir has to re-point them.
 YAML
-    for name in oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key; do
+    for name in oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key notify_email_password slack_webhook_url; do
         printf '  %s:\n    file: %s\n' "$name" "$STATE_DIR/secrets/$name" >>"$OVERRIDE"
     done
     log "wrote the compose override"

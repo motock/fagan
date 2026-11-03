@@ -86,6 +86,7 @@ public hostname through with the default `$host` form gets a 403.
 | `PIPELINE_OIDC_ISSUER` | unset — required | Issuer URL of the identity provider. |
 | `PIPELINE_OIDC_AUDIENCE` | unset — required | Expected `aud` claim. |
 | `PIPELINE_OIDC_JWKS_URL` | unset — required | JWKS endpoint used to verify signatures. |
+| `PIPELINE_OIDC_INTERNAL_BASE_URL` | unset (compose sets `https://proxy:8443`) | In-network origin used only for the server's own OIDC discovery and token-exchange requests. The public issuer still supplies the `iss` check and the browser redirect. Requires `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS=1` when the origin resolves to a private address. |
 | `PIPELINE_OIDC_CLIENT_SECRET_FILE` | `/run/secrets/oidc_client_secret` | Path of the mounted client-secret file. The entrypoint fails fast when it is unreadable. Bearer-token verification itself is JWKS-only; this file is a deployment credential, not an input to signature checking. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | unset | Comma-separated allowlist enabling DNS-rebinding protection for a proxied deployment. Set it whenever the container sits behind a reverse proxy. |
 | `PLAN_DIR` | `/var/lib/pipeline/plans` | Where plans and decision files live. |

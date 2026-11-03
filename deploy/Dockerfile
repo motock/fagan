@@ -90,9 +90,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 # git is a runtime dependency (worktrees, commits, diffs); ca-certificates is
 # needed for the IdP's JWKS fetch; curl and xz-utils fetch and unpack the pinned
-# gh, Node and Claude Code tooling below. Lists are dropped in the same layer.
+# gh, Node and Claude Code tooling below; procps supplies `ps`, which the
+# story-status, watchdog, checkpoint and review paths shell out to (without it
+# every status check raises FileNotFoundError and a dispatched story can never
+# be seen as finished). Lists are dropped in the same layer.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils \
+ && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Fixed numeric ids so the volume can be pre-created with host-side ownership

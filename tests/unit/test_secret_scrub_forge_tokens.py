@@ -57,6 +57,26 @@ def test_ci_job_token_scrubbed():
     assert scrubbed == {"PATH": _PATH}
 
 
+def test_slack_webhook_is_in_the_agent_denylist():
+    """SN-02: the loader exports SLACK_WEBHOOK_URL into the server process, so
+    a dispatched agent would inherit it unless the denylist strips it. A
+    model-driven Bash tool could then post to the operator's Slack workspace.
+
+    Membership only -- the set also grows for unrelated reasons and an exact
+    equality assertion would break on every addition.
+    """
+    assert "SLACK_WEBHOOK_URL" in execution._AGENT_SECRET_ENV
+
+
+def test_slack_webhook_is_scrubbed():
+    env = {"SLACK_WEBHOOK_URL": _SENTINEL, "PATH": _PATH}
+
+    scrubbed = execution._strip_agent_secrets(env)
+
+    assert "SLACK_WEBHOOK_URL" not in scrubbed
+    assert scrubbed == {"PATH": _PATH}
+
+
 def test_existing_github_tokens_are_still_scrubbed():
     """The extension must not drop the entries that were already covered."""
     env = {

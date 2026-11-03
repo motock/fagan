@@ -378,7 +378,7 @@ breaks when the value is wrong.
 | `PUBLIC_HOSTNAME` | The name every client uses | none — required, else compose refuses to start | `pipeline.example.com` | Baked into the OIDC issuer, both redirect URIs and the certificate. Changing it later invalidates every issued token and session. |
 | `PUBLIC_PORT` | The TLS port clients reach | `8443` | `8443` | Published as `${PUBLIC_PORT}:8443` and interpolated into the issuer and resource URL. A port that does not match what clients dial is a 401 (§8), not a redirect. |
 | `PIPELINE_DASHBOARD_ALLOWED_HOSTS` | `Host` header allowlist for the dashboard | set by compose to `${PUBLIC_HOSTNAME}` | `pipeline.example.com,pipeline.internal` | Comma-separated. A `Host` not on the list is refused; an empty list disables the check. |
-| `PIPELINE_MCP_ALLOWED_HOSTS` | `Host` header allowlist for the MCP transport (DNS-rebinding protection) | set by compose to `${PUBLIC_HOSTNAME}`; unset means the SDK default | `pipeline.example.com` | A request whose `Host` is not listed gets **421 Invalid Host** (§8). Setting `PUBLIC_HOSTNAME` alone is not enough if you override this list and leave the host out. |
+| `PIPELINE_MCP_ALLOWED_HOSTS` | `Host` header allowlist for the MCP transport (DNS-rebinding protection) | set by compose to `${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*`; unset means the SDK default | `pipeline.example.com,pipeline.example.com:*` | A request whose `Host` is not listed gets **421 Invalid Host** (§8). Setting `PUBLIC_HOSTNAME` alone is not enough if you override this list and leave the host out. |
 | `PIPELINE_MCP_RESOURCE_URL` | The RFC 9728 identifier for this MCP server | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT}/mcp` | `https://pipeline.example.com:8443/mcp` | Must be absolute `https://`, with no userinfo, query or fragment, or the transport refuses to start. It is what a 401 challenge advertises as `resource_metadata`; a mismatch leaves clients unable to start a login flow (§8). |
 | `PIPELINE_REPO_URL_HOSTS` | Hosts the pipeline may clone from | `github.com` | `github.com,git.example.com` | Comma-separated, hosts only, no scheme. A plan naming any other host is refused at clone time. Only `https://` URLs are accepted. |
 | `PIPELINE_REPOS_ROOT` | Root of the managed clone volume | `/var/lib/pipeline/repos` (image default, on `pipeline-state`) | `/var/lib/pipeline/repos` | Where `https://<host>/<owner>/<repo>` is cloned. Must be a real directory, not a symlink; an explicit value that cannot be created is fatal. |
@@ -831,7 +831,7 @@ Add every name clients legitimately use, comma-separated, and restart the
 pipeline container:
 
 ```sh
-PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com,pipeline.internal
+PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com,pipeline.example.com:*,pipeline.internal,pipeline.internal:*
 ```
 
 Leaving it empty makes the transport fall back to the SDK default instead of

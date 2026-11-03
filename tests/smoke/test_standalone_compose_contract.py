@@ -153,14 +153,15 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     assert "${PUBLIC_PORT:-8443}" in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
     assert re.search(
-        r"^\s*PIPELINE_MCP_ALLOWED_HOSTS:\s*\$\{PUBLIC_HOSTNAME\}:\*\s*$",
+        r"^\s*PIPELINE_MCP_ALLOWED_HOSTS:\s*\$\{PUBLIC_HOSTNAME\},\$\{PUBLIC_HOSTNAME\}:\*\s*$",
         block,
         re.MULTILINE,
     ), (
-        "PIPELINE_MCP_ALLOWED_HOSTS must use the SDK's trailing `:*` wildcard "
-        "form: the MCP transport compares the full Host header including the "
-        "port, so a bare `${PUBLIC_HOSTNAME}` never matches `localhost:8443` and "
-        "every proxied request gets 421 Misdirected Request"
+        "PIPELINE_MCP_ALLOWED_HOSTS must list both `${PUBLIC_HOSTNAME}` and "
+        "`${PUBLIC_HOSTNAME}:*`: the MCP transport compares the full Host header "
+        "including the port, so the bare entry covers a portless `Host` (the "
+        "default 443) and the `:*` entry covers an explicit port; either entry "
+        "alone leaves the other form at 421 Misdirected Request"
     )
 
 
@@ -280,3 +281,20 @@ def test_literal_secret_detector_flags_a_hardcoded_value() -> None:
     assert pattern.findall("      KC_BOOTSTRAP_ADMIN_PASSWORD: hunter2\n") == [
         ("KC_BOOTSTRAP_ADMIN_PASSWORD", "hunter2")
     ]
+
+
+def test_docs_document_the_bare_and_wildcard_allowed_hosts_form() -> None:
+    docs = _text(REPO_ROOT / "docs" / "DEPLOY_STANDALONE.md")
+
+    assert r"set by compose to `${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*`" in docs, (
+        "the environment table must say compose sets both the bare host and its "
+        "`:*` wildcard form: a portless `Host` (the default 443) matches only "
+        "the bare entry and an explicit port matches only the `:*` entry"
+    )
+    assert (
+        "PIPELINE_MCP_ALLOWED_HOSTS=pipeline.example.com,"
+        "pipeline.example.com:*"
+    ) in docs, (
+        "the §8 troubleshooting example must show both forms for every host, "
+        "otherwise an operator who copies it still gets 421 on the default 443"
+    )

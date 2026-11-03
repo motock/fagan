@@ -129,13 +129,6 @@ agents.
 | `/run/secrets/claude_code_oauth_token` | `CLAUDE_CODE_OAUTH_TOKEN_FILE` | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `/run/secrets/gh_token` | `GH_TOKEN_FILE` | `GH_TOKEN` |
 | `/run/secrets/ollama_api_key` | `OLLAMA_API_KEY_FILE` | `OLLAMA_API_KEY` |
-| `/run/secrets/notify_email_password` | `PIPELINE_NOTIFY_EMAIL_PASSWORD_FILE` | `PIPELINE_NOTIFY_EMAIL_PASSWORD` |
-| `/run/secrets/slack_webhook_url` | `SLACK_WEBHOOK_URL_FILE` | `SLACK_WEBHOOK_URL` |
-
-The last two are the notification credentials: the SMTP password that
-`pipeline/notification_email.py` reads, and the Slack webhook URL a notification
-instance names through `webhook_url_env`. Either may be an empty file when that
-channel is unused.
 
 - Each file must be a **regular file, mode `0600`, owned by the uid the
   container runs as**. The entrypoint refuses to start when the mode has any
@@ -163,12 +156,6 @@ channel is unused.
     by `pipeline/execution.py::_AGENT_SECRET_ENV` - the consumer for the agent
     child (`spawn_local`, `spawn_harness`, and the docker sandbox's allowlist
     downstream).
-  - `SLACK_WEBHOOK_URL` and `PIPELINE_NOTIFY_EMAIL_PASSWORD` (the notification
-    credentials): both are stripped from every agent child by the same
-    `pipeline/execution.py::_AGENT_SECRET_ENV`, and from the `claude` CLI child by
-    `app/backend_claude.py::_CLAUDE_AGENT_UNUSED_SECRETS`. A webhook an agent's
-    Bash tool could read is a live posting credential into the operator's Slack
-    workspace, so that strip is load-bearing, not hygiene.
   - Nothing else. `PIPELINE_ANTHROPIC_API_KEY`, `OLLAMA_API_KEY` and
     `CLAUDE_CODE_OAUTH_TOKEN` are **readable by agent shells**: an agent is
     prompt-injectable code running as the same uid, and a bare `env` prints
@@ -190,14 +177,7 @@ channel is unused.
   (`app/backend_claude.py::_first_party_claude_env()`) and SF-03 adds the model
   keys to the agent denylist (`pipeline/execution.py::_AGENT_SECRET_ENV`). Until
   they land, this table plus the risk note is the contract: the deploy layer
-  mounts no credential this section does not name. The one non-credential mount
-  is the rendered notification config, `notification.json`, mounted read-only at
-  `PIPELINE_NOTIFY_CONFIG_PATH` (`/etc/pipeline/notification.json` in
-  `deploy/standalone/compose.yaml`). It carries no secret - only the channel
-  types, non-secret SMTP addressing (host, port, from/to) and the *names* of the
-  environment variables that hold the credentials above -
-  so the installer writes it mode `0644`, readable by the container uid `10001`
-  that runs the pipeline. The secret files themselves stay `0600` for that uid.
+  mounts nothing it does not also name here.
   Until a credential broker lands (the agent talks to a local proxy, or receives
   a per-agent, per-run scoped key) run the server only for operators you would
   let read the mounted files, and **budget-cap every operator model key and the

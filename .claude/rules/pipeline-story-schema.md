@@ -58,6 +58,17 @@ Sparse stories leave the agent to guess. Populate: what to build, the approach, 
 
 For local-family dispatch the test-author phase is always-on: it writes a NEW failing suite before the weak executor touches code. A behavior-preserving refactor has no new test to write, and forcing the phase to invent one produced an unsatisfiable structural-assertion oracle that parked mid-write (Mode 51). Place the literal token `[no-new-tests]` anywhere in `agent_instructions` to skip the phase; the story then falls open to monolithic dispatch against the existing suite. It is the exact bracketed string — "no new tests" in prose does NOT opt out — and use it only when the existing suite genuinely covers the change. It applies wherever it appears EXCEPT when its own sentence negotiates that use (e.g. "[no-new-tests] must NOT be used here"): that is a *mention*, not an invocation, so an author explaining the opt-out cannot trigger it.
 
+## The brief must carry the literal artifact
+
+Executors apply the brief literally; a capable model still cannot recover from an ambiguous instruction without burning a rework cycle. Write each edit as a contract, not a description:
+
+- **Exact destination, resolved.** State the path relative to the repo root as it actually resolves, not the shorthand from the surrounding prose. If a destination is resolved against a different CWD, name that CWD and give the full relative path.
+- **Literal before/after.** Put the exact current line and the exact new line in fenced blocks. Do not paraphrase either side.
+- **A verify command and its expected output.** For every change, name the command that proves it and quote what it prints. If the preflight applied the change, embed the resulting diff or lines verbatim rather than deleting the scratch worktree and leaving the executor to re-derive it.
+- **No escaped-pattern prose.** Give literal text; if a regex is genuinely required, give the exact pattern and the exact test that exercises it. Backslash-counting instructions have cost a rework cycle on a one-line correction.
+- **All affected copies.** If code or config changes a value that docs, examples, tables, or tests restate, list every file and give the exact new literal in each; declare all of them in `files` (see below).
+- **No placeholders.** "The appropriate path", "the relevant line", and "update the docs" are not instructions. A brief containing one is not ready to ingest.
+
 ## Declare `files` from where the code actually lives
 
 `files` is a hard gate: a production path outside it is sent back before any LLM review, and a headless agent cannot ask for a path (`request_decision` is permission-denied), so a correct "the brief needs this file" stop counts as a crash and parks the story. Four parked this way in two days (2026-10-23/24, plan `external-context-sources-phase1/2`), always because the author wrote `files` from the brief instead of the code:
@@ -74,6 +85,7 @@ Before writing or ingesting `files`, for each story:
 3. **Declare the wiring file.** Behavior added in one module and called from another declares both; see 'Grading the integration' below.
 4. **State a decided scope when it is not obvious.** If the brief alone would make a reviewer read a declared file as out of scope, add 'SCOPE IS DECIDED, NOT A FINDING: ...' naming the files and why — the reviewer reads the brief, not the `files` list.
 5. **Parallel stories on one file.** Concurrent stories adding to the same module (especially one insertion point, e.g. the end of `context_sources.py`) conflict at the merge gate, which cannot resolve conflicts: chain them with `dependencies` or give each a new module.
+6. **Include the docs that restate the changed value.** Grep the old literal across `docs/`, config, and tests before writing `files`; every stale hit is declared and updated in the same story. The reviewer sees only the diff, never the plan, so a doc left on the old value reads as an incomplete change.
 
 Fixing it afterwards: `patch_story` cannot edit `files`. Update the plan and its brief, re-ingest (statuses and runtime state kept, authored fields refreshed — first confirm the manifest briefs match the plan), then rebase and push by hand. A stale verdict will not re-review until the flagged files change; that workaround is what `docs/plans/PARKED_STORY_RECOVERY_PLAN.md` removes.
 

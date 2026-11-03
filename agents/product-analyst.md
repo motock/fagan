@@ -40,9 +40,11 @@ shippable, testable, and reviewable.
     @.claude/rules/pipeline-story-schema.md, "Local (non-Claude) dispatch".
 - **For every non-Claude tier, these override the general slicing advice
   below** (full checklist: @.claude/rules/local-dispatch-preflight.md):
-  - **Keep a code change and the docs it makes stale in the same story.** The
-    reviewer sees only the diff, never the plan, so a code story whose doc
-    update lives in a sibling story is sent back with "docs not updated".
+  - **Keep a code change and the docs it makes stale in the same story**, and
+    declare those docs in `files`. The reviewer sees only the diff, never the
+    plan, so a code story whose doc update lives in a sibling story is sent
+    back with "docs not updated", and an undeclared doc path is gated before
+    review even runs.
   - **Write comments that stay true after later stories merge** — state the
     invariant, never "inert until the sibling story removes X".
   - **Doc-only or config-only stories get `"tdd_split": false`** and at most
@@ -61,6 +63,39 @@ shippable, testable, and reviewable.
 - **Omit each story's `model` field** unless the user explicitly names an
   implementer. The registry's `dispatch` role decides the model; a model pin
   copied from an example silently misroutes the story to that tag.
+
+## Make the brief a contract, not a description
+
+A dispatched agent executes the brief literally; every ambiguity becomes a
+guess, and a wrong guess costs a full rework cycle. This is an authoring
+defect, not a model-strength one — it has happened with capable cloud models.
+Before a story is ready to ingest:
+
+- **Name the exact artifact, not the intent.** For each edit, quote the literal
+  before/after text in a fenced block and the destination path as it resolves
+  from the repo root (not a shorthand from the surrounding prose). "Point the
+  example at the ignored directory" is not a brief; the exact line is.
+- **Pair every change with its verify command.** State the command and the
+  exact expected output. A requirement nothing can check is silently dropped,
+  and the test-author phase can only grade what is written as a concrete
+  assertion.
+- **Every documented literal is pinned by a test.** If code or config changes a
+  value a doc, table, or example states, the same story adds an assertion that
+  reads that doc and asserts the literal. Otherwise the docs drift silently.
+- **List every file the change makes stale, including docs.** Grep the old
+  literal across `docs/`, config, and tests before writing `files`; every hit
+  you are changing belongs in the same story and in `files`.
+- **Never express an edit as escaped or regex prose.** Give the literal text;
+  if a regex is unavoidable, give the exact pattern and the exact test that
+  exercises it. Backslash-counting instructions have burned a one-line
+  correction.
+- **If you ran the preflight, embed the applied diff.** The stand-in is not
+  throwaway: quote the resulting lines into `agent_instructions` so the
+  executor applies a known-good patch instead of re-deriving it.
+- **One concern per story.** Count distinct verifiable outcomes, not lines.
+  More than roughly two outcomes in one brief (e.g. four independent fixes plus
+  their tests) is split on any tier; a capable model still fails an
+  under-specified multi-part brief.
 
 ## Output format — the pipeline plan schema
 
@@ -92,6 +127,10 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
   dicts the harness materializes verbatim and grades the run against -
   reserve it only when pre-specifying the exact acceptance test, not as a
   place for prose criteria.
+- A docs/config/script story's one required test is the **pinning test**: it
+  reads the changed artifact (or the config it documents) and asserts the
+  literal value. Write that test into the brief, and into `acceptance` when
+  you are pre-specifying it.
 
 - `persona` — which SDLC role should implement this story. Choose EXACTLY one
   of the personas that actually exist as dispatchable agents (anything else

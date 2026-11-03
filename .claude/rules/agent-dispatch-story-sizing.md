@@ -7,6 +7,14 @@
 > a story for local or weaker-than-Claude dispatch; each rule here is a
 > distinct axis the file-count cap does not capture.
 
+## Count verifiable outcomes, not files
+
+A story is one concern. The per-file and per-function caps are necessary but not sufficient: a brief with several independent fixes, each with its own test, exhausts the rework budget even when every file fits. Count the distinct, separately verifiable outcomes in the brief; more than roughly two should be split into dependent stories — on every tier, not just the weakest.
+
+**Not hypothetical:** a four-fix story (image ownership, compose host allow-list, smoke credential seeding, seeded repo default branch) plus three test files and an open-ended "report how far it gets" was parked, split, and its successor still needed two more review cycles for items the original brief never named. The model was a capable cloud model; the brief was the defect.
+
+**How to apply:** write each outcome as a sentence ("the host header is accepted on port 443", "the doc example matches the compose path") and make each one its own story or an explicitly graded step. A code change and the doc it invalidates are one outcome, not two — do not split them, but do not let them hide a third independent fix either.
+
 ## Function count, not file count, is the real budget
 
 Cap a single dispatch story at ~2-3 **new functions**, not just ≤2

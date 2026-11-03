@@ -40,6 +40,11 @@ deploy/standalone/.env
 # deploy/standalone/import/. Never commit it.
 deploy/standalone/import/
 
+# The operator's resolved role -> provider/model registry for the standalone
+# stack: deploy/install.sh seeds it once from model_registry.local.json (or the
+# shipped catalog) and compose bind-mounts it. Machine-specific; never commit it.
+deploy/standalone/model_registry.json
+
 # Operator's personal per-role model routing (provider/model chosen per
 # role), selected via PIPELINE_MODEL_REGISTRY_PATH (app/role_registry.py's
 # _registry_path) instead of the shipped provider-neutral model_registry.json.

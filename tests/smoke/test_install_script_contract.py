@@ -16,6 +16,7 @@ contract they pin is the one an operator (or CI) relies on:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -314,3 +315,34 @@ def test_env_copied_from_the_shipped_example_installs(tmp_path: Path) -> None:
         value = match.group(1).strip()
         assert value, f"{key} stayed empty after a copy-the-example install"
         assert "change-me" not in value.lower()
+
+
+def test_dry_run_seeds_the_model_registry_and_keeps_it_on_a_rerun(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+
+    first = _run("--dry-run", "--non-interactive", "--state-dir", str(state_dir), home=home)
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    registry = state_dir / "model_registry.json"
+    assert registry.is_file(), "the installer must create the registry compose bind-mounts"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    assert "providers" in document, "a seeded registry must be a real registry document"
+    assert stat.S_IMODE(registry.stat().st_mode) == 0o644, (
+        "the registry is not a secret and uid 10001 must be able to read it"
+    )
+
+    sentinel = '{"providers": {}, "roles": {"dispatch": {"provider": "ollama", "model": "keep-me"}}}'
+    registry.write_text(sentinel, encoding="utf-8")
+
+    second = _run("--dry-run", "--non-interactive", "--state-dir", str(state_dir), home=home)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert registry.read_text(encoding="utf-8") == sentinel, (
+        "a re-run must never overwrite the operator's role assignments"
+    )
+
+
+def test_the_seeded_registry_is_gitignored() -> None:
+    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "deploy/standalone/model_registry.json" in ignored

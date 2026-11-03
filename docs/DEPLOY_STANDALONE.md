@@ -95,6 +95,12 @@ bash deploy/install.sh --non-interactive \
 touching Docker — the fastest way to see exactly what the rest of this section
 produces.
 
+It also seeds `deploy/standalone/model_registry.json` once — from
+`model_registry.local.json` when present, otherwise the shipped
+`model_registry.json` — and never overwrites it on a re-run. Edit its `roles.*`
+entries to name models the deployment can actually reach; a role with no
+reachable model fails at dispatch, not at start-up.
+
 Secrets are only ever accepted from files (`--anthropic-key-file`,
 `--claude-oauth-token-file`, `--gh-token-file`, `--ollama-key-file`,
 `--first-user-password-file`). Passing a secret as a flag value is an error by
@@ -165,7 +171,21 @@ chown -R 10001:10001 "$STATE_DIR/secrets"
 Not root? You will see the installer's warning and the files stay owned by you;
 if the stack then fails to start, run that same `chown` with `sudo`.
 
-**Step 4 — write `.env`.** Compose reads it from the directory holding the
+**Step 4 — write the model registry.** Compose bind-mounts
+`$STATE_DIR/model_registry.json` as the server's registry and refuses to start
+without it. The installer seeds it once — from `model_registry.local.json` when
+one exists, otherwise from the shipped `model_registry.json` — and never
+overwrites an existing one, because the roles are operator-specific. Doing it by
+hand:
+
+```sh
+cp model_registry.local.json "$STATE_DIR/model_registry.json"   # or model_registry.json
+```
+
+Edit `roles.dispatch` (and the other roles) so each names a provider and model
+you can actually reach. The file is gitignored; leave it out of version control.
+
+**Step 5 — write `.env`.** Compose reads it from the directory holding the
 compose file, so it must be `deploy/standalone/.env`:
 
 ```sh
@@ -201,7 +221,7 @@ up the smoke stack (or nothing) against a different `.env`, and the resulting
 containers look almost right. Always pass `-f` and let compose take the project
 name from the file (`pipeline-standalone`).
 
-**Step 5 — bring the stack up.**
+**Step 6 — bring the stack up.**
 
 ```sh
 docker compose -f deploy/standalone/compose.yaml up -d --build --wait
@@ -219,7 +239,7 @@ The `-k` is confined to this one probe: the certificate comes from Caddy's
 internal CA, which is not in the machine's trust store yet. Clients get that CA
 in step 7. The installer polls this URL for up to 180 seconds.
 
-**Step 6 — create the first user and its client.** Only if you want a user
+**Step 7 — create the first user and its client.** Only if you want a user
 created for you. It runs `kcadm` inside the Keycloak container, and the password
 travels on stdin so it never appears in `ps`:
 
@@ -287,7 +307,7 @@ chmod 600 ~/.config/pipeline/mcp-client.json
 
 `mcp-token` refuses this file if it is group- or other-accessible.
 
-**Step 7 — trust and configure the clients.** Export Caddy's internal root CA
+**Step 8 — trust and configure the clients.** Export Caddy's internal root CA
 and point the clients at it:
 
 ```sh
@@ -383,7 +403,7 @@ breaks when the value is wrong.
 | `PIPELINE_REPO_URL_HOSTS` | Hosts the pipeline may clone from | `github.com` | `github.com,git.example.com` | Comma-separated, hosts only, no scheme. A plan naming any other host is refused at clone time. Only `https://` URLs are accepted. |
 | `PIPELINE_REPOS_ROOT` | Root of the managed clone volume | `/var/lib/pipeline/repos` (image default, on `pipeline-state`) | `/var/lib/pipeline/repos` | Where `https://<host>/<owner>/<repo>` is cloned. Must be a real directory, not a symlink; an explicit value that cannot be created is fatal. |
 | `PIPELINE_ALLOWED_REPO_ROOTS` | Allowlist confining any workspace the server resolves or validates | the value of `PIPELINE_REPOS_ROOT`; a no-op when unset or blank | `/var/lib/pipeline/repos` | Comma-separated roots, matched component-wise on resolved paths. A workspace outside every root is denied. |
-| `PIPELINE_MODEL_REGISTRY_PATH` | Which model registry the server reads | `/app/model_registry.local.json` in the container, a read-only bind of `deploy/standalone/model_registry.json` | `/app/model_registry.local.json` | The registry resolves the model for each role. Point it at a file whose `roles.dispatch` entry names a model you can actually reach. |
+| `PIPELINE_MODEL_REGISTRY_PATH` | Which model registry the server reads | `/app/model_registry.local.json` in the container, a read-only bind of `deploy/standalone/model_registry.json` (seeded once by the installer and kept on re-runs) | `/app/model_registry.local.json` | The registry resolves the model for each role. Point it at a file whose `roles.dispatch` entry names a model you can actually reach. |
 | `OLLAMA_ENDPOINT` | Base URL of a local model server | `http://host.docker.internal:11434` | `http://host.docker.internal:11434` | Passed to the container as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`. `host.docker.internal` resolves on Linux too, via the `host-gateway` extra host. |
 | `PIPELINE_CLI_CALLBACK_PORT` | Local port a CLI client's browser flow returns to | `33418` | `33418` | Substituted into the realm's `pipeline-cli` redirect URI as `http://localhost:<port>/callback`, so it must match `--callback-port` on the client (§5). Change it and the realm must be re-imported (§8). |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |

@@ -562,6 +562,25 @@ chmod 700 "$STATE_DIR/import"
 render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"
 log "install.sh: rendered $RENDERED_REALM_FILE"
 
+# The compose file bind-mounts $STATE_DIR/model_registry.json as the server's
+# registry. It names the provider/model each role resolves to, so it is
+# operator-specific: seed it once, then never overwrite it on a re-run. Prefer
+# the operator's local registry (the same file the non-container server uses)
+# and fall back to the shipped provider-neutral catalog.
+REGISTRY_FILE="$STATE_DIR/model_registry.json"
+if [ -f "$REGISTRY_FILE" ]; then
+  log "install.sh: keeping $REGISTRY_FILE"
+elif [ -f "$REPO_ROOT/model_registry.local.json" ]; then
+  cp -- "$REPO_ROOT/model_registry.local.json" "$REGISTRY_FILE"
+  log "install.sh: wrote $REGISTRY_FILE from model_registry.local.json"
+else
+  cp -- "$REPO_ROOT/model_registry.json" "$REGISTRY_FILE"
+  log "install.sh: wrote $REGISTRY_FILE from model_registry.json; set roles.* to models you can reach"
+fi
+# Not a secret, and the pipeline container (uid 10001) must be able to read it;
+# umask 077 would otherwise leave it unreadable to anyone but the installer.
+chmod 644 "$REGISTRY_FILE"
+
 if [ "$DRY_RUN" -eq 1 ]; then
   log "install.sh: dry run; state written, Docker not touched"
   printf 'STANDALONE_REALM_FILE=%s docker compose -f %s up -d --build --wait\n' \

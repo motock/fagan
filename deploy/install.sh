@@ -64,13 +64,14 @@ DEFAULT_ADMIN_USER="admin"
 DEFAULT_REPO_HOSTS="github.com"
 DEFAULT_OLLAMA_ENDPOINT="http://host.docker.internal:11434"
 DEFAULT_CALLBACK_PORT="33418"
+DEFAULT_NOTIFY_EMAIL_PORT="587"
 MIN_MEMORY_BYTES=6442450944 # 6 GiB
 READY_TIMEOUT_SECONDS=180
 
 # Secret files deploy/standalone/compose.yaml mounts. Every one must exist even
 # when unused: `docker compose up` fails on a missing file and `config` does not
 # check it. deploy/lib/operator_env.sh treats an empty file as absent.
-COMPOSE_SECRETS="oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key"
+COMPOSE_SECRETS="oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key slack_webhook_url notify_email_password"
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
@@ -193,6 +194,13 @@ Options:
   --gh-token-file PATH         file holding a GitHub token
   --ollama-key-file PATH       file holding an Ollama API key
   --first-user-password-file PATH  file holding the first user's password
+  --notify-slack-webhook-file PATH  file holding a Slack incoming-webhook URL
+  --notify-email-host HOST       enable email; SMTP relay host
+  --notify-email-port PORT       SMTP port (default: 587)
+  --notify-email-user USER       SMTP account name
+  --notify-email-from ADDR       envelope From address
+  --notify-email-to ADDR         recipient address
+  --notify-email-password-file PATH  file holding the SMTP password
   --state-dir DIR              where .env and secrets/ are written (default: deploy/standalone)
   --non-interactive            never prompt; everything from flags/env, secrets only from files
   --dry-run                    write the state directory and print the compose command only
@@ -220,6 +228,13 @@ CLAUDE_OAUTH_TOKEN_FILE=""
 GH_TOKEN_FILE=""
 OLLAMA_KEY_FILE=""
 FIRST_USER_PASSWORD_FILE=""
+NOTIFY_SLACK_WEBHOOK_FILE=""
+NOTIFY_EMAIL_HOST=""
+NOTIFY_EMAIL_PORT=""
+NOTIFY_EMAIL_USER=""
+NOTIFY_EMAIL_FROM=""
+NOTIFY_EMAIL_TO=""
+NOTIFY_EMAIL_PASSWORD_FILE=""
 
 while [ "$#" -gt 0 ]; do
   arg="$1"
@@ -248,7 +263,9 @@ while [ "$#" -gt 0 ]; do
     --state-dir | --hostname | --port | --admin-user | --first-user | --repo-hosts | \
       --ollama-endpoint | --cli-callback-port | --anthropic-key-file | \
       --claude-oauth-token-file | --gh-token-file | --ollama-key-file | \
-      --first-user-password-file)
+      --first-user-password-file | --notify-slack-webhook-file | \
+      --notify-email-host | --notify-email-port | --notify-email-user | \
+      --notify-email-from | --notify-email-to | --notify-email-password-file)
       if [ -z "$val" ]; then
         [ "$#" -ge 2 ] || fail "option $key requires a value"
         val="$2"
@@ -268,6 +285,13 @@ while [ "$#" -gt 0 ]; do
         --gh-token-file) GH_TOKEN_FILE="$val" ;;
         --ollama-key-file) OLLAMA_KEY_FILE="$val" ;;
         --first-user-password-file) FIRST_USER_PASSWORD_FILE="$val" ;;
+        --notify-slack-webhook-file) NOTIFY_SLACK_WEBHOOK_FILE="$val" ;;
+        --notify-email-host) NOTIFY_EMAIL_HOST="$val" ;;
+        --notify-email-port) NOTIFY_EMAIL_PORT="$val" ;;
+        --notify-email-user) NOTIFY_EMAIL_USER="$val" ;;
+        --notify-email-from) NOTIFY_EMAIL_FROM="$val" ;;
+        --notify-email-to) NOTIFY_EMAIL_TO="$val" ;;
+        --notify-email-password-file) NOTIFY_EMAIL_PASSWORD_FILE="$val" ;;
       esac
       ;;
     # Inline secrets stay out of argv: they land in `ps`, shell history and CI
@@ -314,6 +338,13 @@ resolve() { # $1 current value, $2 env key, $3 default -> prints value
   printf '%s' "$3"
 }
 
+json_escape() { # $1 string -> JSON string body
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
 HOSTNAME="$(resolve "$HOSTNAME" PUBLIC_HOSTNAME "$DEFAULT_HOSTNAME")"
 PORT="$(resolve "$PORT" PUBLIC_PORT "$DEFAULT_PORT")"
 ADMIN_USER="$(resolve "$ADMIN_USER" KEYCLOAK_ADMIN "$DEFAULT_ADMIN_USER")"
@@ -321,6 +352,14 @@ FIRST_USER="$(resolve "$FIRST_USER" PIPELINE_FIRST_USER "")"
 REPO_HOSTS="$(resolve "$REPO_HOSTS" PIPELINE_REPO_URL_HOSTS "$DEFAULT_REPO_HOSTS")"
 OLLAMA_ENDPOINT="$(resolve "$OLLAMA_ENDPOINT" OLLAMA_ENDPOINT "$DEFAULT_OLLAMA_ENDPOINT")"
 CALLBACK_PORT="$(resolve "$CALLBACK_PORT" PIPELINE_CLI_CALLBACK_PORT "$DEFAULT_CALLBACK_PORT")"
+# Notification channel settings: none of these are secrets, so the usual
+# precedence (flag > existing .env > built-in) applies. The SMTP port has a
+# built-in default of 587; --notify-email-port still wins over it.
+NOTIFY_EMAIL_HOST="$(resolve "$NOTIFY_EMAIL_HOST" PIPELINE_NOTIFY_EMAIL_HOST "")"
+NOTIFY_EMAIL_PORT="$(resolve "$NOTIFY_EMAIL_PORT" PIPELINE_NOTIFY_EMAIL_PORT "$DEFAULT_NOTIFY_EMAIL_PORT")"
+NOTIFY_EMAIL_USER="$(resolve "$NOTIFY_EMAIL_USER" PIPELINE_NOTIFY_EMAIL_USER "")"
+NOTIFY_EMAIL_FROM="$(resolve "$NOTIFY_EMAIL_FROM" PIPELINE_NOTIFY_EMAIL_FROM "")"
+NOTIFY_EMAIL_TO="$(resolve "$NOTIFY_EMAIL_TO" PIPELINE_NOTIFY_EMAIL_TO "")"
 
 is_port() {
   case "$1" in
@@ -362,6 +401,23 @@ if [ "$NONINTERACTIVE" -eq 0 ]; then
   REPO_HOSTS="$(prompt_value "Hosts the pipeline may clone from (comma separated)" "$REPO_HOSTS")"
   OLLAMA_ENDPOINT="$(prompt_value "Ollama endpoint" "$OLLAMA_ENDPOINT")"
   CALLBACK_PORT="$(prompt_value "CLI OAuth callback port" "$CALLBACK_PORT")"
+  printf 'Notifications are optional; leave answers blank to disable.\n' >&2
+  NOTIFY_EMAIL_HOST="$(prompt_value "SMTP host (blank to skip email)" "$NOTIFY_EMAIL_HOST")"
+  if [ -n "$NOTIFY_EMAIL_HOST" ]; then
+    NOTIFY_EMAIL_PORT="$(prompt_value "SMTP port" "$NOTIFY_EMAIL_PORT")"
+    NOTIFY_EMAIL_USER="$(prompt_value "SMTP user" "$NOTIFY_EMAIL_USER")"
+    NOTIFY_EMAIL_FROM="$(prompt_value "Envelope From address" "$NOTIFY_EMAIL_FROM")"
+    NOTIFY_EMAIL_TO="$(prompt_value "Notification recipient" "$NOTIFY_EMAIL_TO")"
+  fi
+fi
+
+# A half-configured email channel is worse than no channel: refuse it here, in
+# both interactive and non-interactive mode, rather than write a config the
+# runtime would fail on.
+if [ -n "$NOTIFY_EMAIL_HOST" ]; then
+  [ -n "$NOTIFY_EMAIL_FROM" ] || fail "--notify-email-from is required when email notifications are enabled"
+  [ -n "$NOTIFY_EMAIL_TO" ] || fail "--notify-email-to is required when email notifications are enabled"
+  is_port "$NOTIFY_EMAIL_PORT" || fail "--notify-email-port must be a number between 1 and 65535 (got: $NOTIFY_EMAIL_PORT)"
 fi
 
 [ -n "$HOSTNAME" ] || fail "--hostname must not be empty"
@@ -393,6 +449,10 @@ collect_secret "Anthropic API key" "$ANTHROPIC_KEY_FILE" anthropic_api_key
 collect_secret "Claude Code OAuth token" "$CLAUDE_OAUTH_TOKEN_FILE" claude_code_oauth_token
 collect_secret "GitHub token" "$GH_TOKEN_FILE" gh_token
 collect_secret "Ollama API key" "$OLLAMA_KEY_FILE" ollama_api_key
+if [ -n "$NOTIFY_EMAIL_HOST" ]; then
+  collect_secret "SMTP password" "$NOTIFY_EMAIL_PASSWORD_FILE" notify_email_password
+fi
+collect_secret "Slack incoming-webhook URL" "$NOTIFY_SLACK_WEBHOOK_FILE" slack_webhook_url
 
 secret_value() { # $1 secret name -> prints the collected value
   local line
@@ -507,6 +567,36 @@ for name in $COMPOSE_SECRETS; do
 done
 unset SECRET_VALUES
 
+# notification.json is the notification config the runtime reads from
+# STANDALONE_NOTIFY_CONFIG. It carries only env var *names*, never a secret
+# value. "Enabled" is decided from persisted state -- the secret file on disk,
+# not the file flag -- so a re-run without the flag keeps the channel the
+# operator already configured.
+NOTIFY_CONFIG_FILE="$STATE_DIR/notification.json"
+NOTIFY_INSTANCES=""
+NOTIFY_ROUTE_TO=""
+if [ -n "$NOTIFY_EMAIL_HOST" ] && [ -n "$NOTIFY_EMAIL_FROM" ] && [ -n "$NOTIFY_EMAIL_TO" ]; then
+  NOTIFY_INSTANCES="$(printf '"email":{"type":"email","host":"%s","port":%s,"user":"%s","from":"%s","to":["%s"],"password_env":"PIPELINE_NOTIFY_EMAIL_PASSWORD"}' \
+    "$(json_escape "$NOTIFY_EMAIL_HOST")" "$NOTIFY_EMAIL_PORT" \
+    "$(json_escape "$NOTIFY_EMAIL_USER")" "$(json_escape "$NOTIFY_EMAIL_FROM")" \
+    "$(json_escape "$NOTIFY_EMAIL_TO")")"
+  NOTIFY_ROUTE_TO='"email"'
+fi
+if [ -s "$SECRETS_DIR/slack_webhook_url" ]; then
+  [ -z "$NOTIFY_INSTANCES" ] || NOTIFY_INSTANCES="$NOTIFY_INSTANCES,"
+  NOTIFY_INSTANCES="${NOTIFY_INSTANCES}\"slack\":{\"type\":\"slack\",\"webhook_url_env\":\"SLACK_WEBHOOK_URL\"}"
+  NOTIFY_ROUTE_TO="${NOTIFY_ROUTE_TO:+$NOTIFY_ROUTE_TO,}\"slack\""
+fi
+if [ -n "$NOTIFY_INSTANCES" ]; then
+  printf '{"version":1,"instances":{%s},"routes":[{"name":"all","match":{"plan":"*"},"deliver":[{"events":["*"],"to":[%s]}]}]}\n' \
+    "$NOTIFY_INSTANCES" "$NOTIFY_ROUTE_TO" >"$NOTIFY_CONFIG_FILE"
+else
+  printf '{"version":1,"instances":{},"routes":[]}\n' >"$NOTIFY_CONFIG_FILE"
+fi
+# A redirect onto an existing file keeps that file's old mode, so set 0600
+# explicitly: the config is operator-specific even though it holds no secret.
+chmod 600 "$NOTIFY_CONFIG_FILE"
+
 if [ -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
@@ -534,6 +624,19 @@ PIPELINE_OIDC_AUDIENCE=$MCP_AUDIENCE
 PIPELINE_CLI_CALLBACK_PORT=$CALLBACK_PORT
 PIPELINE_DASHBOARD_CLIENT_SECRET=$DASHBOARD_CLIENT_SECRET
 PIPELINE_MCP_CLIENT_SECRET=$MCP_CLIENT_SECRET
+
+# ---- Notifications --------------------------------------------------------
+
+STANDALONE_NOTIFY_CONFIG=$STATE_DIR/notification.json
+# Notification settings are not secrets (the SMTP password and the Slack
+# webhook live in secrets/), so they are recorded here and reused on a re-run
+# exactly like every other non-secret value: flag > this file > built-in. An
+# empty value means "channel disabled".
+PIPELINE_NOTIFY_EMAIL_HOST=$NOTIFY_EMAIL_HOST
+PIPELINE_NOTIFY_EMAIL_PORT=$NOTIFY_EMAIL_PORT
+PIPELINE_NOTIFY_EMAIL_USER=$NOTIFY_EMAIL_USER
+PIPELINE_NOTIFY_EMAIL_FROM=$NOTIFY_EMAIL_FROM
+PIPELINE_NOTIFY_EMAIL_TO=$NOTIFY_EMAIL_TO
 EOF
 chmod 600 "$ENV_FILE"
 
@@ -648,13 +751,6 @@ keycloak_login() {
     compose exec -T keycloak bash -c \
       'IFS= read -r pw; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$1" --password "$pw"' \
       _ "$ADMIN_USER"
-}
-
-json_escape() { # $1 string -> JSON string body
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  printf '%s' "$s"
 }
 
 client_id_for() { # $1 keycloak clientId -> prints internal id, empty when absent

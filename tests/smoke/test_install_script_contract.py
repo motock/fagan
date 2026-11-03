@@ -346,3 +346,264 @@ def test_dry_run_seeds_the_model_registry_and_keeps_it_on_a_rerun(tmp_path: Path
 def test_the_seeded_registry_is_gitignored() -> None:
     ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "deploy/standalone/model_registry.json" in ignored
+
+
+# ---------------------------------------------------------------------------
+# Notifications (SN-01): the installer writes $STATE_DIR/notification.json in
+# the shape pipeline/notification_routing.py loads, keeping every secret value
+# in 0600 files and only env var *names* in the config.
+# ---------------------------------------------------------------------------
+
+WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/SECRETWEBHOOK"
+SMTP_PASSWORD = "smtp-password-XYZ"
+
+
+def _notify_files(tmp_path: Path) -> tuple[Path, Path]:
+    hook = tmp_path / "slack-webhook.txt"
+    hook.write_text(WEBHOOK_URL, encoding="utf-8")
+    password = tmp_path / "smtp-password.txt"
+    password.write_text(SMTP_PASSWORD, encoding="utf-8")
+    return hook, password
+
+
+def _notify_flags(hook: Path, password: Path) -> tuple[str, ...]:
+    return (
+        "--notify-slack-webhook-file",
+        str(hook),
+        "--notify-email-host",
+        "smtp.example.com",
+        "--notify-email-port",
+        "2525",
+        "--notify-email-user",
+        "notify@example.com",
+        "--notify-email-from",
+        "ops@example.com",
+        "--notify-email-to",
+        "oncall@example.com",
+        "--notify-email-password-file",
+        str(password),
+    )
+
+
+def _notify_config(state_dir: Path) -> tuple[str, dict[str, object]]:
+    path = state_dir / "notification.json"
+    assert path.is_file(), f"installer did not write {path}"
+    raw = path.read_text(encoding="utf-8")
+    return raw, json.loads(raw)
+
+
+def test_install_writes_notification_config(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        *_notify_flags(hook, password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    raw, data = _notify_config(state_dir)
+    assert data["version"] == 1
+    instances = data["instances"]
+    assert instances["slack"] == {
+        "type": "slack",
+        "webhook_url_env": "SLACK_WEBHOOK_URL",
+    }
+    email = instances["email"]
+    assert email["type"] == "email"
+    assert email["host"] == "smtp.example.com"
+    assert email["port"] == 2525, "the port must be a JSON number, not a quoted string"
+    assert email["user"] == "notify@example.com"
+    assert email["from"] == "ops@example.com"
+    assert email["to"] == ["oncall@example.com"]
+    assert email["password_env"] == "PIPELINE_NOTIFY_EMAIL_PASSWORD"
+
+    routes = data["routes"]
+    assert len(routes) == 1, f"expected exactly one route, got {routes!r}"
+    route = routes[0]
+    assert route["name"] == "all"
+    assert route["match"] == {"plan": "*"}
+    deliver = route["deliver"]
+    assert len(deliver) == 1
+    assert deliver[0]["events"] == ["*"]
+    assert set(deliver[0]["to"]) == {"email", "slack"}
+
+    assert "SECRETWEBHOOK" not in raw, "the webhook URL must never reach the config"
+    assert SMTP_PASSWORD not in raw, "the SMTP password must never reach the config"
+
+
+def test_install_notification_secrets_are_private(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        *_notify_flags(hook, password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    secrets_dir = state_dir / "secrets"
+    for name, expected in (
+        ("slack_webhook_url", WEBHOOK_URL),
+        ("notify_email_password", SMTP_PASSWORD),
+    ):
+        path = secrets_dir / name
+        assert path.is_file(), f"missing secret file {path}"
+        mode = stat.S_IMODE(path.stat().st_mode)
+        assert mode == 0o600, f"{name} has mode {oct(mode)}, expected 0o600"
+        assert path.read_text(encoding="utf-8") == expected
+
+    config = state_dir / "notification.json"
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+
+    env_text = (state_dir / ".env").read_text(encoding="utf-8")
+    out = proc.stdout + proc.stderr
+    for value in (WEBHOOK_URL, SMTP_PASSWORD):
+        assert value not in env_text, "a notification secret leaked into .env"
+        assert value not in out, "a notification secret was printed"
+
+
+def test_install_without_notification_flags_writes_empty_config(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    _, data = _notify_config(state_dir)
+    assert data == {"version": 1, "instances": {}, "routes": []}
+
+
+def test_install_rerun_is_idempotent(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    flags = _notify_flags(hook, password)
+
+    first = _run(
+        "--dry-run", "--non-interactive", *flags, state_dir=state_dir, home=tmp_path / "home"
+    )
+    assert first.returncode == 0, first.stdout + first.stderr
+    first_raw, first_data = _notify_config(state_dir)
+
+    second = _run(
+        "--dry-run", "--non-interactive", *flags, state_dir=state_dir, home=tmp_path / "home"
+    )
+    assert second.returncode == 0, second.stdout + second.stderr
+    second_raw, second_data = _notify_config(state_dir)
+
+    assert second_data == first_data, "a re-run must keep the notification config"
+    assert second_raw == first_raw
+    secrets_dir = state_dir / "secrets"
+    for name, expected in (
+        ("slack_webhook_url", WEBHOOK_URL),
+        ("notify_email_password", SMTP_PASSWORD),
+    ):
+        path = secrets_dir / name
+        assert path.read_text(encoding="utf-8") == expected
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_install_fails_closed_on_partial_email(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        "--notify-email-host",
+        "smtp.example.com",
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode != 0, "a host without from/to must abort the install"
+    out = proc.stdout + proc.stderr
+    assert "notify-email-from" in out or "notify-email-to" in out, out
+
+
+def test_install_interactive_shows_notification_prompts(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    home.mkdir()
+    # Answers in prompt order: the seven pre-existing prompts, then SMTP host,
+    # port, user, from and to, then the hidden secrets (four API keys, the SMTP
+    # password, the Slack webhook) as blanks.
+    answers = """pipeline.example.internal
+8443
+admin
+
+github.com
+http://host.docker.internal:11434
+33418
+smtp.example.com
+2525
+notify@example.com
+ops@example.com
+oncall@example.com
+
+
+
+
+
+"""
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    for key in ("PUBLIC_HOSTNAME", "PUBLIC_PORT", "PIPELINE_IMAGE", "ANTHROPIC_API_KEY", "GH_TOKEN"):
+        env.pop(key, None)
+    proc = subprocess.run(
+        ["bash", str(INSTALL), "--dry-run", "--state-dir", str(state_dir)],
+        input=answers,
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    out = proc.stdout + proc.stderr
+    assert "SMTP host (blank to skip email)" in out
+    assert "Notifications are optional" in out
+
+
+def test_notification_json_escapes_the_from_address(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    from_address = 'Ops "Oncall" <ops@example.com>'
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        "--notify-slack-webhook-file", str(hook),
+        "--notify-email-host", "smtp.example.com",
+        "--notify-email-from", from_address,
+        "--notify-email-to", "oncall@example.com",
+        "--notify-email-password-file", str(password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    _, data = _notify_config(state_dir)
+    assert data["instances"]["email"]["from"] == from_address
+
+
+def test_invalid_smtp_port_is_refused(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    hook, password = _notify_files(tmp_path)
+    proc = _run(
+        "--dry-run",
+        "--non-interactive",
+        "--notify-slack-webhook-file", str(hook),
+        "--notify-email-host", "smtp.example.com",
+        "--notify-email-port", "not-a-port",
+        "--notify-email-from", "ops@example.com",
+        "--notify-email-to", "oncall@example.com",
+        "--notify-email-password-file", str(password),
+        state_dir=state_dir,
+        home=tmp_path / "home",
+    )
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "--notify-email-port" in out
+    assert "not-a-port" in out

@@ -70,10 +70,11 @@ services:
 
       # Public origin. Hosts the MCP transport and the dashboard accept; the
       # resource URL is the RFC 9728 identifier clients are told to request.
-      # The MCP transport compares the whole Host header including the port, so
-      # it gets the SDK's trailing `:*` wildcard form; the dashboard's own check
-      # strips the port, so it takes the bare hostname.
-      PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}:*
+      # The MCP transport compares the whole Host header: a bare host matches a
+      # request with no port (the default 443) and `host:*` matches an explicit
+      # port, so both are listed; the dashboard's own check strips the port, so
+      # it takes the bare hostname.
+      PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*
       PIPELINE_DASHBOARD_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
       PIPELINE_MCP_RESOURCE_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/mcp
 

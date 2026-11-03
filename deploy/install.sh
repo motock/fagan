@@ -324,6 +324,17 @@ env_get() { # $1 key, $2 file -> prints value, non-zero when absent
   printf '%s' "${line#*=}"
 }
 
+env_looks_like_installed_state() { # $1 file -> 0 when it is evidence of a prior install
+  # SAD-02: an .env this installer (or an older one) wrote carries its header or
+  # at least one of the keys only the installer generates, with a value. A stray
+  # 0-byte file, a comment-only file, or a hand-written line or two is *not*
+  # evidence of an install that has plans in flight, and treating it as one
+  # would fail open on what the operator believes is a fresh, gated install.
+  [ -s "$1" ] || return 1
+  grep -qE '^# Written by deploy/install\.sh' "$1" 2>/dev/null && return 0
+  grep -qE '^(PUBLIC_HOSTNAME|PUBLIC_PORT|CADDY_TLS|KEYCLOAK_ADMIN|KEYCLOAK_ADMIN_PASSWORD|PIPELINE_PUBLIC_URL|PIPELINE_OIDC_AUDIENCE|PIPELINE_CLI_CALLBACK_PORT|PIPELINE_DASHBOARD_CLIENT_SECRET|PIPELINE_MCP_CLIENT_SECRET|PIPELINE_REPO_URL_HOSTS|OLLAMA_ENDPOINT|STANDALONE_NOTIFY_CONFIG|PIPELINE_NOTIFY_EMAIL_[A-Z]+)=.+' "$1" 2>/dev/null
+}
+
 resolve() { # $1 current value, $2 env key, $3 default -> prints value
   if [ -n "$1" ]; then
     printf '%s' "$1"
@@ -606,22 +617,47 @@ chmod 644 "$NOTIFY_CONFIG_FILE"
 # would flip an operator's deliberate `PIPELINE_PLAN_APPROVAL=` (off, per
 # approval_enabled()) back to the default. Validate before the heredoc below
 # rewrites .env, so an unusable value aborts without touching the file.
-# SAD-02: an *existing* .env with no PIPELINE_PLAN_APPROVAL line belongs to an
-# install that predates the on-by-default gate. Every plan it has ingested so
-# far was ingested with the gate off, so it carries no `approval` block and
+# SAD-02: an *existing* install's .env with no PIPELINE_PLAN_APPROVAL line
+# predates the on-by-default gate. Every plan it has ingested so far was
+# ingested with the gate off, so it carries no `approval` block and
 # is_activatable() returns False: turning the gate on would stall the whole
 # server (advance/dispatch skip with plan_not_approved) with no in-band
 # explanation, and approve_plan alone cannot rescue such a plan -- _decide_plan
 # refuses it with "plan content changed; re-ingest before approving". So keep
 # the gate OFF for that install, write the 0 explicitly so the opt-out is loud
 # in .env (ADR 0004), and warn once in the log.
+# The legacy path needs *evidence* of an earlier install, not mere existence
+# (env_looks_like_installed_state): a stray 0-byte or comment-only .env has no
+# plans in flight, so honouring it would disable a human-approval control on a
+# fresh install -- ambiguous state must resolve to the safe side (ADR 0004/0007).
+# A consequence worth knowing: a `git pull` + `docker compose up -d` upgrade
+# that skips this script sees no line and compose's ${PIPELINE_PLAN_APPROVAL-1}
+# turns the gate ON, so this script and `up -d` do diverge for that one input.
 PLAN_APPROVAL=1
 APPROVAL_UPGRADED=0
+APPROVAL_NOTE=""
 if existing_approval="$(env_get PIPELINE_PLAN_APPROVAL "$ENV_FILE")"; then
+  # compose's .env reader strips CR, surrounding whitespace and one matching
+  # pair of quotes before it hands the value to the container. Strip the same
+  # here, so a hand-edited `PIPELINE_PLAN_APPROVAL="1"` or a CRLF line means the
+  # same thing to this script and to `docker compose config` instead of the
+  # installer refusing a value the container would accept.
+  existing_approval="${existing_approval%$'\r'}"
+  existing_approval="${existing_approval#"${existing_approval%%[![:space:]]*}"}"
+  existing_approval="${existing_approval%"${existing_approval##*[![:space:]]}"}"
+  case "$existing_approval" in
+    \"?*\" | \'?*\')
+      # One matching pair of quotes, dropped whole.
+      existing_approval="${existing_approval:1:${#existing_approval}-2}"
+      existing_approval="${existing_approval#"${existing_approval%%[![:space:]]*}"}"
+      existing_approval="${existing_approval%"${existing_approval##*[![:space:]]}"}"
+      ;;
+  esac
   PLAN_APPROVAL="$existing_approval"
-elif [ -f "$ENV_FILE" ]; then
+elif env_looks_like_installed_state "$ENV_FILE"; then
   PLAN_APPROVAL=0
   APPROVAL_UPGRADED=1
+  APPROVAL_NOTE=" (off: this existing install predates the gate; see the warning above)"
 fi
 case "$PLAN_APPROVAL" in
   ""|on|1|true|off|0|false) ;;
@@ -933,6 +969,7 @@ OpenCode (~/.config/opencode/opencode.json):
     }
   }
 
+Plan approval: PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL$APPROVAL_NOTE
 Dashboard: https://$HOSTNAME:$PORT/ (Keycloak admin console under /realms/master)
 Logs:      docker compose -f $COMPOSE_REL logs -f
 EOF

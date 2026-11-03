@@ -177,6 +177,85 @@ def test_fresh_install_still_enables_the_gate(tmp_path: Path) -> None:
     assert UPGRADE_WARNING not in proc.stderr
 
 
+def _bare_state_dir(tmp_path: Path, contents: str) -> tuple[Path, Path, Path]:
+    home = tmp_path / "home"
+    home.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    env_file = state_dir / ".env"
+    env_file.write_text(contents, encoding="utf-8")
+    return home, state_dir, env_file
+
+
+def test_empty_env_file_keeps_the_gate_on(tmp_path: Path) -> None:
+    home, state_dir, env_file = _bare_state_dir(tmp_path, "")
+
+    proc = _install(home, state_dir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _single_approval_value(env_file) == "1", (
+        "a 0-byte .env is not evidence of an install with plans in flight; "
+        "resolving it to 0 would fail open on what the operator believes is a "
+        "fresh, gated install (ADR 0004/0007)"
+    )
+    assert UPGRADE_WARNING not in proc.stderr
+
+
+def test_comment_only_env_file_keeps_the_gate_on(tmp_path: Path) -> None:
+    home, state_dir, env_file = _bare_state_dir(
+        tmp_path, "# copied from an example\n\n# nothing usable here\n"
+    )
+
+    proc = _install(home, state_dir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _single_approval_value(env_file) == "1", (
+        "a comment-only .env carries no generated value, so it is not a prior "
+        "install and must not disable the gate"
+    )
+    assert UPGRADE_WARNING not in proc.stderr
+
+
+def test_quoted_explicit_on_is_read_the_way_compose_reads_it(tmp_path: Path) -> None:
+    home, state_dir, env_file = _bare_state_dir(
+        tmp_path,
+        'PUBLIC_HOSTNAME=pipeline.example.com\nPIPELINE_PLAN_APPROVAL= "1"\n',
+    )
+
+    proc = _install(home, state_dir)
+
+    assert proc.returncode == 0, (
+        "compose strips whitespace and one matching pair of quotes from a .env "
+        "value before the container sees it, so the installer must accept the "
+        "same spelling instead of aborting: " + proc.stdout + proc.stderr
+    )
+    assert _single_approval_value(env_file) == "1"
+    assert UPGRADE_WARNING not in proc.stderr
+
+
+def test_crlf_explicit_off_is_read_the_way_compose_reads_it(tmp_path: Path) -> None:
+    home, state_dir, env_file = _bare_state_dir(
+        tmp_path,
+        "PUBLIC_HOSTNAME=pipeline.example.com\r\nPIPELINE_PLAN_APPROVAL=0\r\n",
+    )
+
+    proc = _install(home, state_dir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _single_approval_value(env_file) == "0", (
+        "a CRLF line must not be rejected as an unusable value"
+    )
+    assert UPGRADE_WARNING not in proc.stderr
+
+
+def test_final_summary_reports_the_gate_state() -> None:
+    # --dry-run exits before the end-of-run summary, so this pins the summary
+    # line statically: a stderr warning during an unattended run is otherwise
+    # the only place the disabled control is visible.
+    script = INSTALL.read_text(encoding="utf-8")
+    assert "Plan approval: PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL" in script
+
+
 def test_deploy_doc_documents_the_upgrade_path() -> None:
     lines = DEPLOY_DOC.read_text(encoding="utf-8").splitlines()
     start = lines.index("### Upgrading")

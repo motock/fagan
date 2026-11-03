@@ -90,6 +90,11 @@ services:
       # host.docker.internal resolve on Linux as well as Docker Desktop.
       PIPELINE_LOCAL_ENDPOINT_OLLAMA: ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
       PIPELINE_MODEL_REGISTRY_PATH: /app/model_registry.local.json
+      # The notification transports (SMTP and Slack) are configured by a rendered
+      # JSON file, not by variables: it names hosts, ports and recipients but
+      # carries no secret. The two credential files below are mounted as compose
+      # secrets and read by the entrypoint loader.
+      PIPELINE_NOTIFY_CONFIG_PATH: /etc/pipeline/notification.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No published port: the MCP transport and the dashboard are reachable only
@@ -103,9 +108,14 @@ services:
       - claude_code_oauth_token
       - gh_token
       - ollama_api_key
+      - notify_email_password
+      - slack_webhook_url
     volumes:
       - pipeline-state:/var/lib/pipeline
       - ./model_registry.json:/app/model_registry.local.json:ro
+      # Rendered by deploy/install.sh (STANDALONE_NOTIFY_CONFIG). Read-only: the
+      # pipeline only reads the transport config.
+      - ${STANDALONE_NOTIFY_CONFIG:?STANDALONE_NOTIFY_CONFIG must point at the rendered notification config}:/etc/pipeline/notification.json:ro
       # Read-only: the proxy's CA bundle, so the https JWKS fetch verifies the
       # proxy's certificate. The pipeline never writes here.
       - ca-public:/caddy-ca:ro
@@ -233,6 +243,12 @@ secrets:
     file: ./secrets/gh_token
   ollama_api_key:
     file: ./secrets/ollama_api_key
+  # Notification credentials. Empty when the operator does not use that
+  # transport; the entrypoint treats an empty file as absent.
+  notify_email_password:
+    file: ./secrets/notify_email_password
+  slack_webhook_url:
+    file: ./secrets/slack_webhook_url
 
 volumes:
   # Mutable server state: plans, manifests, worktrees, the audit chain.

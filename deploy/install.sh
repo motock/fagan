@@ -593,9 +593,12 @@ if [ -n "$NOTIFY_INSTANCES" ]; then
 else
   printf '{"version":1,"instances":{},"routes":[]}\n' >"$NOTIFY_CONFIG_FILE"
 fi
-# A redirect onto an existing file keeps that file's old mode, so set 0600
-# explicitly: the config is operator-specific even though it holds no secret.
-chmod 600 "$NOTIFY_CONFIG_FILE"
+# A redirect onto an existing file keeps that file's old mode, so set 0644
+# explicitly: the config carries no secret (only env var *names*), and the
+# pipeline mounts it read-only into a container running as uid 10001. A 0600
+# file owned by the host user is unreadable there, so the pipeline logs a load
+# error and delivers nothing.
+chmod 644 "$NOTIFY_CONFIG_FILE"
 
 if [ -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE" 2>/dev/null || true

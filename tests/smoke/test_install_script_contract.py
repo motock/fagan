@@ -458,7 +458,12 @@ def test_install_notification_secrets_are_private(tmp_path: Path) -> None:
         assert path.read_text(encoding="utf-8") == expected
 
     config = state_dir / "notification.json"
-    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config.stat().st_mode) == 0o644, (
+        "notification.json carries no secret and is mounted read-only into a "
+        "container running as uid 10001; a 0600 file owned by the host user is "
+        "unreadable there, so the pipeline logs a load error and delivers "
+        "nothing"
+    )
 
     env_text = (state_dir / ".env").read_text(encoding="utf-8")
     out = proc.stdout + proc.stderr

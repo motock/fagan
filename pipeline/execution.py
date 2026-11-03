@@ -213,6 +213,10 @@ def _spawn_fd_redirect(
 
 _AGENT_SECRET_ENV = frozenset({
     "PIPELINE_NOTIFY_EMAIL_PASSWORD",
+    # The operator's Slack webhook: exported into the server process by
+    # deploy/lib/operator_env.sh, so an agent would inherit it and its
+    # model-driven Bash tool could post to the operator's workspace.
+    "SLACK_WEBHOOK_URL",
     "PLANE_API_KEY",
     "GH_TOKEN",
     "GITHUB_TOKEN",

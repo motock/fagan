@@ -111,6 +111,70 @@ def _cleanup_body() -> str:
     return match.group(1)
 
 
+# ---------------------------------------------------------------------------
+# CHANGE 4: give $TMP back to the invoking user *before* using docker again
+# ---------------------------------------------------------------------------
+
+# The escalated (sudo) install leaves $TMP - and therefore $HOME, hence
+# ~/.docker/config.json - owned by root. Docker then cannot read its config, the
+# compose plugin is not loaded, and `compose -f ...` is parsed as a docker flag
+# ("unknown shorthand flag: 'f' in -f"), so the dump and the `down -v` both fail.
+# The chown must therefore run before either of them, not after.
+TMP_CHOWN = re.compile(r'chown -R "\$\(id -u\):\$\(id -g\)" "\$TMP"')
+
+
+def _code(text: str) -> str:
+    """``text`` with comment-only lines removed, so prose cannot match a call."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _index(body: str, pattern: re.Pattern[str], what: str) -> int:
+    code = _code(body)
+    match = pattern.search(code)
+    assert match, f"cleanup() in deploy/standalone/smoke.sh has no {what}"
+    return match.start()
+
+
+def test_tmp_chown_runs_before_the_failure_log_dump():
+    body = _cleanup_body()
+    chown_at = _index(body, TMP_CHOWN, '`chown -R "$(id -u):$(id -g)" "$TMP"` call')
+    dump_at = _index(
+        body, re.compile(r"docker compose[^\n]*logs --tail"), "`logs --tail` dump"
+    )
+    assert chown_at < dump_at, (
+        'cleanup() must hand $TMP back to the invoking user (chown -R "$(id -u):'
+        '$(id -g)" "$TMP") BEFORE it dumps the container state and logs: the '
+        "escalated install leaves $HOME root-owned, so docker cannot read "
+        '$HOME/.docker/config.json and the dump dies with "unknown shorthand '
+        "flag: 'f' in -f\""
+    )
+
+
+def test_tmp_chown_runs_before_the_teardown():
+    body = _cleanup_body()
+    chown_at = _index(body, TMP_CHOWN, '`chown -R "$(id -u):$(id -g)" "$TMP"` call')
+    down_at = _index(
+        body, re.compile(r"docker compose[^\n]* down -v"), "`down -v` teardown"
+    )
+    assert chown_at < down_at, (
+        'cleanup() must run `chown -R "$(id -u):$(id -g)" "$TMP"` BEFORE '
+        "`down -v`: otherwise the teardown cannot reach the daemon either, it is "
+        "swallowed by `>/dev/null 2>&1 || true`, and the named volumes survive "
+        "to break the next run"
+    )
+
+
+def test_tmp_chown_is_not_duplicated():
+    body = _cleanup_body()
+    calls = TMP_CHOWN.findall(body)
+    assert len(calls) == 1, (
+        'cleanup() must contain exactly one `chown -R "$(id -u):$(id -g)" '
+        f'"$TMP"` call; found {len(calls)}'
+    )
+
+
 def test_cleanup_dumps_logs_of_the_failing_services():
     body = _cleanup_body()
     tail_calls = re.findall(r"logs --tail[^\n]*", body)

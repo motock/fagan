@@ -140,6 +140,16 @@ cleanup() {
     export PIPELINE_CLI_CALLBACK_PORT="${PIPELINE_CLI_CALLBACK_PORT:-33418}"
     export PIPELINE_DASHBOARD_CLIENT_SECRET="${PIPELINE_DASHBOARD_CLIENT_SECRET:-unused}"
     export PIPELINE_MCP_CLIENT_SECRET="${PIPELINE_MCP_CLIENT_SECRET:-unused}"
+    # Moved above the dumps: `$HOME` lives under `$TMP`, and a root-owned
+    # `$HOME/.docker/config.json` (left by the escalated install) makes docker
+    # fail to load the compose plugin, so `compose -f` is parsed as a docker flag
+    # ("unknown shorthand flag: 'f' in -f") and both the failure dump and
+    # `down -v` below die.
+    if [ -n "$SUDO" ] && [ -d "$TMP" ]; then
+        # The escalated install leaves root-owned files (the state dir, the CA,
+        # the client credentials) behind.
+        $SUDO chown -R "$(id -u):$(id -g)" "$TMP" >/dev/null 2>&1 || true
+    fi
     # A failed run must leave its evidence in the job output. The workflow's own
     # "Show the stack's logs on failure" step runs a bare `docker compose logs`
     # with no --env-file, so it dies on the `${VAR:?}` interpolation above, and
@@ -162,11 +172,6 @@ cleanup() {
         log "STANDALONE_SMOKE_KEEP=1: leaving the stack up. Inspect with: docker compose -f \"$BASE_COMPOSE\" -f \"$OVERRIDE\" ps"
     else
         docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" down -v >/dev/null 2>&1 || true
-    fi
-    if [ -n "$SUDO" ] && [ -d "$TMP" ]; then
-        # The escalated install leaves root-owned files (the state dir, the CA,
-        # the client credentials) behind.
-        $SUDO chown -R "$(id -u):$(id -g)" "$TMP" >/dev/null 2>&1 || true
     fi
     if [ "$KEEP_TMP" = "1" ] || [ "$status" -ne 0 ]; then
         log "leaving $TMP in place for inspection"

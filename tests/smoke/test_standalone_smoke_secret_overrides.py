@@ -43,6 +43,11 @@ CLEANUP_FUNCTION = re.compile(r"^cleanup\(\) \{\n(.*?)^\}\n", re.MULTILINE | re.
 
 # `if [ "$status" -ne 0 ]; then ... fi`: the guard that keeps a *failed* run's
 # evidence in the job output and a green run's output quiet.
+# `${VAR:?message}` in compose.yaml: compose refuses to interpolate the project
+# (even for `ps` or `logs`) unless VAR is set, so cleanup() must export each one
+# before it dumps evidence.
+REQUIRED_COMPOSE_VAR = re.compile(r"\$\{([A-Z_][A-Z0-9_]*):\?")
+
 STATUS_GUARD = re.compile(
     r'if \[ "\$status" -ne 0 \]; then\n(?P<body>.*?)\n\s*fi\b', re.DOTALL
 )
@@ -176,3 +181,70 @@ def test_cleanup_tears_down_exactly_once():
         "guard and the failure dump must not add a second teardown): "
         f"{calls} found"
     )
+
+
+def _body_lines(body: str) -> list[tuple[int, str]]:
+    """(offset, line) for every line of a function body; the offset is a char index."""
+    lines: list[tuple[int, str]] = []
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        lines.append((offset, line))
+        offset += len(line)
+    return lines
+
+
+def test_cleanup_exports_the_rendered_realm_file():
+    """compose.yaml:157 needs the realm path, or the failure dump prints nothing.
+
+    The first CHANGE 3 attempt only satisfied STANDALONE_NOTIFY_CONFIG, so both
+    `compose ps` and `compose logs` aborted with "required variable
+    STANDALONE_REALM_FILE is missing a value" and the `|| true` swallowed it:
+    the job printed the log() headers and nothing else.
+    """
+    body = _cleanup_body()
+    line = next(
+        (ln for ln in body.splitlines() if "export STANDALONE_REALM_FILE=" in ln),
+        None,
+    )
+    assert line is not None, (
+        "cleanup() must export STANDALONE_REALM_FILE: deploy/standalone/compose.yaml "
+        "declares it with `${VAR:?}`, so the failure dump dies on interpolation and "
+        "leaves no evidence"
+    )
+    assert "$STATE_DIR/import/realm.json" in line, (
+        "cleanup() must point STANDALONE_REALM_FILE at the realm install.sh rendered "
+        f"into the state dir ($STATE_DIR/import/realm.json), not a fixed path: {line!r}"
+    )
+    assert "deploy/standalone/" not in line, (
+        f"STANDALONE_REALM_FILE must not name the repo's committed path: {line!r}"
+    )
+
+
+def test_cleanup_satisfies_every_required_compose_variable():
+    """Any new `${VAR:?}` in the base file must not silently kill the dump."""
+    compose = REPO_ROOT / "deploy" / "standalone" / "compose.yaml"
+    required = REQUIRED_COMPOSE_VAR.findall(_text(compose))
+    assert required, "deploy/standalone/compose.yaml declares no `${VAR:?}` variables"
+    body = _cleanup_body()
+    dump_at = body.find("logs --tail")
+    assert dump_at != -1, "cleanup() has no `logs --tail` dump to guard"
+    for name in sorted(set(required)):
+        # `export FOO=...`, `export FOO` and `export FOO BAR` all count: cleanup()
+        # sets the values in plain assignments first and only then exports them.
+        exported_at = max(
+            (
+                offset
+                for offset, line in _body_lines(body)
+                if re.search(rf"\bexport\b[^\n]*\b{name}\b", line)
+            ),
+            default=-1,
+        )
+        assert exported_at != -1, (
+            f"cleanup() must export {name}: deploy/standalone/compose.yaml declares it "
+            "with `${VAR:?}`, so `compose ps`/`compose logs` abort on interpolation "
+            "and a failed run leaves no evidence"
+        )
+        assert exported_at < dump_at, (
+            f"cleanup() must export {name} BEFORE the `logs --tail` dump, otherwise "
+            "the dump aborts on interpolation"
+        )

@@ -148,7 +148,11 @@ cleanup() {
     if [ "$status" -ne 0 ]; then
         # Compose refuses to interpolate compose.yaml without this one; the value
         # only has to be non-empty (install.sh wrote the real one into $STATE_DIR).
-        export STANDALONE_NOTIFY_CONFIG="${STANDALONE_NOTIFY_CONFIG:-$TMP/state/notification.json}"
+        export STANDALONE_NOTIFY_CONFIG="${STANDALONE_NOTIFY_CONFIG:-$STATE_DIR/notification.json}"
+        # compose.yaml:157 declares the realm with `${VAR:?}` too, so `ps`/`logs`
+        # would abort on interpolation as well. install.sh --render-realm wrote it
+        # here, so this path exists at cleanup time.
+        export STANDALONE_REALM_FILE="${STANDALONE_REALM_FILE:-$STATE_DIR/import/realm.json}"
         log "install failed (status $status): container state follows"
         docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" ps || true
         log "last 200 log lines of keycloak, proxy and pipeline follow"

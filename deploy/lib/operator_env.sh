@@ -219,6 +219,33 @@ load_operator_credentials() {
         fi
         unset _git_token_path
     fi
+
+    configure_git_credentials
+}
+
+# Give every child git process the mounted forge token for the allowed hosts.
+# The helper reads the token file at call time, so the secret never enters
+# .gitconfig, an argv list, or a log line. Scoped to PIPELINE_REPO_URL_HOSTS so
+# the token is never offered to a host the operator did not allow.
+configure_git_credentials() {
+    [ -n "${PIPELINE_GIT_TOKEN_FILE:-}" ] || return 0
+    [ -r "$PIPELINE_GIT_TOKEN_FILE" ] || return 0
+    [ -n "${HOME:-}" ] || die "HOME is unset; cannot configure git credentials"
+    _git_helper='!f() { echo username=x-access-token; echo "password=$(cat "$PIPELINE_GIT_TOKEN_FILE")"; }; f'
+    _git_hosts="${PIPELINE_REPO_URL_HOSTS:-github.com}"
+    _git_old_ifs=$IFS
+    IFS=,
+    for _git_host in $_git_hosts; do
+        case "$_git_host" in
+            ""|*[!A-Za-z0-9.-]*) continue ;;
+        esac
+        git config --global --replace-all "credential.https://$_git_host.helper" "$_git_helper" \
+            || die "could not configure git credentials for the mounted token"
+    done
+    IFS=$_git_old_ifs
+    unset _git_helper _git_hosts _git_host _git_old_ifs
+    GIT_TERMINAL_PROMPT=0
+    export GIT_TERMINAL_PROMPT
 }
 
 # The repository root the server owns; everything the clone path is allowed to

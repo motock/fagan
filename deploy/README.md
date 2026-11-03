@@ -215,6 +215,89 @@ Repo defaults the entrypoint sets (both exported, both overridable):
 | `PIPELINE_REPOS_ROOT` | `/var/lib/pipeline/repos` | The directory SA-05 (the repo-clone story, not implemented yet) will clone into, laid out as `<host>/<owner>/<repo>`. Created at start with mode `0750` on the mounted volume; a pre-existing root is `chmod 750`-ed, and the entrypoint refuses to start if group write or any other-user access remains (it is the clone trust boundary). A root **you set** that cannot be created or tightened is fatal, so `PIPELINE_ALLOWED_REPO_ROOTS` never points at a path that does not exist; the image default stays best effort, which is not a fail-open because `pipeline/repo_clone.py::_make_dirs()` creates the root and its parents mode `0750` at clone time, under a path the allowlist already admitted. The volume must therefore be writable by the container uid (see [Volumes](#volumes)). A **symlinked** root is refused rather than followed, and a root that is itself a **mount point** is refused when its mode is too loose instead of being `chmod`-ed — for a bind mount that would mutate the host directory the operator owns, so the operator sets the mode on the volume. |
 | `PIPELINE_ALLOWED_REPO_ROOTS` | `$PIPELINE_REPOS_ROOT` | The `pipeline/workspace.py` allowlist a plan's `repo_root` must live under. Defaulting it to the repos root means the dashboard's decompose route and the scheduler are confined to the directory the server owns; a preset value is kept as-is. |
 
+## Notifications
+
+The server delivers notifications through two transports, Slack and SMTP email.
+`deploy/install.sh` collects what it needs, writes the operator's answers into
+`deploy/standalone/.env`, stores the two secrets as files, and generates the
+routing config the container reads.
+
+### Installer flags and prompts
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--notify-slack-webhook-file PATH` | File holding a Slack incoming-webhook URL |
+| `--notify-email-host HOST` | Enable email; SMTP relay host |
+| `--notify-email-port PORT` | SMTP port (default `587`) |
+| `--notify-email-user USER` | SMTP account name |
+| `--notify-email-from ADDR` | Envelope `From` address |
+| `--notify-email-to ADDR` | Recipient address |
+| `--notify-email-password-file PATH` | File holding the SMTP password |
+
+`--notify-email-host`, `--notify-email-from` and `--notify-email-to` are what
+turn email on; `--notify-email-user` and `--notify-email-password-file` are
+needed for a relay that authenticates. Every value has a matching
+`PIPELINE_NOTIFY_EMAIL_*` environment variable, and a flag beats it. Any value
+you neither pass nor set is asked for interactively, so an unattended run should
+pass the flags explicitly.
+
+### The generated config
+
+The installer writes `deploy/standalone/notification.json` (only env var
+*names*, never a secret value):
+
+```json
+{"version": 1,
+ "instances": {
+   "email": {"type": "email", "host": "smtp.example.com", "port": 587,
+             "user": "pipeline@example.com", "from": "pipeline@example.com",
+             "to": ["oncall@example.com"],
+             "password_env": "PIPELINE_NOTIFY_EMAIL_PASSWORD"},
+   "slack": {"type": "slack", "webhook_url_env": "SLACK_WEBHOOK_URL"}},
+ "routes": [{"name": "all", "match": {"plan": "*"},
+             "deliver": [{"events": ["*"], "to": ["email", "slack"]}]}]}
+```
+
+- `slack` carries `webhook_url_env: SLACK_WEBHOOK_URL`; the URL itself is read
+  from that environment variable at send time.
+- `email` carries `host`, `port`, `user`, `from`, `to` and
+  `password_env: PIPELINE_NOTIFY_EMAIL_PASSWORD`.
+- The default `all` route matches every plan (`match.plan: "*"`) and lists every
+  event (`events: ["*"]`), so it delivers each event, including event names that
+  do not exist yet, to every instance in its `to` list. A channel the installer
+  did not enable is simply absent from `instances` and from `to`.
+
+An instance may name an env var for a secret but must never hold a secret
+inline: a `webhook_url`, `password` or token setting makes the loader reject the
+whole file, as does a route that names an instance the file does not define.
+
+### Secret files
+
+| Secret file (default) | Environment name |
+| --------------------- | ---------------- |
+| `deploy/standalone/secrets/slack_webhook_url` | `SLACK_WEBHOOK_URL` |
+| `deploy/standalone/secrets/notify_email_password` | `PIPELINE_NOTIFY_EMAIL_PASSWORD` |
+
+Both files must be regular files, mode `0600`, owned by the uid the container
+runs as. Compose mounts them as container secrets and the entrypoint exports the
+names above; they are never written to `.env` and never baked into the image.
+The config file itself holds no secret, so it is written mode `0644` and mounted
+read-only.
+
+### Changing routes and events
+
+Edit the route and event lists in `deploy/standalone/notification.json`, then
+restart the stack (`docker compose up -d`) so the container re-reads it. The
+container reads the path in `PIPELINE_NOTIFY_CONFIG_PATH`, which
+`deploy/standalone/compose.yaml` sets to `/etc/pipeline/notification.json`; set
+that variable to point the server at a different file. A plan no route matches
+and an event the winning route does not list go nowhere (deny by default), and
+an invalid file delivers nothing rather than falling back to a default.
+
+The durable outbox spool is separate from this config. It is controlled by
+`PIPELINE_NOTIFY_OUTBOX_ENABLED` and `PIPELINE_NOTIFY_OUTBOX_EVENTS`, and the
+standalone installer does not enable it.
+
 ## Volumes
 
 `/var/lib/pipeline` is declared as a `VOLUME` and owned by uid 10001. It holds:

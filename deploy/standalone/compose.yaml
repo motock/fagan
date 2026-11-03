@@ -50,6 +50,9 @@ services:
       PIPELINE_NATS_MANAGE_STREAM: "1"
       PIPELINE_SCHEDULER_DAEMON: "1"
       PIPELINE_POLICY_ENFORCE: "1"
+      # Safety gates default on (ADR 0004); the dash form keeps an explicit
+      # empty (=off for approval_enabled()) instead of rewriting it to 1.
+      PIPELINE_PLAN_APPROVAL: ${PIPELINE_PLAN_APPROVAL-1}
 
       # Identity: bearer tokens are verified against the IdP's JWKS through the
       # proxy. The issuer is the public origin the IdP is pinned to (KC_HOSTNAME).

@@ -386,6 +386,7 @@ breaks when the value is wrong.
 | `PIPELINE_MODEL_REGISTRY_PATH` | Which model registry the server reads | `/app/model_registry.local.json` in the container, a read-only bind of `deploy/standalone/model_registry.json` | `/app/model_registry.local.json` | The registry resolves the model for each role. Point it at a file whose `roles.dispatch` entry names a model you can actually reach. |
 | `OLLAMA_ENDPOINT` | Base URL of a local model server | `http://host.docker.internal:11434` | `http://host.docker.internal:11434` | Passed to the container as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`. `host.docker.internal` resolves on Linux too, via the `host-gateway` extra host. |
 | `PIPELINE_CLI_CALLBACK_PORT` | Local port a CLI client's browser flow returns to | `33418` | `33418` | Substituted into the realm's `pipeline-cli` redirect URI as `http://localhost:<port>/callback`, so it must match `--callback-port` on the client (§5). Change it and the realm must be re-imported (§8). |
+| `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |
 
 ### The public origin, worked through
 
@@ -777,6 +778,24 @@ The token expired. `mcp-token` mints short-lived tokens (§7); an exported
 env token. Mint a fresh one, or use OAuth mode. A 401 that arrives with an
 `invalid_token`-style message a fixed interval after login is this, not a policy
 problem — check the token's `exp` before suspecting the server.
+
+### Dashboard login says `authentication_unavailable`
+
+The browser reaches `/auth/login` and the dashboard answers
+`{"error":"authentication_unavailable"}` with a 503. That is the server failing
+its **own** discovery request to the OIDC issuer, not a browser or certificate
+problem: the identity provider is pinned to the public origin (`KC_HOSTNAME`),
+and the pipeline container cannot resolve that name to the proxy. The log line
+is `OIDC login unavailable` with `reason=discovery_failed`.
+
+The standalone compose file already sets `PIPELINE_OIDC_INTERNAL_BASE_URL` to
+`https://proxy:8443`, so discovery and the token exchange go to the proxy's
+in-network name while the browser and the `iss` claim keep the public origin. If
+you run the pieces by hand, set the same variable, and keep
+`PIPELINE_OIDC_ALLOW_PRIVATE_JWKS=1` so the fetch's private-address guard accepts
+the proxy's in-network address. The public issuer stays the value in
+`PIPELINE_OIDC_ISSUER`; do not point that at `proxy`, or the `iss` check and the
+browser redirect will both fail.
 
 ### A realm edit does not take effect
 

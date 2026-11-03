@@ -221,6 +221,7 @@ def _finish_login(config: core.OidcLoginConfig, request: Request) -> Response:
                 "client_secret": secret,
                 "code_verifier": pending.code_verifier,
             },
+            allow_private=config.allow_private,
         )
     except core.OidcLoginError:
         return _refuse(401, core.AUTHENTICATION_FAILED, "token_exchange_failed")

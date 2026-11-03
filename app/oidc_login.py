@@ -84,6 +84,12 @@ ENV_CLIENT_SECRET_FILE = "PIPELINE_OIDC_CLIENT_SECRET_FILE"
 ENV_REDIRECT_URI = "PIPELINE_OIDC_REDIRECT_URI"
 ENV_ISSUER = "PIPELINE_OIDC_ISSUER"
 
+#: Optional in-network origin used only for server-side fetches (discovery and
+#: the token exchange). The browser still redirects to the public issuer; the
+#: identity provider keeps issuing tokens under that public name. Without it a
+#: self-hosted IdP behind the compose network is unreachable from the server.
+ENV_INTERNAL_BASE_URL = "PIPELINE_OIDC_INTERNAL_BASE_URL"
+
 #: The three variables that switch the flow on: all of them or none.
 LOGIN_ENV = (ENV_CLIENT_ID, ENV_CLIENT_SECRET_FILE, ENV_REDIRECT_URI)
 
@@ -197,6 +203,8 @@ class OidcLoginConfig:
     client_secret_file: str = field(default="", repr=False)
     redirect_uri: str = ""
     issuer: str = ""
+    internal_base_url: str = ""
+    allow_private: bool = False
 
 
 @dataclass
@@ -315,6 +323,14 @@ def load_config(env: Mapping[str, str] | None = None) -> OidcLoginConfig:
     _require_https(issuer, ENV_ISSUER)
     _require_https(values[ENV_REDIRECT_URI], ENV_REDIRECT_URI)
 
+    internal_base = (source.get(ENV_INTERNAL_BASE_URL) or "").strip().rstrip("/")
+    if internal_base:
+        _require_https(internal_base, ENV_INTERNAL_BASE_URL)
+    allow_private = str(source.get(oidc.OIDC_ALLOW_PRIVATE_JWKS_ENV, "")).strip().lower() in (
+        "1",
+        "true",
+    )
+
     problem = _secret_file_problem(values[ENV_CLIENT_SECRET_FILE])
     if problem is not None:
         raise OidcLoginConfigError(
@@ -327,6 +343,8 @@ def load_config(env: Mapping[str, str] | None = None) -> OidcLoginConfig:
         client_secret_file=values[ENV_CLIENT_SECRET_FILE],
         redirect_uri=values[ENV_REDIRECT_URI],
         issuer=issuer.rstrip("/"),
+        internal_base_url=internal_base,
+        allow_private=allow_private,
     )
 
 
@@ -438,6 +456,27 @@ def _post_form(
 # ---------------------------------------------------------------------------
 
 
+def _server_side_url(config: OidcLoginConfig, url: str) -> str:
+    """Return *url* with its origin replaced by the configured internal base.
+
+    The identity provider is pinned to a public name (``KC_HOSTNAME``), so the
+    discovery document it serves names the public origin everywhere. A server
+    inside the compose network cannot resolve that name to itself, so the
+    server-only legs (discovery fetch and token exchange) are issued against an
+    in-network origin instead. The public issuer is still what the document is
+    validated against, and the browser still follows the public authorization
+    endpoint: only the origin of a server-side request changes.
+    """
+    base = config.internal_base_url
+    if not base:
+        return url
+    parsed = urllib.parse.urlsplit(url)
+    internal = urllib.parse.urlsplit(base)
+    return urllib.parse.urlunsplit(
+        (internal.scheme, internal.netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
 def _discovery(config: OidcLoginConfig) -> dict[str, str]:
     """Return the issuer's endpoints, cached for ``DISCOVERY_TTL_S``.
 
@@ -445,7 +484,7 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
     misdirected or hijacked document cannot point the flow at another party's
     authorization or token endpoint.
     """
-    url = config.issuer + DISCOVERY_SUFFIX
+    url = _server_side_url(config, config.issuer + DISCOVERY_SUFFIX)
     now = _now()
     with _LOCK:
         cached = _DISCOVERY.get(config.issuer)
@@ -458,7 +497,7 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
         raise OidcLoginError("discovery recently failed")
 
     try:
-        document = _fetch_json(url)
+        document = _fetch_json(url, allow_private=config.allow_private)
         if document.get("issuer") != config.issuer:
             raise OidcLoginError("discovery issuer mismatch")
         endpoints: dict[str, str] = {}
@@ -467,8 +506,14 @@ def _discovery(config: OidcLoginConfig) -> dict[str, str]:
             if not isinstance(value, str) or not value.startswith("https://"):
                 raise OidcLoginError("discovery document incomplete")
             endpoints[name] = value
+        # The browser is sent to authorization_endpoint, so it stays public.
+        # The token exchange is server-side, so it follows the internal base.
+        endpoints["token_endpoint"] = _server_side_url(
+            config, endpoints["token_endpoint"]
+        )
         # Optional: not every provider supports RP-initiated logout, and a value
-        # that is not an https URL is ignored rather than followed.
+        # that is not an https URL is ignored rather than followed. Logout is a
+        # browser redirect, so it stays on the public origin.
         end_session = document.get("end_session_endpoint")
         if isinstance(end_session, str) and end_session.startswith("https://"):
             endpoints["end_session_endpoint"] = end_session

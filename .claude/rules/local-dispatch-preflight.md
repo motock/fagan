@@ -11,8 +11,9 @@
 **The point of this pipeline is local and open-weight models.** A plan that
 only succeeds on Claude/frontier models has failed its purpose. Every story
 dispatched to a non-Claude tier must pass all of the checks below, and the
-plan author (not the executor, not the reviewer) owns them. A weak executor
-cannot recover from a plan defect; it can only burn its rework budget on it.
+plan author (not the executor, not the reviewer) owns them. No executor,
+however capable, can recover from an ambiguous plan defect; each one burns a
+rework cycle. This is an authoring failure class, not a model-strength one.
 
 ## Why a checklist and not more prose
 
@@ -59,7 +60,27 @@ For each story, in a scratch worktree off current `master`
    - **split** the reconciling test edit into its own prerequisite story.
 4. Also note any failure that reproduces on untouched `master` — that is a
    broken baseline; fix or quarantine it before dispatching anything.
-5. Remove the scratch worktree.
+5. Quote the applied stand-in into the story's `agent_instructions` verbatim
+   (the diff or the exact resulting lines) while the worktree still exists,
+   then remove the scratch worktree. The preflight is the known-good patch;
+   keep it instead of making the executor re-derive it.
+
+### 1b. Read the brief as an executor, line by line
+
+The impact run proves the change is compatible with the suite; it does not
+prove the brief is unambiguous. Before ingest, simulate the executor:
+
+- Every path named in the brief exists at the base SHA and is the file the
+  behavior actually lives in (not the file the prose names).
+- Every quoted "current" literal appears verbatim in that file; every quoted
+  "new" literal is what the tests and the surrounding code expect.
+- Every change has a verify command, and its expected output is quoted.
+- Grep each new literal across `docs/`, config, and tests: every stale hit is
+  named in the brief and declared in `files`.
+- No instruction relies on a placeholder ("the appropriate path", "the
+  relevant line") or on counting backslashes.
+
+If any check fails, rewrite the brief as one coherent document (see §5).
 
 High-risk test shapes to look for when reading the failures — each one has
 cost a full story on this repo:
@@ -91,10 +112,10 @@ brief or its siblings. It grades every PR as if it were a complete change.
 
 ### 3. Size the tests to the change
 - **Doc-only or config-only stories:** put the `[no-new-tests]` token in `agent_instructions` (the per-story `tdd_split` opt-in was removed; see pipeline-story-schema.md) and
-  prescribe at most one small test (locate the row/key by unique text and
-  assert its cells/value). The always-on test-author phase otherwise writes
-  hundreds of lines of prose assertions (661 lines for a 3-row table edit on
-  2026-09-18) that the executor then drifts into editing.
+  prescribe exactly one small test: the pinning test that reads the changed
+  doc/config and asserts the literal value. The always-on test-author phase
+  otherwise writes hundreds of lines of prose assertions (661 lines for a
+  3-row table edit on 2026-09-18) that the executor then drifts into editing.
 - **Any tier:** if the prescribed tests would be more than ~5x the
   production change, the requirement list is over-specified — cut it to the
   assertions that grade the deliverable.

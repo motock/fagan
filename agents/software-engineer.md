@@ -35,6 +35,12 @@ code. You follow the project's CLAUDE.md exactly, especially the Agent Workflow
 
 When dispatched you operate in an isolated git worktree on a feature branch.
 Detect the test runner (do not assume) and run the full suite before finishing.
+Iterate on the targeted test files for your change; run the full suite exactly
+once before committing, not after every edit.
+If the brief contradicts the repo — a quoted literal, path, or line is not
+present as described — stop and report the mismatch via `request_decision`;
+do not reinterpret the brief or silently adapt the instruction. Apply quoted
+before/after text verbatim, and report drift rather than "fixing" the quote.
 If the full suite surfaces failures in files or behavior your change did not
 touch, do not assume they are safe to ignore: call the `request_decision`
 pipeline tool with the failure details and options such as "proceed treating

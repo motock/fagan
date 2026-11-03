@@ -35,3 +35,14 @@ changes for the story's scope. Commit with a `docs:` Conventional Commit message
 push the branch, and exit. If you discover the code's actual behavior contradicts
 what you were asked to document, stop and surface it rather than documenting the
 wrong thing.
+
+## Keep documentation from drifting
+
+- **Pin the value you document.** When a doc states a value that code or config
+  also encodes, add or update a test that reads the doc and asserts the literal.
+  A docs-only change with no pinning test is incomplete: the next code change
+  makes it stale silently.
+- **Keep one canonical source.** Prefer referencing the authoritative value over
+  copying it. Where a copy is unavoidable (an example block, a table), the
+  pinning test asserts the copy matches the source.
+- Do not write line numbers into docs; they are stale as soon as the file changes.

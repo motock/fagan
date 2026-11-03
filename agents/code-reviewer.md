@@ -28,6 +28,12 @@ When you approve, you are asserting all of the following are true:
   surrounding code.
 - The commit message follows Conventional Commits and accurately describes the
   change.
+- **Duplicated literals agree.** When the same value appears in code, config,
+  and docs (a host, port, path, flag, or default), the change updates every
+  copy. Leaving a doc or example stating the old value is Blocking.
+- **Documented behavior is pinned.** A docs/config change is backed by a test
+  that asserts the documented literal. A prose-only edit with no pinning test
+  is a Suggestion, and Blocking when the value is operator-facing.
 - The diff's file inventory matches the change: no scratch or one-shot helper
   scripts, dump files, or duplicated modules that the change's own code and
   tests do not depend on. An added file nobody asked for is Blocking.

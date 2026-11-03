@@ -600,6 +600,23 @@ fi
 # error and delivers nothing.
 chmod 644 "$NOTIFY_CONFIG_FILE"
 
+# Plan approval (SAD-01): safety gates default on (ADR 0004), so an ingested
+# plan waits for approve_plan on a fresh install. Read the existing value with
+# env_get, never resolve(): resolve() treats an explicit empty as absent and
+# would flip an operator's deliberate `PIPELINE_PLAN_APPROVAL=` (off, per
+# approval_enabled()) back to the default. Validate before the heredoc below
+# rewrites .env, so an unusable value aborts without touching the file.
+PLAN_APPROVAL=1
+if existing_approval="$(env_get PIPELINE_PLAN_APPROVAL "$ENV_FILE")"; then
+  PLAN_APPROVAL="$existing_approval"
+fi
+case "$PLAN_APPROVAL" in
+  ""|on|1|true|off|0|false) ;;
+  *)
+    fail "PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL is not a value approval_enabled() accepts; use one of on, 1, true, off, 0, false, or empty for off"
+    ;;
+esac
+
 if [ -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
@@ -618,6 +635,10 @@ CADDY_TLS=internal
 
 PIPELINE_REPO_URL_HOSTS=$REPO_HOSTS
 OLLAMA_ENDPOINT=$OLLAMA_ENDPOINT
+
+# ---- Plan approval --------------------------------------------------------
+
+PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL
 
 # ---- Identity (Keycloak) --------------------------------------------------
 
@@ -644,6 +665,7 @@ EOF
 chmod 600 "$ENV_FILE"
 
 log "install.sh: wrote $ENV_FILE and $SECRETS_DIR (mode 0600)"
+log "install.sh: PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL: when on, an ingested plan dispatches only after its owner or a delegate runs approve_plan; off/0/false/empty disables approval"
 
 # The realm template references the same ${env.*} names compose passes to
 # Keycloak. Export this run's resolved values and render the template here: an

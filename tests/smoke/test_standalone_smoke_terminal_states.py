@@ -22,7 +22,14 @@ SMOKE = REPO_ROOT / "deploy" / "standalone" / "smoke.sh"
 
 # The pipeline's real story statuses (set_story_status accepts exactly these).
 NOT_PIPELINE_STATUSES = ("merged", "reviewed", "completed", "success")
-FAILURE_STATUSES = ("failed", "error", "interrupted", "blocked")
+FAILURE_STATUSES = (
+    "failed",
+    "error",
+    "interrupted",
+    "blocked",
+    "parked",
+    "changes_requested",
+)
 
 
 def poll_case_arms() -> tuple[set[str], set[str]]:
@@ -73,3 +80,20 @@ def test_failure_statuses_still_fail_the_smoke() -> None:
     _, failure = poll_case_arms()
 
     assert set(FAILURE_STATUSES) <= failure
+
+
+def test_the_verdict_line_says_review_and_merge_are_out_of_scope() -> None:
+    text = SMOKE.read_text(encoding="utf-8")
+    verdict = re.search(r'^log "PASSED: (.*)"$', text, re.MULTILINE)
+
+    assert verdict, "no PASSED verdict line in smoke.sh"
+    assert "review and merge are out of scope" in verdict.group(1)
+
+
+def test_the_docs_quote_the_smoke_verdict_line() -> None:
+    text = SMOKE.read_text(encoding="utf-8")
+    verdict = re.search(r'^log "(PASSED: .*)"$', text, re.MULTILINE)
+    docs = (REPO_ROOT / "docs" / "DEPLOY_STANDALONE.md").read_text(encoding="utf-8")
+
+    assert verdict, "no PASSED verdict line in smoke.sh"
+    assert f"standalone-smoke: {verdict.group(1)}" in docs

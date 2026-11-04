@@ -1012,7 +1012,7 @@ backend; the stack is not reachable with the base file alone.
 The last line is the verdict:
 
 ```text
-standalone-smoke: PASSED: the standalone install ran a repo_url plan to a terminal state
+standalone-smoke: PASSED: the standalone install ran a repo_url plan through dispatch and grading (tests_passed); review and merge are out of scope
 ```
 
 Before it, the run walks through the stages it completed — for example

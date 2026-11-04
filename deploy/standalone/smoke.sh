@@ -283,7 +283,9 @@ seed_repository() {
     # Mode bits are not enough: git in the container (uid 10001) refuses a repository
     # owned by another user ("dubious ownership"). Last step, after the push above.
     # shellcheck disable=SC2086  # $SUDO is empty or the word `sudo`
-    [ -z "$SUDO" ] || $SUDO chown -R 10001:10001 "$TMP/repo.git"
+    # Skipped only on macOS (Docker Desktop maps ownership); a root runner has an empty
+    # SUDO and chowns directly.
+    [ "$(uname -s)" = "Darwin" ] || $SUDO chown -R 10001:10001 "$TMP/repo.git"
     log "seeded the bare repository"
 }
 
@@ -681,7 +683,7 @@ print(payload.get("status") or "unknown")
                 log "story $STORY_KEY reached ${state}"
                 return 0
                 ;;
-            failed | error | interrupted | blocked)
+            failed | error | interrupted | blocked | parked | changes_requested)
                 fail "story $STORY_KEY ended in '${state}'"
                 ;;
         esac
@@ -721,4 +723,4 @@ check_metadata
 call_tools
 poll_for_terminal_state
 
-log "PASSED: the standalone install ran a repo_url plan to a terminal state"
+log "PASSED: the standalone install ran a repo_url plan through dispatch and grading (tests_passed); review and merge are out of scope"

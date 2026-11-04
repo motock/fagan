@@ -37,15 +37,20 @@ def test_seed_repository_hands_the_repo_to_the_container_git_user() -> None:
     assert CHOWN in seed_repository_body()
 
 
-def test_the_chown_is_escalated_only_when_sudo_is_set() -> None:
-    # macOS leaves SUDO empty (Docker Desktop maps ownership) and an unattended
-    # local run must not prompt for sudo.
+def test_the_chown_is_skipped_only_on_macos() -> None:
+    # Docker Desktop maps ownership on macOS, so no chown (and no sudo prompt) there.
+    # On Linux it must run for a non-root runner (SUDO=sudo) and for a root runner
+    # (SUDO empty), so it is keyed on the OS, not on SUDO being set.
     chown_lines = [
         line for line in seed_repository_body().splitlines() if CHOWN in line
     ]
 
     assert chown_lines, "no chown line in seed_repository()"
-    assert chown_lines[0].lstrip().startswith('[ -z "$SUDO" ] || $SUDO chown')
+    assert (
+        chown_lines[0]
+        .lstrip()
+        .startswith('[ "$(uname -s)" = "Darwin" ] || $SUDO chown')
+    )
 
 
 def test_the_chown_runs_after_the_seed_push() -> None:

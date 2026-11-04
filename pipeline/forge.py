@@ -22,6 +22,8 @@ import threading
 from logging import getLogger
 from typing import Any, Protocol
 
+from app.plugin_loader import load_plugin, require_methods
+
 logger = getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -244,18 +246,44 @@ def _register_adapters() -> None:
     _ADAPTERS.setdefault("gitlab", GitLabForge)
 
 
+# The PR verbs a plugin adapter must provide. Validated by require_methods so a
+# half-implemented adapter fails at load time, not mid-merge.
+_FORGE_METHODS = (
+    "open_pr",
+    "update_pr_title",
+    "comment_pr",
+    "merge_pr",
+    "pr_title",
+    "pr_state",
+    "checks_status",
+    "has_ci_config",
+    "checks_snapshot",
+    "failure_excerpt",
+    "rerun_failed",
+    "prepare_merge",
+)
+
+
 def get_forge(repo_root: str) -> Forge:
     """The forge adapter for ``repo_root``, cached per repo root.
 
     The same ``repo_root`` returns the identical instance and the remote is
     read at most once per repo root per process; distinct roots get distinct
-    instances.
+    instances. When ``PIPELINE_FORGE_PLUGIN`` is set, the plugin factory
+    receives the repository root and its adapter is cached per key.
     """
     key = str(repo_root)
     with _CACHE_LOCK:
         cached = _CACHE.get(key)
         if cached is not None:
             return cached
+
+        factory = load_plugin("forge", selector=_FORGE_ENV, selector_default="auto")
+        if factory is not None:
+            adapter = factory(key)
+            require_methods(adapter, _FORGE_METHODS, "forge")
+            _CACHE[key] = adapter
+            return adapter
 
         name = resolve_forge_name(key)
         _register_adapters()

@@ -49,8 +49,12 @@ def _serve_with_fakes(
         uvicorn_calls.append((args, kwargs))
 
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=_run))
+    # ``network_grade=True`` is the capability the real provider declares; a
+    # spec'd Mock alone exposes a child Mock there and the guard refuses it.
     monkeypatch.setattr(
-        rt, "build_identity_provider", lambda *a, **k: Mock(spec=OidcProvider)
+        rt,
+        "build_identity_provider",
+        lambda *a, **k: Mock(spec=OidcProvider, network_grade=True),
     )
     rt.serve(mcp, environ=env)
     return mcp, uvicorn_calls
@@ -127,8 +131,12 @@ def test_serve_refuses_to_start_with_enforcement_zero(
     monkeypatch.setitem(
         sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None)
     )
+    # ``network_grade=True`` is the capability the real provider declares; a
+    # spec'd Mock alone exposes a child Mock there and the guard refuses it.
     monkeypatch.setattr(
-        rt, "build_identity_provider", lambda *a, **k: Mock(spec=OidcProvider)
+        rt,
+        "build_identity_provider",
+        lambda *a, **k: Mock(spec=OidcProvider, network_grade=True),
     )
     with pytest.raises(SystemExit, match="PIPELINE_POLICY_ENFORCE"):
         rt.serve(mcp, environ=env)
@@ -143,8 +151,12 @@ def test_serve_refuses_to_start_with_enforcement_off(
     monkeypatch.setitem(
         sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None)
     )
+    # ``network_grade=True`` is the capability the real provider declares; a
+    # spec'd Mock alone exposes a child Mock there and the guard refuses it.
     monkeypatch.setattr(
-        rt, "build_identity_provider", lambda *a, **k: Mock(spec=OidcProvider)
+        rt,
+        "build_identity_provider",
+        lambda *a, **k: Mock(spec=OidcProvider, network_grade=True),
     )
     with pytest.raises(SystemExit, match="PIPELINE_POLICY_ENFORCE"):
         rt.serve(mcp, environ=env)

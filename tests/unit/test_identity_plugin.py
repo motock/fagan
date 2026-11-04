@@ -9,14 +9,16 @@ real process environment never decides the outcome.
 from __future__ import annotations
 
 import importlib
+import sys
 import textwrap
+import types
 
 import pytest
 
 from app.identity import IdentityError, SharedSecretProvider
 from app.oidc import IDENTITY_PROVIDER_ENV, build_identity_provider
 from pipeline import remote_transport as rt
-from tests.unit.test_remote_transport_serve import _serve_with_fakes
+from tests.unit.test_remote_transport_serve import FakeMCP
 
 IDENTITY_PLUGIN_ENV = "PIPELINE_IDENTITY_PLUGIN"
 REMOTE_ENV = {"PIPELINE_MCP_TRANSPORT": "streamable-http", IDENTITY_PROVIDER_ENV: "oidc"}
@@ -191,10 +193,40 @@ def test_middleware_accepts_plugin_provider_declaring_network_grade(
     middleware = rt.BearerAuthMiddleware(object(), provider)
 
     assert middleware is not None
-    # The transport's own serve path builds the same gate via this helper, and
-    # a network_grade-capable provider passes it.
-    _mcp, uvicorn_calls = _serve_with_fakes(monkeypatch, REMOTE_ENV)
-    assert isinstance(uvicorn_calls[0][0][0], rt.BearerAuthMiddleware)
+
+
+def test_remote_serve_refuses_a_plugin_before_reaching_the_gate(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the real, unpatched ``serve`` path against this test's provider.
+
+    The transport's start-up gate still demands ``PIPELINE_IDENTITY_PROVIDER=oidc``
+    (pipeline/remote_transport.py::_settings_from_env), and the loader rejects
+    that selector as a conflict with the plugin variable, so a plugin cannot yet
+    be wired to the remote transport. This asserts the refusal happens at
+    provider build time - never a silent fallback to the built-in provider and
+    never a bound socket - so that whichever story changes the gate has a
+    failing test to update deliberately.
+    """
+    spec = _write_plugin(
+        tmp_path,
+        monkeypatch,
+        "identity_plugin_serve_gate",
+        _provider_source(network_grade=True),
+    )
+    uvicorn_calls: list[object] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        types.SimpleNamespace(run=lambda *a, **k: uvicorn_calls.append((a, k))),
+    )
+    env = dict(REMOTE_ENV, **{IDENTITY_PLUGIN_ENV: spec})
+
+    with pytest.raises(IdentityError) as excinfo:
+        rt.serve(FakeMCP(), environ=env)
+
+    assert "conflicts" in str(excinfo.value)
+    assert uvicorn_calls == []
 
 
 def test_plugin_identity_error_passes_through(

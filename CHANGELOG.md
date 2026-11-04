@@ -9,6 +9,17 @@ in practice.
 
 ## [Unreleased]
 
+### Fixed
+
+- A notification channel that keeps failing now backs off - one minute,
+  doubling up to an hour - instead of retrying on every scheduler tick, so a
+  broken channel stops hammering its endpoint. The email channel now reports a
+  disconnect during the login phase instead of failing silently, and treats a
+  temporary 4xx authentication reply as retryable rather than permanent.
+  Queued notifications older than 7 days are dropped at drain time, so a
+  channel that recovers after a long outage no longer flushes weeks of stale
+  messages at once.
+
 ## [0.9.0] - 2026-11-03
 
 ### Changed

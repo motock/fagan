@@ -463,7 +463,9 @@ the spooling sink performs no network I/O at all and only the scheduler's
 drain pays that cost, on its own schedule. A record the sender accepts is
 removed from the spool; a record it rejects — or that makes the sender raise
 — is retained verbatim for the next drain, so a transient SMTP outage delays
-delivery instead of losing the notification.
+delivery instead of losing the notification. A record older than seven days is
+dropped at drain time instead of being sent, with one WARNING that names only
+the outbox file, so a recovered channel does not flush a stale backlog.
 
 **Configuration** (all opt-in; the outbox spool and the e-mail send are
 disabled by default):
@@ -502,11 +504,12 @@ mandatory certificate verification is always on
 (`pipeline/notification_email.py:176`–177); there is no subject or TLS toggle
 to configure.
 
-A failed send never drops the record: the drain rewrites the spool atomically
-and keeps every record the sender did not accept, so delivery is
-at-least-once. The e-mail sender fails closed on partial configuration
-(missing host, recipient, or sender) and logs the missing variable names,
-never their values.
+A failed send never drops a record younger than seven days: the drain rewrites
+the spool atomically and keeps every record the sender did not accept, so
+delivery is at-least-once within that age; older records are dropped at drain
+time (see Outbox sink above). The e-mail sender fails closed on partial
+configuration (missing host, recipient, or sender) and logs the missing
+variable names, never their values.
 
 ### Which events are e-mailed by default
 

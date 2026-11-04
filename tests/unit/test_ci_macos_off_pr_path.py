@@ -64,6 +64,25 @@ def test_matrix_os_line_uses_event_name():
     )
 
 
+def test_rationale_does_not_claim_a_pre_pr_signal():
+    """The comment above the matrix must describe the new cadence.
+
+    macOS no longer runs on pull requests, so a rationale that calls this leg
+    a pre-PR signal contradicts the matrix expression right below it.
+    """
+    # Comments are wrapped, so normalise away the `#` markers and line breaks
+    # before matching phrases.
+    raw = " ".join(re.sub("#", " ", _WORKFLOW.read_text()).split())
+    assert "pre-PR signal" not in raw, (
+        "the ci.yml matrix rationale still calls the macOS leg a pre-PR signal, "
+        "but macOS no longer runs on pull requests"
+    )
+    assert "caught within a day" in raw, (
+        "the ci.yml matrix rationale must state that a macOS-only break is "
+        "still caught within a day"
+    )
+
+
 def test_pull_request_branch_is_ubuntu_only_and_other_branch_has_both():
     line = _os_expression_line(_workflow_text())
     pull_request_part, _, other_part = line.partition("||")

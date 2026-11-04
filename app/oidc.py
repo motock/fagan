@@ -37,6 +37,8 @@ from typing import Any
 import httpx
 import jwt
 
+from app.plugin_loader import PluginError, load_plugin, require_methods
+
 from .identity import (
     ROLES,
     SYSTEM_SUBJECT_PREFIX,
@@ -677,9 +679,22 @@ def build_identity_provider(
     ``secret_reader``, so rotation still takes effect per request. Any value
     other than ``shared-secret`` or ``oidc`` raises rather than falling back to
     the permissive local principal - an unknown setting must not silently
-    downgrade authentication (ADR 0004).
+    downgrade authentication (ADR 0004). A plugin selected by the
+    operator-controlled ``PIPELINE_IDENTITY_PLUGIN=module:attr`` variable wins
+    over the built-in choice; a bad plugin spec raises rather than falling back.
     """
     env = os.environ if environ is None else environ
+    # Scope: plugin identity providers serve the remote MCP transport and
+    # build_identity_provider callers; app/oidc_login.py's dashboard browser
+    # login is OIDC-specific and is not changed here.
+    try:
+        factory = load_plugin("identity", env, selector=IDENTITY_PROVIDER_ENV, selector_default=_SHARED_SECRET)
+        if factory is not None:
+            provider = factory(secret_reader, env)
+            require_methods(provider, ("authenticate",), "identity")
+            return provider
+    except PluginError as exc:
+        raise IdentityError(f"invalid identity plugin: {exc}") from None
     raw = str(env.get(IDENTITY_PROVIDER_ENV, _SHARED_SECRET)).strip()
     if raw in ("", _SHARED_SECRET):
         return SharedSecretProvider(secret_reader)

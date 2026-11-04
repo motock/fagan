@@ -1,7 +1,8 @@
 """OIDC identity provider: JWKS-backed JWT verification (ADR 0009 phase 6).
 
-Free-standing like ``app.identity``: it imports the identity types and nothing
-else from ``app.*``, so the service layer can depend on it without a cycle.
+Free-standing like ``app.identity``: besides the identity types it imports only
+the plugin loader from ``app.*``, so the service layer can depend on it without
+a cycle.
 
 Verification rules, each load-bearing:
 
@@ -36,6 +37,8 @@ from typing import Any
 
 import httpx
 import jwt
+
+from app.plugin_loader import PluginError, load_plugin, require_methods
 
 from .identity import (
     ROLES,
@@ -677,9 +680,33 @@ def build_identity_provider(
     ``secret_reader``, so rotation still takes effect per request. Any value
     other than ``shared-secret`` or ``oidc`` raises rather than falling back to
     the permissive local principal - an unknown setting must not silently
-    downgrade authentication (ADR 0004).
+    downgrade authentication (ADR 0004). A plugin selected by the
+    operator-controlled ``PIPELINE_IDENTITY_PLUGIN=module:attr`` variable wins
+    over the built-in choice; a bad plugin spec raises rather than falling back.
     """
     env = os.environ if environ is None else environ
+    # Scope, stated precisely: this selection makes a plugin the provider that
+    # build_identity_provider returns, but it does NOT by itself put that
+    # provider in front of any request. The remote MCP transport still refuses
+    # to serve unless ``PIPELINE_IDENTITY_PROVIDER=oidc``
+    # (pipeline/remote_transport.py::_settings_from_env), and that selector
+    # conflicts with the plugin variable below, so wiring a plugin to the
+    # remote transport needs a separate change to that gate. The dashboard
+    # only consults an OidcProvider and stays on its API-key path otherwise,
+    # and app/oidc_login.py's browser login is OIDC-specific and untouched.
+    try:
+        factory = load_plugin(
+            "identity",
+            env,
+            selector=IDENTITY_PROVIDER_ENV,
+            selector_default=_SHARED_SECRET,
+        )
+        if factory is not None:
+            provider = factory(secret_reader, env)
+            require_methods(provider, ("authenticate",), "identity")
+            return provider
+    except PluginError as exc:
+        raise IdentityError(f"invalid identity plugin: {exc}") from None
     raw = str(env.get(IDENTITY_PROVIDER_ENV, _SHARED_SECRET)).strip()
     if raw in ("", _SHARED_SECRET):
         return SharedSecretProvider(secret_reader)

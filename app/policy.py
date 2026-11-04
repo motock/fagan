@@ -1,17 +1,27 @@
 """Deny-by-default authorization policy for the tenancy seam (ADR 0009).
 
-This is the authorization half of the ADR 0009 seam: a pure, stateless policy
-over a verified :class:`app.identity.Principal`. It is inert in this plan —
-nothing calls it yet — so it is written to be strictly deny-by-default and to
-fail closed, because the enforcement plan will trust it as written.
+This is the authorization half of the ADR 0009 seam: a policy over a verified
+:class:`app.identity.Principal`. It is written to be strictly deny-by-default
+and to fail closed, because the enforcement path trusts it as written.
 
-It imports ``app.identity`` only: never ``app.auth`` (an adapter concern) and
-never ``pipeline.*`` (the service layer that will call it).
+Trust boundary, stated honestly: the authorizer is selected by the
+operator-controlled ``PIPELINE_AUTHORIZER_PLUGIN=module:attr`` (see
+:mod:`app.plugin_loader`), so whoever can set that variable chooses the code
+that defines every ADR 0009 allow/deny decision — the same "setting the
+variable is code execution in the orchestrator" boundary the plugin loader
+documents, extended to the policy itself. The resolved authorizer may be an
+arbitrary operator-supplied, stateful object, not just :class:`LocalPolicy`.
+
+The policy is resolved once per process and frozen thereafter, so a later write
+to ``PIPELINE_AUTHORIZER_PLUGIN`` cannot change a running process's decisions.
+It imports ``app.identity`` and ``app.plugin_loader`` only: never ``app.auth``
+(an adapter concern) and never ``pipeline.*`` (the service layer that calls it).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -24,6 +34,7 @@ from app.identity import (
     SYSTEM_WORKER,
     Principal,
 )
+from app.plugin_loader import PluginError, load_plugin, plugin_spec, require_methods
 
 logger = logging.getLogger(__name__)
 
@@ -230,9 +241,64 @@ class LocalPolicy:
         )
 
 
+#: The operator-controlled variable that selects the authorizer seam.
+AUTHORIZER_PLUGIN_ENV = "PIPELINE_AUTHORIZER_PLUGIN"
+
+#: The authorizer resolved at first use and then frozen for the process
+#: lifetime. Re-reading the environment per decision would let any in-process
+#: writer redefine who is allowed, with no restart and no audit record.
+_AUTHORIZER: Authorizer | None = None
+
+#: Serialises the one-time build so concurrent first callers cannot each build
+#: a separate authorizer (and silently discard one). Never held while calling
+#: the authorizer's own ``allow``: only the build runs under it. A plugin
+#: factory must not call :func:`default_authorizer` from its own build code —
+#: that would re-enter this lock on the same thread and deadlock.
+_AUTHORIZER_LOCK = threading.Lock()
+
+
 def default_authorizer() -> Authorizer:
-    """Return the authorizer for this deployment."""
-    return LocalPolicy()
+    """Return the authorizer for this deployment, resolved once per process.
+
+    ``PIPELINE_AUTHORIZER_PLUGIN=module:attr`` selects an operator-supplied
+    authorizer in place of :class:`LocalPolicy`. A bad spec raises
+    :class:`~app.plugin_loader.PluginError` rather than falling back — silently
+    keeping ``LocalPolicy`` would change who is allowed — and the resolved
+    instance is cached, so a stateful authorizer (for example one holding a
+    database connection) is built once and later environment writes cannot
+    alter this process's decisions.
+    """
+    global _AUTHORIZER
+    if _AUTHORIZER is not None:
+        return _AUTHORIZER
+    with _AUTHORIZER_LOCK:
+        if _AUTHORIZER is not None:
+            return _AUTHORIZER
+        factory = load_plugin("authorizer")
+        if factory is None:
+            if plugin_spec("authorizer") is not None:
+                # The variable resolved a moment ago: a factory is missing, so
+                # fail loudly instead of calling None outside the fail-closed
+                # wrapper. ``PluginError`` is never downgraded to LocalPolicy.
+                raise PluginError(
+                    f"{AUTHORIZER_PLUGIN_ENV} is set but no authorizer plugin "
+                    "factory could be resolved"
+                )
+            logger.warning(
+                "no plugin configured for a security-sensitive seam",
+                extra={
+                    "plugin_seam": "authorizer",
+                    "plugin_env": AUTHORIZER_PLUGIN_ENV,
+                },
+            )
+            _AUTHORIZER = LocalPolicy()
+            return _AUTHORIZER
+        authorizer = factory()
+        # Validate before caching: an unvalidated object must never be handed
+        # back to a later decision (that would run with no policy at all).
+        require_methods(authorizer, ("allow",), "authorizer")
+        _AUTHORIZER = authorizer
+        return _AUTHORIZER
 
 
 def _action_label(action: object) -> str:

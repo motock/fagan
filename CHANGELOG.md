@@ -122,7 +122,7 @@ in practice.
 
 ### Fixed
 
-- Standalone installer rendered the Keycloak realm file `0600`, which the container user (uid 1000) could not read when the installing user was not uid 1000, so the IdP crash-looped; the installer now relaxes only the published `$STATE_DIR/import/realm.json` to `0644` after rendering it `0600`, so that file is world-readable and must not be copied out of its `0700` import directory (the directory mode is the only control on the client secrets at rest). `--render-realm` still writes `0600`.
+- Standalone installer rendered the Keycloak realm file `0600`, which the container user (uid 1000) could not read when the installing user was not uid 1000, so the IdP crash-looped; `render_realm` now publishes it `0644`, and the client secrets stay private because every caller renders into a `0700` directory (install.sh's `$STATE_DIR/import`, created `mkdir -m 0700` and refused if symlinked or foreign-owned, and the documented manual recipe's `deploy/standalone/import`) — never copy `realm.json` out of that directory.
 
 ## [0.8.0] - 2026-10-22
 

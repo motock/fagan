@@ -150,17 +150,14 @@ render_realm() { # $1 template, $2 rendered file
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  # The rendered file carries the OIDC client secrets, so the helper keeps both the
-  # temp file and DST at 0600 for every caller (including `--render-realm`, where
-  # DST is caller-chosen and has no private parent). The install path relaxes the
-  # published file once, below, inside the 0700 import/ directory.
-  chmod 0600 "$tmp"
+  # 0644: the Keycloak container user (uid 1000) must read this file; the 0700 import dir keeps the secrets private.
+  chmod 0644 "$tmp"
   if ! mv -- "$tmp" "$dst"; then
     printf 'render_realm: cannot write %s\n' "$dst" >&2
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0600 "$dst"
+  chmod 0644 "$dst"
 }
 
 # `install.sh --render-realm SRC DST` only renders the template and stops: no
@@ -741,15 +738,15 @@ export PIPELINE_DASHBOARD_CLIENT_SECRET PIPELINE_MCP_CLIENT_SECRET
 # with resolved client secrets and a re-run (documented as safe) would abort with
 # "no ${env.*} placeholders found". import/ only ever holds rendered files.
 RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"
-mkdir -p -- "$STATE_DIR/import"
+# The published realm is 0644 so the Keycloak container user can read it, which
+# makes this directory 0700 the control that keeps the client secrets private:
+# create it private in one step, and refuse a symlinked or foreign-owned dir so
+# nobody can redirect where the secrets land or which directory gets tightened.
+mkdir -m 0700 -p -- "$STATE_DIR/import"
+[ -L "$STATE_DIR/import" ] && fail "$STATE_DIR/import must not be a symlink"
+[ -O "$STATE_DIR/import" ] || fail "$STATE_DIR/import is not owned by the current user"
 chmod 700 "$STATE_DIR/import"
 render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"
-# render_realm publishes at 0600; Keycloak imports the file as uid 1000 in the
-# container and is bind-mounted read-only, so it cannot read a 0600 file owned by
-# any other uid. Relax only this copy, inside the 0700 import/ directory above:
-# the directory mode is now the sole control on these client secrets at rest, so
-# never copy realm.json out of it (backup, `docker cp`, operator `cp`).
-chmod 0644 "$RENDERED_REALM_FILE"
 log "install.sh: rendered $RENDERED_REALM_FILE"
 
 # The compose file bind-mounts $STATE_DIR/model_registry.json as the server's

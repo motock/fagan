@@ -120,6 +120,10 @@ in practice.
   new SHA-256 pin, exact enumeration or exact count of a cumulative artifact
   in `tests/`, against a baseline that may only shrink.
 
+### Fixed
+
+- Standalone installer rendered the Keycloak realm file `0600`, which the container user (uid 1000) could not read when the installing user was not uid 1000, so the IdP crash-looped; `render_realm` now publishes it `0644`, and the client secrets stay private because every caller renders into a `0700` directory (install.sh's `$STATE_DIR/import`, created `mkdir -m 0700` and refused if symlinked or foreign-owned, and the documented manual recipe's `deploy/standalone/import`) — never copy `realm.json` out of that directory.
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

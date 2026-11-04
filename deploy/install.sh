@@ -150,13 +150,14 @@ render_realm() { # $1 template, $2 rendered file
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0600 "$tmp"
+  # 0644: the Keycloak container user (uid 1000) must read this file; the 0700 import dir keeps the secrets private.
+  chmod 0644 "$tmp"
   if ! mv -- "$tmp" "$dst"; then
     printf 'render_realm: cannot write %s\n' "$dst" >&2
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0600 "$dst"
+  chmod 0644 "$dst"
 }
 
 # `install.sh --render-realm SRC DST` only renders the template and stops: no
@@ -737,7 +738,13 @@ export PIPELINE_DASHBOARD_CLIENT_SECRET PIPELINE_MCP_CLIENT_SECRET
 # with resolved client secrets and a re-run (documented as safe) would abort with
 # "no ${env.*} placeholders found". import/ only ever holds rendered files.
 RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"
-mkdir -p -- "$STATE_DIR/import"
+# The published realm is 0644 so the Keycloak container user can read it, which
+# makes this directory 0700 the control that keeps the client secrets private:
+# create it private in one step, and refuse a symlinked or foreign-owned dir so
+# nobody can redirect where the secrets land or which directory gets tightened.
+mkdir -m 0700 -p -- "$STATE_DIR/import"
+[ -L "$STATE_DIR/import" ] && fail "$STATE_DIR/import must not be a symlink"
+[ -O "$STATE_DIR/import" ] || fail "$STATE_DIR/import is not owned by the current user"
 chmod 700 "$STATE_DIR/import"
 render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"
 log "install.sh: rendered $RENDERED_REALM_FILE"
@@ -791,6 +798,8 @@ fi
 log "install.sh: starting the stack (this builds the pipeline image on first run)"
 # Must be exported in this shell: compose aborts on ${STANDALONE_REALM_FILE:?...}.
 export STANDALONE_REALM_FILE="$RENDERED_REALM_FILE"
+# Same reason: compose() runs without --env-file, so export the notify config too.
+export STANDALONE_NOTIFY_CONFIG="$NOTIFY_CONFIG_FILE"
 compose up -d --build --wait
 
 ready_url="https://$HOSTNAME:$PORT/realms/$REALM/.well-known/openid-configuration"

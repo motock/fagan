@@ -103,14 +103,14 @@ def test_client_descriptions_fit_the_keycloak_column(tmp_path: Path) -> None:
         )
 
 
-def test_rendered_file_is_private(tmp_path: Path) -> None:
+def test_rendered_file_is_readable_by_the_keycloak_user(tmp_path: Path) -> None:
     dst = tmp_path / "realm.json"
 
     result = run_render(TEMPLATE, dst, sample_env())
 
     assert result.returncode == 0, result.stderr
     assert dst.exists()
-    assert os.stat(dst).st_mode & 0o777 == 0o600
+    assert os.stat(dst).st_mode & 0o777 == 0o644
 
 
 def test_missing_variable_fails_by_name_and_writes_nothing(tmp_path: Path) -> None:

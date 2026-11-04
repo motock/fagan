@@ -140,15 +140,38 @@ cleanup() {
     export PIPELINE_CLI_CALLBACK_PORT="${PIPELINE_CLI_CALLBACK_PORT:-33418}"
     export PIPELINE_DASHBOARD_CLIENT_SECRET="${PIPELINE_DASHBOARD_CLIENT_SECRET:-unused}"
     export PIPELINE_MCP_CLIENT_SECRET="${PIPELINE_MCP_CLIENT_SECRET:-unused}"
-    if [ "${STANDALONE_SMOKE_KEEP:-0}" = "1" ]; then
-        log "STANDALONE_SMOKE_KEEP=1: leaving the stack up. Inspect with: docker compose -f \"$BASE_COMPOSE\" -f \"$OVERRIDE\" ps"
-    else
-        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" down -v >/dev/null 2>&1 || true
-    fi
+    # Moved above the dumps: `$HOME` lives under `$TMP`, and a root-owned
+    # `$HOME/.docker/config.json` (left by the escalated install) makes docker
+    # fail to load the compose plugin, so `compose -f` is parsed as a docker flag
+    # ("unknown shorthand flag: 'f' in -f") and both the failure dump and
+    # `down -v` below die.
     if [ -n "$SUDO" ] && [ -d "$TMP" ]; then
         # The escalated install leaves root-owned files (the state dir, the CA,
         # the client credentials) behind.
         $SUDO chown -R "$(id -u):$(id -g)" "$TMP" >/dev/null 2>&1 || true
+    fi
+    # A failed run must leave its evidence in the job output. The workflow's own
+    # "Show the stack's logs on failure" step runs a bare `docker compose logs`
+    # with no --env-file, so it dies on the `${VAR:?}` interpolation above, and
+    # the `down -v` below then removes the containers: without this dump a
+    # timeout such as "the IdP did not answer" leaves nothing to read.
+    if [ "$status" -ne 0 ]; then
+        # Compose refuses to interpolate compose.yaml without this one; the value
+        # only has to be non-empty (install.sh wrote the real one into $STATE_DIR).
+        export STANDALONE_NOTIFY_CONFIG="${STANDALONE_NOTIFY_CONFIG:-$STATE_DIR/notification.json}"
+        # compose.yaml:157 declares the realm with `${VAR:?}` too, so `ps`/`logs`
+        # would abort on interpolation as well. install.sh --render-realm wrote it
+        # here, so this path exists at cleanup time.
+        export STANDALONE_REALM_FILE="${STANDALONE_REALM_FILE:-$STATE_DIR/import/realm.json}"
+        log "install failed (status $status): container state follows"
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" ps || true
+        log "last 200 log lines of keycloak, proxy and pipeline follow"
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" logs --tail 200 keycloak proxy pipeline || true
+    fi
+    if [ "${STANDALONE_SMOKE_KEEP:-0}" = "1" ]; then
+        log "STANDALONE_SMOKE_KEEP=1: leaving the stack up. Inspect with: docker compose -f \"$BASE_COMPOSE\" -f \"$OVERRIDE\" ps"
+    else
+        docker compose -f "$BASE_COMPOSE" -f "$OVERRIDE" down -v >/dev/null 2>&1 || true
     fi
     if [ "$KEEP_TMP" = "1" ] || [ "$status" -ne 0 ]; then
         log "leaving $TMP in place for inspection"
@@ -196,7 +219,7 @@ secrets:
   # names ./secrets/<name> relative to deploy/standalone, so an install with a
   # separate --state-dir has to re-point them.
 YAML
-    for name in oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key; do
+    for name in oidc_client_secret anthropic_api_key claude_code_oauth_token gh_token ollama_api_key notify_email_password slack_webhook_url; do
         printf '  %s:\n    file: %s\n' "$name" "$STATE_DIR/secrets/$name" >>"$OVERRIDE"
     done
     log "wrote the compose override"
@@ -257,6 +280,12 @@ seed_repository() {
     git -C "$TMP/seed" push -q origin HEAD:main
     # uid 10001 inside the container reads (and pushes) through the bind mount.
     chmod -R a+rwX "$TMP/repo.git"
+    # Mode bits are not enough: git in the container (uid 10001) refuses a repository
+    # owned by another user ("dubious ownership"). Last step, after the push above.
+    # shellcheck disable=SC2086  # $SUDO is empty or the word `sudo`
+    # Skipped only on macOS (Docker Desktop maps ownership); a root runner has an empty
+    # SUDO and chowns directly.
+    [ "$(uname -s)" = "Darwin" ] || $SUDO chown -R 10001:10001 "$TMP/repo.git"
     log "seeded the bare repository"
 }
 
@@ -648,11 +677,13 @@ print(payload.get("status") or "unknown")
         [ "$state" = "$seen" ] || log "story $STORY_KEY is ${state}"
         seen="$state"
         case "$state" in
-            done | merged | reviewed | completed | success)
+            # A file:// bare repo has no PR to open or merge, so `done` is out of reach
+            # here; tests_passed (agent ran, clone worked, grading passed) is the end.
+            done | tests_passed)
                 log "story $STORY_KEY reached ${state}"
                 return 0
                 ;;
-            failed | error | interrupted | blocked)
+            failed | error | interrupted | blocked | parked | changes_requested)
                 fail "story $STORY_KEY ended in '${state}'"
                 ;;
         esac
@@ -692,4 +723,4 @@ check_metadata
 call_tools
 poll_for_terminal_state
 
-log "PASSED: the standalone install ran a repo_url plan to a terminal state"
+log "PASSED: the standalone install ran a repo_url plan through dispatch and grading (tests_passed); review and merge are out of scope"

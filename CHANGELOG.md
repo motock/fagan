@@ -120,6 +120,10 @@ in practice.
   new SHA-256 pin, exact enumeration or exact count of a cumulative artifact
   in `tests/`, against a baseline that may only shrink.
 
+### Fixed
+
+- Standalone installer rendered the Keycloak realm file `0600`, which the container user (uid 1000) could not read when the installing user was not uid 1000, so the IdP crash-looped; the file is now `0644` inside the `0700` import directory.
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

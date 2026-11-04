@@ -150,13 +150,14 @@ render_realm() { # $1 template, $2 rendered file
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0600 "$tmp"
+  # 0644 so the Keycloak container user (uid 1000) can read the bind-mounted file; the secrets stay protected because $STATE_DIR/import is kept at 0700 below.
+  chmod 0644 "$tmp"
   if ! mv -- "$tmp" "$dst"; then
     printf 'render_realm: cannot write %s\n' "$dst" >&2
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0600 "$dst"
+  chmod 0644 "$dst"
 }
 
 # `install.sh --render-realm SRC DST` only renders the template and stops: no

@@ -198,5 +198,8 @@ def _unreleased_section(changelog: str) -> str:
 
 def test_changelog_unreleased_mentions_backoff() -> None:
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    section = _unreleased_section(changelog)
 
-    assert "backs off" in _unreleased_section(changelog)
+    assert "backs off" in section
+    # The operator-facing promise of this change: stale records are dropped.
+    assert "7 days" in section

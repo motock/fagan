@@ -99,7 +99,8 @@ def test_changelog_unreleased_section_records_the_default_change():
     text = CHANGELOG.read_text(encoding="utf-8")
     start = text.find("## [Unreleased]")
     assert start != -1, "CHANGELOG.md must keep a '## [Unreleased]' section"
-    end = text.find("\n## [", start + 1)
+    # Through the release cut from [Unreleased]: the section ends at the 0.8.0 heading.
+    end = text.find("\n## [0.8.0]", start + 1)
     unreleased = text[start:] if end == -1 else text[start:end]
     assert "PIPELINE_PLAN_APPROVAL" in unreleased, (
         "the [Unreleased] section of CHANGELOG.md must record that the "

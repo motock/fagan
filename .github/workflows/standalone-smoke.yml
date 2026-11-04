@@ -6,8 +6,7 @@ name: Standalone smoke
 # the dev smoke stack; this is the only job that runs the installer for real.
 #
 # ADVISORY FOR NOW: gated on the repository variable `ENABLE_STANDALONE_SMOKE_CI`
-# and OFF by default, so it does not block a merge while the run is being brought
-# to green. The comparison is explicit (`== 'true'`): a bare
+# and OFF by default. The comparison is explicit (`== 'true'`): a bare
 # `vars.ENABLE_STANDALONE_SMOKE_CI` is true for the string "false", which would
 # run the job for operators who explicitly disabled it.
 #

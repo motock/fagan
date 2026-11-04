@@ -3,7 +3,7 @@
 How a release is cut in this repo. This is a manual procedure, written down so
 the next release does not depend on anyone's memory. Releases are cut by hand
 with `git`, `gh` and `mcp-publisher`; GitHub Actions does not tag, bump versions
-or cut releases. Two workflows are defined, and neither of them releases:
+or cut releases. Three workflows are defined, and none of them releases:
 
 - `ci.yml` - the test suite, on every change.
 - `smoke.yml` - builds `deploy/Dockerfile`, starts `deploy/compose.yaml`, runs
@@ -15,6 +15,11 @@ or cut releases. Two workflows are defined, and neither of them releases:
   `ghcr.io/<owner>/fagan` tagged with the commit SHA and `master`, with SBOM and
   provenance attestations; that publish job is not gated. The image is a build
   artifact, not a release: the version comes from the `vX.Y.Z` tag below.
+- `standalone-smoke.yml` - installs the standalone stack with
+  `deploy/install.sh` and runs `deploy/standalone/smoke.sh` against it; runs on
+  pull requests touching `deploy/**` or `pipeline/remote_*.py` and on
+  `workflow_dispatch`, gated on the repository variable
+  `ENABLE_STANDALONE_SMOKE_CI`.
 
 Like the project itself, this is a single-maintainer research project rather
 than a maintained product with an SLA: releases happen when there is something
@@ -41,10 +46,10 @@ inventing a new version scheme.
 
 ## Pre-flight checks
 
-Work through this checklist before touching the tag. All four must be true.
+Work through this checklist before touching the tag. All five must be true.
 
-- [ ] **master CI is green.** Two workflows run on `master` (`ci.yml` and
-      `smoke.yml`), so the bare `gh run list --branch master --limit 1` can
+- [ ] **master CI is green.** Only `ci.yml` and `smoke.yml` run on `master`
+      automatically, so the bare `gh run list --branch master --limit 1` can
       report either one; scope it per workflow with `--workflow`, running
       `gh run list --workflow ci.yml --branch master --limit 1` and
       `gh run list --workflow smoke.yml --branch master --limit 1`, and confirm
@@ -62,6 +67,12 @@ Work through this checklist before touching the tag. All four must be true.
       quiet tree.
 - [ ] **The full suite passes locally.** Run `pytest` and confirm zero
       failures. This is necessary but not sufficient — see the CI check above.
+- [ ] **The standalone smoke is green on the release commit.** It does not run
+      on pushes to `master`, so start it yourself with
+      `gh workflow run standalone-smoke.yml --ref master`, then watch
+      `gh run list --workflow standalone-smoke.yml --limit 1` until it reads
+      `completed` / `success`. It needs the repository variable
+      `ENABLE_STANDALONE_SMOKE_CI=true` and takes about 2 to 12 minutes.
 
 ## Writing the changelog entry
 

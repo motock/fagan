@@ -440,6 +440,7 @@ seed_credentials() {
         printf 'PIPELINE_DASHBOARD_CLIENT_SECRET=%s\n' "$(openssl rand -hex 32)"
         printf 'PIPELINE_MCP_CLIENT_SECRET=%s\n' "$(openssl rand -hex 32)"
         printf 'PIPELINE_CLI_CALLBACK_PORT=%s\n' "$callback_port"
+        printf 'PIPELINE_PLAN_APPROVAL=1\n'
         printf 'PUBLIC_HOSTNAME=%s\n' "$PUBLIC_HOSTNAME"
         printf 'PUBLIC_PORT=%s\n' "$PUBLIC_PORT"
         printf 'CADDY_TLS=internal\n'
@@ -456,7 +457,7 @@ seed_credentials() {
     # also reads the admin *username* from that file: without KEYCLOAK_ADMIN it
     # defaults ADMIN_USER to `admin` while the container's bootstrap admin comes
     # from stack.env, and every kcadm call fails with invalid_grant.
-    grep -E '^(KEYCLOAK_ADMIN|KEYCLOAK_ADMIN_PASSWORD|PIPELINE_DASHBOARD_CLIENT_SECRET|PIPELINE_MCP_CLIENT_SECRET|PIPELINE_CLI_CALLBACK_PORT)=' \
+    grep -E '^(KEYCLOAK_ADMIN|KEYCLOAK_ADMIN_PASSWORD|PIPELINE_DASHBOARD_CLIENT_SECRET|PIPELINE_MCP_CLIENT_SECRET|PIPELINE_CLI_CALLBACK_PORT|PIPELINE_PLAN_APPROVAL)=' \
         "$ENV_FILE" >"$STATE_DIR/.env"
     chmod 600 "$STATE_DIR/.env"
     log "seeded throwaway stack credentials"

@@ -80,3 +80,11 @@ if a precise date is needed when writing one of these up.
 - harness-defect-followups — completed 2026-10-29, 7 stories
 - smoke-stack — completed 2026-10-29, 11 stories
 - SCHEDULER_EVENT_DRIVEN_PLAN — completed 2026-10-30, 17 stories
+- rule-doc-token-trim — completed 2026-10-30, 1 story
+- smoke-stack-green — completed 2026-10-30, 6 stories
+- notification-subject-labels — completed 2026-11-02, 1 story
+- standalone-security-defaults — completed 2026-11-02, 2 stories
+- hardening-and-reverify-cost — completed 2026-11-02, 2 stories
+- standalone-image-build-fix — completed 2026-11-02, 2 stories
+- agpl-relicense — completed 2026-11-02, 1 story
+- standalone-green-remote-mcp — completed 2026-11-02, 4 stories

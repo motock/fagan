@@ -19,6 +19,7 @@ from __future__ import annotations
 import enum
 import logging
 import re
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,18 @@ _TYPE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _SECRET_KEY_FRAGMENTS = ("password", "token", "webhook_url", "secret", "api_key")
 _ENV_SUFFIX = "_env"
+
+# Per-channel circuit breaker: a channel that answered RETRY (or raised) is not
+# tried again until a growing delay has passed, so a rate-limiting provider is
+# not hammered on every scheduler tick.
+_BREAKER_BASE_S = 60
+_BREAKER_MAX_S = 3600
+_BREAKERS: dict[str, tuple[int, float]] = {}
+
+
+def reset_breakers() -> None:
+    """Forget all breaker state (used by tests and on daemon restart)."""
+    _BREAKERS.clear()
 
 
 class ChannelConfigError(ValueError):
@@ -119,10 +132,19 @@ def resolve_env(
     return value
 
 
-def as_sender(channel: Channel) -> Callable[[dict], bool]:
-    """Adapt a channel to the ``record -> bool`` sender ``_drain_one_outbox`` needs."""
+def as_sender(
+    channel: Channel, clock: Callable[[], float] = time.monotonic
+) -> Callable[[dict], bool]:
+    """Adapt a channel to the ``record -> bool`` sender ``_drain_one_outbox`` needs.
+
+    A channel that answered RETRY (or raised) is skipped until its backoff
+    window elapses, so a rate-limiting provider is not retried on every tick.
+    """
 
     def sender(record: dict) -> bool:
+        count, blocked_until = _BREAKERS.get(channel.name, (0, 0.0))
+        if clock() < blocked_until:
+            return False
         try:
             result = channel.send(record)
         except Exception as exc:  # noqa: BLE001 - a bad channel must not break the drain
@@ -131,8 +153,18 @@ def as_sender(channel: Channel) -> Callable[[dict], bool]:
                 channel.name,
                 type(exc).__name__,
             )
+            count += 1
+            delay = min(_BREAKER_BASE_S * 2 ** (count - 1), _BREAKER_MAX_S)
+            _BREAKERS[channel.name] = (count, clock() + delay)
+            logger.warning(
+                "channel backing off: channel=%s failures=%d seconds=%d",
+                channel.name,
+                count,
+                delay,
+            )
             return False
         if result.status is DeliveryStatus.DELIVERED:
+            _BREAKERS.pop(channel.name, None)
             return True
         if result.status is DeliveryStatus.REJECTED:
             logger.error(
@@ -140,7 +172,23 @@ def as_sender(channel: Channel) -> Callable[[dict], bool]:
                 channel.name,
                 result.reason,
             )
+            _BREAKERS.pop(channel.name, None)
             return True
+        count += 1
+        delay = min(
+            max(
+                _BREAKER_BASE_S * 2 ** (count - 1),
+                result.retry_after_seconds or 0,
+            ),
+            _BREAKER_MAX_S,
+        )
+        _BREAKERS[channel.name] = (count, clock() + delay)
+        logger.warning(
+            "channel backing off: channel=%s failures=%d seconds=%d",
+            channel.name,
+            count,
+            delay,
+        )
         return False
 
     return sender

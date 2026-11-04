@@ -141,6 +141,8 @@ def test_valid_python_writes_never_trigger_escalation_text(tmp_path, monkeypatch
     "git checkout -- src/app.py",
     "git checkout HEAD -- src/app.py",
     "git restore src/app.py",
+    "git stash",
+    "git stash pop",
     # Destructive op buried in a compound command must still be caught.
     "git status && git reset --hard b5063c7",
     "cd sub && git clean -fd && git status",
@@ -173,7 +175,8 @@ def test_bash_blocks_destructive_git_ops(tmp_path, monkeypatch, cmd):
     "git reset HEAD src/app.py",      # unstage only, no --hard
     "git checkout --theirs src/app.py",  # merge opt, not the pathsep `--`
     "pytest -q",
-    "git stash",
+    "git stash list",
+    "git stash show -p",
     "git rebase origin/master",
     # Multi-line: a safe `git reset HEAD <path>` on one line must not be
     # attributed to a `--hard` token on an unrelated later line.

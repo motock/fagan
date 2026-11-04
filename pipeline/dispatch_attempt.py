@@ -74,9 +74,32 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
     signal, not a security boundary, must never block or corrupt a
     story's dispatch).
     """
+    # Diff against the fetched origin base when there is one: a local branch
+    # can be arbitrarily stale (created before other stories merged), which
+    # would attribute their new functions to this story. No fetch happens
+    # here - the dispatch has already fetched; absence of the ref keeps the
+    # local-branch behaviour.
+    diff_base = base_branch
+    if not base_branch.startswith("origin/"):
+        origin_base = f"origin/{base_branch}"
+        try:
+            probe = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", origin_base],
+                check=False,
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            probe = None
+        if probe is not None and probe.returncode == 0:
+            diff_base = origin_base
+
     try:
         diff = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=AM", base_branch, "HEAD"],
+            ["git", "diff", "--name-only", "--diff-filter=AM",
+             f"{diff_base}...HEAD"],
             check=False,
             cwd=worktree,
             capture_output=True,
@@ -108,7 +131,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
 
         try:
             old_show = subprocess.run(
-                ["git", "show", f"{base_branch}:{rel_path}"],
+                ["git", "show", f"{diff_base}:{rel_path}"],
                 check=False,
                 cwd=worktree,
                 capture_output=True,

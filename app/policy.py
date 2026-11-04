@@ -11,9 +11,13 @@ that defines every ADR 0009 allow/deny decision — the same "setting the
 variable is code execution in the orchestrator" boundary the plugin loader
 documents, extended to the policy itself. The resolved authorizer may be an
 arbitrary operator-supplied, stateful object, not just :class:`LocalPolicy`.
+Unlike the other seams, this one refuses to load a plugin unless
+``PIPELINE_PLUGIN_MODULES`` is set: the module allowlist is required here, not
+merely recommended.
 
-The policy is resolved once per process and frozen thereafter, so a later write
-to ``PIPELINE_AUTHORIZER_PLUGIN`` cannot change a running process's decisions.
+Once an operator-supplied authorizer has been built it is kept for the life of
+the process, so a later write to ``PIPELINE_AUTHORIZER_PLUGIN`` (or clearing it)
+cannot swap or downgrade a running process's decisions.
 It imports ``app.identity`` and ``app.plugin_loader`` only: never ``app.auth``
 (an adapter concern) and never ``pipeline.*`` (the service layer that calls it).
 """
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -256,6 +261,8 @@ AUTHORIZER_PLUGIN_ENV = "PIPELINE_AUTHORIZER_PLUGIN"
 #: object passed :func:`app.plugin_loader.require_methods`, so a rejected
 #: object is never handed to a later decision.
 _PLUGIN_AUTHORIZERS: dict[str, Authorizer] = {}
+#: Re-entrant: a plugin factory may itself ask for the authorizer while it is built.
+_AUTHORIZER_LOCK = threading.RLock()
 
 
 def default_authorizer() -> Authorizer:
@@ -264,25 +271,27 @@ def default_authorizer() -> Authorizer:
     ``PIPELINE_AUTHORIZER_PLUGIN=module:attr`` selects an operator-supplied
     authorizer in place of :class:`LocalPolicy`; a bad spec raises
     :class:`~app.plugin_loader.PluginError` rather than falling back, because
-    silently keeping ``LocalPolicy`` would change who is allowed.
+    silently keeping ``LocalPolicy`` would change who is allowed. The first
+    plugin authorizer built wins for the life of the process.
     """
-    spec = plugin_spec("authorizer")
-    if spec is None:
-        logger.warning(
-            "no plugin configured for a security-sensitive seam",
-            extra={
-                "plugin_seam": "authorizer",
-                "plugin_env": AUTHORIZER_PLUGIN_ENV,
-            },
-        )
-        return LocalPolicy()
-    if not os.environ.get(ALLOWLIST_ENV, "").strip():
-        # Deny by default for this seam alone: the authorizer decides every
-        # ADR 0009 action, so a tree-writer must not be able to install one
-        # without the loader's module allowlist. Raise before importing it.
-        raise PluginError(f"{AUTHORIZER_PLUGIN_ENV} requires {ALLOWLIST_ENV}")
-    cached = _PLUGIN_AUTHORIZERS.get(spec)
-    if cached is None:
+    with _AUTHORIZER_LOCK:
+        for live in _PLUGIN_AUTHORIZERS.values():
+            return live
+        spec = plugin_spec("authorizer")
+        if spec is None:
+            logger.warning(
+                "no plugin configured for a security-sensitive seam",
+                extra={
+                    "plugin_seam": "authorizer",
+                    "plugin_env": AUTHORIZER_PLUGIN_ENV,
+                },
+            )
+            return LocalPolicy()
+        if not os.environ.get(ALLOWLIST_ENV, "").strip():
+            # Deny by default for this seam alone: the authorizer decides every
+            # ADR 0009 action, so a tree-writer must not be able to install one
+            # without the loader's module allowlist. Raise before importing it.
+            raise PluginError(f"{AUTHORIZER_PLUGIN_ENV} requires {ALLOWLIST_ENV}")
         factory = load_plugin("authorizer")
         if factory is None:
             # Unreachable outside monkeypatch: both reads take the same
@@ -292,11 +301,11 @@ def default_authorizer() -> Authorizer:
                 f"{AUTHORIZER_PLUGIN_ENV} is set but no authorizer plugin "
                 "factory could be resolved"
             )
-        cached = factory()
+        built = factory()
         # Validate before caching: an unvalidated object must never be handed
         # back to a later decision (that would run with no policy at all).
-        require_methods(cached, ("allow",), "authorizer")
-        _PLUGIN_AUTHORIZERS[spec] = cached
+        require_methods(built, ("allow",), "authorizer")
+        _PLUGIN_AUTHORIZERS[spec] = built
         logger.info(
             "authorizer plugin loaded",
             extra={
@@ -304,7 +313,8 @@ def default_authorizer() -> Authorizer:
                 "plugin_module": spec.partition(":")[0],
             },
         )
-    return cached
+        return built
+
 
 def _action_label(action: object) -> str:
     """Return a log-safe label for ``action``: its value, or its type name."""

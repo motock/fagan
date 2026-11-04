@@ -14,6 +14,7 @@ import importlib
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,9 @@ def test_is_allowed_honors_plugin_decision(
 
     assert is_allowed(default_authorizer(), OIDC_ALICE, Action.PLAN_APPROVE, RESOURCE) is False
 
+    # The first authorizer is frozen for the life of a process, so a second
+    # selection needs a fresh process; clearing the cache stands in for one.
+    app.policy._PLUGIN_AUTHORIZERS.clear()
     _install_plugin(tmp_path, monkeypatch, "policy_plugin_allower", ALLOWING_PLUGIN)
 
     assert is_allowed(default_authorizer(), OIDC_ALICE, Action.PLAN_APPROVE, RESOURCE) is True
@@ -435,3 +439,63 @@ def _audit_events(plan_dir: Path) -> list[str]:
     """Return the ``event`` field of every notification the plan sidecar holds."""
     path = plan_dir / "p.notifications.jsonl"
     return [json.loads(line)["event"] for line in path.read_text().splitlines()]
+
+
+def test_resolution_is_frozen_after_the_first_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later write to the selector cannot swap a running process's authorizer."""
+    _install_plugin(tmp_path, monkeypatch, "policy_frozen_first", DENYING_PLUGIN)
+    first = default_authorizer()
+    (tmp_path / "policy_frozen_second.py").write_text(ALLOWING_PLUGIN, encoding="utf-8")
+    monkeypatch.setenv(PLUGIN_ENV, "policy_frozen_second:build")
+    monkeypatch.setenv(ALLOWLIST_ENV, "policy_frozen_first,policy_frozen_second")
+
+    second = default_authorizer()
+
+    assert second is first
+    assert "policy_frozen_second" not in sys.modules
+
+
+def test_unsetting_the_selector_does_not_downgrade_to_local_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once a plugin authorizer is live, clearing the variable keeps it."""
+    _install_plugin(tmp_path, monkeypatch, "policy_frozen_keep", DENYING_PLUGIN)
+    first = default_authorizer()
+    monkeypatch.delenv(PLUGIN_ENV)
+
+    assert default_authorizer() is first
+
+
+def test_cold_cache_builds_exactly_one_authorizer_under_concurrency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Racing first calls must share one stateful authorizer, not build several."""
+    slow = _returning_plugin("True").replace(
+        "FACTORY_CALLS += 1", "FACTORY_CALLS += 1\n    import time\n\n    time.sleep(0.05)"
+    )
+    _install_plugin(tmp_path, monkeypatch, "policy_cold_race", slow)
+    results: list[object] = []
+    barrier = threading.Barrier(8)
+
+    def resolve() -> None:
+        barrier.wait()
+        results.append(default_authorizer())
+
+    threads = [threading.Thread(target=resolve) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len({id(item) for item in results}) == 1
+    assert importlib.import_module("policy_cold_race").FACTORY_CALLS == 1
+
+
+def test_trust_boundary_paragraph_states_the_allowlist_is_mandatory() -> None:
+    """The module docstring must say PIPELINE_PLUGIN_MODULES is required here."""
+    doc = app.policy.__doc__ or ""
+
+    assert "PIPELINE_PLUGIN_MODULES" in doc
+    assert "required" in doc.split("PIPELINE_PLUGIN_MODULES", 1)[1][:200]

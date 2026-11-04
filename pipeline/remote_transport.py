@@ -302,7 +302,7 @@ class BearerAuthMiddleware:
         clock: Any = None,
         environ: dict[str, str] | None = None,
     ) -> None:
-        if not isinstance(provider, OidcProvider):
+        if getattr(provider, "network_grade", False) is not True:
             raise TypeError(
                 "remote mcp transport requires an OidcProvider; refusing to serve "
                 f"with {type(provider).__name__}"
@@ -591,7 +591,7 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     # first client's discovery request. ``None`` means metadata stays disabled.
     parse_resource_url(env)
     provider = build_identity_provider(lambda: "", env)
-    if not isinstance(provider, OidcProvider):
+    if getattr(provider, "network_grade", False) is not True:
         raise SystemExit("refusing to serve MCP over HTTP without an OIDC provider")
     if not enforcement_enabled(env):
         raise SystemExit(

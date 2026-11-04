@@ -335,3 +335,270 @@ def test_load_plugin_logs_one_info_record(plugin_env, caplog):
     assert record.plugin_seam == "event_bus"
     assert record.plugin_module == "plugin_ok_mod"
     assert record.plugin_attr == "factory"
+
+
+# ---------------------------------------------------------------------------
+# Round 2 (code review): the loader is a code-execution primitive, so it must
+# refuse the process-executing corners of the interpreter, honour an operator
+# allowlist, and apply the same controls to the list variable. These cases
+# extend the suite; the cases above are unchanged.
+# ---------------------------------------------------------------------------
+
+ENV_ALLOWLIST = "PIPELINE_PLUGIN_MODULES"
+
+PLUGIN_REEXPORT_MOD = '''\
+from os import system as runner
+'''
+
+PLUGIN_PRIVATE_MOD = '''\
+def _hidden():
+    return "hidden"
+
+
+def __dunder__():
+    return "dunder"
+
+
+def public():
+    return "public"
+'''
+
+PLUGIN_AUTHORIZER_MOD = '''\
+class Authorizer:
+    def authorize(self):
+        return True
+'''
+
+PLUGIN_PARTIAL_AUTHORIZER_MOD = '''\
+class Authorizer:
+    def allow(self):
+        return True
+'''
+
+
+@pytest.fixture
+def harden_env(tmp_path, monkeypatch):
+    """Temp modules for the hardening cases (re-export, private, authorizers)."""
+    monkeypatch.syspath_prepend(str(tmp_path))
+    write_module(tmp_path, "plugin_harden_reexport", PLUGIN_REEXPORT_MOD)
+    write_module(tmp_path, "plugin_harden_private", PLUGIN_PRIVATE_MOD)
+    write_module(tmp_path, "plugin_harden_authz", PLUGIN_AUTHORIZER_MOD)
+    write_module(tmp_path, "plugin_harden_authz_partial", PLUGIN_PARTIAL_AUTHORIZER_MOD)
+    return tmp_path
+
+
+def spy_on_imports(monkeypatch):
+    """Record every module the loader imports, delegating to the real one."""
+    from app import plugin_loader
+
+    imported = []
+    real_import = plugin_loader.importlib.import_module
+
+    def recording_import(name, *args, **kwargs):
+        imported.append(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(plugin_loader.importlib, "import_module", recording_import)
+    return imported
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "os:system",
+        "posix:system",
+        "subprocess:run",
+        "shutil:rmtree",
+        "builtins:eval",
+        "builtins:__import__",
+    ],
+)
+def test_stdlib_modules_cannot_be_plugins(harden_env, monkeypatch, spec):
+    imported = spy_on_imports(monkeypatch)
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin("auth", {ENV_AUTH: spec})
+
+    message = str(excinfo.value)
+    assert ENV_AUTH in message
+    assert spec.partition(":")[0] not in message
+    # Refused before the import, so nothing was executed or resolved.
+    assert imported == []
+
+
+@pytest.mark.parametrize(
+    "spec", ["plugin_harden_private:_hidden", "plugin_harden_private:__dunder__"]
+)
+def test_private_attributes_cannot_be_plugins(harden_env, spec):
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin("event_bus", {ENV_EVENT_BUS: spec})
+
+    message = str(excinfo.value)
+    assert ENV_EVENT_BUS in message
+    assert "must be public" in message
+    assert spec.partition(":")[2] not in message
+
+
+def test_reexported_attribute_is_refused(harden_env):
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin("event_bus", {ENV_EVENT_BUS: "plugin_harden_reexport:runner"})
+
+    message = str(excinfo.value)
+    assert ENV_EVENT_BUS in message
+    assert "defined by the plugin module" in message
+    assert "runner" not in message
+
+
+def test_allowlist_denies_modules_outside_it(plugin_env, monkeypatch):
+    imported = spy_on_imports(monkeypatch)
+    environ = {ENV_EVENT_BUS: "plugin_ok_mod:factory", ENV_ALLOWLIST: "overlay, plugins"}
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin("event_bus", environ)
+
+    message = str(excinfo.value)
+    assert ENV_ALLOWLIST in message
+    assert "plugin_ok_mod" not in message
+    assert imported == []
+
+
+def test_allowlist_admits_matching_module(plugin_env):
+    environ = {ENV_EVENT_BUS: "plugin_ok_mod:factory", ENV_ALLOWLIST: "plugin_ok_mod"}
+
+    factory = load_plugin("event_bus", environ)
+
+    assert factory() == "plugin-value"
+
+
+def test_load_plugin_list_validates_seam():
+    with pytest.raises(ValueError):
+        load_plugin_list("Bad-Seam", {})
+
+
+def test_load_plugin_list_applies_selector_conflict(plugin_env, monkeypatch):
+    imported = spy_on_imports(monkeypatch)
+    environ = {
+        "PIPELINE_AUTH_PLUGINS": "plugin_list_first:factory",
+        "AUTH_MODE": "oidc",
+    }
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin_list(
+            "auth",
+            environ,
+            selector="AUTH_MODE",
+            selector_default="shared-secret",
+        )
+
+    message = str(excinfo.value)
+    assert "PIPELINE_AUTH_PLUGINS" in message
+    assert "AUTH_MODE" in message
+    assert imported == []
+
+
+def test_load_plugin_list_allows_matching_selector(plugin_env):
+    environ = {
+        "PIPELINE_AUTH_PLUGINS": "plugin_list_first:factory",
+        "AUTH_MODE": "shared-secret",
+    }
+
+    factories = load_plugin_list(
+        "auth", environ, selector="AUTH_MODE", selector_default="shared-secret"
+    )
+
+    assert [factory() for factory in factories] == ["first"]
+
+
+def test_both_plugin_variables_raise(plugin_env):
+    environ = {
+        ENV_EVENT_BUS: "plugin_ok_mod:factory",
+        ENV_EVENT_BUS_LIST: "plugin_list_first:factory",
+    }
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin("event_bus", environ)
+    message = str(excinfo.value)
+    assert ENV_EVENT_BUS in message
+    assert ENV_EVENT_BUS_LIST in message
+
+    with pytest.raises(PluginError):
+        load_plugin_list("event_bus", environ)
+
+
+def test_load_plugin_list_rejects_duplicates(plugin_env):
+    environ = {
+        ENV_EVENT_BUS_LIST: "plugin_list_first:factory, plugin_list_first:factory"
+    }
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin_list("event_bus", environ)
+
+    message = str(excinfo.value)
+    assert ENV_EVENT_BUS_LIST in message
+    assert "more than once" in message
+
+
+def test_load_plugin_list_rejects_unbounded_list(plugin_env):
+    environ = {ENV_EVENT_BUS_LIST: ", ".join(["plugin_list_first:factory"] * 65)}
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin_list("event_bus", environ)
+
+    message = str(excinfo.value)
+    assert ENV_EVENT_BUS_LIST in message
+    assert "more than 64" in message
+
+
+def test_spec_and_seam_reject_trailing_newline():
+    from app.plugin_loader import SPEC_RE
+
+    assert SPEC_RE.match("plugin_ok_mod:factory\n") is None
+    with pytest.raises(ValueError):
+        plugin_env_name("auth\n")
+
+
+def test_load_plugin_enforces_required_methods(harden_env):
+    factory = load_plugin(
+        "auth",
+        {ENV_AUTH: "plugin_harden_authz:Authorizer"},
+        required_methods=["authorize"],
+    )
+
+    assert factory().authorize() is True
+
+    with pytest.raises(PluginError) as excinfo:
+        load_plugin(
+            "auth",
+            {ENV_AUTH: "plugin_harden_authz_partial:Authorizer"},
+            required_methods=["authorize"],
+        )
+
+    assert str(excinfo.value) == (
+        "auth plugin is missing required methods: authorize"
+    )
+
+
+def test_load_plugin_warns_when_security_seam_has_no_plugin(caplog):
+    with caplog.at_level(logging.WARNING, logger="app.plugin_loader"):
+        assert load_plugin("auth", {}, required_methods=["authorize"]) is None
+
+    records = [r for r in caplog.records if r.name == "app.plugin_loader"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].plugin_seam == "auth"
+
+
+def test_load_plugin_is_silent_when_ordinary_seam_has_no_plugin(caplog):
+    with caplog.at_level(logging.DEBUG, logger="app.plugin_loader"):
+        assert load_plugin("event_bus", {}) is None
+
+    assert [r for r in caplog.records if r.name == "app.plugin_loader"] == []
+
+
+def test_load_plugin_logs_the_variable_name_for_audit(plugin_env, caplog):
+    with caplog.at_level(logging.INFO, logger="app.plugin_loader"):
+        load_plugin("event_bus", {ENV_EVENT_BUS: "plugin_ok_mod:factory"})
+
+    records = [r for r in caplog.records if r.name == "app.plugin_loader"]
+    assert len(records) == 1
+    assert records[0].plugin_env == ENV_EVENT_BUS

@@ -150,14 +150,17 @@ render_realm() { # $1 template, $2 rendered file
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  # 0644 so the Keycloak container user (uid 1000) can read the bind-mounted file; the secrets stay protected because $STATE_DIR/import is kept at 0700 below.
-  chmod 0644 "$tmp"
+  # The rendered file carries the OIDC client secrets, so the helper keeps both the
+  # temp file and DST at 0600 for every caller (including `--render-realm`, where
+  # DST is caller-chosen and has no private parent). The install path relaxes the
+  # published file once, below, inside the 0700 import/ directory.
+  chmod 0600 "$tmp"
   if ! mv -- "$tmp" "$dst"; then
     printf 'render_realm: cannot write %s\n' "$dst" >&2
     rm -f -- "$tmp" "$tmp.new"
     return 1
   fi
-  chmod 0644 "$dst"
+  chmod 0600 "$dst"
 }
 
 # `install.sh --render-realm SRC DST` only renders the template and stops: no
@@ -741,6 +744,12 @@ RENDERED_REALM_FILE="$STATE_DIR/import/realm.json"
 mkdir -p -- "$STATE_DIR/import"
 chmod 700 "$STATE_DIR/import"
 render_realm "$REPO_ROOT/deploy/standalone/realm.json" "$RENDERED_REALM_FILE"
+# render_realm publishes at 0600; Keycloak imports the file as uid 1000 in the
+# container and is bind-mounted read-only, so it cannot read a 0600 file owned by
+# any other uid. Relax only this copy, inside the 0700 import/ directory above:
+# the directory mode is now the sole control on these client secrets at rest, so
+# never copy realm.json out of it (backup, `docker cp`, operator `cp`).
+chmod 0644 "$RENDERED_REALM_FILE"
 log "install.sh: rendered $RENDERED_REALM_FILE"
 
 # The compose file bind-mounts $STATE_DIR/model_registry.json as the server's

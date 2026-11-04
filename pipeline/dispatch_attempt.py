@@ -1,5 +1,6 @@
 """Attempt-level helpers extracted from pipeline.dispatch."""
 
+import ast
 import json
 import logging
 import subprocess
@@ -18,6 +19,31 @@ detect_unsatisfiable_signal = _ServerRef("detect_unsatisfiable_signal")
 diagnose_failure = _ServerRef("diagnose_failure")
 
 _notify_user = _ModuleRef("pipeline.dispatch", "_notify_user")
+
+
+def _decorated_function_names(source: str) -> set[str]:
+    """Names of module-level functions carrying at least one decorator.
+
+    Such a function is typically wired in by its decorator alone (a pytest
+    fixture, a route, a click command, `atexit.register`), so "referenced
+    nowhere else" is not evidence of dead code for it.
+
+    Only module-level nodes are considered: a nested function's decorator
+    says nothing about a module-level function of the same name, so walking
+    the whole AST would suppress genuinely dead code. A file that does not
+    parse yields no names rather than raising - this gate is best-effort and
+    must never crash a dispatch.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.decorator_list
+    }
 
 
 def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
@@ -70,6 +96,8 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
         base_name = Path(rel_path).name
         if base_name.startswith("test_") or base_name.endswith("_test.py"):
             continue
+        if base_name == "conftest.py":
+            continue
         full_path = worktree / rel_path
         if not full_path.is_file():
             continue
@@ -95,6 +123,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
             else set()
         )
         new_names = _module_level_function_names(source) - old_names
+        new_names = new_names - _decorated_function_names(source)
 
         for fn_name in sorted(new_names):
             if fn_name.startswith("__") and fn_name.endswith("__"):

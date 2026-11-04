@@ -37,7 +37,7 @@ def _labels(block):
     found = []
     for line in block.splitlines():
         stripped = line.strip()
-        if stripped.startswith(("runs-on:", "- ")):
+        if stripped.startswith(("runs-on:", "- ", "os:")):
             found.extend(_LABEL_RE.findall(stripped))
     return found
 

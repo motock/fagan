@@ -5,6 +5,8 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  schedule:
+    - cron: "17 4 * * *"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -20,16 +22,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         # macOS catches macOS-only fixture dependencies (e.g. `plutil`) that
-        # pass every local and ubuntu gate and fail only after the PR is open
-        # (observed live 2026-07-30). Dispatch, the check_story_status done-bar
-        # and the merge-gate reverify all run on macOS, so this leg is the only
-        # pre-PR signal for that class of break. Restricted to ONE Python
-        # version: the point is platform coverage, not another version sweep.
+        # pass every local and ubuntu gate (observed live 2026-07-30).
+        # Dispatch, the check_story_status done-bar and the merge-gate reverify
+        # all run on macOS, so this leg is the post-merge signal for that class
+        # of break: it runs on push to master and nightly, not on pull
+        # requests, because GitHub's macOS runners queue and cancel often
+        # enough to stall merges, while a macOS-only break is still caught
+        # within a day. Restricted to ONE Python version: the point is
+        # platform coverage, not another version sweep.
         exclude:
           - os: macos-latest
             python-version: "3.11"

@@ -46,7 +46,7 @@ def _retry():
     return nc.DeliveryResult(nc.DeliveryStatus.RETRY)
 
 
-def test_first_retry_blocks_send_for_thirty_seconds():
+def test_first_retry_blocks_send_for_sixty_seconds():
     channel = FakeChannel(result=_retry())
     clock = FakeClock()
     sender = nc.as_sender(channel, clock=clock)
@@ -54,7 +54,7 @@ def test_first_retry_blocks_send_for_thirty_seconds():
     assert sender(RECORD) is False
     assert channel.calls == 1
 
-    clock.advance(30)
+    clock.advance(59)
 
     assert sender(RECORD) is False
     assert channel.calls == 1

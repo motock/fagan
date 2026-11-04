@@ -632,10 +632,18 @@ A channel type is a class in `pipeline/` registered with
 - `send(record) -> DeliveryResult` — delivers one spooled record.
 
 `DeliveryStatus` semantics: `DELIVERED` retires the record from this
-instance's queue; `RETRY` keeps it and it is retried on the next drain tick
-(`retry_after_seconds` is part of the contract but ignored in V1);
+instance's queue; `RETRY` keeps it queued while the instance backs off;
 `REJECTED` is a permanent failure — the record is dropped with one ERROR log
 so a revoked webhook cannot block its queue forever.
+
+A `RETRY` (or a raising `send`) opens a per-instance circuit breaker: the
+instance is not tried again until an exponentially growing delay has passed
+(base 60 s, doubling per consecutive failure, ceiling 3600 s). A
+`retry_after_seconds` on the result is honoured when it is longer than the
+computed delay, up to the same 3600 s ceiling. Attempts made while the
+instance is backing off return `RETRY`'s `False` without calling `send`, so
+the record stays queued; `DELIVERED` or `REJECTED` clears the state. The
+breaker is in memory, per process: a daemon restart starts from zero.
 
 There is one queue per instance, so each instance retries independently and
 a record is never resent to an instance that already accepted it.

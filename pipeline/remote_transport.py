@@ -8,9 +8,10 @@ one is a deliberate two-part act, and the second part is non-negotiable:
 * the identity provider must be OIDC, because a remote MCP endpoint that
   authenticates nobody is an unauthenticated control plane over the network.
   A missing or different provider refuses to start rather than serving.
-  ``BearerAuthMiddleware`` enforces this at construction time: anything that is
-  not an ``OidcProvider`` raises ``TypeError``, so the default
-  ``SharedSecretProvider`` cannot be wired in by accident.
+  ``BearerAuthMiddleware`` enforces this at construction time: the provider must
+  declare ``network_grade`` as exactly ``True`` -- an identity check, not mere
+  truthiness -- or ``TypeError``. A missing value, a truthy non-``True`` value
+  such as ``1``, and the default ``SharedSecretProvider`` are all denied.
 
 The gate is raw ASGI on purpose. ``streamable_http_app()`` returns a Starlette
 app, and wrapping it here without importing Starlette keeps this module

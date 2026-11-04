@@ -26,7 +26,9 @@ def smoke_text() -> str:
 
 
 def seed_repository_body() -> str:
-    match = re.search(r"^seed_repository\(\) \{\n(.*?)^\}", smoke_text(), re.MULTILINE | re.DOTALL)
+    match = re.search(
+        r"^seed_repository\(\) \{\n(.*?)^\}", smoke_text(), re.MULTILINE | re.DOTALL
+    )
     assert match, "seed_repository() not found in smoke.sh"
     return match.group(1)
 
@@ -38,7 +40,9 @@ def test_seed_repository_hands_the_repo_to_the_container_git_user() -> None:
 def test_the_chown_is_escalated_only_when_sudo_is_set() -> None:
     # macOS leaves SUDO empty (Docker Desktop maps ownership) and an unattended
     # local run must not prompt for sudo.
-    chown_lines = [line for line in seed_repository_body().splitlines() if CHOWN in line]
+    chown_lines = [
+        line for line in seed_repository_body().splitlines() if CHOWN in line
+    ]
 
     assert chown_lines, "no chown line in seed_repository()"
     assert chown_lines[0].lstrip().startswith('[ -z "$SUDO" ] || $SUDO chown')

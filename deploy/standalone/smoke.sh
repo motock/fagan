@@ -675,7 +675,9 @@ print(payload.get("status") or "unknown")
         [ "$state" = "$seen" ] || log "story $STORY_KEY is ${state}"
         seen="$state"
         case "$state" in
-            done | merged | reviewed | completed | success)
+            # A file:// bare repo has no PR to open or merge, so `done` is out of reach
+            # here; tests_passed (agent ran, clone worked, grading passed) is the end.
+            done | tests_passed)
                 log "story $STORY_KEY reached ${state}"
                 return 0
                 ;;

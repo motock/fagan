@@ -104,6 +104,85 @@ in practice.
   and a rejection is a 401 with `{"detail":"Unauthorized"}`, an
   `X-Correlation-ID` header and a `WWW-Authenticate: Bearer` challenge. TLS is
   not terminated here — put a reverse proxy in front.
+- `PIPELINE_MCP_RESOURCE_URL` makes the remote transport publish RFC 9728
+  protected-resource metadata at
+  `/.well-known/oauth-protected-resource`: the resource identifier, the
+  authorization servers, the supported bearer methods and scopes, and a 401
+  challenge that points at it, so a client that discovers the authorization
+  server first can start its login flow. Unset keeps today's bare `Bearer`
+  challenge.
+- `deploy/standalone/mcp-token` mints a fresh MCP access token for a client
+  that cannot run a browser OAuth flow: it exchanges the per-user Keycloak
+  client secret (grant type `client_credentials`) and prints either a JSON
+  headers object for Claude Code's `headersHelper` or, with `--raw`, the bare
+  token.
+- The remote policy covers every registered pipeline tool (30, up from 17), so
+  each one now has a service path that consults it; a name the policy does not
+  list is still refused, and `record_security_audit` stays host-scoped and
+  unavailable to a network caller.
+- A remote plan author may not name a server path: `repo_root` and workspaces
+  are refused for remote principals, so a plan can only point at code with
+  `repo_url`.
+- `PIPELINE_DASHBOARD_ALLOWED_HOSTS` lets the operator allowlist the hostnames
+  the dashboard accepts behind a reverse proxy, instead of trusting whatever
+  `Host` header arrives.
+
+**Standalone server (Docker)**
+
+- `docs/DEPLOY_STANDALONE.md` is the operator guide for the standalone stack
+  without the installer: what each process, port and volume does, the install
+  by hand step for step, the secret file behind each variable, the
+  configuration reference, Claude Code and OpenCode setup, and upgrade, backup
+  and troubleshooting procedures.
+- `deploy/install.sh` takes a machine that has Docker to a running standalone
+  stack and prints how to connect Claude Code and OpenCode. It is interactive
+  by default; `--non-interactive` reads every value from flags or the
+  environment for CI. Secrets are never accepted on the command line — they
+  come from `--*-file` flags or a no-echo prompt. The whole script runs under
+  `umask 077` and writes every compose secret file and the generated
+  `deploy/standalone/.env` at `0600`.
+- `deploy/standalone/realm.json` is a Keycloak realm template the installer
+  renders at install time: each `${env.NAME}` is substituted from the resolved
+  value (failing by variable name when one is unset), instead of being imported
+  with its placeholders intact. The realm ships PKCE for both confidential
+  clients, registration off and a 900s access-token lifespan.
+- A plan may name a `repo_url` instead of a server path; the server clones it
+  into the managed root and re-fetches that clone on ingest, so a long-lived
+  server ingests a fresh checkout. A plan naming both `repo_url` and
+  `repo_root` is refused as ambiguous.
+- Dispatch-time git — the branch check, the worktree fetch and the agent's own
+  push — authenticates to a private origin with the same mounted forge token
+  the clone uses, so a private `repo_url` no longer exits 128 mid-dispatch.
+- The runtime loads its operator credentials (`ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `OLLAMA_API_KEY`) from mounted secret
+  files, refusing anything that is not a `0600` regular file owned by the
+  service uid, and exports each only to the processes that need it.
+- Startup refuses placeholder credentials: the three Keycloak and OIDC values
+  compose reads with `${VAR:?}` are rejected when they are still the published
+  `change-me-*` constants, so a copied or outdated env file cannot boot a stack
+  with a secret that is printed in this repository. `deploy/standalone/.env.example`
+  ships those entries empty, so `docker compose up` refuses to start until they
+  are set.
+- The NATS container shares the pipeline container's network namespace, which is
+  attached to the compose project network, so its previous `0.0.0.0` binding let
+  every other service on that network reach the broker; both stacks now bind it
+  to loopback.
+- The installer prompts for (or accepts flags for) SMTP and Slack notification
+  settings and writes the `notification.json` that the server's notification
+  routing loads, deciding what is enabled from the persisted secret files so a
+  re-run keeps the configured channels. That config carries only
+  environment-variable names, never a credential, and the Slack webhook is
+  stripped from the environment every agent child sees.
+- `deploy/standalone/smoke.sh` runs the whole operator path against a throwaway
+  state directory — install, MCP token, a `repo_url` plan saved, ingested,
+  approved and dispatched, and grading — and the `standalone-smoke` workflow
+  runs it on a Linux runner behind the repository variable
+  `ENABLE_STANDALONE_SMOKE_CI` (off by default); with the gate enabled it passes
+  there.
+- CI builds the server image on every pull request, and a push to `master`
+  publishes it to GHCR as `ghcr.io/<owner>/fagan`, tagged with the commit SHA
+  and `master`, with SBOM and provenance attestations (see
+  `docs/RELEASING.md`).
 
 **Dashboard**
 
@@ -123,6 +202,23 @@ in practice.
 ### Fixed
 
 - Standalone installer rendered the Keycloak realm file `0600`, which the container user (uid 1000) could not read when the installing user was not uid 1000, so the IdP crash-looped; `render_realm` now publishes it `0644`, and the client secrets stay private because every caller renders into a `0700` directory (install.sh's `$STATE_DIR/import`, created `mkdir -m 0700` and refused if symlinked or foreign-owned, and the documented manual recipe's `deploy/standalone/import`) — never copy `realm.json` out of that directory.
+- The standalone runtime image installed no `procps`, so every `ps` call from
+  status, watchdog and review paths raised `FileNotFoundError` and a dispatched
+  story could never be seen as finished; the package is now part of the
+  existing runtime apt line.
+- A hand-started standalone stack failed before the server ran because the
+  compose stack bind-mounts `deploy/standalone/model_registry.json` and nothing
+  created it. The installer now seeds that file once — the operator's local
+  registry if present, else the shipped catalog — and leaves an existing one
+  untouched; it is gitignored because its rows are machine-specific.
+- The standalone MCP transport refused the default 443 deployment with 421
+  because the SDK matches a host wildcard only when the `Host` header carries a
+  port; both the bare host and the wildcard form are now accepted, and the
+  operator docs match.
+- The first end-to-end standalone smoke run exposed four defects, all fixed:
+  the remote transport now allows the public host with any port, the clone root
+  is created owned by the runtime uid, the admin user the installer logs in as
+  is seeded, and the seeded bare repo points at the branch that has the commit.
 
 ## [0.8.0] - 2026-10-22
 

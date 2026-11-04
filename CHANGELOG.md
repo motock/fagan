@@ -16,7 +16,7 @@ in practice.
   broken channel stops hammering its endpoint. The email channel now reports a
   disconnect during the login phase instead of failing silently, and treats a
   temporary 4xx authentication reply as retryable rather than permanent.
-  Queued notifications older than 7 days are dropped at delivery time, so a
+  Queued notifications older than 7 days are dropped at drain time, so a
   channel that recovers after a long outage no longer flushes weeks of stale
   messages at once.
 

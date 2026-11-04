@@ -19,11 +19,12 @@ import fnmatch
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.plugin_loader import load_plugin_list
 from pipeline import paths
 from pipeline.notification_channels import (
     ChannelConfigError,
@@ -189,6 +190,9 @@ def _config_path(path: Path | str | None, env: Mapping[str, str]) -> Path:
     return paths.PLAN_DIR / "notifications.json"
 
 
+_REGISTERED_CHANNEL_PLUGINS: set[Callable] = set()
+
+
 def load_notification_config(
     path: Path | str | None = None, env: Mapping[str, str] = os.environ
 ) -> NotificationConfig | None:
@@ -199,6 +203,18 @@ def load_notification_config(
     # Channel types register on import; config load must not depend on who
     # imported what first (the spool side never imports these modules).
     from . import notification_email, notification_slack  # noqa: F401
+    from .notification_channels import register_channel_type
+
+    # Operator-selected channel plugins: PIPELINE_CHANNEL_PLUGINS lists
+    # module:attr registrar callables, each handed register_channel_type.
+    # Registration happens once per process because register_channel_type
+    # raises on a duplicate type name while this loader runs many times. A
+    # registrar that raises propagates (config load must fail, not skip it)
+    # and is only recorded once it returned.
+    for registrar in load_plugin_list("channel"):
+        if registrar not in _REGISTERED_CHANNEL_PLUGINS:
+            registrar(register_channel_type)
+            _REGISTERED_CHANNEL_PLUGINS.add(registrar)
 
     cfg_path = _config_path(path, env)
     try:

@@ -163,6 +163,10 @@ def _build_message(settings: EmailSettings, rendered: RenderedNotification) -> E
     return message
 
 
+class SMTPAuthPhaseDisconnect(Exception):
+    """Server closed the connection while authenticating."""
+
+
 def _smtp_deliver(settings: EmailSettings, message: EmailMessage) -> None:
     """Open the connection and send; raises whatever smtplib raises."""
     with smtplib.SMTP(settings.host, settings.port, timeout=settings.timeout) as smtp:
@@ -173,7 +177,10 @@ def _smtp_deliver(settings: EmailSettings, message: EmailMessage) -> None:
         # certificate fails verification and the send fails closed before
         # the credential is transmitted.
         smtp.starttls(context=ssl.create_default_context())
-        smtp.login(settings.user, settings.password)
+        try:
+            smtp.login(settings.user, settings.password)
+        except smtplib.SMTPServerDisconnected as exc:
+            raise SMTPAuthPhaseDisconnect("connection closed during authentication") from exc
         smtp.send_message(message)
 
 
@@ -334,9 +341,16 @@ class EmailChannelType:
             return DeliveryResult(DeliveryStatus.REJECTED, reason="malformed_record")
         try:
             _smtp_deliver(settings, message)
+        except SMTPAuthPhaseDisconnect as exc:
+            return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_disconnect"))
+        except smtplib.SMTPAuthenticationError as exc:
+            # 4xx means "try again later" (e.g. Gmail's `454 4.7.0 Too many login
+            # attempts`); 5xx rejects the credential outright.
+            if 400 <= exc.smtp_code < 500:
+                return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_temporary"))
+            return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected"))
         except (
             smtplib.SMTPRecipientsRefused,
-            smtplib.SMTPAuthenticationError,
             smtplib.SMTPSenderRefused,
         ) as exc:
             return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected"))

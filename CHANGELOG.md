@@ -9,6 +9,8 @@ in practice.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
 ### Changed
 
 - The standalone stack now defaults `PIPELINE_PLAN_APPROVAL` on: compose

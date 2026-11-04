@@ -127,3 +127,12 @@ def pytest_sessionfinish(session, exitstatus):
             f"{sorted(new_entries)}"
         )
         session.exitstatus = 1
+
+
+@pytest.fixture(autouse=True)
+def _reset_notification_breakers():
+    from pipeline import notification_channels
+
+    notification_channels.reset_breakers()
+    yield
+    notification_channels.reset_breakers()

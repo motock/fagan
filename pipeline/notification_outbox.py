@@ -56,6 +56,7 @@ import json
 import logging
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,11 @@ OUTBOX_SUFFIX = ".outbox.jsonl"
 # phases cover all plans at once), so its drain phase passes this instead of a
 # single plan name.
 ALL_PLANS = "*"
+
+# Maximum age of a spooled record, in seconds (7 days).  A channel that cannot
+# deliver keeps every record forever, so a recovery would flush weeks of stale
+# notifications at once; the drain drops anything older than this instead.
+OUTBOX_MAX_AGE_S = 7 * 24 * 3600
 
 
 def _append_rotating(path: Path, line: str) -> None:
@@ -208,6 +214,27 @@ def outbox_sink(event: dict[str, Any]) -> None:
         return
 
 
+def _is_expired(record: dict, now: datetime) -> bool:
+    """Return True when ``record`` is older than :data:`OUTBOX_MAX_AGE_S`.
+
+    The record's top-level ``"ts"`` is the ISO 8601 string the sink spooled
+    (for example ``2026-11-04T00:24:53.872989+00:00``).  A naive timestamp is
+    treated as UTC.  A missing key, a non-string value, or an unparseable
+    string returns False, so the record is KEPT: an odd timestamp must fail
+    towards delivery, never towards silent loss.
+    """
+    raw = record.get("ts")
+    if not isinstance(raw, str):
+        return False
+    try:
+        ts = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts).total_seconds() > OUTBOX_MAX_AGE_S
+
+
 def _drain_one_outbox(path: Path, sender) -> int:
     """Drain the single outbox file ``path``; return the sent-record count.
 
@@ -228,6 +255,9 @@ def _drain_one_outbox(path: Path, sender) -> int:
         with open(path, "r", encoding="utf-8") as fh:
             raw_lines = fh.read().splitlines()
 
+        # One clock reading for the whole drain so a slow sender cannot make
+        # the expiry cutoff drift from record to record.
+        now = datetime.now(UTC)
         # Retained lines keep their ORIGINAL raw text (never a re-serialized
         # dict) so a drain that rejects everything leaves the file
         # byte-for-byte unchanged.
@@ -245,6 +275,15 @@ def _drain_one_outbox(path: Path, sender) -> int:
                 logger.warning(
                     "Skipping malformed outbox line in %s (not valid JSON)",
                     path.name,
+                )
+                continue
+            if isinstance(record, dict) and _is_expired(record, now):
+                # Stale beyond OUTBOX_MAX_AGE_S: drop it instead of delivering
+                # weeks-old notifications on a channel that just recovered.
+                # Nothing from the record is logged.  It is not added to
+                # retained_lines, so the rewrite removes it from the file.
+                logger.warning(
+                    "Dropping expired outbox record: file=%s", path.name
                 )
                 continue
             try:

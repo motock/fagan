@@ -240,10 +240,14 @@ def _drain_one_outbox(path: Path, sender) -> int:
 
     Records the ``sender`` accepted (returned ``True``) are removed; records
     it rejected (``False``) or that made it RAISE are retained verbatim for
-    the next drain.  The rewrite is atomic — a temp file in the same
-    directory, then :func:`os.replace` over the original — so a crash
-    mid-rewrite leaves the original intact: at-least-once delivery, never a
-    lost notification.  Never raises.
+    the next drain.  Records older than :data:`OUTBOX_MAX_AGE_S` are dropped
+    unsent — removed from the spool and logged at ``WARNING`` with the file
+    name only — so a channel that recovers after a long outage does not flush
+    weeks of stale notifications.  The rewrite is atomic — a temp file in the
+    same directory, then :func:`os.replace` over the original — so a crash
+    mid-rewrite leaves the original intact: at-least-once delivery for
+    everything the age limit retains, never a silently lost notification.
+    Never raises.
     """
     sent = 0
     try:

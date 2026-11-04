@@ -299,6 +299,18 @@ The adoptable specs this server exports live in `docs/specs/`:
 `ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern), and
 `DOCKER_SANDBOX.md` (the opt-in Docker sandboxing behavior).
 
+### Running the standalone server (Docker)
+
+This is the production-style deployment — Keycloak sign-in, Caddy TLS and the
+remote MCP transport — installed on a clean Docker machine with
+`bash deploy/install.sh`. The operator guide is
+[docs/DEPLOY_STANDALONE.md](docs/DEPLOY_STANDALONE.md). Plan approval is ON by
+default for this stack (`PIPELINE_PLAN_APPROVAL`, see §6 and §7 of that guide),
+so a newly ingested plan dispatches only after its owner or a delegate runs
+`approve_plan`. This is not the `scripts/standalone-setup.sh` flow below: that
+one starts the dashboard and scheduler directly and never registers an MCP
+server.
+
 ### Running standalone (dashboard + scheduler, no MCP server)
 
 The dashboard exposes the same operations as the MCP tools — save/ingest a plan,

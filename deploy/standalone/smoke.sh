@@ -280,6 +280,10 @@ seed_repository() {
     git -C "$TMP/seed" push -q origin HEAD:main
     # uid 10001 inside the container reads (and pushes) through the bind mount.
     chmod -R a+rwX "$TMP/repo.git"
+    # Mode bits are not enough: git in the container (uid 10001) refuses a repository
+    # owned by another user ("dubious ownership"). Last step, after the push above.
+    # shellcheck disable=SC2086  # $SUDO is empty or the word `sudo`
+    [ -z "$SUDO" ] || $SUDO chown -R 10001:10001 "$TMP/repo.git"
     log "seeded the bare repository"
 }
 

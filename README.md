@@ -299,7 +299,7 @@ The adoptable specs this server exports live in `docs/specs/`:
 `ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern), and
 `DOCKER_SANDBOX.md` (the opt-in Docker sandboxing behavior).
 
-### Running the standalone server (Docker)
+### Running the Docker server (Keycloak sign-in, TLS, remote MCP)
 
 This is the production-style deployment — Keycloak sign-in, Caddy TLS and the
 remote MCP transport — installed on a clean Docker machine with

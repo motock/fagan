@@ -328,8 +328,12 @@ class _FakeMCP:
 def test_serve_installs_the_remote_tool_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     mcp = _FakeMCP()
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=Mock()))
+    # ``network_grade=True`` is the capability the real provider declares; a
+    # spec'd Mock alone exposes a child Mock there and the guard refuses it.
     monkeypatch.setattr(
-        rt, "build_identity_provider", lambda *a, **k: Mock(spec=OidcProvider)
+        rt,
+        "build_identity_provider",
+        lambda *a, **k: Mock(spec=OidcProvider, network_grade=True),
     )
     rt.serve(mcp, environ=dict(REMOTE_ENV))
     assert remote_tool_policy in mcp.middleware

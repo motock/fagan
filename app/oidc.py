@@ -611,6 +611,11 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
 class OidcProvider:
     """``IdentityProvider`` that verifies a bearer token against a JWKS."""
 
+    # Declare ``network_grade = True`` only if ``authenticate()`` verifies a
+    # bearer credential cryptographically (signature and expiry): the remote MCP
+    # transport refuses every provider that does not declare it.
+    network_grade = True
+
     def __init__(self, settings: OidcSettings) -> None:
         self._settings = settings
 

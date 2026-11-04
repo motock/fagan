@@ -59,7 +59,14 @@ def _serve_with_fakes(
         uvicorn_calls.append((args, kwargs))
 
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=_run))
-    monkeypatch.setattr(rt, "build_identity_provider", lambda *a, **k: Mock(spec=OidcProvider))
+    # The transport now gates on a declared capability, not on isinstance().
+    # A spec'd Mock's ``network_grade`` is a child Mock (not exact True), so the
+    # double declares the capability the real provider declares.
+    monkeypatch.setattr(
+        rt,
+        "build_identity_provider",
+        lambda *a, **k: Mock(spec=OidcProvider, network_grade=True),
+    )
     rt.serve(mcp, environ=env)
     return mcp, uvicorn_calls
 

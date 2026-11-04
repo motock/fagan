@@ -45,8 +45,8 @@ modes — it is not a hands-off "describe a feature, get a PR" tool yet.
 
 Developed and run day-to-day on **macOS**. The core (MCP server, dashboard,
 Claude-backend dispatch/review, the full test suite) is plain Python and CI
-tests it on Ubuntu across Python 3.11–3.14, plus macOS on 3.14, on every
-push. Two pieces are
+tests it on Ubuntu across Python 3.11–3.14 on every pull request and push,
+plus macOS on 3.14 on every push to master and nightly. Two pieces are
 **macOS-only**:
 
 - **`launchd/*.plist`** — the scheduler/MLX-supervisor/usage-poller are
@@ -545,7 +545,7 @@ For the one-command guided setup (flags, configuration keys, secure defaults, tr
 ## Prerequisites
 
 - **Python 3.11+** and the project venv. CI tests 3.11–3.14 on Ubuntu and
-  3.14 on macOS on every push.
+  3.14 on macOS on every push to master and nightly.
 - **git** on PATH.
 - **Claude Code CLI** (`claude`).
 - **The active forge's CLI** — `PIPELINE_FORGE` selects the code host

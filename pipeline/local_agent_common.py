@@ -391,6 +391,7 @@ DESTRUCTIVE_GIT_PATTERNS = [
     # anchor matches only the pathspec separator, not merge opts like --theirs.
     (re.compile(r"\bgit\s+checkout\b[^;&|\n]*\s--(\s|$)"), "git checkout -- <paths>"),
     (re.compile(r"\bgit\s+restore\b"), "git restore"),
+    (re.compile(r"\bgit\s+stash\b(?![^;&|\n]*\s(list|show)\b)"), "git stash"),
 ]
 
 

@@ -33,6 +33,8 @@ from typing import Protocol
 
 import httpx
 
+from app.plugin_loader import load_plugin, require_methods
+
 from .config import PLANE_MAX_ATTEMPTS
 
 # ---------- Plane config (env vars) ----------
@@ -347,8 +349,24 @@ def get_ticket_provider() -> TicketProvider:
     "auto" (default) preserves today's behavior exactly: Plane if configured,
     else the no-op provider. "none" forces the no-op provider even when Plane
     vars are set. "plane"/"jira" force that backend, erroring clearly if its
-    required config is missing rather than silently falling back.
+    required config is missing rather than silently falling back. When
+    PIPELINE_TICKET_PROVIDER_PLUGIN is set it selects the provider, and
+    combining it with PIPELINE_TICKET_PROVIDER=plane, none, or jira raises
+    PluginError because the settings conflict.
     """
+    factory = load_plugin(
+        "ticket_provider",
+        selector="PIPELINE_TICKET_PROVIDER",
+        selector_default="auto",
+    )
+    if factory is not None:
+        provider = factory()
+        require_methods(
+            provider,
+            ("create_epic", "create_story", "set_state", "resolve_key"),
+            "ticket provider",
+        )
+        return provider
     choice = os.environ.get("PIPELINE_TICKET_PROVIDER", "auto").strip().lower()
     if choice == "auto":
         return PlaneTicketProvider() if _plane_enabled() else NullTicketProvider()

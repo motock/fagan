@@ -409,6 +409,13 @@ breaks when the value is wrong.
 | `PIPELINE_PLAN_APPROVAL` | Gate that requires a plan to be approved before it can be dispatched | `1` (fresh install) | `PIPELINE_PLAN_APPROVAL=0` | An unrecognised value makes ingest fail closed with an error naming the variable |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |
 
+One row here is rendered rather than authored: the installer writes
+`STANDALONE_NOTIFY_CONFIG` into this `.env`, pointing at
+`deploy/standalone/notification.json`, and generates that file from its
+`--notify-*` answers — an `email` instance, a `slack` instance, both or neither,
+and an `all` route delivering every event to each channel. It holds environment
+variable *names* only; the values stay in the `secrets/` files.
+
 ### The public origin, worked through
 
 `PUBLIC_HOSTNAME`, `PUBLIC_PORT` and `PIPELINE_MCP_RESOURCE_URL` are one value
@@ -940,8 +947,9 @@ this by adding `*`: the point of the check is to make a rebinding attack fail.
 `deploy/standalone/smoke.sh` grades the whole operator path in a throwaway state
 directory: it runs `deploy/install.sh --non-interactive`, then saves, ingests,
 approves and dispatches a `repo_url` plan through the MCP transport over HTTPS
-and polls the story to a terminal state. Run it before you trust an install, and
-run it locally before you turn on its CI job.
+and polls the story until it reaches `tests_passed` (review and merge are out of
+scope for the smoke). Run it before you trust an install, and run it locally
+before you turn on its CI job.
 
 ### Prerequisites
 
@@ -949,6 +957,11 @@ run it locally before you turn on its CI job.
   checks; without it, it stops with `the Docker Compose v2 plugin is missing`.
 - A shell with the tools the script uses on `PATH`: `bash`, `python3`, `openssl`,
   `git` and `curl`. The script's header lists its requirements.
+- **Not a host that already runs a standalone stack.** The run publishes host
+  port 8443 and uses the compose project `pipeline-standalone` (fixed in the
+  compose file), and its teardown runs `docker compose … down -v`, which deletes
+  that project's named volumes (Keycloak data, pipeline state). Use a separate
+  machine or CI instead.
 - Free host ports. The stack publishes exactly one port, from
   `deploy/standalone/compose.yaml`:
 

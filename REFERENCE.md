@@ -497,9 +497,13 @@ renders `[pipeline] merge rework: <plan>/<story_key>`; and a `usage_paused` or
 derived from its own name (`my_event` renders `[pipeline] my event: ...`), so a
 newly routed event never looks like plan completion. The story key is read from
 the record's top-level `story_key`, falling back to `payload.story_key`; when
-neither is present the `/<story_key>` suffix is omitted. Only a missing, `None`,
-or empty event keeps the legacy `[pipeline] plan complete: <plan>` subject, so
-records spooled before the event stamp still render identically. STARTTLS with
+neither is present the `/<story_key>` suffix is omitted. Only a record with no
+`event` key at all (spooled before the event stamp) keeps the legacy
+`[pipeline] plan complete: <plan>` subject, so those records still render
+identically. A record whose `event` is present but `None`, empty or blank (a
+notice emitted without an event) renders `[pipeline] notice:
+<plan>/<story_key>`, with the `/<story_key>` suffix omitted when there is no
+story key; it never renders as plan completion. STARTTLS with
 mandatory certificate verification is always on
 (`pipeline/notification_email.py:176`–177); there is no subject or TLS toggle
 to configure.

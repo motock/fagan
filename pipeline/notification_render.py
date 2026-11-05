@@ -14,9 +14,11 @@ from dataclasses import dataclass
 # record["payload"]["event"] (NOTIFYLC-1).  The subject is DERIVED from the
 # record, never configured: there is deliberately no subject knob.  An event
 # present but not listed here renders its own name, humanized, so a newly
-# routed event never masquerades as plan completion; only a
-# missing/None/empty event falls back to the legacy "plan complete" subject,
-# so records spooled before the event= stamp still render identically.
+# routed event never masquerades as plan completion.  Only a record with NO
+# "event" key at all -- one spooled before the event= stamp -- falls back to
+# the legacy "plan complete" subject, so those records render identically; an
+# event that is present but None, empty, blank or not a string is a notice
+# emitted without an event and renders the neutral UNSTAMPED_LABEL subject.
 SUBJECT_LABELS = {
     "plan_completed": "plan complete",
     "story_parked": "story parked",
@@ -33,6 +35,13 @@ SUBJECT_LABELS = {
     "plan_approved": "plan approved",
     "plan_changes_requested": "plan changes requested",
 }
+
+# Neutral label for a notification emitted without an event: the record
+# carries the "event" key (so it is not a pre-stamp legacy record) but the
+# value is not a usable event name.  Kept OUT of SUBJECT_LABELS on purpose --
+# it is not an event, it is the absence of one.
+UNSTAMPED_LABEL = 'notice'
+
 
 # Only these events name a single story; every other labelled event is
 # plan-level, so a story key must never be appended to its subject even when
@@ -68,11 +77,21 @@ def render_notification(record: dict) -> RenderedNotification:
     payload = record.get("payload") or {}
     event = payload.get("event")
     story_key = record.get("story_key") or payload.get("story_key")
-    if not isinstance(event, str) or not event:
-        # Legacy fallback: records spooled before the event= stamp carry no
-        # event at all, so only a missing/None/empty event renders the
-        # original "plan complete" subject.
+    if "event" not in payload:
+        # Legacy fallback: only a record with no "event" key at all was
+        # spooled before the event= stamp, so it alone renders the original
+        # "plan complete" subject.
         subject = f"[pipeline] plan complete: {record.get('plan')}"
+    elif not isinstance(event, str) or not event.strip():
+        # The event key is present but carries no usable event name (None,
+        # empty, whitespace-only or not a string): the notice was emitted
+        # without an event, so it renders a neutral subject -- never plan
+        # completion.
+        subject = (
+            f"[pipeline] {UNSTAMPED_LABEL}: {record.get('plan')}/{story_key}"
+            if story_key else
+            f"[pipeline] {UNSTAMPED_LABEL}: {record.get('plan')}"
+        )
     else:
         # A present event we have no explicit label for still gets a
         # readable subject derived from its name, never the plan-complete

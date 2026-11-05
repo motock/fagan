@@ -117,6 +117,8 @@ def _patch_story_impl(
             manifest = _store.get_manifest(plan_name)
             if reset_if_changed(manifest):
                 _store.save_manifest(plan_name, manifest)
+                from pipeline.plan_approval_notice import notify_approval_event
+                notify_approval_event(plan_name, manifest, "plan_pending_approval")
         if (
             was_dispatched
             and "agent_instructions" in fields

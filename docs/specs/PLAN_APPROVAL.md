@@ -198,6 +198,9 @@ three events:
 | `plan_approved` | the plan was approved |
 | `plan_changes_requested` | changes were requested on the plan |
 
+A reset performed by `patch_story` or `patch_plan` also sends
+`plan_pending_approval`, once the reset has been saved.
+
 Ingest emits `plan_pending_approval` only while `PIPELINE_PLAN_APPROVAL` is on
 and the plan is **newly** pending approval. A plan is newly pending when the
 recomputed record is `pending_approval` and either there is no previous

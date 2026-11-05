@@ -40,6 +40,14 @@ def _assert_interpreter() -> None:
 if __name__ == "__main__":
     _assert_interpreter()
     configure_logging_from_env()
+    # Resolve the authorizer seam before the transport starts serving: a missing
+    # or rejected authorizer plugin must stop the process here rather than
+    # surface on some later authorization decision. A PluginError propagates.
+    # Imported here, not at module top, so importing this shim stays side-effect
+    # free.
+    from app.policy import activate_authorizer
+
+    activate_authorizer()
     # stdio stays the default and is byte-identical to before; anything else
     # is a remote transport, which pipeline.remote_transport refuses to serve
     # unless OIDC is configured.

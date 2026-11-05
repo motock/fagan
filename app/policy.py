@@ -314,6 +314,38 @@ def default_authorizer() -> Authorizer:
         return built
 
 
+def activate_authorizer() -> Authorizer:
+    """Resolve the authorizer seam once at start-up and log which one is live.
+
+    Resolution belongs to process start-up, not to the first authorization
+    decision: a missing or rejected authorizer plugin must stop the process
+    before it serves anything, and the operator needs a record of which
+    authorizer is in force. :func:`default_authorizer` already keeps a built
+    plugin for the life of the process, so calling this again neither rebuilds
+    the object nor changes the decision -- it only records the seam again.
+
+    :class:`~app.plugin_loader.PluginError` propagates on purpose: falling back
+    to :class:`LocalPolicy` would change who is allowed.
+    """
+    authorizer = default_authorizer()
+    # ``default_authorizer`` returns either a cached plugin object or a fresh
+    # LocalPolicy, so identity against the cache is what distinguishes them --
+    # more honest than ``isinstance``, which a plugin could satisfy.
+    with _AUTHORIZER_LOCK:
+        specs = [
+            spec for spec, live in _PLUGIN_AUTHORIZERS.items() if live is authorizer
+        ]
+    # Only the module part of ``module:attr``: never the attribute, the raw
+    # spec, a repr of the object, or any other value taken from the
+    # environment.
+    module = specs[0].partition(":")[0] if specs else "builtin"
+    logger.info(
+        "authorizer active",
+        extra={"plugin_seam": "authorizer", "plugin_module": module},
+    )
+    return authorizer
+
+
 def _action_label(action: object) -> str:
     """Return a log-safe label for ``action``: its value, or its type name."""
     if isinstance(action, Action):

@@ -748,7 +748,7 @@ app.include_router(chat.chat_router, prefix="/api")
 # when the decorator runs, so they are in scope in time.
 from app.auth import ORIGIN_CHAT, ORIGIN_UI
 from app.dashboard_models import ProposePatchRequest
-from pipeline import worktree_patch
+from pipeline import authorization, worktree_patch
 from pipeline.workspace import WorkspaceSecurityError
 
 
@@ -989,10 +989,10 @@ mount_routes(app)
 _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
+authorization.activate_authorizer()
 
 # Outermost: the last middleware added wins, so this follows every @app.middleware.
 dashboard_cors.install(app)
-# API-only mode registers neither UI route, so no response can carry the key.
 _dashboard_ui_enabled = dashboard_ui.ui_enabled()
 dashboard_ui.register_index(app, dashboard_index, _dashboard_ui_enabled)
 if _dashboard_ui_enabled:

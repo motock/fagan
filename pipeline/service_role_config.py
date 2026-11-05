@@ -152,8 +152,11 @@ def _patch_plan_impl(self, plan_name: str, fields: dict[str, Any]):
             return {"ok": False, "error": f"No such plan {plan_name!r}"}
         manifest = _store.get_manifest(plan_name)
         manifest.update(fields)
-        reset_if_changed(manifest)
+        reset = reset_if_changed(manifest)
         _store.save_manifest(plan_name, manifest)
+        if reset:
+            from pipeline.plan_approval_notice import notify_approval_event
+            notify_approval_event(plan_name, manifest, "plan_pending_approval")
         return {"ok": True, "plan_name": plan_name}
 
 

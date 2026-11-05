@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import inspect
 
-import pipeline.store_records as store_records  # noqa: PLR0402
 import pytest
+
+import pipeline.store_records as store_records  # noqa: PLR0402
 
 
 def _attr(name):

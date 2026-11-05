@@ -185,6 +185,37 @@ snapshot, not as a live view of current warnings.
 
 ## 9. Dashboard surfacing
 
+### The review endpoint
+
+`GET /api/plans/{plan_name}/review` (`app/dashboard_routes_approval.py`,
+mounted under `/api` so the dashboard's existing `/api/` middleware
+authenticates it) returns the payload an operator reviews a plan against: the
+stored approval record (`status`, `digest`, `decided_by`, `at`,
+`self_approved`, `reason`), `current_digest` — the digest of the authored
+content as it is on disk right now — `digest_current` (whether the stored
+digest still matches it, i.e. whether the approval is stale), `viewer_is_author`
+(the viewer's subject compared with the manifest's `ingested_by`, the same
+comparison `_decide_plan` records as `self_approved`), `owner`, `role_config`,
+a field-by-field projection of each story, and `warnings` from
+`pipeline.plan_review.review_warnings`. The manifest itself is never returned
+and the route never writes.
+
+Visibility is `app.policy.can_view` over
+`pipeline.authorization.resource_for(manifest, plan_name, None)`: the plan's
+owner, one of its delegates, and the local operator see it; everyone else does
+not. An invalid plan key, a missing manifest and a plan the caller may not see
+are the **same** 404 with the **same** body, `{"detail": "plan not found"}` — no
+existence oracle. Only for a visible plan are the two gate failures reported,
+both `409`: `plan approval is not enabled` when the gate is off, and
+`plan has no approval record; re-ingest it` when the manifest carries no
+`approval` dict. Unauthenticated callers are refused by the middleware (401)
+before the handler runs.
+
+Core ships **no** review page: this is a JSON API. An operator supplies a review
+UI through the dashboard extension mount (`app/dashboard_mount.py`, see
+"Mounted dashboard extensions"), whose `ctx.router` routes are included under
+`/api/ext` behind the same authentication.
+
 `app/dashboard_helpers._plan_summary` adds an `"approval"` key **only** when
 the manifest carries an approval record. The value is a six-field projection:
 

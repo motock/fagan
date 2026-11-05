@@ -15,8 +15,11 @@ Contract under test (PLANNOTIFY-08):
 
 * Subject shapes:
 
-  - ``plan_completed``, and a missing/None/EMPTY event (the legacy fallback):
+  - ``plan_completed``, and a record with NO ``event`` key at all (the
+    legacy fallback, i.e. spooled before the event stamp):
         ``[pipeline] plan complete: <plan>``
+  - a present-but-``None``/empty event (a notice emitted without an event):
+        ``[pipeline] notice: <plan>`` (never plan completion)
   - story-level events (story_parked, dispatch_failed, tests_failed,
     agent_gave_up):
         ``[pipeline] <label>: <plan>/<story_key>``
@@ -28,9 +31,12 @@ Contract under test (PLANNOTIFY-08):
 
 Two hard constraints this file also grades:
 
-A. The fallback subject for a missing/None/EMPTY event stays EXACTLY
+A. The fallback subject for a record with NO ``event`` key stays EXACTLY
    ``[pipeline] plan complete: <plan>`` -- records spooled before this change
    carry no event key and are still in flight (delivery is at-least-once).
+   A record whose ``event`` is present but ``None`` or empty renders
+   ``[pipeline] notice: <plan>`` instead: it was emitted without an event, so
+   it never renders as plan completion.
 B. No ninth ``os.environ.get("PIPELINE_NOTIFY_EMAIL_...")`` call is added to
    the module: the subject is derived, never configured.
 
@@ -401,20 +407,20 @@ def test_payload_without_event_key_keeps_legacy_subject(monkeypatch):
     assert subject == "[pipeline] plan complete: PLAN-42"
 
 
-def test_event_none_keeps_legacy_subject(monkeypatch):
+def test_event_none_renders_a_neutral_notice_subject(monkeypatch):
     subject = _subject_for(
         monkeypatch,
         {"plan": "PLAN-42", "payload": {"event": None, "message": "hi"}},
     )
-    assert subject == "[pipeline] plan complete: PLAN-42"
+    assert subject == "[pipeline] notice: PLAN-42"
 
 
-def test_event_empty_string_keeps_legacy_subject(monkeypatch):
+def test_event_empty_string_renders_a_neutral_notice_subject(monkeypatch):
     subject = _subject_for(
         monkeypatch,
         {"plan": "PLAN-42", "payload": {"event": "", "message": "hi"}},
     )
-    assert subject == "[pipeline] plan complete: PLAN-42"
+    assert subject == "[pipeline] notice: PLAN-42"
 
 
 def test_unrecognized_event_uses_a_humanized_label(monkeypatch):

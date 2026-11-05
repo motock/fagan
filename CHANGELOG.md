@@ -61,6 +61,7 @@ in practice.
   Queued notifications older than 7 days are dropped at drain time, so a
   channel that recovers after a long outage no longer flushes weeks of stale
   messages at once.
+- The scheduler daemon now keeps retrying the NATS broker in the background when the broker is not up yet at start-up (the standalone stack starts `nats` a few milliseconds after the pipeline container), and starts the durable consumers when it answers. Before, those consumers stayed down until the container was restarted and their events piled up in the stream.
 
 ## [0.9.0] - 2026-11-03
 

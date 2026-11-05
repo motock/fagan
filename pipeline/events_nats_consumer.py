@@ -53,6 +53,7 @@ import datetime
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -94,6 +95,13 @@ _START_TIMEOUT_S = 15.0
 _STOP_GRACE_S = 10.0
 #: How long shutdown may take in total before it gives up on the loop.
 _STOP_TIMEOUT_S = 20.0
+#: Seconds the background start retry waits before its first attempt.
+_RETRY_INITIAL_S = 1.0
+#: Ceiling for the retry backoff, so a broker that stays down is not hammered.
+_RETRY_MAX_S = 30.0
+#: How long :func:`stop_consumers` waits for the retry thread to exit; covers an
+#: in-flight dial of ``PIPELINE_EVENT_PUBLISH_TIMEOUT_S`` (5 s by default).
+_RETRY_JOIN_TIMEOUT_S = 20.0
 
 
 @dataclass
@@ -110,6 +118,15 @@ class _Consumer:
 
 #: Consumers this process started, in start order.
 _consumers: list[_Consumer] = []
+#: Guards every read and mutation of :data:`_consumers`: the retry thread and
+#: :func:`stop_consumers` run on different threads.
+_consumers_lock = threading.Lock()
+#: Set by :func:`stop_consumers` to interrupt the retry thread's wait at once.
+_retry_stop = threading.Event()
+#: The background retry thread, when one is alive.
+_retry_thread: threading.Thread | None = None
+#: Guards :data:`_retry_thread`, so two starts cannot spawn two retries.
+_retry_thread_lock = threading.Lock()
 
 
 def durable_types(bus: NatsEventBus) -> tuple[str, ...]:
@@ -148,7 +165,8 @@ def max_deliver() -> int:
 
 def running_consumer_names() -> tuple[str, ...]:
     """The durable consumer names this process currently runs."""
-    return tuple(consumer.durable for consumer in _consumers)
+    with _consumers_lock:
+        return tuple(consumer.durable for consumer in _consumers)
 
 
 def start_consumers(bus) -> None:
@@ -159,23 +177,43 @@ def start_consumers(bus) -> None:
     daemon is the only process that starts it.
 
     A broker that cannot be reached leaves no consumer behind and does not
-    abort the daemon; the events stay in the stream and a later start consumes
-    them.
+    abort the daemon: if the broker is unreachable, a background thread retries
+    the connection with backoff and starts the durable consumers when the
+    broker answers; events stay in the stream until then.
     """
     if not isinstance(bus, NatsEventBus):
         return
 
     loop = bus._ensure_loop()
-    try:
-        bus._ensure_connection(loop)
-    except Exception:  # noqa: BLE001 - an unreachable broker is not fatal here
+    missing = _start_missing(bus, loop)
+    if missing is None:
         logger.warning(
             "durable consumers were not started: the NATS broker named by "
             "PIPELINE_NATS_URL is unreachable"
         )
+        _ensure_retry_thread(bus)
         return
+    if missing:
+        # The per-type warning is already logged; retry only what is missing.
+        _ensure_retry_thread(bus)
 
-    already = set(running_consumer_names())
+
+def _start_missing(bus: NatsEventBus, loop) -> set[str] | None:
+    """One start attempt: connect, then start every type not yet running.
+
+    Returns ``None`` when the broker could not be reached -- a broker that is
+    not up yet is expected at daemon boot and is not logged here, so a broker
+    that stays down cannot flood the log. Otherwise returns the durable names
+    still missing, which is empty once every type runs.
+    """
+    try:
+        bus._ensure_connection(loop)
+    except Exception:  # noqa: BLE001 - an unreachable broker is not fatal here
+        return None
+
+    with _consumers_lock:
+        already = {consumer.durable for consumer in _consumers}
+    missing: set[str] = set()
     for event_type in durable_types(bus):
         durable = _durable_name(event_type)
         if durable in already:
@@ -188,8 +226,53 @@ def start_consumers(bus) -> None:
             logger.warning(
                 "the durable consumer %s was not started", durable
             )
+            missing.add(durable)
             continue
-        _consumers.append(consumer)
+        with _consumers_lock:
+            _consumers.append(consumer)
+    return missing
+
+
+def _ensure_retry_thread(bus: NatsEventBus) -> None:
+    """Start the one background retry, unless a live one already runs."""
+    global _retry_thread
+    with _retry_thread_lock:
+        if _retry_thread is not None and _retry_thread.is_alive():
+            return
+        _retry_stop.clear()
+        _retry_thread = threading.Thread(
+            target=_retry_start,
+            args=(bus,),
+            name="nats-consumer-start-retry",
+            daemon=True,
+        )
+        _retry_thread.start()
+
+
+def _retry_start(bus: NatsEventBus) -> None:
+    """Retry the durable-consumer start until the broker answers or stop is set.
+
+    Waits 1 s, then doubles to a 30 s ceiling, on :data:`_retry_stop` so a stop
+    interrupts the wait immediately. A failed attempt logs nothing; the first
+    attempt that starts every durable type logs one info line and ends the
+    thread.
+    """
+    delay = _RETRY_INITIAL_S
+    attempts = 0
+    while not _retry_stop.is_set():
+        if _retry_stop.wait(delay):
+            return
+        attempts += 1
+        loop = bus._ensure_loop()
+        missing = _start_missing(bus, loop)
+        if missing is None or missing:
+            delay = min(delay * 2, _RETRY_MAX_S)
+            continue
+        logger.info(
+            "durable consumers started after the broker became reachable",
+            extra={"attempts": attempts},
+        )
+        return
 
 
 def stop_consumers() -> None:
@@ -200,9 +283,23 @@ def stop_consumers() -> None:
     exactly as it would have -- cancelling it mid-delivery would leave a
     message the broker has to redeliver. Only a loop that outlives
     :data:`_STOP_GRACE_S` is cancelled.
+
+    The background start retry is stopped and joined first, so it cannot start
+    a consumer behind the shutdown's back or spawn a duplicate on the next
+    start.
     """
-    while _consumers:
-        consumer = _consumers.pop()
+    global _retry_thread
+    _retry_stop.set()
+    with _retry_thread_lock:
+        thread = _retry_thread
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(_RETRY_JOIN_TIMEOUT_S)
+
+    while True:
+        with _consumers_lock:
+            if not _consumers:
+                break
+            consumer = _consumers.pop()
         loop = consumer.bus._loop
         if loop is None or loop.is_closed() or not loop.is_running():
             _abandon(consumer)
@@ -214,6 +311,12 @@ def stop_consumers() -> None:
         except Exception:  # noqa: BLE001 - shutdown must finish regardless
             _abandon(consumer)
             logger.warning("the durable consumer %s did not stop cleanly", consumer.durable)
+
+    # Cleared only after the join, so a later start_consumers can begin again
+    # and the thread we just joined cannot wake up and start consumers.
+    with _retry_thread_lock:
+        _retry_thread = None
+    _retry_stop.clear()
 
 
 def _abandon(consumer: _Consumer) -> None:

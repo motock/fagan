@@ -1,0 +1,3182 @@
+{
+ "components": {
+  "schemas": {
+   "ActiveWorkspaceResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/workspace``: the active path, or null.",
+    "properties": {
+     "active": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active"
+     }
+    },
+    "required": [
+     "active"
+    ],
+    "title": "ActiveWorkspaceResponse",
+    "type": "object"
+   },
+   "ApplyPatchRequest": {
+    "description": "Body for ``POST /api/worktree/patch/{patch_id}/apply`` (WAP-10).\n\nThe apply route re-accepts NOTHING but the human confirmation token:\nthe diff that gets applied is always the server-stored record for the\npatch id in the URL, never anything the caller sends.  A forged\n``unified_diff`` (or any other extra key) in the body is therefore\ninert -- pydantic ignores unknown fields and the model has no diff\nfield to smuggle one into.",
+    "properties": {
+     "confirmation_token": {
+      "title": "Confirmation Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "confirmation_token"
+    ],
+    "title": "ApplyPatchRequest",
+    "type": "object"
+   },
+   "ChatRequest": {
+    "properties": {
+     "history": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "History"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     },
+     "plan_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Plan Name"
+     },
+     "workspace": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Workspace"
+     }
+    },
+    "required": [
+     "message"
+    ],
+    "title": "ChatRequest",
+    "type": "object"
+   },
+   "ChatResponse": {
+    "properties": {
+     "reply": {
+      "title": "Reply",
+      "type": "string"
+     },
+     "tool_calls": {
+      "items": {},
+      "title": "Tool Calls",
+      "type": "array"
+     },
+     "turns": {
+      "title": "Turns",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "reply",
+     "tool_calls",
+     "turns"
+    ],
+    "title": "ChatResponse",
+    "type": "object"
+   },
+   "DecisionRequest": {
+    "properties": {
+     "answer": {
+      "title": "Answer",
+      "type": "string"
+     },
+     "context": {
+      "default": "",
+      "title": "Context",
+      "type": "string"
+     },
+     "decided_by": {
+      "default": "human",
+      "title": "Decided By",
+      "type": "string"
+     },
+     "question": {
+      "title": "Question",
+      "type": "string"
+     },
+     "story_key": {
+      "title": "Story Key",
+      "type": "string"
+     }
+    },
+    "required": [
+     "story_key",
+     "question",
+     "answer"
+    ],
+    "title": "DecisionRequest",
+    "type": "object"
+   },
+   "DecomposeRequest": {
+    "properties": {
+     "request": {
+      "title": "Request",
+      "type": "string"
+     },
+     "workspace": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Workspace"
+     }
+    },
+    "required": [
+     "request"
+    ],
+    "title": "DecomposeRequest",
+    "type": "object"
+   },
+   "DecomposeResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``POST /api/decompose`` (``decompose_plan``).\n\n``plan`` is the model-authored plan object (free-form by nature).",
+    "properties": {
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "plan": {
+      "additionalProperties": true,
+      "title": "Plan",
+      "type": "object"
+     }
+    },
+    "required": [
+     "ok",
+     "plan"
+    ],
+    "title": "DecomposeResponse",
+    "type": "object"
+   },
+   "DirectoryEntry": {
+    "additionalProperties": true,
+    "description": "One entry of ``GET /api/workspace/files``.",
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "type": {
+      "title": "Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "type"
+    ],
+    "title": "DirectoryEntry",
+    "type": "object"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "title": "Detail",
+      "type": "array"
+     }
+    },
+    "title": "HTTPValidationError",
+    "type": "object"
+   },
+   "IngestPlanRequest": {
+    "properties": {
+     "only_epics": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Only Epics"
+     },
+     "overwrite": {
+      "default": false,
+      "title": "Overwrite",
+      "type": "boolean"
+     }
+    },
+    "title": "IngestPlanRequest",
+    "type": "object"
+   },
+   "IngestPlanResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``POST /api/plans/{plan_name}/ingest`` (``ingest_plan``).\n\nA failed ingest raises HTTPException with the service's error, so a 200\nalways carries ``ok: true``; the remaining keys come from the ingest\nimplementation and are documented as allowed, not required.",
+    "properties": {
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "ok"
+    ],
+    "title": "IngestPlanResponse",
+    "type": "object"
+   },
+   "PatchApplyResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``POST /api/worktree/patch/{patch_id}/apply``.\n\nA refused apply raises HTTPException with the engine's ``status_code``, so a\n200 always carries ``ok: true``; the rest of the engine result is\nengine-defined and therefore documented as allowed but not required.",
+    "properties": {
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "ok"
+    ],
+    "title": "PatchApplyResponse",
+    "type": "object"
+   },
+   "PlanRoleConfigBody": {
+    "properties": {
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     }
+    },
+    "title": "PlanRoleConfigBody",
+    "type": "object"
+   },
+   "ProposePatchRequest": {
+    "description": "Body for ``POST /api/worktree/patch/propose`` (WAP-9).\n\nThe chat model proposes a unified diff against a stuck story's\nworktree; a human reviews and applies it in the dashboard.",
+    "properties": {
+     "plan_name": {
+      "title": "Plan Name",
+      "type": "string"
+     },
+     "story_key": {
+      "title": "Story Key",
+      "type": "string"
+     },
+     "unified_diff": {
+      "title": "Unified Diff",
+      "type": "string"
+     }
+    },
+    "required": [
+     "plan_name",
+     "story_key",
+     "unified_diff"
+    ],
+    "title": "ProposePatchRequest",
+    "type": "object"
+   },
+   "RoleDefaultBody": {
+    "properties": {
+     "model": {
+      "title": "Model",
+      "type": "string"
+     },
+     "provider": {
+      "title": "Provider",
+      "type": "string"
+     }
+    },
+    "required": [
+     "provider",
+     "model"
+    ],
+    "title": "RoleDefaultBody",
+    "type": "object"
+   },
+   "SavePlanRequest": {
+    "properties": {
+     "plan_json": {
+      "title": "Plan Json",
+      "type": "string"
+     },
+     "workspace": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Workspace"
+     }
+    },
+    "required": [
+     "plan_json"
+    ],
+    "title": "SavePlanRequest",
+    "type": "object"
+   },
+   "SavePlanResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``POST /api/plans/{plan_name}/save`` (``save_plan``).",
+    "properties": {
+     "epic_count": {
+      "title": "Epic Count",
+      "type": "integer"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "story_count": {
+      "title": "Story Count",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "ok",
+     "path",
+     "epic_count",
+     "story_count"
+    ],
+    "title": "SavePlanResponse",
+    "type": "object"
+   },
+   "StoryDecisionRequest": {
+    "properties": {
+     "context": {
+      "default": "",
+      "title": "Context",
+      "type": "string"
+     },
+     "decided_by": {
+      "default": "human",
+      "title": "Decided By",
+      "type": "string"
+     },
+     "options": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Options",
+      "type": "array"
+     },
+     "question": {
+      "title": "Question",
+      "type": "string"
+     }
+    },
+    "required": [
+     "question",
+     "options"
+    ],
+    "title": "StoryDecisionRequest",
+    "type": "object"
+   },
+   "StoryDiffFile": {
+    "additionalProperties": true,
+    "description": "One entry of a story diff summary's ``files`` list.",
+    "properties": {
+     "added": {
+      "default": 0,
+      "title": "Added",
+      "type": "integer"
+     },
+     "binary": {
+      "default": false,
+      "title": "Binary",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "removed": {
+      "default": 0,
+      "title": "Removed",
+      "type": "integer"
+     },
+     "status": {
+      "default": "",
+      "title": "Status",
+      "type": "string"
+     },
+     "untracked": {
+      "default": false,
+      "title": "Untracked",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "StoryDiffFile",
+    "type": "object"
+   },
+   "StoryDiffResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/plans/{plan_name}/stories/{story_key}/diff``.\n\nThe route returns one of three shapes -- ``{\"available\": false, \"reason\":\n...}``, a summary (``files``/``totals``/``truncated``/shas), or a single\nfile's diff (``path``/``diff``/``binary``) -- so ``available`` is the only\nkey every branch returns. The rest is declared as optional, and the\n``diff`` body itself is free-form text.",
+    "properties": {
+     "available": {
+      "title": "Available",
+      "type": "boolean"
+     },
+     "base_ref": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base Ref"
+     },
+     "base_sha": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base Sha"
+     },
+     "binary": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Binary"
+     },
+     "branch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Branch"
+     },
+     "diff": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Diff"
+     },
+     "files": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/StoryDiffFile"
+      },
+      "title": "Files",
+      "type": "array"
+     },
+     "head_sha": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Head Sha"
+     },
+     "path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Path"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "totals": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "integer"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Totals"
+     },
+     "truncated": {
+      "default": false,
+      "title": "Truncated",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "available"
+    ],
+    "title": "StoryDiffResponse",
+    "type": "object"
+   },
+   "StoryPatchBody": {
+    "properties": {
+     "acceptance": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Acceptance"
+     },
+     "agent_instructions": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Instructions"
+     },
+     "backend": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Backend"
+     },
+     "blocked_by": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Blocked By"
+     },
+     "dependencies": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dependencies"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "persona": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Persona"
+     },
+     "pr_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pr Url"
+     },
+     "risk": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk"
+     },
+     "summary": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Summary"
+     },
+     "tdd_split": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tdd Split"
+     }
+    },
+    "title": "StoryPatchBody",
+    "type": "object"
+   },
+   "StoryStatusBody": {
+    "properties": {
+     "status": {
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "StoryStatusBody",
+    "type": "object"
+   },
+   "ValidationError": {
+    "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "title": "Location",
+      "type": "array"
+     },
+     "msg": {
+      "title": "Message",
+      "type": "string"
+     },
+     "type": {
+      "title": "Error Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError",
+    "type": "object"
+   },
+   "WorkspaceEntriesResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/workspace/files`` (``list_workspace_directory``).",
+    "properties": {
+     "entries": {
+      "items": {
+       "$ref": "#/components/schemas/DirectoryEntry"
+      },
+      "title": "Entries",
+      "type": "array"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ok",
+     "path",
+     "entries"
+    ],
+    "title": "WorkspaceEntriesResponse",
+    "type": "object"
+   },
+   "WorkspaceEntry": {
+    "additionalProperties": true,
+    "description": "One row of ``GET /api/workspaces`` (``list_workspaces`` entry).",
+    "properties": {
+     "exists": {
+      "title": "Exists",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "valid": {
+      "title": "Valid",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "path",
+     "exists",
+     "valid"
+    ],
+    "title": "WorkspaceEntry",
+    "type": "object"
+   },
+   "WorkspaceFileResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/workspace/file`` (``read_workspace_file``).\n\n``content`` is the file's UTF-8 text, so it is free-form text rather than a\nstructured object.",
+    "properties": {
+     "content": {
+      "title": "Content",
+      "type": "string"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ok",
+     "path",
+     "content"
+    ],
+    "title": "WorkspaceFileResponse",
+    "type": "object"
+   },
+   "WorkspaceRequest": {
+    "properties": {
+     "create": {
+      "default": false,
+      "title": "Create",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "WorkspaceRequest",
+    "type": "object"
+   },
+   "WorkspaceResolveResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``POST /api/workspace`` (``validate/create_workspace``).\n\n``pipeline.workspace.validate_workspace`` and ``create_workspace`` always\nreturn ``ok``/``path``/``error``; the route answers 400 instead of 200 when\n``ok`` is false, so a 200 always carries ``ok: true`` plus the resolved path.",
+    "properties": {
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ok",
+     "path",
+     "error"
+    ],
+    "title": "WorkspaceResolveResponse",
+    "type": "object"
+   },
+   "WorkspaceSearchResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/workspace/search`` (``search_workspace``).\n\n``matches`` are raw ``grep`` output lines; ``truncated`` says whether the\nresult was cut at the service's ``max_results`` ceiling.",
+    "properties": {
+     "matches": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Matches",
+      "type": "array"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "truncated": {
+      "title": "Truncated",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "ok",
+     "matches",
+     "truncated"
+    ],
+    "title": "WorkspaceSearchResponse",
+    "type": "object"
+   },
+   "WorkspacesResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/workspaces``.",
+    "properties": {
+     "workspaces": {
+      "items": {
+       "$ref": "#/components/schemas/WorkspaceEntry"
+      },
+      "title": "Workspaces",
+      "type": "array"
+     }
+    },
+    "required": [
+     "workspaces"
+    ],
+    "title": "WorkspacesResponse",
+    "type": "object"
+   }
+  }
+ },
+ "info": {
+  "title": "Agent Pipeline Dashboard",
+  "version": "1.0.0"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/chat": {
+   "post": {
+    "operationId": "chat_endpoint_api_chat_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "x-pipeline-api-key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Api-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChatRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Chat Endpoint"
+   }
+  },
+  "/api/chat/stream": {
+   "post": {
+    "operationId": "chat_stream_endpoint_api_chat_stream_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "x-pipeline-api-key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Api-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChatRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       },
+       "text/event-stream": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      },
+      "description": "Server-sent events: `event: <type>` + `data: <json>` frames (turn, reply, result, tool_call, tool_result, error)."
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Chat Stream Endpoint"
+   }
+  },
+  "/api/config": {
+   "get": {
+    "description": "Read-only effective-configuration snapshot, mirroring\npipeline.server.get_effective_config's MCP tool for the dashboard: every\nrole in config_provenance.PIPELINE_ROLES with its resolved\n(provider, model) and provenance, every cataloged env var's resolved\nvalue and provenance, any transport-only env vars present that have no\neffect as input, and which config-source files were consulted (with an\nexists flag each). Pure read - makes no changes and writes nothing.\n\nThe dashboard carries no persona knowledge (agents/*.md model defaults),\nso no model_fallbacks are supplied here - a role with nothing else\nconfigured honestly reports model_source == \"unset\" rather than\nguessing a persona-specific default.\n\nPass ?plan=<name> to layer in that plan's manifest role_config\noverrides. Reuses the module's existing _read_manifest helper rather\nthan a second reader; a missing manifest (_read_manifest returns None)\nor a malformed one (invalid JSON) both degrade to \"no plan overrides\"\nrather than a 404 or 500 - _read_manifest itself is left unchanged, the\ntolerance for malformed JSON lives here.",
+    "operationId": "effective_config_api_config_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "plan",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Plan"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Effective Config Api Config Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Effective Config"
+   }
+  },
+  "/api/config/plans/{plan_name}/roles/{role}": {
+   "post": {
+    "description": "Delegates to _service.set_plan_role_config(plan_name, role, body.provider,\nbody.model).\n\n404 if the plan does not exist; 400 on validation failure; on success\nreturns the service result plus the updated per-plan effective config (the\nplan's role_config layered into resolve_role_provenance).",
+    "operationId": "set_plan_role_config_route_api_config_plans__plan_name__roles__role__post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "role",
+      "required": true,
+      "schema": {
+       "title": "Role",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PlanRoleConfigBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Set Plan Role Config Route Api Config Plans  Plan Name  Roles  Role  Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Plan Role Config Route"
+   }
+  },
+  "/api/config/providers": {
+   "get": {
+    "description": "Read-only provider/model catalog from model_registry.json, for the\nConfiguration view's provider/model dropdowns. load_registry() is\nalready tolerant of a missing/malformed registry (raises\nRoleRegistryError), degrading to an empty catalog rather than\n500ing, mirroring how /api/config's effective_config() already\nhandles the same exception a few lines above.",
+    "operationId": "config_providers_api_config_providers_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Config Providers Api Config Providers Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Config Providers"
+   }
+  },
+  "/api/config/roles/{role}": {
+   "post": {
+    "description": "Delegates to _service.set_role_default(role, body.provider, body.model).\n\nOn success returns the service result plus the updated effective config for\nthat role (via config_provenance.resolve_role_provenance). Validation\nfailures surface as HTTP 400 with the service's error message.",
+    "operationId": "set_role_default_route_api_config_roles__role__post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "role",
+      "required": true,
+      "schema": {
+       "title": "Role",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RoleDefaultBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Set Role Default Route Api Config Roles  Role  Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Role Default Route"
+   }
+  },
+  "/api/decompose": {
+   "post": {
+    "operationId": "decompose_route_api_decompose_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DecomposeRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DecomposeResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Decompose Route"
+   }
+  },
+  "/api/dispatch_health": {
+   "get": {
+    "description": "Fleet-wide headline metrics stratified by whether a story carried an\n`acceptance` block at dispatch time.\n\nThe point of this endpoint: Fix #1 (the harness-owned acceptance oracle,\nshipped 2026-06-27) is supposed to lift devstral's success rate on\nstories with `acceptance` while leaving the without-acceptance slice\nuntouched. Watching `escalation_rate` and `success_rate` between the\ntwo slices over the next week tells us whether Fix #1 is paying off\nin production, vs. just in the A/B/C experiment rig.\n\nStories are only counted once `dispatched` is True \u2014 i.e. they\nactually got picked up by `advance_pipeline`. The denominator is\ndispatched, not story_count, because plans accumulate 'todo' stories\nthat haven't been tried yet and would dilute the rate toward zero.",
+    "operationId": "dispatch_health_api_dispatch_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Dispatch Health Api Dispatch Health Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Dispatch Health"
+   }
+  },
+  "/api/guard-liveness": {
+   "get": {
+    "operationId": "get_guard_liveness_api_guard_liveness_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Guard Liveness Api Guard Liveness Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Guard Liveness"
+   }
+  },
+  "/api/health": {
+   "get": {
+    "description": "Liveness plus config-agreement: is the scheduler on the same config?\n\n``plan_dir`` keeps its existing meaning (the resolved canonical plan dir).\n``scheduler`` is the config fingerprint the scheduler daemon writes to\n``<plan_dir>/.scheduler_health.json`` (the CFG-B2 default path), or\n``None`` when that file is absent / unreadable / empty / malformed or\ncarries no usable ``config`` object. ``config_mismatch`` lists the\ndashboard-resolved fields whose values differ from that fingerprint\n(``plan_dir`` and ``worktree_root``); ``[]`` when they agree or when\nthere is no fingerprint to compare.\n\nFail-soft (mirrors ``_degraded_liveness_report``): any problem reading or\nparsing the fingerprint degrades to ``scheduler=None`` /\n``config_mismatch=[]`` with HTTP 200 \u2014 a health check must never 500.\n\n``topology`` is additive and observational: the process's resolved\n``plan_dir`` / ``repo_root`` / branch and worktree namespaces, plus the\nruntime selections ``resolved_runtime()`` reports, read live per request.",
+    "operationId": "health_api_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Health Api Health Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Health"
+   }
+  },
+  "/api/ingestable-plans": {
+   "get": {
+    "description": "List saved plan files that are valid targets for the Comms panel's\ningest picker (distinct from GET /api/plans, which lists already-\ningested plan manifests).",
+    "operationId": "ingestable_plans_api_ingestable_plans_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Ingestable Plans Api Ingestable Plans Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Ingestable Plans"
+   }
+  },
+  "/api/plans": {
+   "get": {
+    "description": "List plan summaries, newest first.\n\n``repo`` is an optional filter: absent, empty (``repo=``), or ``all``\nreturns ALL plans exactly as before. Any other value returns only plans\nwhose manifest ``repo_root`` matches, after applying ``os.path.expanduser``\n+ ``os.path.realpath`` normalization to BOTH the param and each candidate\n(so ``~/repo`` and trailing-slash variants still match). A ``repo`` value\nmatching no plans yields HTTP 200 with an empty ``plans`` list. Composes\nwith ``include_archived`` (AND).",
+    "operationId": "list_plans_api_plans_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "include_archived",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Include Archived",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "repo",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Repo"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Plans Api Plans Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Plans"
+   }
+  },
+  "/api/plans/advance_all": {
+   "post": {
+    "description": "Delegates to _service.advance_all_plans().",
+    "operationId": "advance_all_plans_api_plans_advance_all_post",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Advance All Plans Api Plans Advance All Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Advance All Plans"
+   }
+  },
+  "/api/plans/{plan_name}": {
+   "get": {
+    "operationId": "get_plan_api_plans__plan_name__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Plan Api Plans  Plan Name  Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Plan"
+   }
+  },
+  "/api/plans/{plan_name}/advance": {
+   "post": {
+    "description": "Delegates to _service.advance_pipeline(plan_name).",
+    "operationId": "advance_pipeline_api_plans__plan_name__advance_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Advance Pipeline Api Plans  Plan Name  Advance Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Advance Pipeline"
+   }
+  },
+  "/api/plans/{plan_name}/archive": {
+   "post": {
+    "description": "Dismiss a plan from the default sidebar view. This only touches the\ndashboard's own UI-preference file - the plan's manifest.json (and\neverything the live pipeline reads/writes) is untouched, so this is\nreversible and carries no orchestration risk.",
+    "operationId": "archive_plan_api_plans__plan_name__archive_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Archive Plan Api Plans  Plan Name  Archive Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Archive Plan"
+   }
+  },
+  "/api/plans/{plan_name}/decisions": {
+   "post": {
+    "operationId": "add_decision_api_plans__plan_name__decisions_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DecisionRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Add Decision Api Plans  Plan Name  Decisions Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Add Decision"
+   }
+  },
+  "/api/plans/{plan_name}/ingest": {
+   "post": {
+    "operationId": "ingest_plan_api_plans__plan_name__ingest_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/IngestPlanRequest"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Request"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/IngestPlanResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Ingest Plan"
+   }
+  },
+  "/api/plans/{plan_name}/metrics": {
+   "get": {
+    "operationId": "get_plan_metrics_api_plans__plan_name__metrics_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Plan Metrics Api Plans  Plan Name  Metrics Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Plan Metrics"
+   }
+  },
+  "/api/plans/{plan_name}/pause": {
+   "post": {
+    "description": "Pause a plan's execution. Delegates the manifest mutation to\n_service.pause_plan (which persists the `paused` flag) and returns the\nservice's result verbatim, except that an authorization refusal is a 403.\nA plan with no manifest is a 404, matching the archive/unarchive precedent.",
+    "operationId": "pause_plan_api_plans__plan_name__pause_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Pause Plan Api Plans  Plan Name  Pause Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Pause Plan"
+   }
+  },
+  "/api/plans/{plan_name}/resume": {
+   "post": {
+    "description": "Resume a plan's execution. Delegates the manifest mutation to\n_service.resume_plan (which clears the `paused` flag) and returns the\nservice's result verbatim, except that an authorization refusal is a 403.\nA plan with no manifest is a 404, matching the archive/unarchive precedent.",
+    "operationId": "resume_plan_api_plans__plan_name__resume_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Resume Plan Api Plans  Plan Name  Resume Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Resume Plan"
+   }
+  },
+  "/api/plans/{plan_name}/save": {
+   "post": {
+    "operationId": "save_plan_api_plans__plan_name__save_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SavePlanRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SavePlanResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Save Plan"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/approve_merge": {
+   "post": {
+    "description": "Delegates to _service.approve_merge(plan_name, story_key).",
+    "operationId": "approve_merge_route_api_plans__plan_name__stories__story_key__approve_merge_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Approve Merge Route Api Plans  Plan Name  Stories  Story Key  Approve Merge Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Approve Merge Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/checklist": {
+   "get": {
+    "description": "Return the tech-lead checklist (`.agent_plan.md`) and the executor's\nrunning scratchpad (`.agent_scratchpad.md`) from the story's worktree, so\nthe dashboard can show how far an in-progress story's attempt has gotten\n(DASHBOARD_STORY_PROGRESS_PLAN.md Tier 0).\n\nResponse shape:\n  { \"plan\": {\"available\": bool, \"text\": str},\n    \"scratchpad\": {\"available\": bool, \"text\": str} }\n\nThese artifacts only exist for stories run under PIPELINE_DECOMPOSE\n(GUIDED_DECOMPOSITION_PLAN.md); every other story \u2014 the common case \u2014\nreturns available:false for both. 404 is reserved for an unknown plan or\nstory key; a missing/gone worktree or a story never dispatched is the\nnormal available:false state, never a 500. See _read_worktree_file for the\ncontainment contract.",
+    "operationId": "get_story_checklist_api_plans__plan_name__stories__story_key__checklist_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Story Checklist Api Plans  Plan Name  Stories  Story Key  Checklist Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Story Checklist"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/checkpoint": {
+   "post": {
+    "description": "Delegates to _service.checkpoint(plan_name, story_key, step, summary, next_hint).",
+    "operationId": "checkpoint_api_plans__plan_name__stories__story_key__checkpoint_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": true,
+        "title": "Body",
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Checkpoint Api Plans  Plan Name  Stories  Story Key  Checkpoint Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Checkpoint"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/decisions": {
+   "post": {
+    "operationId": "request_decision_route_api_plans__plan_name__stories__story_key__decisions_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StoryDecisionRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Request Decision Route Api Plans  Plan Name  Stories  Story Key  Decisions Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Request Decision Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/diff": {
+   "get": {
+    "description": "Return the story worktree's diff summary, or one file's diff when\n``?path=`` names a file in that summary.\n\n404 only for an unknown plan or story; an absent/deleted/non-git\nworktree or missing base is 200 + available:false + reason; a ``path``\noutside the summary is 400. Every response is ``no-store`` and diff\ncontent is never logged.",
+    "operationId": "get_story_diff_api_plans__plan_name__stories__story_key__diff_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "path",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Path"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/StoryDiffResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Story Diff"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/dispatch": {
+   "post": {
+    "description": "Delegates to _service.dispatch_story(plan_name, story_key).",
+    "operationId": "dispatch_story_route_api_plans__plan_name__stories__story_key__dispatch_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Dispatch Story Route Api Plans  Plan Name  Stories  Story Key  Dispatch Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Dispatch Story Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/done": {
+   "post": {
+    "description": "Delegates to _service.mark_story_done(plan_name, story_key).",
+    "operationId": "mark_story_done_route_api_plans__plan_name__stories__story_key__done_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Mark Story Done Route Api Plans  Plan Name  Stories  Story Key  Done Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Mark Story Done Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/interrupt": {
+   "post": {
+    "description": "Delegates to _service.interrupt_story(plan_name, story_key).",
+    "operationId": "interrupt_story_route_api_plans__plan_name__stories__story_key__interrupt_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Interrupt Story Route Api Plans  Plan Name  Stories  Story Key  Interrupt Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Interrupt Story Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/journal": {
+   "get": {
+    "description": "Return the story's checkpoint journal (the on-disk timeline of every\nmeaningful step the agent took before being interrupted/resumed).\n\nResponse shape:\n  { \"available\": bool, \"entries\": [ {step, summary, next_hint, ts, ...} ] }\n\nSemantics:\n  - 404 only when the plan or story itself doesn't exist. The client\n    treats 404 as 'this story is gone' (render an empty placeholder or\n    toast), distinct from a healthy story that simply hasn't\n    checkpointed yet.\n  - 200 + available:false + entries:[]  when the journal file is\n    missing, malformed, or empty. NEVER 500 \u2014 a stray corrupt file in\n    PLAN_DIR must not take the dashboard down; the UI renders the\n    same 'No journal yet' empty state for all three cases.\n  - Entries are returned in file order (chronological as the agent\n    wrote them) so the UI can render them top-to-bottom as a\n    vertical timeline.",
+    "operationId": "get_story_journal_api_plans__plan_name__stories__story_key__journal_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Story Journal Api Plans  Plan Name  Stories  Story Key  Journal Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Story Journal"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/log": {
+   "get": {
+    "description": "Tail the on-disk log recorded in story['log'] for the redesigned\nmodal's \"Log\" tab.\n\nReturns {\"available\": bool, \"lines\": [str...]} where `lines` is the\ntail (newest-last). Default length is `_LOG_TAIL_DEFAULT` (200),\ncapped at `_LOG_TAIL_CAP` (500) \u2014 a client may pass ?lines=N inside\nthat envelope. Path-traversal protection: the endpoint reads the\nlog path ONLY from the manifest (never from the request), and the\nresolved path is contain-checked under PLAN_DIR.\n\nErrors that are NOT errors:\n  * story['log'] missing/empty -> available=False, lines=[].\n  * file gone -> available=False, lines=[] (no 500).\n  * non-UTF-8 bytes -> decoded with replacement chars.",
+    "operationId": "get_story_log_api_plans__plan_name__stories__story_key__log_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "lines",
+      "required": false,
+      "schema": {
+       "default": 200,
+       "title": "Lines",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Story Log Api Plans  Plan Name  Stories  Story Key  Log Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Story Log"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/patch": {
+   "post": {
+    "description": "Delegates to _service.patch_story(plan_name, story_key, fields=...).",
+    "operationId": "patch_story_route_api_plans__plan_name__stories__story_key__patch_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StoryPatchBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Patch Story Route Api Plans  Plan Name  Stories  Story Key  Patch Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Patch Story Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/replay": {
+   "get": {
+    "description": "Return the story's merged chronological replay timeline, combining\nthe checkpoint journal with the tails of the worktree logs, so the\ndashboard can render one vertical timeline of everything the agent\ndid (journal steps interleaved with agent/review log activity).\n\nResponse shape:\n  { \"available\": bool,\n    \"events\": [ {ts, source, kind, message} ],\n    \"sources\": {\"journal\": bool, \"agent.log\": bool, \"review.log\": bool} }\n\nSemantics:\n  - 404 only when the plan or story itself doesn't exist. The client\n    treats 404 as 'this story is gone' (render an empty placeholder or\n    toast), distinct from a healthy story that simply has nothing to\n    replay yet.\n  - 200 + available:false + events:[] when the journal is missing,\n    malformed, or empty AND no worktree log is readable \u2014 a story never\n    dispatched (no worktree), a wiped agent.log, and a corrupt journal\n    are all normal available-degraded states, NEVER 500.\n  - available is True iff the journal was readable OR at least one log\n    source contributed; `sources` echoes which inputs actually did, so\n    the UI can label provenance.\n  - Each log source contributes only its last `lines` lines (default\n    `_LOG_TAIL_DEFAULT` 200, clamped to [1, `_LOG_TAIL_CAP` 500]).\n  - Events are merged and sorted chronologically by build_replay_events\n    (app.story_replay); the sort is stable, journal events first at\n    equal timestamps.",
+    "operationId": "get_story_replay_api_plans__plan_name__stories__story_key__replay_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "lines",
+      "required": false,
+      "schema": {
+       "default": 200,
+       "title": "Lines",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Story Replay Api Plans  Plan Name  Stories  Story Key  Replay Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Story Replay"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/review": {
+   "post": {
+    "description": "Delegates to _service.review_story(plan_name, story_key).",
+    "operationId": "review_story_route_api_plans__plan_name__stories__story_key__review_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Review Story Route Api Plans  Plan Name  Stories  Story Key  Review Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Review Story Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/start": {
+   "post": {
+    "description": "Delegates to _service.mark_story_in_progress(plan_name, story_key).",
+    "operationId": "start_story_route_api_plans__plan_name__stories__story_key__start_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Start Story Route Api Plans  Plan Name  Stories  Story Key  Start Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Start Story Route"
+   }
+  },
+  "/api/plans/{plan_name}/stories/{story_key}/status": {
+   "post": {
+    "description": "Delegates to _service.set_story_status(plan_name, story_key, status).",
+    "operationId": "set_story_status_route_api_plans__plan_name__stories__story_key__status_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "story_key",
+      "required": true,
+      "schema": {
+       "title": "Story Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StoryStatusBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Set Story Status Route Api Plans  Plan Name  Stories  Story Key  Status Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Story Status Route"
+   }
+  },
+  "/api/plans/{plan_name}/unarchive": {
+   "post": {
+    "description": "Restore a previously-archived plan to the default sidebar view.",
+    "operationId": "unarchive_plan_api_plans__plan_name__unarchive_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Unarchive Plan Api Plans  Plan Name  Unarchive Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Unarchive Plan"
+   }
+  },
+  "/api/usage": {
+   "get": {
+    "description": "Surface the Claude usage gate's health, including whether it has gone\nblind (probe stale past the staleness window, so it's failing OPEN and\nspend is unguarded). The UI alerts on gate_blind so a silent CLI-output\nchange doesn't leave the cost gate quietly disabled.",
+    "operationId": "usage_api_usage_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Usage Api Usage Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Usage"
+   }
+  },
+  "/api/workspace": {
+   "get": {
+    "operationId": "get_workspace_route_api_workspace_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActiveWorkspaceResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Workspace Route"
+   },
+   "post": {
+    "operationId": "set_workspace_route_api_workspace_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/WorkspaceRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkspaceResolveResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Workspace Route"
+   }
+  },
+  "/api/workspace/file": {
+   "get": {
+    "operationId": "read_workspace_file_route_api_workspace_file_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "path",
+      "required": true,
+      "schema": {
+       "title": "Path",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkspaceFileResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Read Workspace File Route"
+   }
+  },
+  "/api/workspace/files": {
+   "get": {
+    "operationId": "list_workspace_directory_route_api_workspace_files_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "path",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Path",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkspaceEntriesResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Workspace Directory Route"
+   }
+  },
+  "/api/workspace/search": {
+   "get": {
+    "operationId": "search_workspace_route_api_workspace_search_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "pattern",
+      "required": true,
+      "schema": {
+       "title": "Pattern",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkspaceSearchResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Search Workspace Route"
+   }
+  },
+  "/api/workspaces": {
+   "get": {
+    "operationId": "list_workspaces_route_api_workspaces_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkspacesResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Workspaces Route"
+   }
+  },
+  "/api/worktree/patch/propose": {
+   "post": {
+    "description": "Record a model-proposed patch for human review; never applies it.\n\nChat-reachable BY DESIGN: proposing is how the model hands its work to\na human, so the origin gate is an allow-list (chat | ui) rather than\nthe chat-refusing gate the write routes use.  The deny list is\nAPPLY-side only: a patch touching ``.git`` is accepted here so the\nhuman can inspect what the model tried, and refused later at apply.",
+    "operationId": "propose_worktree_patch_route_api_worktree_patch_propose_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProposePatchRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Propose Worktree Patch Route Api Worktree Patch Propose Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Propose Worktree Patch Route"
+   }
+  },
+  "/api/worktree/patch/{patch_id}": {
+   "get": {
+    "description": "Hand the trusted UI the full stored record for human review.\n\nIncludes ``diff_text`` and the ``confirmation_token``: the UI is the\ntrusted, ui-origin-authenticated human, and the token is bound to\n``patch_id`` + ``diff_hash`` so it cannot be replayed against a\ndifferent patch.  Read-only: no TTL refresh, no status flip, no store\nmutation -- a second GET returns the same token and a later apply with\nit still succeeds.  The token is re-derived through worktree_patch's\npublic helper -- the same derivation the mint and the apply verify\nuse -- so the three can never drift apart.  The response carries\n``Cache-Control: no-store``: the body holds a live credential and must\nnever sit in a shared cache.",
+    "operationId": "get_worktree_patch_route_api_worktree_patch__patch_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "patch_id",
+      "required": true,
+      "schema": {
+       "title": "Patch Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Worktree Patch Route"
+   }
+  },
+  "/api/worktree/patch/{patch_id}/apply": {
+   "post": {
+    "description": "Apply the SERVER-STORED record for *patch_id*, gated on the token.\n\nThe route passes ONLY ``(plan_name, story_key, patch_id,\nconfirmation_token)`` to the engine -- the diff applied is always the\nserver-stored record, never anything from the request body.  A forged\n``unified_diff`` alongside the token is inert (pydantic ignores the\nunknown key and the model has no diff field).",
+    "operationId": "apply_worktree_patch_route_api_worktree_patch__patch_id__apply_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "patch_id",
+      "required": true,
+      "schema": {
+       "title": "Patch Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ApplyPatchRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PatchApplyResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Apply Worktree Patch Route"
+   }
+  }
+ }
+}

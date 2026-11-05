@@ -478,7 +478,7 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
 | `PIPELINE_NOTIFY_EMAIL_ENABLED` | `0` | Master gate for the e-mail send; must be set to exactly `1` — any other value (`true`, `yes`, `0`, unset) silently skips the send and leaves records retained in the outbox |
 | `PIPELINE_NOTIFY_EMAIL_USER` | unset (empty) | SMTP account name, e.g. `you@example.com` |
-| `PIPELINE_NOTIFY_EMAIL_PASSWORD` | unset (empty) | SMTP credential — use a provider app-password, never a primary account password |
+| `PIPELINE_NOTIFY_EMAIL_PASSWORD` | unset (empty) | SMTP credential — use a provider app-password, never a primary account password. Routed-channel instances can instead name a `password_ref` resolved through the "Credentials (operator-supplied provider)" seam |
 | `PIPELINE_NOTIFY_EMAIL_FROM` | unset (empty) | Envelope From address; falls back to the username |
 | `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of notification e-mails |
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
@@ -599,7 +599,12 @@ Rules:
 - **Deny by default.** An event the winning route does not list goes
   nowhere, and a plan no route matches receives nothing from this file.
 - **Secrets are references.** A setting named `<x>_env` holds the NAME of an
-  environment variable, read at send time. A setting named like a secret
+  environment variable, read at send time. `password_ref` and `webhook_url_ref`
+  name a credential reference resolved through the credentials seam (see
+  "Credentials (operator-supplied provider)") instead of an ambient environment
+  variable; each is mutually exclusive with its `<x>_env` counterpart, and a
+  channel instance must name one form or the other where the setting is
+  required (the Slack webhook). A setting named like a secret
   (`password`, `token`, `webhook_url`, `secret`, `api_key`) that holds the
   value inline is rejected at load.
 - **Fail closed.** A broken file (bad JSON, unknown type, unknown instance,
@@ -632,8 +637,9 @@ an operator can register additional types from a module listed in
 - `from_settings(instance_name, settings, env)` — classmethod that validates
   the settings and returns an instance with `name`, `outbox_suffix` and
   `send`. It raises `ChannelConfigError` for bad settings and resolves
-  secrets from `env` via the `<x>_env` names. Messages name the instance and
-  setting key only.
+  secrets from `env` via the `<x>_env` names, or through the credentials seam
+  via the `<x>_ref` names (see "Credentials (operator-supplied provider)").
+  Messages name the instance and setting key only.
 - `send(record) -> DeliveryResult` — delivers one spooled record.
 
 `DeliveryStatus` semantics: `DELIVERED` retires the record from this
@@ -665,7 +671,8 @@ text.
 
 | Setting | Required | Default | Meaning |
 |---|---|---|---|
-| `webhook_url_env` | yes | — | NAME of the environment variable holding the webhook URL; read at send time |
+| `webhook_url_env` | one of | — | NAME of the environment variable holding the webhook URL; read at send time |
+| `webhook_url_ref` | one of | — | A credential reference resolved through the credentials seam instead of `webhook_url_env`; exactly one of the two is required, and each is mutually exclusive with the other — see "Credentials (operator-supplied provider)" |
 | `timeout` | no | `20` | Request timeout in seconds; must be > 0 |
 
 > **Warning:** the webhook URL is a secret; reference it by env var name.
@@ -1807,6 +1814,90 @@ seam and recommended wherever more than one principal can write the checkout.
 **Error behavior.** Error messages name the variable and never echo the spec
 value, which may carry a path or a secret. A refused spec imports nothing.
 
+## Credentials (operator-supplied provider)
+
+Every operator credential the core needs is obtained through one seam,
+`app/credentials.py`. The core **reads** credentials there; it **never stores or
+writes** them. There is no credential cache on disk, no state written back to the
+provider, and no path by which a resolved value is persisted.
+
+**Off unless selected.** The seam is disabled by default: the open-source
+behaviour — read the value from the process environment or from the documented
+file — is unchanged. An operator selects a provider with
+`PIPELINE_CREDENTIALS_PLUGIN=module:attr` (see
+"Plugins (operator-supplied adapters)" for the spec format, the module allowlist
+and the trust model). A bad plugin **raises** — a bad spec, an import failure, a
+factory that does not return a provider, or a provider that fails on `get` — and
+never falls back to the ambient environment values. The plural
+`PIPELINE_CREDENTIALS_PLUGINS` is refused outright: the seam has exactly one
+provider, and silently ignoring a configured list would be a fallback.
+
+**The interface.** The plugin is a factory callable:
+
+```
+factory() -> CredentialProvider
+```
+
+and the provider implements one method:
+
+```
+get(ref) -> Credential | None
+```
+
+`None` means "not configured" and is different from an error; a provider failure
+raises, it does not return `None`. A `Credential` carries a `SecretValue` (an
+opaque, unprintable value whose raw string is reachable only through `.reveal()`)
+and an optional expiry in epoch seconds.
+
+**The reference.** `get` receives a `CredentialRef`:
+
+| Field | Meaning |
+| --- | --- |
+| `purpose` | The credential class: `env`, `model` or `notification` in this release |
+| `name` | The credential within that class — an environment-variable name for `env`, a fixed name for `model`, the channel's configured reference for `notification` |
+| `namespace` | The tenant namespace. Core **always** sets it to `'default'` in this release; a provider may use it for multi-tenant selection |
+| `scope` | Optional extra selectors as `(key, value)` pairs — a plan, a repository or a tenant. Empty when the caller has nothing narrower to offer |
+
+The purposes resolved through the seam in this release:
+
+- `env` — the `name` is an environment variable name. The default provider reads
+  only a declared allowlist of `env` names, so the seam cannot be used to read an
+  arbitrary orchestrator variable.
+- `model` — `anthropic_api_key` and `claude_oauth_token`, the model credential.
+- `notification` — the `password_ref` or `webhook_url_ref` configured on a
+  notification channel instance (see "Slack channel type" and the notification
+  routing example).
+
+**What stays environment- or file-based in this release** and is planned to move
+to the seam later: the forge tokens (`GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`,
+`GLAB_TOKEN`, `CI_JOB_TOKEN`), the ticket provider keys (`PLANE_API_KEY` and its
+siblings), the Ollama key (`OLLAMA_API_KEY`), the git clone token file, and the
+deployment-level OIDC client secret and NATS credentials file
+(`PIPELINE_NATS_CREDS_FILE`). Until each one moves, its existing environment
+variable or file location remains the source of truth.
+
+**THE RULE.** A dispatched agent child is prompt-injectable, so it **never
+receives a raw operator credential** except through the one injection function
+for its credential class. The raw string is obtained with `.reveal()` only inside
+that function, and everything else treats a `SecretValue` as opaque:
+
+| Credential class | The one injection function |
+| --- | --- |
+| The model credential | `_first_party_claude_env` in `app/backend_claude.py` — the only place the model credential is injected |
+| The notification e-mail password | `_secret_text` in `pipeline/notification_email.py` |
+| The notification Slack webhook URL | `_secret_text` in `pipeline/notification_slack.py` |
+
+`pipeline/execution.py` additionally strips a denylist of credential-bearing
+environment names (`_AGENT_SECRET_ENV`) from every local child environment, so a
+value that never leaves the orchestrator cannot be reached even indirectly.
+
+**Observability.** A credential value is **never logged** — not the raw string,
+not a prefix, not a length. Every resolve logs **one** record carrying
+`credential_purpose`, `credential_name`, `credential_namespace` and
+`credential_outcome` (`ok`, `unset`, `invalid`, `expired` or `error`), and nothing
+else about the value. Errors name the reference, the provider or the failure
+class.
+
 ## Configuration (environment variables)
 ### Message broker (NATS JetStream)
 
@@ -1973,6 +2064,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_FORGE_PLUGIN` | *(unset → off)* | `module:attr` factory `(repo_root) -> Forge` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_CREDENTIALS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> CredentialProvider` (its `get(ref) -> Credential \| None` resolves `env`, `model` and `notification` credentials) — see the "Credentials (operator-supplied provider)" section. A bad plugin raises and never falls back to ambient values |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
 | `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
 | `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |

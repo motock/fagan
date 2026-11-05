@@ -22,6 +22,7 @@ this module global and the bare-name reads below resolve at call time.
 import fcntl
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -260,12 +261,14 @@ def _plan_lock(plan_name: str):
             # Start the hold clock only on a REAL flock (never on the
             # reentrant fast path above, and never on a failed acquire — a
             # timestamp left behind by a failure would make the next
-            # successful hold report the failure's start time).
-            _plan_lock_timings()[plan_name] = {
-                "started": time.monotonic(),
-                "released_seconds": 0.0,
-                "released_windows": 0,
-            }
+            # successful hold report the failure's start time). A REAL flock
+            # taken while this thread already has an entry for the plan (the
+            # _released_plan_lock window case: advance_pipeline drops the
+            # flock around dispatch_story, which then re-flocks through
+            # _store.transaction -> _TransactionLock) must NOT overwrite the
+            # outer hold's start or its accumulated released_seconds — it only
+            # raises the depth, so the outer release still owns the record.
+            _start_plan_lock_hold(plan_name)
         else:
             # Exactly one record per failed attempt; no timing entry, no
             # release record. cross_process comes from the process-wide
@@ -287,7 +290,7 @@ def _plan_lock(plan_name: str):
                 with _process_plan_holders_lock:
                     _process_plan_holders.discard(plan_name)
                 fcntl.flock(fd, fcntl.LOCK_UN)
-                _log_plan_lock_release(plan_name)
+                _finish_plan_lock_hold(plan_name)
     finally:
         os.close(fd)
 
@@ -356,18 +359,68 @@ def _held_plan_lock_fds() -> dict[str, int]:
 def _plan_lock_timings() -> dict[str, dict]:
     """Per-thread hold accounting for _plan_lock, keyed by plan name.
 
-    One entry per REAL flock this thread holds: ``started`` (a
+    One entry per OUTERMOST real flock this thread holds: ``started`` (a
     ``time.monotonic()`` stamp taken at acquire), ``released_seconds`` (total
-    time spent inside _released_plan_lock windows for that hold) and
-    ``released_windows`` (how many such windows were opened). Never created
-    on the reentrant fast path or on a failed acquire, and popped when the
-    real flock is released, so a later hold cannot inherit a stale start.
+    time spent inside _released_plan_lock windows for that hold),
+    ``released_windows`` (how many such windows were opened) and ``depth``
+    (how many real flocks this thread has live for the plan right now). Never
+    created on the reentrant fast path or on a failed acquire, and popped when
+    the outermost real flock is released, so a later hold cannot inherit a
+    stale start.
+
+    ``depth`` exists because a real flock can be re-taken for the same plan
+    while this thread already holds the outer one: _released_plan_lock drops
+    the flock around a slow phase, so a body that re-enters _plan_lock (e.g.
+    advance_pipeline -> dispatch_story -> _store.transaction ->
+    _TransactionLock) takes a genuine second flock instead of hitting the
+    reentrant fast path. That inner hold must not reset ``started`` or wipe
+    ``released_seconds`` — otherwise the outer, genuinely long hold would be
+    credited with only the inner span and then lose its entry entirely to the
+    inner release, emitting no record at all.
     """
     timings = getattr(_plan_lock_state, "timings", None)
     if timings is None:
         timings = {}
         _plan_lock_state.timings = timings
     return timings
+
+
+def _start_plan_lock_hold(plan_name: str) -> None:
+    """Open (or deepen) this thread's hold accounting for ``plan_name``.
+
+    Only the outermost real flock starts the clock: a real flock taken while
+    an entry already exists (the released-window case above) just increments
+    ``depth``, leaving ``started``, ``released_seconds`` and
+    ``released_windows`` untouched so the outer hold keeps its full span.
+    """
+    timings = _plan_lock_timings()
+    entry = timings.get(plan_name)
+    if entry is None:
+        timings[plan_name] = {
+            "started": time.monotonic(),
+            "released_seconds": 0.0,
+            "released_windows": 0,
+            "depth": 1,
+        }
+        return
+    entry["depth"] = entry.get("depth", 1) + 1
+
+
+def _finish_plan_lock_hold(plan_name: str) -> None:
+    """Close this thread's hold accounting for ``plan_name``.
+
+    An inner real flock (``depth`` > 1) only decrements the depth: it must not
+    log a release record, and must not pop the entry the outer hold still
+    needs. Only the outermost release logs and pops.
+    """
+    entry = _plan_lock_timings().get(plan_name)
+    if entry is None:
+        return
+    depth = entry.get("depth", 1)
+    if depth > 1:
+        entry["depth"] = depth - 1
+        return
+    _log_plan_lock_release(plan_name)
 
 
 def _plan_lock_slow_seconds() -> float:
@@ -377,8 +430,10 @@ def _plan_lock_slow_seconds() -> float:
     PIPELINE_PLAN_LOCK_SLOW_SECONDS; default 5. A missing, malformed or
     non-positive value degrades to the default instead of raising — a broken
     env var must not take down a tick, and a zero/negative threshold would
-    make every hold "slow". float() so a fractional value like "0.01" is
-    honoured.
+    make every hold "slow". NaN and infinity are rejected too (both pass a
+    bare ``<= 0`` test, and either would silently disable the slow record:
+    every comparison against NaN is False, and nothing but an infinite hold
+    reaches inf). float() so a fractional value like "0.01" is honoured.
     """
     raw = os.environ.get("PIPELINE_PLAN_LOCK_SLOW_SECONDS")
     if raw is None:
@@ -387,7 +442,7 @@ def _plan_lock_slow_seconds() -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return 5.0
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return 5.0
     return value
 
@@ -508,6 +563,12 @@ def _released_plan_lock(plan_name: str):
         yield
     finally:
         delta = time.monotonic() - opened
+        # Credit the window to the OUTERMOST hold of this thread, i.e. the one
+        # _finish_plan_lock_hold will log for. This runs before the blocking
+        # re-acquire, and before any nested real flock can start, so the entry
+        # at this point is always the outer hold's. Do not create an entry
+        # here: if the outer hold already popped its entry there is nothing to
+        # credit and nothing may be minted.
         entry = _plan_lock_timings().get(plan_name)
         if entry is not None:
             entry["released_seconds"] += delta

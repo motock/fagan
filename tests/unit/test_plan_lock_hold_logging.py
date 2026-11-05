@@ -338,3 +338,74 @@ def test_no_secrets_in_messages_or_extra(plan_dir, capture, monkeypatch):
         for value in _custom_keys(record):
             assert "super-secret-value" not in str(getattr(record, value))
             assert str(plan_dir) not in str(getattr(record, value))
+
+
+# (8) ---------------------------------------------------------------------
+def test_real_lock_inside_released_window_logs_one_outer_release(
+    plan_dir, capture, monkeypatch
+):
+    """A real flock taken inside a released window must not hide the outer hold.
+
+    This is the production shape: advance_pipeline drops the plan flock via
+    _released_plan_lock around dispatch_story, and dispatch_story re-flocks
+    through _store.transaction -> _TransactionLock.__enter__ -> _plan_lock.
+    That nested call is a REAL flock (the window discarded the held-set entry),
+    so it must deepen the outer hold rather than overwrite its start and then
+    pop its entry on release — which would leave the outer, genuinely long
+    hold with no record at all.
+    """
+    monkeypatch.setenv(SLOW_ENV, "5")
+
+    with concurrency._plan_lock("iota") as acquired:
+        assert acquired is True
+        with concurrency._released_plan_lock("iota"):
+            time.sleep(0.05)
+            with concurrency._plan_lock("iota") as inner:
+                # A real flock, not the reentrant fast path: the window
+                # discarded the held-set entry before the body ran.
+                assert inner is True
+                time.sleep(0.01)
+
+    released = _released(capture)
+    assert len(released) == 1
+    record = released[0]
+    assert record.levelno == logging.DEBUG
+    assert record.plan == "iota"
+    # The window is credited to the outer hold...
+    assert record.released_windows == 1
+    assert record.released_seconds >= 0.04
+    # ...and the hold span covers the whole outer lock, window included.
+    assert record.held_seconds >= record.released_seconds
+
+
+def test_real_lock_inside_released_window_keeps_outer_slow_record(
+    plan_dir, capture, monkeypatch
+):
+    """The slow INFO record belongs to the outer hold, window excluded."""
+    monkeypatch.setenv(SLOW_ENV, "0.03")
+
+    with concurrency._plan_lock("kappa") as acquired:
+        assert acquired is True
+        time.sleep(0.05)
+        with concurrency._released_plan_lock("kappa"), concurrency._plan_lock(
+            "kappa"
+        ) as inner:
+            assert inner is True
+            time.sleep(0.005)
+
+    released = _released(capture)
+    assert [record.levelno for record in released] == [logging.DEBUG, logging.INFO]
+    for record in released:
+        assert record.plan == "kappa"
+        assert record.released_windows == 1
+        assert record.held_seconds - record.released_seconds >= 0.03
+
+
+def test_non_finite_threshold_falls_back_to_default(plan_dir, capture, monkeypatch):
+    """nan/inf pass a bare ``<= 0`` test and would silently disable slow logs."""
+    for raw in ("nan", "inf", "-inf"):
+        monkeypatch.setenv(SLOW_ENV, raw)
+        assert concurrency._plan_lock_slow_seconds() == 5.0
+        capture.clear()
+        _hold("lambda", 0.02)
+        assert [r.levelno for r in _released(capture)] == [logging.DEBUG]

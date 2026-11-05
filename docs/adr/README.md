@@ -25,5 +25,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0009](0009-tenancy-and-authorization-model.md) | Tenancy and authorization are a service-layer policy over a verified principal | Accepted |
 | [0010](0010-event-delivery-contract-and-nats-jetstream.md) | Events have an at-least-once delivery contract; NATS JetStream is the default broker | Accepted (rule 6 superseded by 0011) |
 | [0011](0011-scheduler-scale-out-leased-plan-advancement.md) | The scheduler advances plans as leased work items and runs heavy work as detached jobs | Accepted |
+| [0012](0012-store-contract-v2.md) | The Store holds namespaced records, and the file layout is one implementation of it | Proposed |
 
 See [`template.md`](template.md) when adding one.

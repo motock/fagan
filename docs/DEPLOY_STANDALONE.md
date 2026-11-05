@@ -668,6 +668,86 @@ If you are enabling the gate on a server that already has plans, see the
 Upgrading paragraph in §7 — each existing plan has to be re-ingested and
 approved once.
 
+### Approving plans
+
+With the gate on, an ingested plan is written `pending_approval` and cannot be
+dispatched until someone approves that exact authored content. The gate is
+enabled with `PIPELINE_PLAN_APPROVAL=on` (the standalone compose file resolves
+it as `${PIPELINE_PLAN_APPROVAL-1}`, so a fresh install is on by default and an
+existing `.env` without the line stays off). To turn it on for an existing
+server, add the line to `deploy/standalone/.env` and recreate the container, or
+set it in a compose override the way §4 shows override files being layered:
+
+```yaml
+services:
+  pipeline:
+    environment:
+      PIPELINE_PLAN_APPROVAL: "on"
+```
+
+A `.env` line is easier; use an override only when the value must live outside
+the env file.
+
+**Who may approve.** The plan's owner (the principal who first ingested it), any
+subject listed in the plan's top-level `delegates`, and the local operator. A
+team lead who is not the owner must be *named in the plan's `delegates`*: holding
+the `approver` role on its own grants no approval right. A `system:` principal
+such as the scheduler never may, and a decision is refused for a plan whose
+digest no longer matches the content shown.
+
+**The three events.** Notifications fire on:
+
+| Event | Fires when |
+| --- | --- |
+| `plan_pending_approval` | an ingest (or a role-config change) puts a plan in the approval queue |
+| `plan_approved` | a decision approves the plan's current digest |
+| `plan_changes_requested` | a decision asks for changes instead of approving |
+
+Each notice carries identifiers (the plan name and the content digest), the story
+counts with a risk summary, a warning count, and a review link — never the plan's
+brief text, filesystem paths or any secret. The link is built from
+`PIPELINE_DASHBOARD_PUBLIC_URL` (the compose file sets it to
+`https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}`) and
+`PIPELINE_APPROVAL_LINK_PATH` (default `/`). The link never approves anything: it
+opens whatever review UI you run at that path, and the decision is still made
+there or through the tool or API below.
+
+**Core ships no browser approval page.** Approve a plan with the MCP
+`approve_plan` tool, or over the digest-bound JSON API:
+
+1. `GET /api/plans/{plan}/review` — the payload you review: the stored approval
+   record, the plan's *current* content digest, and the projection of its stories
+   and warnings.
+2. `POST /api/plans/{plan}/review/approve` or
+   `POST /api/plans/{plan}/review/request-changes` — send the digest you read
+   (`{"digest": "..."}`, plus a non-empty `"reason"` when requesting changes).
+
+A decision made against any other digest is refused with **409** — the plan
+changed under you, so re-read and decide again. Both POSTs require a dashboard
+login (a verified OIDC session); a shared-key or local-operator caller gets a
+fixed "dashboard approval requires login" refusal and should use the MCP tool.
+
+If you want a review UI, mount one through `PIPELINE_DASHBOARD_PLUGINS`: an
+extension's routes are served under `/api/ext` (authenticated), and its static
+pages under `/ext/<name>`. **Static files are served without authentication**, so
+an extension's HTML/JS/CSS must hold no secrets — put tokens and data in its
+`/api/ext` routes and let the page fetch them. Then point the notification link
+at that page with `PIPELINE_APPROVAL_LINK_PATH`.
+
+Route the notices per plan in `notification.json`. The first matching route wins,
+so put a specific route **before** any catch-all `"plan": "*"` route:
+
+```json
+{"name": "approvals", "match": {"plan": "team-a-*"},
+ "deliver": [{"events": ["plan_pending_approval"], "to": ["team-a-lead-mail"]},
+             {"events": ["plan_approved", "plan_changes_requested"], "to": ["team-a-slack"]}]}
+```
+
+The mistake to avoid is leaving the catch-all first: every approval notice then
+goes to the catch-all's channels and the team lead never hears about the plan.
+The second is pointing `PIPELINE_APPROVAL_LINK_PATH` at a page that does not
+exist — the link is appended as-is, so a wrong path is a 404 in every notice.
+
 ## 7. Upgrading, backup and token lifespan
 
 ### Upgrading

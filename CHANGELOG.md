@@ -18,6 +18,12 @@ in practice.
   provider declaring `network_grade = True` instead of only `OidcProvider`.
 - An operator-supplied credential provider (`PIPELINE_CREDENTIALS_PLUGIN`) for the model credential and notification secrets, off by default, with `password_ref` and `webhook_url_ref` channel settings.
 
+**Plan approval**
+
+- Notifications for the three plan-approval events (`plan_pending_approval`, `plan_approved`, `plan_changes_requested`).
+- Digest-bound plan review and decision JSON API (`GET /api/plans/{plan}/review`, `POST /api/plans/{plan}/review/approve`, `POST /api/plans/{plan}/review/request-changes`; a stale digest is refused with 409).
+- Dashboard extension mount for review UIs via `PIPELINE_DASHBOARD_PLUGINS`.
+
 ### Fixed
 
 - A notification channel that keeps failing now backs off - one minute,

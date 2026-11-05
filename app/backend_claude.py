@@ -7,6 +7,7 @@ from datetime import UTC
 from pathlib import Path
 
 from app.backend_types import AgentHandle
+from app.credentials import CredentialRef, resolve
 from app.harness import (
     HarnessRequest,
     aider_binary_available,
@@ -60,8 +61,10 @@ def _validated_operator_key() -> str:
     The value itself is never included in the error -- it must not reach logs,
     tracebacks or the audit sidecar.
     """
-    raw = os.environ.get("PIPELINE_ANTHROPIC_API_KEY", "")
-    key = raw.strip()
+    secret = resolve(CredentialRef("model", "anthropic_api_key"))
+    if secret is None:
+        return ""
+    key = secret.reveal().strip()
     if not key:
         return ""
     reason = ""
@@ -82,7 +85,9 @@ def _validated_operator_key() -> str:
 def _first_party_claude_env() -> dict:
     """Environment for a `claude` subprocess call, isolated from provider
     redirects unless PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV explicitly restores
-    full inheritance (deny-by-default, per Secure by Design)."""
+    full inheritance (deny-by-default, per Secure by Design). This is the
+    single place a model credential is revealed for a child; a child never
+    receives it any other way."""
     if os.environ.get("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", "").strip():
         return dict(os.environ)
     env = dict(os.environ)
@@ -113,6 +118,9 @@ def _first_party_claude_env() -> dict:
         env.pop(var, None)
     if operator_key:
         env["ANTHROPIC_API_KEY"] = operator_key
+    oauth = resolve(CredentialRef("model", "claude_oauth_token"))
+    if oauth is not None:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth.reveal()
     return env
 
 

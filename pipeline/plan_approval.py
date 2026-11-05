@@ -334,4 +334,11 @@ class PlanApprovalMixin:
                     "self_approved": record["self_approved"],
                 },
             )
+            from .plan_approval_notice import notify_approval_event
+
+            notify_approval_event(
+                plan_name,
+                manifest,
+                "plan_approved" if status == "approved" else "plan_changes_requested",
+            )
             return {"ok": True, **record}

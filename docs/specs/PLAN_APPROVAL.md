@@ -129,7 +129,10 @@ Both delegate to `_decide_plan`, which:
   the record — the operator would otherwise be approving content they never
   saw;
 - otherwise writes the decision onto the manifest, appends it to the
-  decisions log, and returns `{"ok": True, ...record}`.
+  decisions log, records it in the audit stream, and returns
+  `{"ok": True, ...record}`. A recorded decision then sends
+  `plan_approved` (or `plan_changes_requested` when the status is not
+  `approved`); every return path above sends nothing.
 
 The decision record carries `plan`, `status`, `digest`, `decided_by`, `at`,
 `role`, `self_approved` and `warnings_seen`, plus `reason` for a
@@ -200,6 +203,16 @@ three events:
 
 A reset performed by `patch_story` or `patch_plan` also sends
 `plan_pending_approval`, once the reset has been saved.
+
+A recorded decision sends `plan_approved` when the plan was approved and
+`plan_changes_requested` when changes were requested, once the decision has
+been saved to the manifest, appended to the decisions log and recorded in the
+audit stream. No other outcome notifies: a disabled gate, an authorization
+refusal, a held lock, a missing plan and a digest mismatch all leave the
+notification channel silent, because none of them changes the plan's state.
+The change-request `reason` is never part of the notification — it is
+reviewer text, so it stays in the manifest and the review UI, not on a channel
+an operator may not control.
 
 Ingest emits `plan_pending_approval` only while `PIPELINE_PLAN_APPROVAL` is on
 and the plan is **newly** pending approval. A plan is newly pending when the

@@ -681,7 +681,20 @@ def _sse_pack(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
 
 
-@chat_router.post("/chat/stream")
+@chat_router.post(
+    "/chat/stream",
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}}
+            },
+            "description": (
+                "Server-sent events: `event: <type>` + `data: <json>` frames "
+                "(turn, reply, result, tool_call, tool_result, error)."
+            ),
+        }
+    },
+)
 def chat_stream_endpoint(
     req: ChatRequest,
     request: Request = None,

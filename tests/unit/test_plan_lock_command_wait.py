@@ -146,27 +146,38 @@ def test_patch_story_reports_retry_hint_when_the_wait_expires(plan_dir, monkeypa
     assert result["retry_after_seconds"] == pytest.approx(0.2)
 
 
-def _transaction_calls(path: Path):
+def _transaction_calls(path: Path, operator_functions: set[str] = frozenset()):
+    """Yield ``(enclosing function name, call)`` for every ``.transaction()``."""
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "transaction"
-        ):
-            yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name in operator_functions:
+            # Operator commands are the only callers allowed to wait.
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == "transaction"
+            ):
+                yield node.name, inner
 
 
 def test_scheduler_internal_callers_never_ask_for_a_wait():
     root = Path(__file__).resolve().parents[2] / "pipeline"
     seen = 0
-    for module in ("service.py", "ingest.py"):
-        for call in _transaction_calls(root / module):
+    for module, operators in (("service.py", {"interrupt_story"}), ("ingest.py", set())):
+        for function, call in _transaction_calls(root / module, operators):
             seen += 1
             keywords = [kw.arg for kw in call.keywords]
             assert "wait_seconds" not in keywords, (
-                f"{module}:{call.lineno} asks the plan lock to wait — the "
-                "scheduler must keep today's fail-fast behaviour"
+                f"{module}:{call.lineno} ({function}) asks the plan lock to wait "
+                "— the scheduler must keep today's fail-fast behaviour"
+            )
+            assert not call.args[1:], (
+                f"{module}:{call.lineno} ({function}) passes a positional wait "
+                "— the scheduler must keep today's fail-fast behaviour"
             )
     assert seen >= 2, "no .transaction() call sites found to inspect"
 

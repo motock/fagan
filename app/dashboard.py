@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api_contract, auth, chat, oidc_login, role_registry
+from app import api_contract, auth, chat, dashboard_schemas, oidc_login, role_registry
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -579,22 +579,22 @@ app.get("/api/plans/{plan_name}/stories/{story_key}/journal")(get_story_journal)
 app.get("/api/plans/{plan_name}/stories/{story_key}/log")(get_story_log)
 app.get("/api/plans/{plan_name}/stories/{story_key}/checklist")(get_story_checklist)
 app.get("/api/plans/{plan_name}/stories/{story_key}/replay")(get_story_replay)
-app.get("/api/plans/{plan_name}/stories/{story_key}/diff")(get_story_diff)
+app.get("/api/plans/{plan_name}/stories/{story_key}/diff", responses={200: {"model": dashboard_schemas.StoryDiffResponse}})(get_story_diff)
 app.get("/api/config")(effective_config)
 app.get("/api/config/providers")(config_providers)
 
 
-@app.get("/api/workspaces")
+@app.get("/api/workspaces", responses={200: {"model": dashboard_schemas.WorkspacesResponse}})
 def list_workspaces_route():
     return {"workspaces": _service.list_workspaces()}
 
 
-@app.get('/api/workspace')
+@app.get('/api/workspace', responses={200: {"model": dashboard_schemas.ActiveWorkspaceResponse}})
 def get_workspace_route():
     return {'active': _service.get_active_workspace()}
 
 
-@app.post('/api/workspace')
+@app.post('/api/workspace', responses={200: {"model": dashboard_schemas.WorkspaceResolveResponse}})
 def set_workspace_route(
     request: WorkspaceRequest,
     x_pipeline_origin: Annotated[str | None, Header(alias="X-Pipeline-Origin")] = None,
@@ -608,7 +608,7 @@ def set_workspace_route(
     return result
 
 
-@app.get('/api/workspace/file')
+@app.get('/api/workspace/file', responses={200: {"model": dashboard_schemas.WorkspaceFileResponse}})
 def read_workspace_file_route(path: str):
     result = _service.read_workspace_file(path)
     if not result.get('ok'):
@@ -616,7 +616,7 @@ def read_workspace_file_route(path: str):
     return result
 
 
-@app.get('/api/workspace/files')
+@app.get('/api/workspace/files', responses={200: {"model": dashboard_schemas.WorkspaceEntriesResponse}})
 def list_workspace_directory_route(path: str = ''):
     result = _service.list_workspace_directory(path or '')
     if not result.get('ok'):
@@ -624,7 +624,7 @@ def list_workspace_directory_route(path: str = ''):
     return result
 
 
-@app.get('/api/workspace/search')
+@app.get('/api/workspace/search', responses={200: {"model": dashboard_schemas.WorkspaceSearchResponse}})
 def search_workspace_route(pattern: str):
     result = _service.search_workspace(pattern)
     if not result.get('ok'):
@@ -926,7 +926,7 @@ def get_worktree_patch_route(
     }
 
 
-@app.post("/api/worktree/patch/{patch_id}/apply")
+@app.post("/api/worktree/patch/{patch_id}/apply", responses={200: {"model": dashboard_schemas.PatchApplyResponse}})
 def apply_worktree_patch_route(
     patch_id: str,
     request: ApplyPatchRequest,
@@ -980,9 +980,9 @@ app.post("/api/plans/{plan_name}/stories/{story_key}/patch")(patch_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/review")(review_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")(approve_merge_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/done")(mark_story_done_route)
-app.post("/api/plans/{plan_name}/save")(save_plan)
-app.post("/api/decompose")(decompose_route)
-app.post("/api/plans/{plan_name}/ingest")(ingest_plan)
+app.post("/api/plans/{plan_name}/save", responses={200: {"model": dashboard_schemas.SavePlanResponse}})(save_plan)
+app.post("/api/decompose", responses={200: {"model": dashboard_schemas.DecomposeResponse}})(decompose_route)
+app.post("/api/plans/{plan_name}/ingest", responses={200: {"model": dashboard_schemas.IngestPlanResponse}})(ingest_plan)
 app.post("/api/plans/{plan_name}/advance")(advance_pipeline)
 app.post("/api/plans/advance_all")(advance_all_plans)
 app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")(checkpoint)

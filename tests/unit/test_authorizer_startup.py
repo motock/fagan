@@ -11,7 +11,6 @@ to :class:`app.policy.LocalPolicy`, and never leaks the attribute name.
 
 from __future__ import annotations
 
-import ast
 import importlib
 import logging
 import sys
@@ -31,8 +30,6 @@ ACTIVE_MESSAGE = "authorizer active"
 
 #: The module part of ``module:attr`` is what may be logged; never the attr.
 ATTRIBUTE = "make_authorizer"
-
-_DASHBOARD_PATH = Path(__file__).resolve().parents[2] / "app" / "dashboard.py"
 
 
 def _plugin_source(attr: str) -> str:
@@ -82,12 +79,6 @@ def _active_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
         for record in caplog.records
         if record.name == "app.policy" and record.getMessage() == ACTIVE_MESSAGE
     ]
-
-
-def _dashboard_has_line_budget() -> bool:
-    """Whether one more line fits under the 1000-line gate (same counting)."""
-    with _DASHBOARD_PATH.open(encoding="utf-8") as handle:
-        return sum(1 for _ in handle) < 1000
 
 
 @pytest.fixture(autouse=True)
@@ -182,39 +173,6 @@ def test_invalid_spec_raises_instead_of_falling_back(
     assert app.policy._PLUGIN_AUTHORIZERS == {}
 
 
-def _daemon_may_import_the_policy_seam() -> bool:
-    """Whether scheduler_daemon.py can reach ``app.policy`` at start-up.
-
-    ``test_scheduler_daemon_imports_remain_stdlib_or_pipeline`` allows only
-    stdlib and ``pipeline`` imports in ``pipeline/scheduler_daemon.py`` (it walks
-    every ``Import``/``ImportFrom`` node, including function bodies), so the
-    daemon cannot import ``app.policy`` until either that guard admits the
-    policy seam or a ``pipeline`` module re-exports the activation. Skipping
-    keeps this test honest rather than hiding the gap: it activates by itself as
-    soon as the daemon can call the seam.
-    """
-    from pipeline import scheduler_daemon
-
-    tree = ast.parse(Path(scheduler_daemon.__file__).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.level == 0
-            and node.module
-            and node.module.split(".")[0] == "app"
-        ):
-            return True
-    return False
-
-
-@pytest.mark.skipif(
-    not _daemon_may_import_the_policy_seam(),
-    reason=(
-        "blocked: pipeline/scheduler_daemon.py may not import app.* "
-        "(test_scheduler_daemon_imports_remain_stdlib_or_pipeline), so the "
-        "daemon start-up activation cannot be wired yet"
-    ),
-)
 def test_daemon_refuses_to_start_with_a_broken_authorizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,14 +200,6 @@ def test_daemon_refuses_to_start_with_a_broken_authorizer(
     assert loop_calls == []
 
 
-@pytest.mark.skipif(
-    not _dashboard_has_line_budget(),
-    reason=(
-        "blocked: app/dashboard.py is at the 1000-line cap, so the dashboard "
-        "start-up activation has no line budget; the test is designed for "
-        "app/dashboard.py below the cap"
-    ),
-)
 def test_dashboard_import_refuses_a_broken_authorizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

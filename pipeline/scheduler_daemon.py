@@ -906,9 +906,11 @@ def run_daemon() -> int:
     the lock, this returns 1 immediately without calling ``scan_fn``,
     ``reconcile_fn``, or ``run_forever``.
     """
+    from .authorization import activate_authorizer
     from .log_format import configure_logging_from_env
 
     configure_logging_from_env()
+    activate_authorizer()
 
     raw_interval = os.environ.get("PIPELINE_SCHEDULER_INTERVAL_S", "60")
     try:

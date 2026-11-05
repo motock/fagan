@@ -24,7 +24,13 @@ from __future__ import annotations
 import logging
 import os
 
-from app.policy import Action, Resource, default_authorizer, is_allowed
+from app.policy import (  # noqa: F401 (activate_authorizer re-exported for pipeline callers)
+    Action,
+    Resource,
+    activate_authorizer,
+    default_authorizer,
+    is_allowed,
+)
 
 from .actor import current_principal
 from .audit import append_host_audit, record_audit

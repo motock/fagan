@@ -24,6 +24,33 @@ in practice.
 - Digest-bound plan review and decision JSON API (`GET /api/plans/{plan}/review`, `POST /api/plans/{plan}/review/approve`, `POST /api/plans/{plan}/review/request-changes`; a stale digest is refused with 409).
 - Dashboard extension mount for review UIs via `PIPELINE_DASHBOARD_PLUGINS`.
 
+**API contract**
+
+- The dashboard's OpenAPI document is now a committed contract at
+  `docs/api/openapi.json`, generated from the live application and checked in
+  CI: `python scripts/api_contract.py check` fails when a route or schema
+  change was not reflected in the snapshot, and `classify` flags a breaking
+  difference. The surface is versioned by `API_VERSION` (stamped into
+  `info.version`): a breaking change requires a MAJOR bump, an additive one a
+  MINOR bump. See `docs/API_CONTRACT.md`.
+- `PIPELINE_DASHBOARD_UI=off` makes the dashboard API-only: `/` and every
+  static asset answer 404 and the shared-secret key is never injected into a
+  response, so a replacement UI can be served from the same origin.
+- Opt-in CORS for a UI hosted on another origin via
+  `PIPELINE_DASHBOARD_CORS_ORIGINS` (exact origins, header credentials only —
+  no cookie, no wildcard). Unset installs no CORS middleware.
+- Response schemas for previously untyped operations, so a generated client
+  has a `components/schemas` reference for every typed JSON response.
+
+### Changed
+
+- `/openapi.json`, `/docs` and `/redoc` are **no longer served
+  unauthenticated**. FastAPI's documentation endpoints sat outside the `/api/`
+  credential gate; the spec now lives at `/api/openapi.json` behind the same
+  authentication as every other API route, and both interactive pages are off
+  by default. Set `PIPELINE_DASHBOARD_PUBLIC_DOCS=1` to restore the old public
+  pages; see `docs/API_CONTRACT.md`.
+
 ### Fixed
 
 - A notification channel that keeps failing now backs off - one minute,

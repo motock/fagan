@@ -4,14 +4,14 @@ import json
 import logging
 
 import pytest
+
+from pipeline.notification_render import render_notification
+from pipeline.notification_routing import load_notification_config
 from pipeline.plan_approval_notice import (
     APPROVAL_EVENTS,
     approval_notice_message,
     notify_approval_event,
 )
-
-from pipeline.notification_render import render_notification
-from pipeline.notification_routing import load_notification_config
 
 DIGEST = "a1b2c3d4e5f6a7b8c9d0"  # first 12 hex: a1b2c3d4e5f6
 
@@ -68,7 +68,13 @@ def test_approval_events_constant():
     )
 
 
-def test_pending_approval_message(clean_env):
+def test_pending_approval_message(clean_env, monkeypatch):
+    # The warning total is plan_review.review_warnings' sum (covered by
+    # test_warning_count_totals_every_story); stub it here so the documented
+    # sentence is deterministic.
+    from pipeline import plan_review
+
+    monkeypatch.setattr(plan_review, "review_warnings", lambda manifest: {})
     assert approval_notice_message("p1", _manifest(), "plan_pending_approval") == (
         "Plan p1 is awaiting approval: 3 stories (risk: 1 high, 0 medium, 1 low, "
         "1 unset), 0 warnings, digest a1b2c3d4e5f6."
@@ -266,6 +272,7 @@ def test_routing_matches_approval_events_for_plan_and_owner(tmp_path):
                 "instances": {"lead": {"type": "fakepan02"}},
                 "routes": [
                     {
+                        "name": "approvals",
                         "match": {"plan": "team-*", "owner": "alice*"},
                         "deliver": [
                             {

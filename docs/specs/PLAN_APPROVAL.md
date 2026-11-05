@@ -108,13 +108,28 @@ byte-identical to before the feature existed.
 `pipeline.plan_approval.PlanApprovalMixin` is mixed into `PipelineService`;
 `pipeline/server.py` keeps one-line `@mcp.tool()` delegations.
 
-- **`approve_plan(plan_name)`** — `pending_approval` (or
-  `changes_requested`) → `approved`.
-- **`reject_plan(plan_name, reason="")`** — `pending_approval` →
-  `changes_requested`, recording `reason` when given. The transition is
-  **unguarded**: `_decide_plan` never checks the current status, so
-  `approved` → `changes_requested` is accepted too (a reviewer may revoke an
+- **`approve_plan(plan_name, *, expected_digest=None)`** — `pending_approval`
+  (or `changes_requested`) → `approved`.
+- **`reject_plan(plan_name, reason="", *, expected_digest=None)`** —
+  `pending_approval` → `changes_requested`, recording `reason` when given. The
+  transition is **unguarded**: `_decide_plan` never checks the current status,
+  so `approved` → `changes_requested` is accepted too (a reviewer may revoke an
   approval).
+
+`expected_digest` is the digest the caller was shown. A provided value that
+does not exactly equal the manifest's current canonical digest — including the
+empty string — is refused with
+
+```json
+{"ok": false, "error": "plan changed since it was displayed; reload before deciding", "stale_digest": true}
+```
+
+and writes **nothing** except one audit record: action `plan.approved` (or
+`plan.changes_requested`), outcome `refused`, target `{"plan": <name>}`, detail
+`{"reason": "stale_digest"}`. No manifest save, no decisions-log entry, no
+notification. `expected_digest=None` behaves exactly as before the keyword
+existed; MCP callers (the `approve_plan` tool in
+`pipeline/server_tools_lifecycle.py`) do not pass it.
 
 Both delegate to `_decide_plan`, which:
 
@@ -124,6 +139,9 @@ Both delegate to `_decide_plan`, which:
 - returns `{"ok": True, "skipped": "locked"}` when the plan's transaction lock
   is held;
 - returns `{"ok": False, "error": ...}` when the plan does not exist;
+- **refuses** with the `stale_digest` payload above, before the digest-on-record
+  check, when a non-`None` `expected_digest` differs from the recomputed
+  digest;
 - **refuses** with `{"ok": False, "error": "plan content changed; re-ingest
   before approving"}` when the recomputed digest differs from the digest on
   the record — the operator would otherwise be approving content they never

@@ -244,19 +244,50 @@ class PlanApprovalMixin:
     this mixin existed.
     """
 
-    def approve_plan(self, plan_name: str) -> dict[str, Any]:
+    def approve_plan(
+        self, plan_name: str, *, expected_digest: str | None = None
+    ) -> dict[str, Any]:
         """Approve ``plan_name``'s authored content (``pending_approval`` ->
-        ``approved``)."""
-        result = self._decide_plan(plan_name, status="approved", reason="")
+        ``approved``).
+
+        ``expected_digest`` is the digest the caller was shown; pass it to be
+        refused instead of deciding stale content. ``None`` (every MCP caller)
+        disables the check.
+        """
+        result = self._decide_plan(
+            plan_name,
+            status="approved",
+            reason="",
+            expected_digest=expected_digest,
+        )
         return wake.after(plan_name, "approve_plan", result)
 
-    def reject_plan(self, plan_name: str, reason: str = "") -> dict[str, Any]:
+    def reject_plan(
+        self,
+        plan_name: str,
+        reason: str = "",
+        *,
+        expected_digest: str | None = None,
+    ) -> dict[str, Any]:
         """Request changes on ``plan_name`` (``pending_approval`` ->
-        ``changes_requested``), recording ``reason`` when given."""
-        return self._decide_plan(plan_name, status="changes_requested", reason=reason)
+        ``changes_requested``), recording ``reason`` when given.
+
+        ``expected_digest`` behaves as in :meth:`approve_plan`.
+        """
+        return self._decide_plan(
+            plan_name,
+            status="changes_requested",
+            reason=reason,
+            expected_digest=expected_digest,
+        )
 
     def _decide_plan(
-        self, plan_name: str, *, status: str, reason: str
+        self,
+        plan_name: str,
+        *,
+        status: str,
+        reason: str,
+        expected_digest: str | None = None,
     ) -> dict[str, Any]:
         """Apply one approval decision and append it to the decisions log.
 
@@ -287,6 +318,22 @@ class PlanApprovalMixin:
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)
             digest = canonical_digest(manifest)
+            if expected_digest is not None and expected_digest != digest:
+                record_audit(
+                    plan_name,
+                    action=f"plan.{status}",
+                    outcome="refused",
+                    target={"plan": plan_name},
+                    detail={"reason": "stale_digest"},
+                )
+                return {
+                    "ok": False,
+                    "error": (
+                        "plan changed since it was displayed; "
+                        "reload before deciding"
+                    ),
+                    "stale_digest": True,
+                }
             previous = manifest.get("approval")
             if not isinstance(previous, dict):
                 previous = {}

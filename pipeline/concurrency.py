@@ -356,6 +356,9 @@ DEFAULT_COMMAND_LOCK_WAIT_SECONDS = 30.0
 MAX_COMMAND_LOCK_WAIT_SECONDS = 120.0
 # Retry cadence while a waiter is inside its bounded wait. 30s of waiting is
 # 600 attempts; each failed attempt closes its own fd on the way out.
+# Each failed attempt also logs one INFO "plan lock contended" record, so a
+# full 30s wait can emit a few hundred of them; logging only the first failure
+# per wait is a known follow-up.
 PLAN_LOCK_RETRY_INTERVAL_SECONDS = 0.05
 
 

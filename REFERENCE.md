@@ -622,8 +622,10 @@ the same bounded worker, each isolated from the other's failure.
 
 ### Adding a channel type
 
-A channel type is a class in `pipeline/` registered with
-`register_channel_type` (see `pipeline/notification_channels.py`):
+A channel type is a class registered with `register_channel_type` (see
+`pipeline/notification_channels.py`). The built-in types live in `pipeline/`;
+an operator can register additional types from a module listed in
+`PIPELINE_CHANNEL_PLUGINS` (see the "Plugins (operator-supplied adapters)" section):
 
 - `type_name` — lowercase identifier (`[a-z][a-z0-9_]{0,31}`) used as
   `"type"` in an instance's settings; registering a duplicate raises.
@@ -1764,19 +1766,63 @@ In addition to the TDD-split gates above, the test-author phase is skipped
 structural test for a doc or config edit belongs in the brief itself. A
 story with no `files`, or with any other path, is unaffected.
 
+## Plugins (operator-supplied adapters)
+
+Each architectural seam has a built-in default. An operator can replace it by
+naming an adapter module in an environment variable: `module:attr`, pointing at
+a factory callable. Plugins are **off unless the variable is set**, and a blank
+value counts as unset. A bad value raises — at startup or on first use — and
+never falls back to the built-in adapter, because a silent fallback would change
+who is authenticated or allowed without saying so.
+
+| Seam | Variable | Factory signature | Notes |
+| --- | --- | --- | --- |
+| Identity provider | `PIPELINE_IDENTITY_PLUGIN` | `factory(secret_reader, env) -> IdentityProvider` | The remote MCP transport accepts it only if the provider sets `network_grade = True` (exactly `True`). `PIPELINE_IDENTITY_PROVIDER` must stay at its `shared-secret` default. The dashboard browser login stays OIDC-only. |
+| Authorizer | `PIPELINE_AUTHORIZER_PLUGIN` | `factory() -> Authorizer` | Cached per process: the first plugin authorizer built wins for the life of the process. Requires `PIPELINE_PLUGIN_MODULES`, the loader's module allowlist. |
+| Event bus | `PIPELINE_EVENT_BUS_PLUGIN` | `factory() -> EventBus` | `/api/health` reports the selection as `plugin` under `runtime.event_bus`. `PIPELINE_EVENT_BUS` must stay at its `inprocess` default. |
+| Forge | `PIPELINE_FORGE_PLUGIN` | `factory(repo_root) -> Forge` | An instance is cached per repository root. `PIPELINE_FORGE` must stay at its `auto` default. |
+| Ticket provider | `PIPELINE_TICKET_PROVIDER_PLUGIN` | `factory() -> TicketProvider` | `PIPELINE_TICKET_PROVIDER` must stay at its `auto` default. |
+| Notification channels | `PIPELINE_CHANNEL_PLUGINS` | comma list of `module:attr` registrars | Each registrar is called once with `register_channel_type`; the channel types it registers are ordinary channel types. |
+
+**Spec format.** `module:attr` — a dotted Python module path, one colon, and a
+public identifier attribute: no file paths, no spaces, no leading dot, no
+trailing newline, and no `_private`/`__dunder__` attribute. A standard-library,
+builtin or frozen module is refused outright, so `os:system` can never be a
+plugin.
+
+**Conflict rule.** A plugin variable together with a non-default built-in
+selector is an error, not a win for either: `PIPELINE_IDENTITY_PLUGIN` plus
+`PIPELINE_IDENTITY_PROVIDER=oidc`, or `PIPELINE_EVENT_BUS_PLUGIN` plus
+`PIPELINE_EVENT_BUS=nats`, raises. The built-in selector at its default value
+agrees with the plugin.
+
+**Trust.** A plugin is code run with the server's privileges, and it is chosen
+only by operator-controlled environment — never by plan, job, manifest or
+request data. Whoever can set the variable runs code in the orchestrator. The
+enterprise image can supply modules from `/app/overlay` (for example
+`overlay.adapters:build_authorizer`). `PIPELINE_PLUGIN_MODULES` narrows the
+loader to an allowlist of module prefixes; it is required for the authorizer
+seam and recommended wherever more than one principal can write the checkout.
+
+**Error behavior.** Error messages name the variable and never echo the spec
+value, which may carry a path or a secret. A refused spec imports nothing.
+
 ## Configuration (environment variables)
 ### Message broker (NATS JetStream)
 
 `PIPELINE_EVENT_BUS=nats` replaces the in-process bus with the NATS JetStream
 bus, so events survive a process restart and are delivered across processes
-(the scheduler daemon runs the durable consumers). Every other value keeps the
-in-process bus. `/api/health` reports the selection under `runtime.event_bus`,
+(the scheduler daemon runs the durable consumers). `inprocess` and `jsonl` keep
+the in-process bus; `PIPELINE_EVENT_BUS_PLUGIN` replaces the selection entirely
+with an operator-supplied bus (see the "Plugins (operator-supplied
+adapters)" section).
+`/api/health` reports the selection under `runtime.event_bus`,
 and — only when it is `nats` — the broker's delivery state under
 `runtime.broker`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PIPELINE_EVENT_BUS` | `inprocess` | Bus selection: `inprocess`, `jsonl` or `nats`. An unsupported value is reported as `invalid` in `/api/health` and refused by the pipeline itself. |
+| `PIPELINE_EVENT_BUS` | `inprocess` | Bus selection: `inprocess`, `jsonl` or `nats`, or an operator-supplied bus via `PIPELINE_EVENT_BUS_PLUGIN`. An unsupported value is reported as `invalid` in `/api/health` and refused by the pipeline itself. |
 | `PIPELINE_NATS_URL` | *(required when the bus is `nats`)* | Server URL, `nats://host:port` or `tls://host:port`. A non-loopback host must use `tls://` or set `PIPELINE_NATS_TLS_CA_FILE`. |
 | `PIPELINE_NATS_STREAM` | `PIPELINE` | JetStream stream name. The managed stream captures the `pipeline.>` subjects. |
 | `PIPELINE_NATS_MANAGE_STREAM` | unset (`0`) | `1` lets the bus create the stream when it is missing; otherwise a missing stream is refused before anything is published. |
@@ -1918,9 +1964,15 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PIPELINE_TICKET_PROVIDER` | `auto` | `auto` \| `none` \| `plane` \| `jira` — see table above |
-| `PIPELINE_FORGE` | `auto` | `auto` \| `github` \| `gitlab` — the code host whose CLI the pipeline drives. `auto` resolves from the origin remote's hostname (falling back to `github` for an unrecognised host); an unknown value raises |
+| `PIPELINE_TICKET_PROVIDER` | `auto` | `auto` \| `none` \| `plane` \| `jira` — see table above, or an operator-supplied provider via `PIPELINE_TICKET_PROVIDER_PLUGIN` |
+| `PIPELINE_FORGE` | `auto` | `auto` \| `github` \| `gitlab` — the code host whose CLI the pipeline drives, or an operator-supplied adapter via `PIPELINE_FORGE_PLUGIN`. `auto` resolves from the origin remote's hostname (falling back to `github` for an unrecognised host); an unknown value raises |
 | `PIPELINE_FORGE=gitlab` | — | Requires the `glab` CLI on `PATH` (install it, then run `glab auth login` once). The pipeline then drives GitLab merge requests instead of GitHub pull requests; CI status is read from the pipelines API, so a failed job's trace is available for rework feedback |
+| `PIPELINE_IDENTITY_PLUGIN` | *(unset → off)* | `module:attr` factory `(secret_reader, env) -> IdentityProvider` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_AUTHORIZER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> Authorizer` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_EVENT_BUS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> EventBus` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_FORGE_PLUGIN` | *(unset → off)* | `module:attr` factory `(repo_root) -> Forge` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
 | `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
 | `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |
@@ -2414,7 +2466,9 @@ and the session cookie" section below.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` accepts a bearer token and, failing that, the browser login session cookie. Any other value raises at startup rather than silently downgrading authentication. |
+| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which built-in identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` accepts a bearer token and, failing that, the browser login session cookie. An operator-supplied provider named by `PIPELINE_IDENTITY_PLUGIN` replaces this selection (see the "Plugins (operator-supplied adapters)"
+section); any other value raises at startup rather than silently downgrading
+authentication. |
 | `PIPELINE_OIDC_ISSUER` | *(required when `oidc`)* | The expected `iss` claim, compared against the configured value — never against a value taken from the token. Must not contain `#` (it joins the issuer and subject into one principal id). |
 | `PIPELINE_OIDC_AUDIENCE` | *(required when `oidc`)* | The expected `aud` claim, likewise from configuration only. |
 | `PIPELINE_OIDC_JWKS_URL` | *(required when `oidc`)* | Where the issuer publishes its signing keys. Must use `https://`. A host that resolves to a private or loopback address is refused unless `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is set. |
@@ -2519,8 +2573,8 @@ why its request failed, so login advertises itself on the auth surface alone:
 By default the MCP server speaks `stdio`, exactly as before: nothing in
 `pipeline/remote_transport.py` runs, and `uvicorn` is never imported. Naming an
 HTTP transport instead serves the same tools over the network, and that is a
-deliberate two-part act — the transport must be named *and* OIDC must be
-configured.
+deliberate two-part act — the transport must be named *and* the identity
+provider must declare that it is fit for a network: `network_grade = True`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -2534,21 +2588,28 @@ configured.
 | `PIPELINE_MCP_MAX_BUCKETS` | `4096` | Maximum live buckets kept per limiter. Past the bound, refilled buckets are dropped and new keys are left untracked — never refused, so filling the map cannot deny service to other callers. Raise it for a deployment with more distinct clients per minute than this. Must be a positive integer: `0` is refused at startup, as is any non-integer or non-canonical value. |
 | `PIPELINE_MCP_TRUSTED_PROXIES` | *(unset)* | Comma-separated IPs or CIDRs of the reverse proxies in front of the endpoint, e.g. `10.0.0.0/8,192.0.2.7`. When the ASGI peer is one of them, the client address used for the failed-auth bucket is the right-most `X-Forwarded-For` entry that is not itself trusted; a hop that is not an IP address is skipped. Unset means the peer is the client, and `X-Forwarded-For` is ignored. A malformed entry, or a CIDR with host bits set (`10.0.0.5/8`), stops the transport at startup. |
 
-A network transport refuses to start unless `PIPELINE_IDENTITY_PROVIDER=oidc`.
-The check runs before any socket is opened, so a misconfiguration produces a
-`SystemExit` at startup rather than an unauthenticated control plane serving on
-the network:
+A network transport refuses to start unless the identity provider declares
+`network_grade = True`. That is true of the built-in `OidcProvider` and of any
+operator-supplied provider that sets it; `SharedSecretProvider` does not, so
+`PIPELINE_IDENTITY_PROVIDER=shared-secret` still refuses. The check runs before
+any socket is opened, so a misconfiguration produces a `SystemExit` at startup
+rather than an unauthenticated control plane serving on the network:
 
 ```bash
 # Refuses to start: the transport is remote but nobody would be authenticated.
 PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=shared-secret \
   python3 app/pipeline_mcp_server.py
 
-# Starts: OIDC is what makes the endpoint authenticating.
+# Starts: OIDC declares network_grade, so the endpoint authenticates.
 PIPELINE_MCP_TRANSPORT=streamable-http PIPELINE_IDENTITY_PROVIDER=oidc \
 PIPELINE_OIDC_ISSUER=... PIPELINE_OIDC_AUDIENCE=... PIPELINE_OIDC_JWKS_URL=... \
   python3 app/pipeline_mcp_server.py
 ```
+
+A remote endpoint can equally be served by an operator-supplied provider named
+by `PIPELINE_IDENTITY_PLUGIN`, provided its class sets `network_grade = True`
+(see the "Plugins (operator-supplied adapters)" section). Such a provider cannot be
+combined with a non-default `PIPELINE_IDENTITY_PROVIDER`.
 
 Every HTTP request to the endpoint must carry exactly one
 `Authorization: Bearer <token>` header, verified with the same verifier and the
@@ -2590,9 +2651,9 @@ should expect all of it:
   resolved to one value. A reverse proxy that appends instead of replacing
   could otherwise let the proxy validate one token while this gate validates
   another.
-- `BearerAuthMiddleware` refuses to be constructed with anything that is not an
-  `OidcProvider` — it raises `TypeError` — so the default `SharedSecretProvider`
-  cannot be wired in by accident.
+- `BearerAuthMiddleware` refuses to be constructed with a provider that does not
+  declare `network_grade = True` — it raises `TypeError` — so the default
+  `SharedSecretProvider` cannot be wired in by accident.
 - The gate is rate limited in two places, both in process memory. A
   **failed-authentication** token bucket is keyed on the client address (as
   resolved under `PIPELINE_MCP_TRUSTED_PROXIES`, below) and checked *before*

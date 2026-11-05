@@ -16,9 +16,14 @@ it handles a credential, so it is built fail-closed:
   for a malformed record too -- the outbox drain re-reads records from
   a JSONL file, so an unrenderable record fails closed like any other.
 
-All configuration is read from ``os.environ`` at CALL time (never at import
-time) so callers and tests can change the environment between calls.  Only the
-standard library is used.
+The routable channel type reads its configuration from ``notification.json``
+settings, not from ``os.environ``; a password comes either from a
+``password_ref`` (a provider reference, resolved through the credential seam at
+send time) or from a legacy ``password_env`` (the NAME of an environment
+variable, read at CALL time).  The legacy ``send_notification_email`` entry
+point reads all of its configuration from ``os.environ`` at CALL time (never at
+import time) so callers and tests can change the environment between calls.
+Only the standard library is used, plus the in-repo credential seam.
 """
 
 from __future__ import annotations
@@ -32,12 +37,14 @@ from dataclasses import dataclass, field
 from email.message import EmailMessage
 from typing import Any
 
+from app.credentials import CredentialRef, resolve
 from pipeline.notification_channels import (
     ChannelConfigError,
     DeliveryResult,
     DeliveryStatus,
     register_channel_type,
     reject_inline_secrets,
+    require_credential_ref,
 )
 from pipeline.notification_render import (  # noqa: F401 - re-exported names
     STORY_LEVEL_EVENTS,
@@ -209,7 +216,17 @@ def _send_smtp(settings: EmailSettings, rendered: RenderedNotification) -> bool:
 
 _ADDRESS_FORBIDDEN = ("\r", "\n")
 _CHANNEL_KEYS = frozenset(
-    {"type", "host", "port", "user", "from", "to", "timeout", "password_env"}
+    {
+        "type",
+        "host",
+        "port",
+        "user",
+        "from",
+        "to",
+        "timeout",
+        "password_env",
+        "password_ref",
+    }
 )
 
 
@@ -239,11 +256,22 @@ def _positive_number(name: str, key: str, value: Any, kind: type) -> Any:
     return kind(value)
 
 
+def _secret_text(secret: Any) -> str:
+    """The ONE place a notification email password is revealed for injection.
+
+    A dispatched child is prompt-injectable, so the raw value must not travel:
+    everything else treats the ``SecretValue`` as opaque. A later egress proxy
+    replaces this function to hand out a placeholder instead.
+    """
+    return secret.reveal() if secret is not None else ""
+
+
 class EmailChannelType:
     """A routable email channel instance (``type: email`` in notification.json).
 
-    The password is never stored: only the NAME of the environment variable
-    that holds it is kept, and it is read at send time.
+    The password is never stored: only a ``password_ref`` (a provider
+    reference) or a ``password_env`` (the NAME of the environment variable that
+    holds it) is kept, and it is resolved at send time.
     """
 
     type_name = "email"
@@ -259,6 +287,7 @@ class EmailChannelType:
         to_addrs: tuple[str, ...],
         timeout: float,
         password_env: str | None,
+        password_ref: str | None = None,
     ) -> None:
         self.name = name
         self.outbox_suffix = f".outbox.{name}.jsonl"
@@ -269,6 +298,7 @@ class EmailChannelType:
         self._to_addrs = to_addrs
         self._timeout = timeout
         self._password_env = password_env
+        self._password_ref = password_ref
 
     @classmethod
     def from_settings(
@@ -298,6 +328,14 @@ class EmailChannelType:
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting 'password_env' must name an env var"
             )
+        password_ref = require_credential_ref(
+            instance_name, "password_ref", settings.get("password_ref")
+        )
+        if password_env is not None and password_ref is not None:
+            raise ChannelConfigError(
+                f"channel {instance_name!r}: settings password_env and password_ref "
+                "are mutually exclusive"
+            )
         return cls(
             instance_name,
             host=host,
@@ -307,7 +345,22 @@ class EmailChannelType:
             to_addrs=to_addrs,
             timeout=timeout,
             password_env=password_env,
+            password_ref=password_ref,
         )
+
+    def _password(self) -> str:
+        """Read the password at send time: never stored, never logged.
+
+        A ``password_ref`` is resolved through the provider seam; a legacy
+        ``password_env`` keeps reading the named variable exactly as before. A
+        reference never falls back to an environment variable, and a provider
+        error propagates to the caller's broad handler (RETRY).
+        """
+        if self._password_ref is not None:
+            return _secret_text(resolve(CredentialRef("notification", self._password_ref)))
+        if self._password_env is not None:
+            return os.environ.get(self._password_env, "")
+        return ""
 
     def send(self, record: dict) -> DeliveryResult:
         try:
@@ -325,7 +378,7 @@ class EmailChannelType:
             host=self._host,
             port=self._port,
             user=self._user,
-            password=os.environ.get(self._password_env, "") if self._password_env else "",
+            password=self._password(),
             from_addr=self._from_addr,
             to_addrs=self._to_addrs,
             timeout=self._timeout,

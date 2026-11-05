@@ -85,12 +85,6 @@ from app.dashboard_routes_story import (
     set_story_status_route,
     start_story_route,
 )
-
-# The index handler moved to app/dashboard_ui.py (which registers it only when
-# the UI is enabled); this re-export keeps ``app.dashboard.dashboard_index``
-# resolvable for the append-only placement check in
-# tests/unit/test_propose_patch_route.py.
-from app.dashboard_ui import build_index_handler as dashboard_index  # noqa: F401
 from app.identity import IdentityError
 from app.oidc import OidcProvider, build_identity_provider
 from app.story_replay import build_replay_events  # noqa: F401
@@ -733,6 +727,11 @@ def _degraded_liveness_report() -> dict[str, Any]:
     zeroed["dataset_found"] = False
     return zeroed
 
+def dashboard_index():
+    """Serve the index page; the key injection lives in ``dashboard_ui``."""
+    return dashboard_ui.index_response(STATIC_DIR, get_or_create_api_key)
+
+
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")
 
@@ -967,7 +966,6 @@ def apply_worktree_patch_route(
     return result
 
 
-
 app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")(dispatch_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/start")(start_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/interrupt")(interrupt_story_route)
@@ -993,7 +991,10 @@ _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
 
-if dashboard_ui.ui_enabled():
-    dashboard_ui.register_index(app, STATIC_DIR, get_or_create_api_key)
+# One decision, taken once: API-only mode registers neither route, so no
+# response can carry the shared-secret key.
+_dashboard_ui_enabled = dashboard_ui.ui_enabled()
+dashboard_ui.register_index(app, dashboard_index, _dashboard_ui_enabled)
+if _dashboard_ui_enabled:
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

@@ -14,6 +14,8 @@ app.
 """
 from __future__ import annotations
 
+import functools
+import inspect
 import json
 import os
 import subprocess
@@ -58,15 +60,14 @@ def _ui_mode_app(environ):
     dashboard module, not in ``dashboard_ui``, because it has to stay the last
     registration -- so it is recreated here.
     """
+    enabled = dashboard_ui.ui_enabled(environ)
     mode_app = FastAPI(title="api-only probe", **api_contract.docs_kwargs())
     mode_app.user_middleware = list(d.app.user_middleware)
     for route in d.app.router.routes:
         if getattr(route, "path", "").startswith("/api"):
             mode_app.router.routes.append(route)
-    dashboard_ui.register_index(
-        mode_app, STATIC_DIR, auth.get_or_create_api_key, environ=environ
-    )
-    if dashboard_ui.ui_enabled(environ):
+    dashboard_ui.register_index(mode_app, d.dashboard_index, enabled)
+    if enabled:
         mode_app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return mode_app
 
@@ -130,9 +131,7 @@ def test_off_mode_keeps_the_oidc_login_routes_registered(key_file, tmp_path):
     )
     auth_app = FastAPI()
     oidc_login.mount_auth_routes(auth_app, config)
-    dashboard_ui.register_index(
-        auth_app, STATIC_DIR, auth.get_or_create_api_key, environ=UI_OFF
-    )
+    dashboard_ui.register_index(auth_app, d.dashboard_index, False)
 
     paths = {getattr(route, "path", "") for route in auth_app.routes}
     assert "/auth/login" in paths
@@ -197,12 +196,13 @@ def test_register_index_registers_the_index_only_when_enabled(key_file):
         reads.append(1)
         return auth.get_or_create_api_key()
 
+    handler = functools.partial(dashboard_ui.index_response, STATIC_DIR, read_key)
     fake = _RecordingApp()
-    dashboard_ui.register_index(fake, STATIC_DIR, read_key, environ=UI_OFF)
+    dashboard_ui.register_index(fake, handler, False)
     assert fake.calls == []
     assert reads == []
 
-    dashboard_ui.register_index(fake, STATIC_DIR, read_key, environ=UI_ON)
+    dashboard_ui.register_index(fake, handler, True)
     assert fake.calls == [("get", "/")], "only the index; the catch-all is the caller's"
     assert reads == [], "the key must be read per request, never at registration"
 
@@ -266,3 +266,35 @@ def test_real_app_refuses_an_invalid_ui_mode_at_import():
     assert result.returncode != 0
     assert dashboard_ui.UI_ENV in result.stderr
     assert "maybe" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# The append-only anchor still lives in app/dashboard.py
+# ---------------------------------------------------------------------------
+def test_dashboard_index_is_defined_in_the_dashboard_module():
+    """The placement guard compares line numbers, so the anchor must share its file.
+
+    ``tests/unit/test_propose_patch_route.py`` asserts
+    ``propose_worktree_patch_route`` is defined after ``dashboard_index``. If
+    ``dashboard_index`` were re-exported from another module, both line numbers
+    would come from different files and the invariant ("no route after the
+    catch-all") would be vacuously true.
+    """
+    index_line = inspect.getsourcelines(d.dashboard_index)[1]
+    propose_line = inspect.getsourcelines(d.propose_worktree_patch_route)[1]
+    assert Path(inspect.getsourcefile(d.dashboard_index)).name == "dashboard.py"
+    assert index_line < propose_line
+
+
+# ---------------------------------------------------------------------------
+# The injected secret cannot break out of the inline <script>
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("payload", ["</script><b>x</b>", "<!--", "a&b"])
+def test_index_response_escapes_markup_in_the_key(key_file, payload):
+    """The key file is read verbatim, so escape < > & before interpolating."""
+    key_file.write_text(payload)
+    response = dashboard_ui.index_response(STATIC_DIR, auth.get_or_create_api_key)
+    body = response.body.decode()
+    assert payload not in body
+    assert "</script><b>" not in body
+    assert "\\u003c" in body or "\\u0026" in body

@@ -39,6 +39,7 @@ from .ecosystem_detect import (
 )
 from .ownership import resolve_ownership
 from .plan_approval import approval_enabled, on_ingest
+from .plan_approval_notice import notify_approval_event, pending_notice_due
 from .repo_config import load_repo_config
 from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
@@ -898,14 +899,15 @@ def _ingest_plan_impl(
             routed_keys.add(key)
             routed.append((key, tag, warning))
 
-        # Opt-in plan-approval gate (ENT-LC-01): record the approval state and
-        # the digest of the authored content immediately before the manifest is
-        # written. With PIPELINE_PLAN_APPROVAL unset/off this is a no-op, so an
-        # existing `approval` key is left exactly as it was.
+        # Opt-in plan-approval gate (ENT-LC-01); a no-op while PIPELINE_PLAN_APPROVAL is off.
+        notify_pending = False
         if approval_enabled():
+            previous_approval = final_manifest.get("approval")
             final_manifest["approval"] = on_ingest(final_manifest)
-
+            notify_pending = pending_notice_due(previous_approval, final_manifest["approval"])
         _atomic_write_json(manifest_path, final_manifest)
+        if notify_pending:
+            notify_approval_event(plan_name, final_manifest, "plan_pending_approval")
 
         # One notification per routed story, after the write: the route
         # notice replaces the plain advisory sizing warning for that story.

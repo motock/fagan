@@ -186,3 +186,36 @@ default-off response is byte-identical to today's.
   verbatim-pinned and is not the documentation surface for this feature.
 - Enforcement of the gate at dispatch is tracked separately; this document
   describes the state, the transitions and the surfacing that exist today.
+
+## 11. Approval notifications
+
+Approval changes are announced through the ordinary notification channel, as
+three events:
+
+| Event | Meaning |
+| --- | --- |
+| `plan_pending_approval` | the plan's authored content is awaiting a decision |
+| `plan_approved` | the plan was approved |
+| `plan_changes_requested` | changes were requested on the plan |
+
+Ingest emits `plan_pending_approval` only while `PIPELINE_PLAN_APPROVAL` is on
+and the plan is **newly** pending approval. A plan is newly pending when the
+recomputed record is `pending_approval` and either there is no previous
+`approval` record, or the previous status was not `pending_approval`, or the
+previous digest differs from the new one. Re-ingesting unchanged content is
+therefore silent, editing the authored content notifies again, and a plan that
+is `approved` against the current digest stays silent across re-ingests. The
+notice is sent after the manifest is written, and a delivery failure is logged
+by exception type only: it never fails the ingest nor loses the manifest.
+
+Message content is deliberately minimal. A notice carries identifiers (the plan
+name and the event), counts (stories, risk summary, warning count, the approval
+digest), and — when `PIPELINE_DASHBOARD_PUBLIC_URL` is configured — an optional
+link to the dashboard filtered by plan name. It never carries brief text, file
+paths, the reviewer's `reason` text, or secrets; the link never contains a
+token, so a notice can never approve anything. A notice is one per plan and
+digest, so retries do not repeat it.
+
+These events are routed like any other: `notifications.json` entries select
+them with the usual `match.plan` / `match.owner` globs, so an operator can send
+approval traffic to a different channel without changing the pipeline.

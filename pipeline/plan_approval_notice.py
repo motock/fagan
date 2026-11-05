@@ -203,3 +203,23 @@ def notify_approval_event(plan_name: str, manifest: dict, event: str) -> None:
         logger.warning(
             "Failed to emit plan approval notice (%s)", type(exc).__name__
         )
+
+
+def pending_notice_due(previous: object, record: object) -> bool:
+    """Return whether ``record`` is a *newly* pending approval worth a notice.
+
+    ``previous`` is the approval record read from the manifest *before* the
+    ingest recomputed it; ``record`` is the record about to be persisted. A
+    notice is due exactly when ``record`` is pending and the pending state is
+    new -- no previous record, a previous status other than ``pending_approval``,
+    or a previous digest that differs from the new one. Both arguments are
+    read-only: the record written to disk must be the one inspected here.
+    """
+    if not isinstance(record, dict) or record.get("status") != "pending_approval":
+        return False
+    if not isinstance(previous, dict):
+        return True
+    return (
+        previous.get("status") != "pending_approval"
+        or previous.get("digest") != record.get("digest")
+    )

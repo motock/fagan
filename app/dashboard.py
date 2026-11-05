@@ -21,7 +21,15 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api_contract, auth, chat, dashboard_schemas, oidc_login, role_registry
+from app import (
+    api_contract,
+    auth,
+    chat,
+    dashboard_mount,
+    dashboard_schemas,
+    oidc_login,
+    role_registry,
+)
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -303,8 +311,6 @@ def _write_archived_plans(archived: set[str]) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-
-
 
 
 @app.get("/api/health")
@@ -992,6 +998,7 @@ app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")(checkpoint)
 # here, at import time, so the app refuses to start instead of half-enabling it.
 # Registered before the catch-all StaticFiles mount below, which would
 # otherwise swallow /auth/login and /auth/callback.
+dashboard_mount.mount_routes(app)
 _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)

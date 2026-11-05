@@ -74,6 +74,11 @@ def test_wait_zero_gives_up_immediately_while_held(plan_dir):
         elapsed = time.monotonic() - started
     # No budget: one attempt (plus the short in-process contention grace).
     assert elapsed < 0.5
+    # No budget leak either: a free lock is taken at once, no inherited sleep.
+    started = time.monotonic()
+    with concurrency._plan_lock(PLAN, wait_seconds=0) as acquired:
+        assert acquired is True
+    assert time.monotonic() - started < 0.5
 
 
 def test_positive_wait_acquires_after_holder_releases(plan_dir):
@@ -92,14 +97,7 @@ def test_wait_times_out_against_a_holder_that_never_releases(plan_dir):
             elapsed = time.monotonic() - started
             assert acquired is False
     assert 0.09 <= elapsed <= 0.6
-
-
-def test_free_lock_is_acquired_at_once_after_an_expired_wait(plan_dir):
-    with _Holder(PLAN, release_after=None) as holder:
-        assert holder.acquired
-        # No budget leak: the next caller must not inherit an expired deadline.
-        with concurrency._plan_lock(PLAN, wait_seconds=0.1) as acquired:
-            assert acquired is False
+    # No budget leak: the next caller must not inherit an expired deadline.
     started = time.monotonic()
     with concurrency._plan_lock(PLAN, wait_seconds=0) as acquired:
         assert acquired is True
@@ -191,9 +189,7 @@ def test_env_resolution(monkeypatch, raw, expected):
     else:
         monkeypatch.setenv(concurrency.COMMAND_LOCK_WAIT_ENV_VAR, raw)
     assert concurrency.command_lock_wait_seconds() == pytest.approx(expected)
-
-
-def test_env_is_reread_on_every_call(monkeypatch):
+    # Re-read on every call: call #2 must not reuse a cached value from #1.
     monkeypatch.setenv(concurrency.COMMAND_LOCK_WAIT_ENV_VAR, "0")
     assert concurrency.command_lock_wait_seconds() == 0.0
     monkeypatch.delenv(concurrency.COMMAND_LOCK_WAIT_ENV_VAR)

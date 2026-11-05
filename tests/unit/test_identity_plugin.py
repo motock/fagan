@@ -17,6 +17,7 @@ import pytest
 
 from app.identity import IdentityError, SharedSecretProvider
 from app.oidc import IDENTITY_PROVIDER_ENV, build_identity_provider
+from app.plugin_loader import ALLOWLIST_ENV
 from pipeline import remote_transport as rt
 from tests.unit.test_remote_transport_serve import FakeMCP
 
@@ -90,7 +91,7 @@ def test_plugin_factory_receives_secret_reader_and_env(
         tmp_path, monkeypatch, name, _provider_source(network_grade=True)
     )
     module = importlib.import_module(name)
-    env = {IDENTITY_PLUGIN_ENV: spec}
+    env = {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: name}
 
     provider = build_identity_provider(_secret_reader, env)
 
@@ -109,7 +110,7 @@ def test_plugin_wins_over_the_builtin_selector(
         tmp_path, monkeypatch, name, _provider_source(network_grade=True)
     )
     module = importlib.import_module(name)
-    env = {IDENTITY_PLUGIN_ENV: spec}
+    env = {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: name}
     if selector is not None:
         env[IDENTITY_PROVIDER_ENV] = selector
 
@@ -128,7 +129,11 @@ def test_plugin_conflicting_with_oidc_selector_raises(
         "identity_plugin_conflict",
         _provider_source(network_grade=True),
     )
-    env = {IDENTITY_PLUGIN_ENV: spec, IDENTITY_PROVIDER_ENV: "oidc"}
+    env = {
+        IDENTITY_PLUGIN_ENV: spec,
+        IDENTITY_PROVIDER_ENV: "oidc",
+        ALLOWLIST_ENV: "identity_plugin_conflict",
+    }
 
     with pytest.raises(IdentityError) as excinfo:
         build_identity_provider(_secret_reader, env)
@@ -173,7 +178,10 @@ def test_middleware_refuses_plugin_provider_without_network_grade(
         "identity_plugin_local_grade",
         _provider_source(network_grade=False),
     )
-    provider = build_identity_provider(_secret_reader, {IDENTITY_PLUGIN_ENV: spec})
+    provider = build_identity_provider(
+        _secret_reader,
+        {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: "identity_plugin_local_grade"},
+    )
 
     with pytest.raises(TypeError):
         rt.BearerAuthMiddleware(object(), provider)
@@ -188,7 +196,10 @@ def test_middleware_accepts_plugin_provider_declaring_network_grade(
         "identity_plugin_remote_grade",
         _provider_source(network_grade=True),
     )
-    provider = build_identity_provider(_secret_reader, {IDENTITY_PLUGIN_ENV: spec})
+    provider = build_identity_provider(
+        _secret_reader,
+        {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: "identity_plugin_remote_grade"},
+    )
 
     middleware = rt.BearerAuthMiddleware(object(), provider)
 
@@ -220,7 +231,13 @@ def test_remote_serve_refuses_a_plugin_before_reaching_the_gate(
         "uvicorn",
         types.SimpleNamespace(run=lambda *a, **k: uvicorn_calls.append((a, k))),
     )
-    env = dict(REMOTE_ENV, **{IDENTITY_PLUGIN_ENV: spec})
+    env = dict(
+        REMOTE_ENV,
+        **{
+            IDENTITY_PLUGIN_ENV: spec,
+            ALLOWLIST_ENV: "identity_plugin_serve_gate",
+        },
+    )
 
     with pytest.raises(IdentityError) as excinfo:
         rt.serve(FakeMCP(), environ=env)
@@ -238,7 +255,10 @@ def test_plugin_identity_error_passes_through(
         "identity_plugin_denies",
         _provider_source(network_grade=True),
     )
-    provider = build_identity_provider(_secret_reader, {IDENTITY_PLUGIN_ENV: spec})
+    provider = build_identity_provider(
+        _secret_reader,
+        {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: "identity_plugin_denies"},
+    )
 
     with pytest.raises(IdentityError) as excinfo:
         provider.authenticate("anything")

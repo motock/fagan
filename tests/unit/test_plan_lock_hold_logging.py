@@ -65,6 +65,38 @@ _STANDARD_RECORD_KEYS = frozenset(
 )
 
 
+class _FakeClock:
+    """Deterministic stand-in for the ``time`` module inside ``concurrency``.
+
+    ``pipeline.concurrency`` reads only ``time.monotonic`` and ``time.sleep``.
+    ``sleep`` here advances the clock by the requested amount and returns
+    immediately, so a hold's measured duration depends solely on the durations
+    the test asks for and can never be inflated into a "slow" hold by a
+    scheduler stall on a loaded CI runner. Any other attribute is delegated to
+    the real ``time`` module.
+    """
+
+    def __init__(self, start=1000.0):
+        self._now = start
+
+    def monotonic(self):
+        return self._now
+
+    def sleep(self, seconds):
+        self._now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """Rebind ``time`` inside ``pipeline.concurrency`` only; never globally."""
+    clock = _FakeClock()
+    monkeypatch.setattr(concurrency, "time", clock)
+    return clock
+
+
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
@@ -97,10 +129,10 @@ def _custom_keys(record):
     return {key for key in record.__dict__ if key not in _STANDARD_RECORD_KEYS}
 
 
-def _hold(name, seconds):
+def _hold(name, seconds, sleeper=time.sleep):
     with concurrency._plan_lock(name) as acquired:
         assert acquired is True
-        time.sleep(seconds)
+        sleeper(seconds)
 
 
 # (1) ---------------------------------------------------------------------
@@ -135,15 +167,15 @@ def test_slow_hold_logs_info_with_held_seconds(plan_dir, capture, monkeypatch):
 
 # (3) ---------------------------------------------------------------------
 def test_released_window_time_is_excluded_from_slow_figure(
-    plan_dir, capture, monkeypatch
+    plan_dir, capture, monkeypatch, fake_clock
 ):
     monkeypatch.setenv(SLOW_ENV, "0.03")
 
     with concurrency._plan_lock("gamma") as acquired:
         assert acquired is True
-        time.sleep(0.005)
+        fake_clock.sleep(0.005)
         with concurrency._released_plan_lock("gamma"):
-            time.sleep(0.06)
+            fake_clock.sleep(0.06)
 
     released = _released(capture)
     assert len(released) == 1
@@ -154,15 +186,17 @@ def test_released_window_time_is_excluded_from_slow_figure(
     assert record.held_seconds - record.released_seconds < 0.03
 
 
-def test_multiple_released_windows_accumulate(plan_dir, capture, monkeypatch):
+def test_multiple_released_windows_accumulate(
+    plan_dir, capture, monkeypatch, fake_clock
+):
     monkeypatch.setenv(SLOW_ENV, "0.03")
 
     with concurrency._plan_lock("gamma") as acquired:
         assert acquired is True
         with concurrency._released_plan_lock("gamma"):
-            time.sleep(0.010)
+            fake_clock.sleep(0.010)
         with concurrency._released_plan_lock("gamma"):
-            time.sleep(0.020)
+            fake_clock.sleep(0.020)
 
     released = _released(capture)
     assert len(released) == 1
@@ -172,13 +206,15 @@ def test_multiple_released_windows_accumulate(plan_dir, capture, monkeypatch):
     assert record.levelno == logging.DEBUG
 
 
-def test_raising_released_window_still_accounted(plan_dir, capture, monkeypatch):
+def test_raising_released_window_still_accounted(
+    plan_dir, capture, monkeypatch, fake_clock
+):
     monkeypatch.setenv(SLOW_ENV, "0.03")
 
     with concurrency._plan_lock("gamma") as acquired:
         assert acquired is True
         with pytest.raises(RuntimeError), concurrency._released_plan_lock("gamma"):
-            time.sleep(0.05)
+            fake_clock.sleep(0.05)
             raise RuntimeError("boom")
 
     released = _released(capture)
@@ -251,15 +287,17 @@ def test_reentrant_nested_call_logs_nothing_extra(plan_dir, capture):
     assert record.released_windows == 0
 
 
-def test_state_is_not_carried_into_the_next_hold(plan_dir, capture, monkeypatch):
+def test_state_is_not_carried_into_the_next_hold(
+    plan_dir, capture, monkeypatch, fake_clock
+):
     monkeypatch.setenv(SLOW_ENV, "0.03")
 
     with concurrency._plan_lock("kappa") as acquired:
         assert acquired is True
         with concurrency._released_plan_lock("kappa"):
-            time.sleep(0.05)
+            fake_clock.sleep(0.05)
 
-    _hold("kappa", 0.005)
+    _hold("kappa", 0.005, fake_clock.sleep)
 
     released = _released(capture)
     assert len(released) == 2

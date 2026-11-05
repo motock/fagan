@@ -18,10 +18,18 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api_contract, auth, chat, dashboard_schemas, oidc_login, role_registry
+from app import (
+    api_contract,
+    auth,
+    chat,
+    dashboard_schemas,
+    dashboard_ui,
+    oidc_login,
+    role_registry,
+)
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -719,25 +727,13 @@ def _degraded_liveness_report() -> dict[str, Any]:
     zeroed["dataset_found"] = False
     return zeroed
 
+def dashboard_index():
+    """Serve the index page; the key injection lives in ``dashboard_ui``."""
+    return dashboard_ui.index_response(STATIC_DIR, get_or_create_api_key)
+
+
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")
-
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def dashboard_index() -> HTMLResponse:
-    """Serve static/index.html with the shared-secret API key injected.
-
-    The browser cannot know the key on its own, so the server reads the
-    static file's text at request time and str.replace()s the
-    ``<!--PIPELINE_API_KEY-->`` placeholder with a small inline script that
-    publishes the key as ``window.__PIPELINE_API_KEY__``. The key store is
-    persistent: every request serves the same stored key, so already-open
-    dashboard tabs keep working. The key is never logged.
-    """
-    key = get_or_create_api_key()
-    html_text = (STATIC_DIR / "index.html").read_text()
-    script = f"<script>window.__PIPELINE_API_KEY__={json.dumps(key)};</script>"
-    return HTMLResponse(content=html_text.replace("<!--PIPELINE_API_KEY-->", script))
 
 
 # ---------------------------------------------------------------------------
@@ -970,7 +966,6 @@ def apply_worktree_patch_route(
     return result
 
 
-
 app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")(dispatch_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/start")(start_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/interrupt")(interrupt_story_route)
@@ -996,5 +991,10 @@ _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# One decision, taken once: API-only mode registers neither route, so no
+# response can carry the shared-secret key.
+_dashboard_ui_enabled = dashboard_ui.ui_enabled()
+dashboard_ui.register_index(app, dashboard_index, _dashboard_ui_enabled)
+if _dashboard_ui_enabled:
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

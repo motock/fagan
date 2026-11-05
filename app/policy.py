@@ -11,9 +11,9 @@ that defines every ADR 0009 allow/deny decision — the same "setting the
 variable is code execution in the orchestrator" boundary the plugin loader
 documents, extended to the policy itself. The resolved authorizer may be an
 arbitrary operator-supplied, stateful object, not just :class:`LocalPolicy`.
-Unlike the other seams, this one refuses to load a plugin unless
-``PIPELINE_PLUGIN_MODULES`` is set: the module allowlist is required here, not
-merely recommended.
+Unlike the other seams, the identity and authorizer seams both refuse to load a
+plugin unless ``PIPELINE_PLUGIN_MODULES`` is set: for these two the module
+allowlist is required, not merely recommended.
 
 Once an operator-supplied authorizer has been built it is kept for the life of
 the process, so a later write to ``PIPELINE_AUTHORIZER_PLUGIN`` (or clearing it)

@@ -149,8 +149,13 @@ def test_plugin_conflicting_with_oidc_selector_raises(
     ],
 )
 def test_invalid_plugin_spec_raises_without_echoing_it(spec: str, hides_spec: bool) -> None:
+    # The allowlist is configured so the spec itself is what gets validated;
+    # without it the seam would refuse on the allowlist first and hide the spec.
     with pytest.raises(IdentityError) as excinfo:
-        build_identity_provider(_secret_reader, {IDENTITY_PLUGIN_ENV: spec})
+        build_identity_provider(
+            _secret_reader,
+            {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: "identity_plugin_missing_module_xyz"},
+        )
 
     message = str(excinfo.value)
     assert message.startswith("invalid identity plugin")
@@ -166,7 +171,10 @@ def test_factory_returning_object_without_authenticate_raises(
     )
 
     with pytest.raises(IdentityError):
-        build_identity_provider(_secret_reader, {IDENTITY_PLUGIN_ENV: spec})
+        build_identity_provider(
+            _secret_reader,
+            {IDENTITY_PLUGIN_ENV: spec, ALLOWLIST_ENV: "identity_plugin_no_authenticate"},
+        )
 
 
 def test_middleware_refuses_plugin_provider_without_network_grade(

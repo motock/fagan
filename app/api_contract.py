@@ -29,6 +29,13 @@ PUBLIC_DOCS_ENV = "PIPELINE_DASHBOARD_PUBLIC_DOCS"
 #: ``/api/`` prefix, so the existing gate covers it without a second code path.
 SPEC_PATH = "/api/openapi.json"
 
+#: The semantic version of the HTTP surface, stamped into ``info.version`` of the
+#: served spec (see ``app.dashboard``). MAJOR changes only for breaking changes:
+#: ``docs/api/openapi.json`` is the snapshot of that surface and
+#: ``scripts/api_contract.py check`` refuses a breaking difference that a MAJOR
+#: bump does not license.
+API_VERSION = "1.0.0"
+
 #: The only environment value that means "publish"; compared after stripping
 #: surrounding whitespace so ``PIPELINE_DASHBOARD_PUBLIC_DOCS=" 1 "`` (a common
 #: shell/Compose artifact) still opts in, while ``true``/``yes``/``0`` do not.

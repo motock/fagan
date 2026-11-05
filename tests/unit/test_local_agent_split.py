@@ -21,6 +21,7 @@ LINE_LIMIT = 1000
 
 _BASELINE_SCRIPTS = frozenset({
     "agent_log_scorecard.py",
+    "api_contract.py",
     "check_line_limit.py", "choose_providers.py", "configure.py",
     "install_checks.py",
     "install_global_rules.py", "local_agent.py", "local_agent_chat.py",

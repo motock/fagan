@@ -16,9 +16,14 @@ it handles a credential, so it is built fail-closed:
   for a malformed record too -- the outbox drain re-reads records from
   a JSONL file, so an unrenderable record fails closed like any other.
 
-All configuration is read from ``os.environ`` at CALL time (never at import
-time) so callers and tests can change the environment between calls.  Only the
-standard library is used.
+The routable channel type reads its configuration from ``notification.json``
+settings, not from ``os.environ``; a password comes either from a
+``password_ref`` (a provider reference, resolved through the credential seam at
+send time) or from a legacy ``password_env`` (the NAME of an environment
+variable, read at CALL time).  The legacy ``send_notification_email`` entry
+point reads all of its configuration from ``os.environ`` at CALL time (never at
+import time) so callers and tests can change the environment between calls.
+Only the standard library is used, plus the in-repo credential seam.
 """
 
 from __future__ import annotations
@@ -264,8 +269,9 @@ def _secret_text(secret: Any) -> str:
 class EmailChannelType:
     """A routable email channel instance (``type: email`` in notification.json).
 
-    The password is never stored: only the NAME of the environment variable
-    that holds it is kept, and it is read at send time.
+    The password is never stored: only a ``password_ref`` (a provider
+    reference) or a ``password_env`` (the NAME of the environment variable that
+    holds it) is kept, and it is resolved at send time.
     """
 
     type_name = "email"

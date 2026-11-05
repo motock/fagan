@@ -37,6 +37,22 @@
     "title": "ApplyPatchRequest",
     "type": "object"
    },
+   "ApproveBody": {
+    "additionalProperties": false,
+    "description": "The approve request body: the digest the approver was shown.",
+    "properties": {
+     "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Digest",
+      "type": "string"
+     }
+    },
+    "required": [
+     "digest"
+    ],
+    "title": "ApproveBody",
+    "type": "object"
+   },
    "ChatRequest": {
     "properties": {
      "history": {
@@ -327,6 +343,27 @@
      "unified_diff"
     ],
     "title": "ProposePatchRequest",
+    "type": "object"
+   },
+   "RequestChangesBody": {
+    "additionalProperties": false,
+    "description": "The request-changes body: the digest shown plus a non-empty reason.",
+    "properties": {
+     "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Digest",
+      "type": "string"
+     },
+     "reason": {
+      "title": "Reason",
+      "type": "string"
+     }
+    },
+    "required": [
+     "digest",
+     "reason"
+    ],
+    "title": "RequestChangesBody",
     "type": "object"
    },
    "RoleDefaultBody": {
@@ -1879,6 +1916,110 @@
      }
     },
     "summary": "Get Plan Review"
+   }
+  },
+  "/api/plans/{plan_name}/review/approve": {
+   "post": {
+    "description": "Approve *plan_name* against the digest the caller was shown.",
+    "operationId": "post_plan_review_approve_api_plans__plan_name__review_approve_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ApproveBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Post Plan Review Approve Api Plans  Plan Name  Review Approve Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Post Plan Review Approve"
+   }
+  },
+  "/api/plans/{plan_name}/review/request-changes": {
+   "post": {
+    "description": "Request changes on *plan_name* against the digest the caller was shown.",
+    "operationId": "post_plan_review_request_changes_api_plans__plan_name__review_request_changes_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RequestChangesBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Post Plan Review Request Changes Api Plans  Plan Name  Review Request Changes Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Post Plan Review Request Changes"
    }
   },
   "/api/plans/{plan_name}/save": {

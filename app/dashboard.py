@@ -147,7 +147,7 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 # server or a loopback alias, so DNS rebinding cannot read the injected key.
 # A reverse proxy must forward the bound address as the upstream Host (nginx:
 # `proxy_set_header Host 127.0.0.1:8000;`); the default `$host` form gets 403.
-app = FastAPI(title="Agent Pipeline Dashboard", **api_contract.docs_kwargs())
+app = FastAPI(title="Agent Pipeline Dashboard", version=api_contract.API_VERSION, **api_contract.docs_kwargs())
 _service = PipelineService()
 
 # ADR 0009 identity seam: the one provider the dashboard resolves credentials

@@ -29,10 +29,11 @@ PUBLIC_DOCS_ENV = "PIPELINE_DASHBOARD_PUBLIC_DOCS"
 #: ``/api/`` prefix, so the existing gate covers it without a second code path.
 SPEC_PATH = "/api/openapi.json"
 
-#: The semantic version of the HTTP surface, stamped into ``info.version``.
-#: MAJOR changes only for breaking changes: ``docs/api/openapi.json`` is the
-#: snapshot of the surface and ``scripts/api_contract.py check`` refuses a
-#: breaking difference that a MAJOR bump does not license.
+#: The semantic version of the HTTP surface, stamped into ``info.version`` of the
+#: served spec (see ``app.dashboard``). MAJOR changes only for breaking changes:
+#: ``docs/api/openapi.json`` is the snapshot of that surface and
+#: ``scripts/api_contract.py check`` refuses a breaking difference that a MAJOR
+#: bump does not license.
 API_VERSION = "1.0.0"
 
 #: The only environment value that means "publish"; compared after stripping
@@ -44,13 +45,10 @@ _PUBLIC_VALUE = "1"
 def docs_kwargs(environ: Mapping[str, str] | None = None) -> dict[str, object]:
     """FastAPI keyword arguments for the documentation endpoints.
 
-    Always carries ``version`` (``API_VERSION``), so the served spec's
-    ``info.version`` is the contract version rather than FastAPI's placeholder.
-
-    When the operator opted in with exactly ``1`` the rest is FastAPI's public
-    defaults: ``/openapi.json``, ``/docs`` and ``/redoc``. Otherwise it returns
-    the closed configuration: the spec at ``SPEC_PATH``, both interactive pages
-    disabled.
+    Returns ``{}`` — FastAPI's public defaults: ``/openapi.json``, ``/docs`` and
+    ``/redoc`` — when the operator opted in with exactly ``1``. Otherwise it
+    returns the closed configuration: the spec at ``SPEC_PATH``, both
+    interactive pages disabled.
 
     ``environ`` exists so callers can grade a hypothetical environment without
     mutating (or racing on) ``os.environ``; it defaults to ``os.environ`` when
@@ -60,10 +58,5 @@ def docs_kwargs(environ: Mapping[str, str] | None = None) -> dict[str, object]:
     """
     source = os.environ if environ is None else environ
     if source.get(PUBLIC_DOCS_ENV, "").strip() == _PUBLIC_VALUE:
-        return {"version": API_VERSION}
-    return {
-        "openapi_url": SPEC_PATH,
-        "docs_url": None,
-        "redoc_url": None,
-        "version": API_VERSION,
-    }
+        return {}
+    return {"openapi_url": SPEC_PATH, "docs_url": None, "redoc_url": None}

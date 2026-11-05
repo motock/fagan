@@ -1839,6 +1839,48 @@
     "summary": "Resume Plan"
    }
   },
+  "/api/plans/{plan_name}/review": {
+   "get": {
+    "description": "Return the review payload for *plan_name* when the caller may see it.",
+    "operationId": "get_plan_review_api_plans__plan_name__review_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Plan Review Api Plans  Plan Name  Review Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Plan Review"
+   }
+  },
   "/api/plans/{plan_name}/save": {
    "post": {
     "operationId": "save_plan_api_plans__plan_name__save_post",

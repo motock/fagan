@@ -704,11 +704,13 @@ def test_api_version_is_semantic():
     assert re.fullmatch(r"\d+\.\d+\.\d+", app_contract.API_VERSION)
 
 
-def test_docs_kwargs_carries_the_version_in_every_branch():
-    public = app_contract.docs_kwargs({app_contract.PUBLIC_DOCS_ENV: "1"})
-    closed = app_contract.docs_kwargs({})
+def test_the_served_spec_reports_the_contract_version():
+    # The version is passed where the app is built, not through docs_kwargs():
+    # docs_kwargs() is pinned exactly by test_dashboard_openapi_auth.py, so the
+    # only thing worth grading here is what a caller can read off the served
+    # document.
+    served = json.loads(export_spec())
 
-    assert public.get("version") == app_contract.API_VERSION
-    assert "openapi_url" not in public
-    assert closed["version"] == app_contract.API_VERSION
-    assert closed["openapi_url"] == app_contract.SPEC_PATH
+    assert served["info"]["version"] == app_contract.API_VERSION
+    assert app_contract.docs_kwargs({app_contract.PUBLIC_DOCS_ENV: "1"}) == {}
+    assert app_contract.docs_kwargs({})["openapi_url"] == app_contract.SPEC_PATH

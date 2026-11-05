@@ -5,6 +5,13 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from app.plugin_loader import (
+    PluginError,
+    check_no_conflict,
+    load_plugin,
+    plugin_spec,
+)
+
 from . import telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
@@ -23,6 +30,10 @@ EVENT_BUS_INPROCESS = "inprocess"
 EVENT_BUS_JSONL = "jsonl"
 #: Accepted value: the NATS JetStream bus (durable, cross-process delivery).
 EVENT_BUS_NATS = "nats"
+#: Reported when ``PIPELINE_EVENT_BUS_PLUGIN`` supplies the bus. Deliberately
+#: not a member of :data:`ALLOWED_EVENT_BUSES`, which lists the values of
+#: ``PIPELINE_EVENT_BUS``.
+EVENT_BUS_PLUGIN = "plugin"
 #: Every accepted value, in the order the error message lists them.
 ALLOWED_EVENT_BUSES = (EVENT_BUS_INPROCESS, EVENT_BUS_JSONL, EVENT_BUS_NATS)
 #: Reported by :func:`reported_event_bus_name` when the variable is unset to an
@@ -147,7 +158,8 @@ def selected_event_bus_name() -> str:
     -------
     str
         ``"inprocess"`` when the variable is absent or exactly ``"inprocess"``,
-        ``"jsonl"`` when it is exactly ``"jsonl"``.
+        ``"jsonl"`` when it is exactly ``"jsonl"``, ``"plugin"`` when
+        ``PIPELINE_EVENT_BUS_PLUGIN`` is set.
 
     Raises
     ------
@@ -161,6 +173,17 @@ def selected_event_bus_name() -> str:
     The environment is read on every call; nothing is cached here (the only
     cache in this module is :func:`get_bus`'s process-level singleton).
     """
+    if plugin_spec("event_bus") is not None:
+        # The plugin variable is the operator's selection; combining it with a
+        # disagreeing PIPELINE_EVENT_BUS is a configuration error, not a win for
+        # either. An unset selector is compared as its default, so it agrees.
+        try:
+            check_no_conflict(
+                "event_bus", selector=EVENT_BUS_ENV, selector_default=EVENT_BUS_INPROCESS
+            )
+        except PluginError as exc:
+            raise ValueError(str(exc)) from None
+        return EVENT_BUS_PLUGIN
     raw = os.environ.get(EVENT_BUS_ENV)
     if raw is None:
         return EVENT_BUS_INPROCESS
@@ -256,11 +279,26 @@ def build_bus() -> EventBus:
       deployment that asked for durable delivery gets it or fails loudly.
     * anything else, including the empty string -- ``ValueError`` from
       :func:`selected_event_bus_name`.
+    * plugin -- the EventBus built by the operator module named in
+      PIPELINE_EVENT_BUS_PLUGIN, with the same handlers subscribed.
 
     The selection is re-read on every call and never cached, so changing the
     variable between two calls changes the bus that comes back. Only
     :func:`get_bus` caches a built bus.
     """
+    if selected_event_bus_name() == EVENT_BUS_PLUGIN:
+        try:
+            factory = load_plugin("event_bus")
+        except PluginError as exc:
+            # Fail closed as the selector does: a bad spec is a configuration
+            # error reported as ValueError, never a silent built-in fallback.
+            raise ValueError(str(exc)) from None
+        bus = factory()
+        # Checked before subscribing: a factory that builds something else must
+        # not receive the pipeline's handlers.
+        if not isinstance(bus, EventBus):
+            raise ValueError("PIPELINE_EVENT_BUS_PLUGIN must build an EventBus")
+        return _subscribe_handlers(bus)
     if selected_event_bus_name() == EVENT_BUS_JSONL:
         return _subscribe_handlers(DispatchingJsonlEventBus(PLAN_DIR))
     if selected_event_bus_name() == EVENT_BUS_NATS:

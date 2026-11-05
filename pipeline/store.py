@@ -114,12 +114,13 @@ class _TransactionLock:
     delegate ``__exit__`` to a freshly constructed transaction.
     """
 
-    def __init__(self, plan_name: str):
+    def __init__(self, plan_name: str, wait_seconds: float = 0.0):
         self._plan_name = plan_name
+        self._wait_seconds = wait_seconds
         self._cm = None
 
     def __enter__(self):
-        self._cm = _plan_lock(self._plan_name)
+        self._cm = _plan_lock(self._plan_name, self._wait_seconds)
         return self._cm.__enter__()
 
     def __exit__(self, *exc):
@@ -157,12 +158,16 @@ class FileStore:
             tmp.unlink(missing_ok=True)
             raise
 
-    def transaction(self, plan_name: str):
+    def transaction(self, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:
         a non-blocking, flock-based, thread-reentrant context manager that
         yields whether the lock was acquired. Callers MUST check the yielded
-        bool and skip all work when it is False."""
-        return _TransactionLock(plan_name)
+        bool and skip all work when it is False.
+
+        ``wait_seconds`` is opt-in: the default ``0.0`` is a single attempt
+        with no sleeping (the scheduler's own ticks). Operator commands pass
+        ``command_lock_wait_seconds()`` to retry for a bounded time."""
+        return _TransactionLock(plan_name, wait_seconds)
 
     list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
 

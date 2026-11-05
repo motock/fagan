@@ -16,6 +16,7 @@ in practice.
   `PIPELINE_<SEAM>_PLUGIN=module:attr` (and `PIPELINE_CHANNEL_PLUGINS` for
   registrars), off by default; the remote MCP transport now accepts any identity
   provider declaring `network_grade = True` instead of only `OidcProvider`.
+- An operator-supplied credential provider (`PIPELINE_CREDENTIALS_PLUGIN`) for the model credential and notification secrets, off by default, with `password_ref` and `webhook_url_ref` channel settings.
 
 ### Fixed
 

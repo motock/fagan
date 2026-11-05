@@ -185,6 +185,78 @@ snapshot, not as a live view of current warnings.
 
 ## 9. Dashboard surfacing
 
+### The deciding routes
+
+Two `POST` routes decide a plan from the dashboard. Both are **digest-bound**:
+the caller sends the 64-character lowercase-hex digest it was shown, and a
+decision made against any other digest is refused. Neither route writes the
+decision record, the audit record or the notification itself — the service
+(`pipeline.plan_approval`) owns all three, so a decision is recorded exactly
+once and a refused or skipped one records nothing.
+
+| Route | Body |
+| --- | --- |
+| `POST /api/plans/{plan_name}/review/approve` | `{"digest": "<64 hex>"}` |
+| `POST /api/plans/{plan_name}/review/request-changes` | `{"digest": "<64 hex>", "reason": "<1..2000 chars>"}` |
+
+Both bodies forbid extra fields (`extra="forbid"`), and `digest` must match
+`^[0-9a-f]{64}$` — lowercase hex only, and no trailing newline. `reason` is
+required, is **stripped first** and must then be 1..2000 characters: `"   "` is
+an empty reason (`422`), while a 2000-character reason the caller padded with
+whitespace is accepted and stored stripped.
+
+#### Check order (fail closed)
+
+1. **A verified login.** `pipeline.actor.current_principal()` must carry
+   `auth_method == "oidc"`. Otherwise `403 dashboard approval requires login`
+   plus one refused audit record whose `detail.reason` is `unverified_principal`.
+   Shared-key callers — including the local operator — keep using the MCP
+   `approve_plan` tool: a shared secret authenticates a deployment, not the
+   person a decision has to be attributed to.
+2. **Enforcement on.** `pipeline.authorization.enforcement_enabled()` must be
+   true. Otherwise `403 policy enforcement is disabled` plus a refused audit
+   record whose `detail.reason` is `policy_enforcement_disabled`: with
+   enforcement off every action is allowed, so an "approval" would record
+   nothing.
+3. **The plan name.** An invalid key is the same fixed `404 plan not found` the
+   read route returns.
+4. **The decision**, delegated to `approve_plan` / `reject_plan` with
+   `expected_digest` set to the body's `digest`.
+
+The order is part of the contract: steps 1 and 2 run before the plan name is
+validated, so a refusal never reports whether a plan exists.
+
+#### Status codes
+
+| Status | Meaning |
+| --- | --- |
+| `200` | `{status, digest, decided_by, at, self_approved}` — exactly those five keys. The principal, a path and any exception text are never in the body. |
+| `403` | `dashboard approval requires login` — the caller is not an OIDC principal. |
+| `403` | `policy enforcement is disabled`. |
+| `403` | `not authorized: plan:approve` (or `plan:reject`) — the policy refused this principal, for example an `approver`-role principal who neither owns the plan nor is one of its delegates. |
+| `404` | `plan not found` — an invalid plan key, or no such plan. |
+| `409` | `plan is busy; retry` — the store could not acquire the plan. Retryable: no decision record was written. |
+| `409` | `plan changed since it was displayed; reload before deciding` — `digest` is stale against the plan as it is on disk now. Nothing is written, and repeating the same stale digest stays a `409`: the route never substitutes the current digest, because that would approve content the operator never saw. |
+| `409` | `plan content changed; re-ingest before approving` — the stored approval digest no longer matches the content. |
+| `409` | `plan approval is not enabled` — `PIPELINE_PLAN_APPROVAL` is off. |
+| `422` | The body is invalid: missing or malformed `digest`, an extra field, or a missing, blank or over-long `reason`. |
+
+#### CSRF, and why a GET never decides
+
+Both routes are `POST` with a JSON body and add **no** exemption to the
+dashboard's same-origin proof. The `/api/` middleware authenticates the request
+first; a session cookie is an ambient credential, so a `POST` that rides it must
+present `Sec-Fetch-Site: same-origin` or an `Origin` equal to the configured
+redirect URI's origin. A cross-site `POST` is refused with `403` by the
+middleware before the handler runs, and therefore before anything is decided. A
+bearer token is an explicit credential and needs no such proof.
+
+**A GET never decides.** A `GET` on either path is refused with `405` by an
+explicit route, so a link, a browser prefetch or an `<img>` tag can never
+approve or ask for changes on a plan. (The route is explicit because the
+dashboard's static mount would otherwise answer such a request with a bare
+`404`, indistinguishable from a mistyped URL.)
+
 ### The review endpoint
 
 `GET /api/plans/{plan_name}/review` (`app/dashboard_routes_approval.py`,

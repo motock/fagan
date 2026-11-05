@@ -33,6 +33,12 @@ _TYPE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _SECRET_KEY_FRAGMENTS = ("password", "token", "webhook_url", "secret", "api_key")
 _ENV_SUFFIX = "_env"
+# A ``<x>_ref`` setting names a credential reference resolved through the
+# provider seam; like ``<x>_env`` it holds no secret, only a name.
+_REF_SUFFIX = "_ref"
+# A credential reference is a lowercase dotted identifier (the credential seam
+# refuses anything else, so it is rejected here at the config boundary).
+_REFERENCE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}\Z")
 
 # Per-channel circuit breaker: a channel that answered RETRY (or raised) is not
 # tried again until a growing delay has passed, so a rate-limiting provider is
@@ -106,13 +112,33 @@ def reject_inline_secrets(instance_name: str, settings: Mapping[str, Any]) -> No
     """Raise if any setting key looks like a secret held inline."""
     for key in settings:
         lowered = str(key).lower()
-        if lowered.endswith(_ENV_SUFFIX):
+        if lowered.endswith((_ENV_SUFFIX, _REF_SUFFIX)):
             continue
         if any(fragment in lowered for fragment in _SECRET_KEY_FRAGMENTS):
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting {key!r} must not hold a secret "
                 f"inline; use {key}{_ENV_SUFFIX} naming an environment variable"
             )
+
+
+def require_credential_ref(
+    instance_name: str, key: str, value: Any
+) -> str | None:
+    """Validate an optional ``<x>_ref`` setting: a credential reference NAME.
+
+    A reference holds no secret: it is a lowercase dotted identifier that the
+    provider seam resolves at send time. ``None`` (the key is absent) is
+    allowed; anything that is not a valid reference is a config error whose
+    message never echoes the value.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _REFERENCE_RE.match(value):
+        raise ChannelConfigError(
+            f"channel {instance_name!r}: setting {key!r} must be a credential "
+            "reference such as 'tenant.name'"
+        )
+    return value
 
 
 def resolve_env(

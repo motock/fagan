@@ -1,7 +1,8 @@
 """Slack incoming-webhook channel type (NC-07).
 
-The webhook URL is a credential: instance settings hold only the NAME of the
-environment variable (``webhook_url_env``), which is read at send time.  The
+The webhook URL is a credential: instance settings hold either the NAME of the
+environment variable (``webhook_url_env``) or a credential reference
+(``webhook_url_ref``) that the provider seam resolves at send time.  The
 URL never reaches a log record, an exception message that escapes, or a
 ``DeliveryResult``; failures are logged as the exception TYPE only.  The URL
 must be ``https`` and redirects are never followed, so a 30x can neither
@@ -21,12 +22,14 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.credentials import CredentialRef, resolve
 from pipeline.notification_channels import (
     ChannelConfigError,
     DeliveryResult,
     DeliveryStatus,
     register_channel_type,
     reject_inline_secrets,
+    require_credential_ref,
 )
 from pipeline.notification_render import render_notification
 
@@ -34,7 +37,9 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT_CHARS = 3000
 TRUNCATION_MARKER = "[... truncated ...]"
-_CHANNEL_KEYS = frozenset({"type", "webhook_url_env", "timeout"})
+_CHANNEL_KEYS = frozenset(
+    {"type", "webhook_url_env", "webhook_url_ref", "timeout"}
+)
 _ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 _PARTIAL_ENTITY_TAIL = ("&amp", "&lt", "&gt", "&am", "&l", "&g", "&a", "&")
 
@@ -46,6 +51,16 @@ class _RedirectBlocked(Exception):
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise _RedirectBlocked
+
+
+def _secret_text(secret: Any) -> str:
+    """The ONE place a Slack webhook credential is revealed for injection.
+
+    A dispatched child is prompt-injectable, so the raw value must not travel:
+    everything else treats the ``SecretValue`` as opaque. A later egress proxy
+    replaces this function to hand out a placeholder instead.
+    """
+    return secret.reveal() if secret is not None else ""
 
 
 def _build_opener() -> urllib.request.OpenerDirector:
@@ -105,10 +120,18 @@ class SlackChannelType:
 
     type_name = "slack"
 
-    def __init__(self, name: str, *, webhook_url_env: str, timeout: float) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        webhook_url_env: str | None,
+        webhook_url_ref: str | None,
+        timeout: float,
+    ) -> None:
         self.name = name
         self.outbox_suffix = f".outbox.{name}.jsonl"
         self._webhook_url_env = webhook_url_env
+        self._webhook_url_ref = webhook_url_ref
         self._timeout = timeout
 
     @classmethod
@@ -120,7 +143,21 @@ class SlackChannelType:
             if key not in _CHANNEL_KEYS:
                 raise ChannelConfigError(f"channel {instance_name!r}: unknown setting {key!r}")
         env_name = settings.get("webhook_url_env")
-        if not isinstance(env_name, str) or not env_name:
+        # ``None`` means "not given"; an empty string is still an error, so the
+        # existing message and behaviour for a blank env name are preserved.
+        if env_name is not None and (not isinstance(env_name, str) or not env_name):
+            raise ChannelConfigError(
+                f"channel {instance_name!r}: setting 'webhook_url_env' must name an env var"
+            )
+        ref_name = require_credential_ref(
+            instance_name, "webhook_url_ref", settings.get("webhook_url_ref")
+        )
+        if env_name is not None and ref_name is not None:
+            raise ChannelConfigError(
+                f"channel {instance_name!r}: settings webhook_url_env and "
+                "webhook_url_ref are mutually exclusive"
+            )
+        if env_name is None and ref_name is None:
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting 'webhook_url_env' must name an env var"
             )
@@ -135,7 +172,12 @@ class SlackChannelType:
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting 'timeout' must be a positive number"
             )
-        return cls(instance_name, webhook_url_env=env_name, timeout=float(timeout))
+        return cls(
+            instance_name,
+            webhook_url_env=env_name,
+            webhook_url_ref=ref_name,
+            timeout=float(timeout),
+        )
 
     def send(self, record: dict) -> DeliveryResult:
         try:
@@ -162,13 +204,20 @@ class SlackChannelType:
             )
             return DeliveryResult(DeliveryStatus.REJECTED, reason="malformed_record")
 
-        url = os.environ.get(self._webhook_url_env, "").strip()
+        if self._webhook_url_ref is not None:
+            url = _secret_text(
+                resolve(CredentialRef("notification", self._webhook_url_ref))
+            ).strip()
+            source = self._webhook_url_ref
+        else:
+            url = os.environ.get(self._webhook_url_env, "").strip()
+            source = self._webhook_url_env
         if not url or not _is_valid_webhook_url(url):
-            # Name the variable only: its value is the credential.
+            # Name the variable or reference only: its value is the credential.
             log.error(
                 "slack channel misconfigured: channel=%s env_var=%s must hold an https URL",
                 self.name,
-                self._webhook_url_env,
+                source,
             )
             return DeliveryResult(DeliveryStatus.RETRY, reason="misconfigured")
 

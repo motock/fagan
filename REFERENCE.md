@@ -1933,6 +1933,8 @@ and — only when it is `nats` — the broker's delivery state under
 subject). It is cached for 30 seconds, and an unreachable broker reports
 `{"reachable": false}` instead of failing the health check.
 
+If the broker cannot be reached when the scheduler daemon starts, the daemon keeps retrying in the background (after 1 s, doubling to a 30 s ceiling) and starts the durable consumers as soon as the broker answers; events published in the meantime wait in the stream. A failed attempt is not logged: the daemon logs one warning when it first fails to connect and one info line when the consumers start.
+
 **Delivery contract** — the authoritative statement is
 [ADR 0010](docs/adr/0010-event-delivery-contract-and-nats-jetstream.md).
 Delivery is **at-least-once**: a message is acked only after every handler

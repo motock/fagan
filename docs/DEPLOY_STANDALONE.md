@@ -406,7 +406,10 @@ breaks when the value is wrong.
 | `PIPELINE_MODEL_REGISTRY_PATH` | Which model registry the server reads | `/app/model_registry.local.json` in the container, a read-only bind of `deploy/standalone/model_registry.json` (seeded once by the installer and kept on re-runs) | `/app/model_registry.local.json` | The registry resolves the model for each role. Point it at a file whose `roles.dispatch` entry names a model you can actually reach. |
 | `OLLAMA_ENDPOINT` | Base URL of a local model server | `http://host.docker.internal:11434` | `http://host.docker.internal:11434` | Passed to the container as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`. `host.docker.internal` resolves on Linux too, via the `host-gateway` extra host. |
 | `PIPELINE_CLI_CALLBACK_PORT` | Local port a CLI client's browser flow returns to | `33418` | `33418` | Substituted into the realm's `pipeline-cli` redirect URI as `http://localhost:<port>/callback`, so it must match `--callback-port` on the client (§5). Change it and the realm must be re-imported (§8). |
-| `PIPELINE_PLAN_APPROVAL` | Gate that requires a plan to be approved before it can be dispatched | `1` (fresh install) | `PIPELINE_PLAN_APPROVAL=0` | An unrecognised value makes ingest fail closed with an error naming the variable |
+| `PIPELINE_PLAN_APPROVAL` | Gate that requires a plan to be approved before it can be dispatched | `1` (fresh install) | `PIPELINE_PLAN_APPROVAL=0` | An unrecognised value makes ingest fail closed with an error naming the variable (§6) |
+| `PIPELINE_DASHBOARD_PUBLIC_URL` | Origin the review link in an approval notification is built from | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}` | `https://pipeline.example.com:8443` | No trailing slash and no path: it is an origin, and the path comes from the next row (§6) |
+| `PIPELINE_APPROVAL_LINK_PATH` | Path appended to that origin in an approval notification's review link | `/` | `/ext/approvals/` | A plain path only — no scheme, query or `..`. An invalid value falls back to `/` rather than failing a notification |
+| `PIPELINE_DASHBOARD_PLUGINS` | Dashboard extensions to mount, in `module:attr` form | unset — no extension is mounted, and no approval page exists | `approvals_app:plugin` | Comma-separated. A bad entry stops dashboard startup instead of being skipped, and whoever sets it runs code in the server (§6) |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |
 
 One row here is rendered rather than authored: the installer writes
@@ -667,6 +670,97 @@ error that names the variable.
 If you are enabling the gate on a server that already has plans, see the
 Upgrading paragraph in §7 — each existing plan has to be re-ingested and
 approved once.
+
+### Approving plans
+
+With the gate on, an ingested plan is written `pending_approval` and cannot be
+dispatched until someone approves that exact authored content. The gate is
+enabled with `PIPELINE_PLAN_APPROVAL=on`. The standalone compose file resolves
+the variable as `${PIPELINE_PLAN_APPROVAL-1}`, so a **missing line means on**:
+an `up -d` against a `.env` that never had the line — fresh or upgraded alike —
+turns the gate on. It is off only when the file carries an explicit off value —
+`0`, `off`, `false` or empty — either written by `install.sh` (which keeps an
+existing install's gate off that way) or added by you. To set it yourself, add
+the line to `deploy/standalone/.env` and recreate the container, or set it in a
+compose override the way §4 shows override files being layered:
+
+```yaml
+services:
+  pipeline:
+    environment:
+      PIPELINE_PLAN_APPROVAL: "on"
+```
+
+A `.env` line is easier; use an override only when the value must live outside
+the env file.
+
+Turning the gate on does **not** gate plans that were already ingested: those
+carry no approval record, so they stop dispatching until each is re-ingested and
+approved once. §7 ("Plan approval on an existing server") gives that sequence —
+follow it before enabling the gate on a server that has plans.
+
+**Who may approve.** The plan's owner (the principal who first ingested it), any
+subject listed in the plan's top-level `delegates`, and the local operator. A
+team lead who is not the owner must be *named in the plan's `delegates`*: holding
+the `approver` role on its own grants no approval right. A `system:` principal
+such as the scheduler never may, and a decision is refused for a plan whose
+digest no longer matches the content shown.
+
+**The three events.** Notifications fire on:
+
+| Event | Fires when |
+| --- | --- |
+| `plan_pending_approval` | an ingest (or a role-config change) puts a plan in the approval queue |
+| `plan_approved` | a decision approves the plan's current digest |
+| `plan_changes_requested` | a decision asks for changes instead of approving |
+
+Each notice carries identifiers (the plan name and the content digest), the story
+counts with a risk summary, a warning count, and a review link — never the plan's
+brief text, filesystem paths or any secret. The link is built from
+`PIPELINE_DASHBOARD_PUBLIC_URL` (the compose file sets it to
+`https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}`) and
+`PIPELINE_APPROVAL_LINK_PATH` (default `/`). The link never approves anything: it
+opens whatever review UI you run at that path, and the decision is still made
+there or through the tool or API below.
+
+**Core ships no browser approval page.** Approve a plan with the MCP
+`approve_plan` tool, or over the digest-bound JSON API:
+
+1. `GET /api/plans/{plan}/review` — the payload you review: the stored approval
+   record, the plan's *current* content digest, and the projection of its stories
+   and warnings.
+2. `POST /api/plans/{plan}/review/approve` or
+   `POST /api/plans/{plan}/review/request-changes` — send the digest you read
+   (`{"digest": "..."}`, plus a non-empty `"reason"` when requesting changes).
+
+A decision made against any other digest is refused with **409** — the plan
+changed under you, so re-read and decide again. Both POSTs require a dashboard
+login (a verified OIDC session); a shared-key or local-operator caller gets a
+fixed "dashboard approval requires login" refusal and should use the MCP tool.
+
+If you want a review UI, mount one through `PIPELINE_DASHBOARD_PLUGINS`: an
+extension's routes are served under `/api/ext` (authenticated), and its static
+pages under `/ext/<name>`. **Static files are served without authentication**, so
+an extension's HTML/JS/CSS must hold no secrets — put tokens and data in its
+`/api/ext` routes and let the page fetch them. Then point the notification link
+at that page with `PIPELINE_APPROVAL_LINK_PATH`.
+
+Route the notices per plan in `notification.json`. A route is one element of the
+file's top-level `routes` array; the example below shows the element, so put it
+inside that array (after the installer-generated ones, before the catch-all).
+The first matching route wins, so put a specific route **before** any catch-all
+`"plan": "*"` route:
+
+```json
+{"name": "approvals", "match": {"plan": "team-a-*"},
+ "deliver": [{"events": ["plan_pending_approval"], "to": ["team-a-lead-mail"]},
+             {"events": ["plan_approved", "plan_changes_requested"], "to": ["team-a-slack"]}]}
+```
+
+The mistake to avoid is leaving the catch-all first: every approval notice then
+goes to the catch-all's channels and the team lead never hears about the plan.
+The second is pointing `PIPELINE_APPROVAL_LINK_PATH` at a page that does not
+exist — the link is appended as-is, so a wrong path is a 404 in every notice.
 
 ## 7. Upgrading, backup and token lifespan
 

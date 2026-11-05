@@ -1,17 +1,32 @@
 """Deny-by-default authorization policy for the tenancy seam (ADR 0009).
 
-This is the authorization half of the ADR 0009 seam: a pure, stateless policy
-over a verified :class:`app.identity.Principal`. It is inert in this plan —
-nothing calls it yet — so it is written to be strictly deny-by-default and to
-fail closed, because the enforcement plan will trust it as written.
+This is the authorization half of the ADR 0009 seam: a policy over a verified
+:class:`app.identity.Principal`. It is written to be strictly deny-by-default
+and to fail closed, because the enforcement path trusts it as written.
 
-It imports ``app.identity`` only: never ``app.auth`` (an adapter concern) and
-never ``pipeline.*`` (the service layer that will call it).
+Trust boundary, stated honestly: the authorizer is selected by the
+operator-controlled ``PIPELINE_AUTHORIZER_PLUGIN=module:attr`` (see
+:mod:`app.plugin_loader`), so whoever can set that variable chooses the code
+that defines every ADR 0009 allow/deny decision — the same "setting the
+variable is code execution in the orchestrator" boundary the plugin loader
+documents, extended to the policy itself. The resolved authorizer may be an
+arbitrary operator-supplied, stateful object, not just :class:`LocalPolicy`.
+Unlike the other seams, this one refuses to load a plugin unless
+``PIPELINE_PLUGIN_MODULES`` is set: the module allowlist is required here, not
+merely recommended.
+
+Once an operator-supplied authorizer has been built it is kept for the life of
+the process, so a later write to ``PIPELINE_AUTHORIZER_PLUGIN`` (or clearing it)
+cannot swap or downgrade a running process's decisions.
+It imports ``app.identity`` and ``app.plugin_loader`` only: never ``app.auth``
+(an adapter concern) and never ``pipeline.*`` (the service layer that calls it).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -23,6 +38,13 @@ from app.identity import (
     SYSTEM_SUBJECT_PREFIX,
     SYSTEM_WORKER,
     Principal,
+)
+from app.plugin_loader import (
+    ALLOWLIST_ENV,
+    PluginError,
+    load_plugin,
+    plugin_spec,
+    require_methods,
 )
 
 logger = logging.getLogger(__name__)
@@ -230,9 +252,68 @@ class LocalPolicy:
         )
 
 
+#: The operator-controlled variable that selects the authorizer seam.
+AUTHORIZER_PLUGIN_ENV = "PIPELINE_AUTHORIZER_PLUGIN"
+
+#: Built plugin authorizers, keyed by their spec. This keeps a stateful
+#: authorizer (for example one holding a database connection) from being
+#: rebuilt on every authorization check. Entries are written only after the
+#: object passed :func:`app.plugin_loader.require_methods`, so a rejected
+#: object is never handed to a later decision.
+_PLUGIN_AUTHORIZERS: dict[str, Authorizer] = {}
+#: Re-entrant: a plugin factory may itself ask for the authorizer while it is built.
+_AUTHORIZER_LOCK = threading.RLock()
+
+
 def default_authorizer() -> Authorizer:
-    """Return the authorizer for this deployment."""
-    return LocalPolicy()
+    """Return the authorizer for this deployment.
+
+    ``PIPELINE_AUTHORIZER_PLUGIN=module:attr`` selects an operator-supplied
+    authorizer in place of :class:`LocalPolicy`; a bad spec raises
+    :class:`~app.plugin_loader.PluginError` rather than falling back, because
+    silently keeping ``LocalPolicy`` would change who is allowed. The first
+    plugin authorizer built wins for the life of the process.
+    """
+    with _AUTHORIZER_LOCK:
+        for live in _PLUGIN_AUTHORIZERS.values():
+            return live
+        spec = plugin_spec("authorizer")
+        if spec is None:
+            logger.warning(
+                "no plugin configured for a security-sensitive seam",
+                extra={
+                    "plugin_seam": "authorizer",
+                    "plugin_env": AUTHORIZER_PLUGIN_ENV,
+                },
+            )
+            return LocalPolicy()
+        if not os.environ.get(ALLOWLIST_ENV, "").strip():
+            # Deny by default for this seam alone: the authorizer decides every
+            # ADR 0009 action, so a tree-writer must not be able to install one
+            # without the loader's module allowlist. Raise before importing it.
+            raise PluginError(f"{AUTHORIZER_PLUGIN_ENV} requires {ALLOWLIST_ENV}")
+        factory = load_plugin("authorizer")
+        if factory is None:
+            # Unreachable outside monkeypatch: both reads take the same
+            # stripped variable, so a non-None spec cannot yield no factory.
+            # Kept as defence in depth instead of calling ``None``.
+            raise PluginError(
+                f"{AUTHORIZER_PLUGIN_ENV} is set but no authorizer plugin "
+                "factory could be resolved"
+            )
+        built = factory()
+        # Validate before caching: an unvalidated object must never be handed
+        # back to a later decision (that would run with no policy at all).
+        require_methods(built, ("allow",), "authorizer")
+        _PLUGIN_AUTHORIZERS[spec] = built
+        logger.info(
+            "authorizer plugin loaded",
+            extra={
+                "plugin_seam": "authorizer",
+                "plugin_module": spec.partition(":")[0],
+            },
+        )
+        return built
 
 
 def _action_label(action: object) -> str:
@@ -287,12 +368,18 @@ def is_allowed(
     """Ask ``authorizer`` and fail closed on any error.
 
     This is the wrapper every future call site uses: a policy that raises must
-    land denied, never propagate. The warning names the action and the
-    principal subject only — never a credential, token, resource or the
-    exception text.
+    land denied, never propagate. Only the literal ``True`` authorizes, because
+    the authorizer may now be arbitrary operator-supplied code and
+    ``pipeline.authorization.authorize`` grades the answer with ``if allowed:``
+    — a denial string, ``{"ok": False}``, ``1`` or an un-awaited coroutine are
+    all truthy and would otherwise be read as ALLOW. ``bool(result)`` is not
+    enough for the same reason, so the check is identity against ``True``.
+
+    The warnings name the action and the principal subject only — never a
+    credential, token, resource or the exception/return value.
     """
     try:
-        return authorizer.allow(principal, action, resource)
+        result = authorizer.allow(principal, action, resource)
     except Exception:  # noqa: BLE001 - fail closed: any policy error lands denied
         logger.warning(
             "authorization policy failed; denying action=%s principal=%s",
@@ -300,3 +387,11 @@ def is_allowed(
             getattr(principal, "subject", None),
         )
         return False
+    if result is True:
+        return True
+    logger.warning(
+        "authorization policy returned a non-boolean result; denying action=%s principal=%s",
+        _action_label(action),
+        getattr(principal, "subject", None),
+    )
+    return False

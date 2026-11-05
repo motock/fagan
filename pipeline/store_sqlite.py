@@ -24,6 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.store import build_store
+from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
+    UnknownNamespaceError,
+    validate_namespace,
+    validate_plan_name,
+    validate_story_key,
+)
 
 # How long ``transaction()`` keeps retrying a contended write lock before it
 # gives up and yields ``False``. Bounded on purpose: the ``Store`` contract is
@@ -54,6 +61,11 @@ _SCHEMA = (
     "manifest_json TEXT NOT NULL"
     ")"
 )
+
+# The optional progress fields the file store fills in on every journal entry
+# it serves. The record view omits them when the writer never set them, so a
+# record read back is the record that was written.
+_JOURNAL_OPTIONAL_FIELDS = ("step", "summary", "next_hint")
 
 
 class SqliteStore:
@@ -133,6 +145,10 @@ class SqliteStore:
         """Close the connection. Safe to call once per store."""
         with self._guard:
             self._conn.close()
+
+    def records(self) -> SqliteRecords:
+        """ADR 0012 namespaced record view"""
+        return SqliteRecords(self)
 
     # -- manifests: the database is the record -----------------------------
     def manifest_path(self, plan_name: str) -> Path:
@@ -407,3 +423,93 @@ class SqliteStore:
 
     def set_active_workspace(self, path: str | None) -> None:
         self._files.set_active_workspace(path)
+
+
+class SqliteRecords:
+    """The namespaced record view of a :class:`SqliteStore` (ADR 0012 stage A).
+
+    Every operation is a view of a legacy ``SqliteStore`` call, so the record
+    API and the legacy API can never disagree about what is stored. Stage A
+    serves the single namespace ``'default'``: any other valid namespace is
+    refused before the store is touched, and an invalid key is rejected before
+    anything is written.
+    """
+
+    def __init__(self, store: SqliteStore):
+        self._store = store
+
+    def _namespace(self, namespace: str) -> None:
+        """Validate ``namespace`` and refuse anything but ``'default'``."""
+        validate_namespace(namespace)
+        if namespace != DEFAULT_NAMESPACE:
+            raise UnknownNamespaceError('unknown namespace')
+
+    def get_manifest(self, namespace: str, plan_name: str) -> dict | None:
+        """Return the plan's manifest, or ``None`` when there is none."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store.get_manifest_or_none(plan_name)
+
+    def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None:
+        """Store ``manifest`` as the whole document for ``plan_name``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(manifest, dict):
+            raise TypeError('manifest must be a dict')
+        # Serialise before touching storage: a manifest that cannot be stored
+        # must leave no trace behind.
+        json.dumps(manifest)
+        self._store.save_manifest(plan_name, manifest)
+
+    def list_plans(self, namespace: str) -> list[str]:
+        """Return the sorted plan names the store records."""
+        self._namespace(namespace)
+        return self._store.list_manifests()
+
+    def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:
+        """Return the decision records for ``plan_name``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store.get_decisions(plan_name)
+
+    def append_decision(self, namespace: str, plan_name: str, record: dict) -> None:
+        """Append one decision record to ``plan_name``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        self._store.append_decision(plan_name, record)
+
+    def get_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> list[dict]:
+        """Return a story's journal entries, in the order they were written.
+
+        The file store normalizes every entry with the optional progress fields
+        (``step``, ``summary``, ``next_hint``) present and ``None`` when the
+        writer gave none; the record view omits the fields a record never had,
+        so a record read back is the record that was written.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        _available, entries = self._store.get_journal(plan_name, story_key)
+        return [
+            {
+                key: value
+                for key, value in entry.items()
+                if value is not None or key not in _JOURNAL_OPTIONAL_FIELDS
+            }
+            for entry in entries
+        ]
+
+    def append_journal(
+        self, namespace: str, plan_name: str, story_key: str, record: dict
+    ) -> None:
+        """Append one journal record for ``story_key``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        self._store.append_journal(plan_name, story_key, record)

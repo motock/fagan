@@ -26,6 +26,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0010](0010-event-delivery-contract-and-nats-jetstream.md) | Events have an at-least-once delivery contract; NATS JetStream is the default broker | Accepted (rule 6 superseded by 0011) |
 | [0011](0011-scheduler-scale-out-leased-plan-advancement.md) | The scheduler advances plans as leased work items and runs heavy work as detached jobs | Accepted |
 | [0012](0012-store-contract-v2.md) | The Store holds namespaced records, and the file layout is one implementation of it | Proposed |
-| [0013](0013-operator-commands-bounded-compare-and-set.md) | Operator commands wait a bounded time and compare-and-set the manifest revision, under a (namespace, plan) lock | Proposed |
+| [0013](0013-plan-commands-and-lock-scope.md) | Operator commands wait a bounded time and compare-and-set the manifest revision, under a (namespace, plan) lock | Proposed |
 
 See [`template.md`](template.md) when adding one.

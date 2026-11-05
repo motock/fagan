@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,

@@ -27,6 +27,11 @@ SUBJECT_LABELS = {
     "merge_conflict_rework": "merge rework",
     "usage_paused": "usage paused",
     "usage_resumed": "usage resumed",
+    # Plan-approval events are plan-level: they carry the plan's name and
+    # never a story key, so none of them belongs in STORY_LEVEL_EVENTS.
+    "plan_pending_approval": "plan awaiting approval",
+    "plan_approved": "plan approved",
+    "plan_changes_requested": "plan changes requested",
 }
 
 # Only these events name a single story; every other labelled event is

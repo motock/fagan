@@ -28,6 +28,13 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
+from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
+    UnknownNamespaceError,
+    validate_namespace,
+    validate_plan_name,
+    validate_story_key,
+)
 
 __all__ = ["FileStore", "Store", "_TransactionLock"]
 
@@ -39,6 +46,9 @@ WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 _plan_lock = _ServerRef("_plan_lock")
 _append_decision = _ServerRef("_append_decision")
 _append_journal = _ServerRef("_append_journal")
+
+# Display-only keys the legacy journal reader adds to every entry it returns.
+_JOURNAL_DISPLAY_DEFAULTS = ("step", "summary", "next_hint")
 
 
 class Store(Protocol):
@@ -401,6 +411,101 @@ class FileStore:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+
+    def records(self) -> "FileRecords":
+        """Return the namespaced record view of this store (ADR 0012)."""
+        return FileRecords(self)
+
+
+class FileRecords:
+    """The namespaced record view over one :class:`FileStore` (ADR 0012).
+
+    Every operation delegates to the legacy ``FileStore`` methods, so the
+    record view and the legacy view always see the same single copy of a
+    record.  Namespaces are opaque keys: this implementation serves
+    :data:`DEFAULT_NAMESPACE` only and refuses any other namespace without
+    touching storage.
+    """
+
+    def __init__(self, store: FileStore) -> None:
+        self._store = store
+
+    def _refuse_other_namespace(self, namespace: str) -> None:
+        if namespace != DEFAULT_NAMESPACE:
+            raise UnknownNamespaceError('unknown namespace')
+
+    # -- manifests -----------------------------------------------------
+    def get_manifest(self, namespace: str, plan_name: str) -> dict | None:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        return self._store.get_manifest_or_none(plan_name)
+
+    def put_manifest(
+        self, namespace: str, plan_name: str, manifest: dict
+    ) -> None:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(manifest, dict):
+            raise TypeError('manifest must be a dict')
+        self._store.save_manifest(plan_name, manifest)
+
+    # -- plan listing --------------------------------------------------
+    def list_plans(self, namespace: str) -> list[str]:
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        return sorted(self._store.list_manifests())
+
+    # -- decisions -----------------------------------------------------
+    def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        return self._store.get_decisions(plan_name)
+
+    def append_decision(
+        self, namespace: str, plan_name: str, record: dict
+    ) -> None:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        self._store.append_decision(plan_name, record)
+
+    # -- journals ------------------------------------------------------
+    def get_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> list[dict]:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        self._refuse_other_namespace(namespace)
+        _available, records = self._store.get_journal(plan_name, story_key)
+        # The legacy reader decorates every entry with display-only defaults
+        # for the dashboard.  A record store hands back the records it was
+        # given, so drop those defaults when the stored record did not carry
+        # them (the legacy reader leaves a real value untouched).
+        return [
+            {
+                key: value
+                for key, value in record.items()
+                if not (key in _JOURNAL_DISPLAY_DEFAULTS and value is None)
+            }
+            for record in records
+        ]
+
+    def append_journal(
+        self, namespace: str, plan_name: str, story_key: str, record: dict
+    ) -> None:
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        self._store.append_journal(plan_name, story_key, record)
 
 
 STORE_INVALID = "invalid"

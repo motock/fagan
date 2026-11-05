@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, chat, oidc_login, role_registry
+from app import api_contract, auth, chat, oidc_login, role_registry
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -138,7 +138,7 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 # server or a loopback alias, so DNS rebinding cannot read the injected key.
 # A reverse proxy must forward the bound address as the upstream Host (nginx:
 # `proxy_set_header Host 127.0.0.1:8000;`); the default `$host` form gets 403.
-app = FastAPI(title="Agent Pipeline Dashboard")
+app = FastAPI(title="Agent Pipeline Dashboard", **api_contract.docs_kwargs())
 _service = PipelineService()
 
 # ADR 0009 identity seam: the one provider the dashboard resolves credentials

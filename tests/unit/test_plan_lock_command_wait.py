@@ -292,20 +292,37 @@ def test_patch_plan_reports_retry_hint_when_the_wait_expires(plan_dir, monkeypat
 
 
 # -- the SQLite store must honour the same contract ----------------------
+def _hold_sqlite_transaction(store):
+    """Hold ``store``'s write transaction in another thread until released."""
+    release = threading.Event()
+    holding = threading.Event()
+
+    def hold():
+        with store.transaction(PLAN, 0.0) as acquired:
+            assert acquired is True
+            holding.set()
+            release.wait(timeout=10)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert holding.wait(timeout=5)
+    return holder, release
+
+
 def test_sqlite_transaction_wait_zero_is_still_one_attempt(tmp_path):
     from pipeline.store_sqlite import SqliteStore
 
     store = SqliteStore(str(tmp_path / "plans.db"))
-    holder = threading.Thread(target=store._guard.acquire, daemon=True)
-    holder.start()
-    holder.join(timeout=5)
+    holder, release = _hold_sqlite_transaction(store)
     try:
         started = time.monotonic()
         with store.transaction(PLAN, 0.0) as acquired:
             assert acquired is False
         assert time.monotonic() - started < 0.5
     finally:
-        store._guard.release()
+        release.set()
+        holder.join(timeout=5)
+        assert not holder.is_alive()
 
 
 def test_sqlite_transaction_wait_acquires_after_the_holder_releases(tmp_path):

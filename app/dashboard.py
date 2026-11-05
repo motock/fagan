@@ -25,6 +25,7 @@ from app import (
     api_contract,
     auth,
     chat,
+    dashboard_cors,
     dashboard_schemas,
     dashboard_ui,
     oidc_login,
@@ -580,7 +581,6 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
     return {"ok": True, "record": record}
 
 
-
 app.get("/api/plans/{plan_name}")(get_plan)
 app.get("/api/plans/{plan_name}/stories/{story_key}/journal")(get_story_journal)
 app.get("/api/plans/{plan_name}/stories/{story_key}/log")(get_story_log)
@@ -845,7 +845,6 @@ def propose_worktree_patch_route(
             request.plan_name,
             request.story_key,
         )
-
     return record
 
 
@@ -991,8 +990,9 @@ _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
 
-# One decision, taken once: API-only mode registers neither route, so no
-# response can carry the shared-secret key.
+# Outermost: the last middleware added wins, so this follows every @app.middleware.
+dashboard_cors.install(app)
+# API-only mode registers neither UI route, so no response can carry the key.
 _dashboard_ui_enabled = dashboard_ui.ui_enabled()
 dashboard_ui.register_index(app, dashboard_index, _dashboard_ui_enabled)
 if _dashboard_ui_enabled:

@@ -133,6 +133,21 @@ def plugin_spec(seam: str, environ: dict[str, str] | None = None) -> str | None:
     return spec or None
 
 
+def require_allowlist(seam: str, environ: dict[str, str] | None = None) -> None:
+    """Refuse ``seam``'s plugin unless the module allowlist is configured.
+
+    The identity and authorizer seams are the security-sensitive pair, so an
+    operator who can write the repository tree must not be able to install one
+    without ``PIPELINE_PLUGIN_MODULES``. The check runs before any import, so a
+    refused plugin is never even loaded: this function never imports anything
+    and never inspects the spec's module. A seam with no plugin selected passes,
+    which keeps the built-in defaults working with the variable unset.
+    """
+    env = os.environ if environ is None else environ
+    if plugin_spec(seam, env) is not None and not _allowlist(env):
+        raise PluginError(f"{plugin_env_name(seam)} requires {ALLOWLIST_ENV}")
+
+
 def _resolve(env_name: str, spec: str, environ=None) -> Callable:
     """Import ``spec`` and return its factory, or raise :class:`PluginError`.
 

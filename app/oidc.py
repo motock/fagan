@@ -38,7 +38,12 @@ from typing import Any
 import httpx
 import jwt
 
-from app.plugin_loader import PluginError, load_plugin, require_methods
+from app.plugin_loader import (
+    PluginError,
+    load_plugin,
+    require_allowlist,
+    require_methods,
+)
 
 from .identity import (
     ROLES,
@@ -695,6 +700,7 @@ def build_identity_provider(
     # only consults an OidcProvider and stays on its API-key path otherwise,
     # and app/oidc_login.py's browser login is OIDC-specific and untouched.
     try:
+        require_allowlist("identity", env)
         factory = load_plugin(
             "identity",
             env,

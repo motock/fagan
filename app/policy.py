@@ -25,7 +25,6 @@ It imports ``app.identity`` and ``app.plugin_loader`` only: never ``app.auth``
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass
 from enum import Enum
@@ -40,10 +39,10 @@ from app.identity import (
     Principal,
 )
 from app.plugin_loader import (
-    ALLOWLIST_ENV,
     PluginError,
     load_plugin,
     plugin_spec,
+    require_allowlist,
     require_methods,
 )
 
@@ -287,11 +286,10 @@ def default_authorizer() -> Authorizer:
                 },
             )
             return LocalPolicy()
-        if not os.environ.get(ALLOWLIST_ENV, "").strip():
-            # Deny by default for this seam alone: the authorizer decides every
-            # ADR 0009 action, so a tree-writer must not be able to install one
-            # without the loader's module allowlist. Raise before importing it.
-            raise PluginError(f"{AUTHORIZER_PLUGIN_ENV} requires {ALLOWLIST_ENV}")
+        # Deny by default for this seam: the authorizer decides every ADR 0009
+        # action, so a tree-writer must not be able to install one without the
+        # loader's module allowlist. Raises before anything is imported.
+        require_allowlist("authorizer")
         factory = load_plugin("authorizer")
         if factory is None:
             # Unreachable outside monkeypatch: both reads take the same

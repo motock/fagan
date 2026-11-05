@@ -7,6 +7,7 @@ pipeline.service, so tests patching pipeline.server still land.
 from typing import Any
 
 from pipeline import worktree_diff
+from pipeline.concurrency import command_lock_wait_seconds
 from pipeline.plan_approval import approval_enabled, reset_if_changed
 
 
@@ -20,11 +21,13 @@ def _set_story_status_impl(self, plan_name: str, story_key: str, status: str) ->
             f"must be one of {sorted(_VALID_STORY_STATUSES)}",
         }
 
-    with _store.transaction(plan_name) as acquired:
+    wait_seconds = command_lock_wait_seconds()
+    with _store.transaction(plan_name, wait_seconds) as acquired:
         if not acquired:
             return {
                 "ok": True,
                 "skipped": "locked",
+                "retry_after_seconds": wait_seconds,
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
         manifest = _store.get_manifest(plan_name)
@@ -97,11 +100,13 @@ def _patch_story_impl(
             '"<plan>:<story_key>" strings',
         }
 
-    with _store.transaction(plan_name) as acquired:
+    wait_seconds = command_lock_wait_seconds()
+    with _store.transaction(plan_name, wait_seconds) as acquired:
         if not acquired:
             return {
                 "ok": True,
                 "skipped": "locked",
+                "retry_after_seconds": wait_seconds,
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
         before = _store.get_manifest(plan_name).get("stories", {}).get(story_key)

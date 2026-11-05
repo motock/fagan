@@ -303,6 +303,7 @@ class PlanApprovalMixin:
             return {"ok": True, "skipped": "approval_disabled"}
 
         from .authorization import authorize
+        from .concurrency import command_lock_wait_seconds
 
         refusal = authorize(
             "plan:approve" if status == "approved" else "plan:reject",
@@ -311,9 +312,17 @@ class PlanApprovalMixin:
         if refusal is not None:
             return refusal
 
-        with _store.transaction(plan_name) as acquired:
+        # Operator command: wait a bounded time for a scheduler tick to let go
+        # of the plan lock instead of answering skipped:"locked" on the first
+        # attempt. The wait used is echoed back as the caller's back-off hint.
+        wait_seconds = command_lock_wait_seconds()
+        with _store.transaction(plan_name, wait_seconds) as acquired:
             if not acquired:
-                return {"ok": True, "skipped": "locked"}
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "retry_after_seconds": wait_seconds,
+                }
             if not _store.manifest_path(plan_name).exists():
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)

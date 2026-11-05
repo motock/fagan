@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
@@ -325,7 +327,7 @@ class SqliteStore:
             time.sleep(_BUSY_RETRY_S)
 
     @contextlib.contextmanager
-    def transaction(self, plan_name: str):
+    def transaction(self, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.
 
         Yields ``True`` when the transaction was acquired and ``False`` when it
@@ -336,10 +338,23 @@ class SqliteStore:
         raises. Re-entering from inside the block acquires the transaction
         already held, so nested call sites compose instead of deadlocking
         against themselves.
+
+        ``wait_seconds`` mirrors ``pipeline.store.Store.transaction``: the
+        default ``0.0`` is exactly one attempt with no sleeping (every
+        scheduler-internal caller). A positive budget retries the in-process
+        guard every ``PLAN_LOCK_RETRY_INTERVAL_SECONDS`` until the deadline
+        passes, then yields ``False``. The waiter holds nothing while it
+        sleeps, so two waiters cannot deadlock each other.
         """
-        if not self._guard.acquire(blocking=False):
-            yield False
-            return
+        if wait_seconds < 0 or not math.isfinite(wait_seconds):
+            wait_seconds = 0.0
+        deadline = time.monotonic() + wait_seconds
+        while not self._guard.acquire(blocking=False):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                yield False
+                return
+            time.sleep(min(PLAN_LOCK_RETRY_INTERVAL_SECONDS, remaining))
         try:
             if self._depth:
                 # Re-entered on the holding thread: the outer block owns the

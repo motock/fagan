@@ -192,7 +192,37 @@ def _reap_zombie_in_progress_stories() -> int:
 
 
 @contextmanager
-def _plan_lock(plan_name: str):
+def _plan_lock(plan_name: str, wait_seconds: float = 0.0):
+    """Bounded-wait wrapper around :func:`_plan_lock_once`.
+
+    ``wait_seconds=0`` (the default, used by every scheduler-internal caller)
+    is byte-identical to the historical behaviour: exactly one attempt, no
+    sleeping, ``False`` on contention. With a positive budget the first
+    attempt still happens immediately, then the attempt is retried every
+    ``PLAN_LOCK_RETRY_INTERVAL_SECONDS`` until the deadline passes.
+
+    Deadline and backoff live in locals: nothing survives the call, so the
+    next caller never inherits an expired deadline (which would fail on a
+    free lock) or a stale budget. A waiter holds no other plan lock while it
+    sleeps — ``_plan_lock_once`` closes its own fd on every failed attempt.
+    """
+    if wait_seconds < 0 or not math.isfinite(wait_seconds):
+        wait_seconds = 0.0
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        with _plan_lock_once(plan_name) as acquired:
+            if acquired:
+                yield True
+                return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            yield False
+            return
+        time.sleep(min(PLAN_LOCK_RETRY_INTERVAL_SECONDS, remaining))
+
+
+@contextmanager
+def _plan_lock_once(plan_name: str):
     """Exclusive, non-blocking lock scoped to one plan's mutations.
 
     Used by every tool that mutates the manifest or the worktree
@@ -314,6 +344,44 @@ _process_plan_holders_lock = threading.Lock()
 # window opening (observed ~1-10ms under pytest-xdist load), short enough
 # that a genuinely held intra-process lock still fails fast.
 _PLAN_LOCK_CONTENTION_GRACE_SECONDS = 0.05
+
+# How long an OPERATOR command (patch_story, set_story_status, interrupt_story,
+# approve_plan, reject_plan, patch_plan) keeps retrying for the plan lock
+# before answering skipped:"locked". The scheduler's own ticks never wait:
+# they pass wait_seconds=0 and keep today's fail-fast behaviour. Read from the
+# environment on EVERY call — never cached at import time — so an operator can
+# flip it between commands (and tests can vary it without a reload).
+COMMAND_LOCK_WAIT_ENV_VAR = "PIPELINE_COMMAND_LOCK_WAIT_SECONDS"
+DEFAULT_COMMAND_LOCK_WAIT_SECONDS = 30.0
+MAX_COMMAND_LOCK_WAIT_SECONDS = 120.0
+# Retry cadence while a waiter is inside its bounded wait. 30s of waiting is
+# 600 attempts; each failed attempt closes its own fd on the way out.
+# Each failed attempt also logs one INFO "plan lock contended" record, so a
+# full 30s wait can emit a few hundred of them; logging only the first failure
+# per wait is a known follow-up.
+PLAN_LOCK_RETRY_INTERVAL_SECONDS = 0.05
+
+
+def command_lock_wait_seconds() -> float:
+    """Resolve how long an operator command should wait for the plan lock.
+
+    ``0`` disables waiting entirely. Anything malformed, negative or
+    non-finite (``float("nan")`` would make every deadline comparison False and
+    hang the retry loop forever) falls back to the default; anything above the
+    cap is clamped. The environment is re-read per call on purpose.
+    """
+    raw = os.environ.get(COMMAND_LOCK_WAIT_ENV_VAR)
+    if raw is None:
+        return DEFAULT_COMMAND_LOCK_WAIT_SECONDS
+    try:
+        wait_seconds = float(raw.strip())
+    except (TypeError, ValueError):
+        return DEFAULT_COMMAND_LOCK_WAIT_SECONDS
+    if not math.isfinite(wait_seconds) or wait_seconds < 0:
+        return DEFAULT_COMMAND_LOCK_WAIT_SECONDS
+    if wait_seconds == 0:
+        return 0.0
+    return min(wait_seconds, MAX_COMMAND_LOCK_WAIT_SECONDS)
 
 
 def _contended_in_process(plan_name: str) -> bool:

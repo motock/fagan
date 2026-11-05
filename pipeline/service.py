@@ -676,11 +676,15 @@ class PipelineService(PlanApprovalMixin):
         if refusal is not None:
             return refusal
 
-        with _store.transaction(plan_name) as acquired:
+        from .concurrency import command_lock_wait_seconds
+
+        wait_seconds = command_lock_wait_seconds()
+        with _store.transaction(plan_name, wait_seconds) as acquired:
             if not acquired:
                 return {
                     "ok": True,
                     "skipped": "locked",
+                    "retry_after_seconds": wait_seconds,
                     "reason": "another dispatch/interrupt is in progress for this plan",
                 }
             manifest_path = _store.manifest_path(plan_name)

@@ -47,6 +47,7 @@ from app.dashboard_models import (
     StoryStatusBody,
     WorkspaceRequest,
 )
+from app.dashboard_mount import mount_routes
 from app.dashboard_refusal import raise_if_forbidden
 from app.dashboard_routes import (
     config_providers,
@@ -303,8 +304,6 @@ def _write_archived_plans(archived: set[str]) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-
-
 
 
 @app.get("/api/health")
@@ -992,6 +991,7 @@ app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")(checkpoint)
 # here, at import time, so the app refuses to start instead of half-enabling it.
 # Registered before the catch-all StaticFiles mount below, which would
 # otherwise swallow /auth/login and /auth/callback.
+mount_routes(app)
 _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)

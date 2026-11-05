@@ -81,6 +81,40 @@ def test_network_grade_capability_is_documented(reference: str) -> None:
     assert "network_grade" in reference
 
 
+def test_no_table_row_is_wrapped_across_lines(reference: str) -> None:
+    """GFM ends a table row at the newline: a wrapped row loses its last cell.
+
+    Guards the defect where the ``PIPELINE_IDENTITY_PROVIDER`` row was split
+    over three physical lines, truncating the table and spilling the
+    continuation into body text. A collapsed-text grep cannot see that, so this
+    check is line-based: a row line that does not close its final cell must be
+    followed by another row line.
+    """
+    lines = reference.splitlines()
+    wrapped = [
+        number
+        for number, (line, following) in enumerate(
+            zip(lines, lines[1:] + [""], strict=True), start=1
+        )
+        if line.startswith("|") and not line.endswith("|") and not following.startswith("|")
+    ]
+    assert not wrapped, f"REFERENCE.md table rows wrapped across lines: {wrapped}"
+
+
+def test_identity_provider_row_carries_both_plugin_and_builtin_note(
+    reference: str,
+) -> None:
+    rows = [
+        line
+        for line in reference.splitlines()
+        if line.startswith("| `PIPELINE_IDENTITY_PROVIDER` |")
+    ]
+    assert len(rows) == 1, "expected exactly one PIPELINE_IDENTITY_PROVIDER row"
+    row = rows[0]
+    assert row.endswith("|"), "the row must close its final cell on the same line"
+    assert "PIPELINE_IDENTITY_PLUGIN" in row
+
+
 @pytest.mark.parametrize("sentence", FALSIFIED_SENTENCES)
 def test_falsified_sentences_are_gone(reference: str, sentence: str) -> None:
     assert sentence not in _collapsed(reference), (

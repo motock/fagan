@@ -2466,9 +2466,7 @@ and the session cookie" section below.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which built-in identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` accepts a bearer token and, failing that, the browser login session cookie. An operator-supplied provider named by `PIPELINE_IDENTITY_PLUGIN` replaces this selection (see the "Plugins (operator-supplied adapters)"
-section); any other value raises at startup rather than silently downgrading
-authentication. |
+| `PIPELINE_IDENTITY_PROVIDER` | `shared-secret` | Which built-in identity provider authenticates `/api/` requests. `shared-secret` is the default and leaves today's behavior unchanged. `oidc` accepts a bearer token and, failing that, the browser login session cookie. An operator-supplied provider named by `PIPELINE_IDENTITY_PLUGIN` replaces this selection (see the "Plugins (operator-supplied adapters)" section); any other value raises at startup rather than silently downgrading authentication. |
 | `PIPELINE_OIDC_ISSUER` | *(required when `oidc`)* | The expected `iss` claim, compared against the configured value — never against a value taken from the token. Must not contain `#` (it joins the issuer and subject into one principal id). |
 | `PIPELINE_OIDC_AUDIENCE` | *(required when `oidc`)* | The expected `aud` claim, likewise from configuration only. |
 | `PIPELINE_OIDC_JWKS_URL` | *(required when `oidc`)* | Where the issuer publishes its signing keys. Must use `https://`. A host that resolves to a private or loopback address is refused unless `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is set. |

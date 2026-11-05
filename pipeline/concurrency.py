@@ -21,12 +21,19 @@ this module global and the bare-name reads below resolve at call time.
 
 import fcntl
 import json
+import logging
 import os
 import threading
 import time
 from contextlib import contextmanager
 
 from .parsers import _atomic_write_json
+
+# Same convention as the rest of the package (pipeline/advance_pool.py,
+# pipeline/service.py, ...): module logger named after the module, structured
+# fields via ``extra=``. Plan-lock records carry ONLY a plan name and timing
+# scalars — never story keys, summaries, paths or environment values.
+logger = logging.getLogger(__name__)
 
 # Reload-stability guard: modules import _ServerRef BY VALUE at import time
 # (pipeline/wedge_io.py: ``from .concurrency import _ServerRef``), and
@@ -250,6 +257,27 @@ def _plan_lock(plan_name: str):
             _held_plan_lock_fds()[plan_name] = fd
             with _process_plan_holders_lock:
                 _process_plan_holders.add(plan_name)
+            # Start the hold clock only on a REAL flock (never on the
+            # reentrant fast path above, and never on a failed acquire — a
+            # timestamp left behind by a failure would make the next
+            # successful hold report the failure's start time).
+            _plan_lock_timings()[plan_name] = {
+                "started": time.monotonic(),
+                "released_seconds": 0.0,
+                "released_windows": 0,
+            }
+        else:
+            # Exactly one record per failed attempt; no timing entry, no
+            # release record. cross_process comes from the process-wide
+            # holder registry, not the thread-local held set: another thread
+            # of THIS process holding the flock is not cross-process.
+            logger.info(
+                "plan lock contended",
+                extra={
+                    "plan": plan_name,
+                    "cross_process": not _contended_in_process(plan_name),
+                },
+            )
         try:
             yield acquired
         finally:
@@ -259,6 +287,7 @@ def _plan_lock(plan_name: str):
                 with _process_plan_holders_lock:
                     _process_plan_holders.discard(plan_name)
                 fcntl.flock(fd, fcntl.LOCK_UN)
+                _log_plan_lock_release(plan_name)
     finally:
         os.close(fd)
 
@@ -322,6 +351,69 @@ def _held_plan_lock_fds() -> dict[str, int]:
         fds = {}
         _plan_lock_state.fds = fds
     return fds
+
+
+def _plan_lock_timings() -> dict[str, dict]:
+    """Per-thread hold accounting for _plan_lock, keyed by plan name.
+
+    One entry per REAL flock this thread holds: ``started`` (a
+    ``time.monotonic()`` stamp taken at acquire), ``released_seconds`` (total
+    time spent inside _released_plan_lock windows for that hold) and
+    ``released_windows`` (how many such windows were opened). Never created
+    on the reentrant fast path or on a failed acquire, and popped when the
+    real flock is released, so a later hold cannot inherit a stale start.
+    """
+    timings = getattr(_plan_lock_state, "timings", None)
+    if timings is None:
+        timings = {}
+        _plan_lock_state.timings = timings
+    return timings
+
+
+def _plan_lock_slow_seconds() -> float:
+    """Hold threshold above which a release is also logged at INFO.
+
+    Read at call time (never at import) from
+    PIPELINE_PLAN_LOCK_SLOW_SECONDS; default 5. A missing, malformed or
+    non-positive value degrades to the default instead of raising — a broken
+    env var must not take down a tick, and a zero/negative threshold would
+    make every hold "slow". float() so a fractional value like "0.01" is
+    honoured.
+    """
+    raw = os.environ.get("PIPELINE_PLAN_LOCK_SLOW_SECONDS")
+    if raw is None:
+        return 5.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 5.0
+    if value <= 0:
+        return 5.0
+    return value
+
+
+def _log_plan_lock_release(plan_name: str) -> None:
+    """Emit the one DEBUG release record (plus INFO when the net hold is slow).
+
+    Net hold is ``held - released``: time spent inside _released_plan_lock
+    windows was not exclusivity the caller paid for, so it must not count
+    toward the slow threshold. The unrounded figures are compared, and the
+    entry is popped so the next hold starts from a fresh timestamp.
+    """
+    entry = _plan_lock_timings().pop(plan_name, None)
+    if entry is None:
+        return
+    held = time.monotonic() - entry["started"]
+    released = entry["released_seconds"]
+    payload = {
+        "plan": plan_name,
+        "held_seconds": round(held, 3),
+        "released_windows": entry["released_windows"],
+        "released_seconds": round(released, 3),
+    }
+    logger.debug("plan lock released", extra=payload)
+    if held - released >= _plan_lock_slow_seconds():
+        logger.info("plan lock released", extra=payload)
 
 
 class PlanLockReacquireTimeout(RuntimeError):
@@ -408,9 +500,18 @@ def _released_plan_lock(plan_name: str):
     # never claim a lock this thread has already released (fail-open).
     held.discard(plan_name)
     fcntl.flock(fd, fcntl.LOCK_UN)
+    # Credit the window to this thread's hold: the DEBUG/INFO release record
+    # subtracts it, so a slow phase inside the window does not make the hold
+    # look slow. Recorded in the finally so a raising body still counts.
+    opened = time.monotonic()
     try:
         yield
     finally:
+        delta = time.monotonic() - opened
+        entry = _plan_lock_timings().get(plan_name)
+        if entry is not None:
+            entry["released_seconds"] += delta
+            entry["released_windows"] += 1
         # Bounded blocking re-acquire on the SAME fd: the open-file
         # description is ours, so this can never conflict with our own
         # lock — no self-deadlock. monotonic(), not time(): a wall-clock

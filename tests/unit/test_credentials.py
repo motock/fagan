@@ -217,9 +217,11 @@ def test_credential_ref_rejects_wrong_types_as_credential_error(ref_kwargs):
 
 
 def test_env_provider_reads_the_named_environment_variable():
-    provider = EnvFileProvider({"MY_TENANT_TOKEN": f"  {SECRET}  "})
+    provider = EnvFileProvider({"CLAUDE_CODE_OAUTH_TOKEN": f"  {SECRET}  "})
 
-    credential = provider.get(CredentialRef(purpose="env", name="MY_TENANT_TOKEN"))
+    credential = provider.get(
+        CredentialRef(purpose="env", name="CLAUDE_CODE_OAUTH_TOKEN")
+    )
 
     assert isinstance(credential, Credential)
     assert credential.value.reveal() == SECRET
@@ -251,8 +253,9 @@ def test_env_provider_reads_the_legacy_model_variables(purpose, name, variable):
         pytest.param({}, CredentialRef("model", "anthropic_api_key"), id="unset"),
         pytest.param({"OTHER_KEY": SECRET}, CredentialRef("model", "unknown_key"),
                      id="unknown-name"),
-        pytest.param({}, CredentialRef(purpose="env", name="MY_TENANT_TOKEN"),
-                     id="unset-env-variable"),
+        pytest.param({"GITHUB_TOKEN": SECRET},
+                     CredentialRef(purpose="env", name="GITHUB_TOKEN"),
+                     id="undeclared-env-credential"),
     ],
 )
 def test_env_provider_returns_none_when_not_configured(environ, ref):
@@ -481,16 +484,16 @@ def test_resolve_returns_a_secret_value_and_logs_one_info_record(
 
 
 def test_resolve_logs_the_env_variable_name_but_never_its_value(caplog):
-    ref = CredentialRef(purpose="env", name="MY_TENANT_TOKEN")
+    ref = CredentialRef(purpose="env", name="CLAUDE_CODE_OAUTH_TOKEN")
 
     with caplog.at_level(logging.INFO, logger="app.credentials"):
-        resolved = resolve(ref, environ={"MY_TENANT_TOKEN": SECRET})
+        resolved = resolve(ref, environ={"CLAUDE_CODE_OAUTH_TOKEN": SECRET})
 
     assert resolved is not None
     assert resolved.reveal() == SECRET
     records = _credential_records(caplog)
     assert len(records) == 1
-    assert records[0].credential_name == "MY_TENANT_TOKEN"
+    assert records[0].credential_name == "CLAUDE_CODE_OAUTH_TOKEN"
     assert records[0].credential_outcome == "ok"
     assert SECRET not in caplog.text
 
@@ -741,6 +744,146 @@ def test_resolve_propagates_a_plugin_error_without_environment_fallback(
         pytest.raises(PluginError) as excinfo,
     ):
         resolve(ref, environ={"PIPELINE_CREDENTIALS_PLUGIN": "not a spec"})
+
+    assert SECRET not in str(excinfo.value)
+    assert SECRET not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# regression tests for the review findings (fail-closed config, no plaintext)
+# ---------------------------------------------------------------------------
+
+
+def test_env_provider_refuses_an_undeclared_env_credential_name():
+    provider = EnvFileProvider(
+        {
+            "GITHUB_TOKEN": SECRET,
+            "AWS_SECRET_ACCESS_KEY": SECRET,
+            "PIPELINE_PLUGIN_MODULES": SECRET,
+        }
+    )
+
+    for name in ("GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "PIPELINE_PLUGIN_MODULES"):
+        assert provider.get(CredentialRef(purpose="env", name=name)) is None
+
+
+def test_env_provider_refuses_an_undeclared_ambient_variable(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", SECRET)
+
+    assert (
+        EnvFileProvider().get(CredentialRef(purpose="env", name="GITHUB_TOKEN"))
+        is None
+    )
+
+
+def test_credential_rejects_a_plain_string_value():
+    with pytest.raises(CredentialError) as excinfo:
+        Credential(value=SECRET)  # type: ignore[arg-type]
+
+    assert "value" in str(excinfo.value)
+    assert SECRET not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "expires_at",
+    [
+        pytest.param("soon", id="string"),
+        pytest.param(object(), id="object"),
+        pytest.param(True, id="bool"),
+        pytest.param(float("nan"), id="nan"),
+    ],
+)
+def test_credential_rejects_an_invalid_expiry(expires_at):
+    with pytest.raises(CredentialError) as excinfo:
+        Credential(SecretValue(SECRET), expires_at=expires_at)  # type: ignore[arg-type]
+
+    assert "expires_at" in str(excinfo.value)
+    assert SECRET not in str(excinfo.value)
+
+
+def test_resolve_rejects_a_result_whose_value_is_a_plain_string(
+    tmp_path, monkeypatch, caplog
+):
+    environ = _install_provider_plugin(
+        tmp_path,
+        monkeypatch,
+        "creds_plugin_forged_credential",
+        """
+        import app.credentials as creds
+
+        class Provider:
+            def get(self, ref):
+                forged = object.__new__(creds.Credential)
+                object.__setattr__(forged, 'value', 'sk-test-0001')
+                object.__setattr__(forged, 'expires_at', None)
+                return forged
+
+        def factory():
+            return Provider()
+        """,
+    )
+    ref = CredentialRef(purpose="model", name="anthropic_api_key")
+
+    with (
+        caplog.at_level(logging.INFO, logger="app.credentials"),
+        pytest.raises(CredentialError) as excinfo,
+    ):
+        resolve(ref, environ=environ)
+
+    assert str(excinfo.value) == "credential provider returned an invalid result"
+    assert SECRET not in str(excinfo.value)
+    assert SECRET not in caplog.text
+    records = _credential_records(caplog)
+    assert len(records) == 1
+    assert records[0].credential_outcome == "invalid"
+    assert records[0].levelno == logging.WARNING
+
+
+def test_credential_provider_refuses_the_plural_variable_without_fallback(
+    monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", SECRET)
+
+    with pytest.raises(PluginError) as excinfo:
+        credential_provider(
+            {"PIPELINE_CREDENTIALS_PLUGINS": "some_module_xyz:factory"}
+        )
+
+    assert SECRET not in str(excinfo.value)
+
+
+def test_credential_provider_refuses_both_plugin_variables(monkeypatch):
+    monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", SECRET)
+
+    with pytest.raises(PluginError):
+        credential_provider(
+            {
+                "PIPELINE_CREDENTIALS_PLUGIN": "some_module_xyz:factory",
+                "PIPELINE_CREDENTIALS_PLUGINS": "some_module_xyz:factory",
+            }
+        )
+
+
+def test_credential_provider_treats_a_blank_plural_variable_as_unset():
+    provider = credential_provider({"PIPELINE_CREDENTIALS_PLUGINS": "   "})
+
+    assert isinstance(provider, EnvFileProvider)
+
+
+def test_resolve_propagates_a_plural_plugin_error_without_fallback(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv("PIPELINE_ANTHROPIC_API_KEY", SECRET)
+    ref = CredentialRef(purpose="model", name="anthropic_api_key")
+
+    with (
+        caplog.at_level(logging.INFO, logger="app.credentials"),
+        pytest.raises(PluginError) as excinfo,
+    ):
+        resolve(
+            ref,
+            environ={"PIPELINE_CREDENTIALS_PLUGINS": "some_module_xyz:factory"},
+        )
 
     assert SECRET not in str(excinfo.value)
     assert SECRET not in caplog.text

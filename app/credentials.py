@@ -7,7 +7,14 @@ an operator-supplied module (for example an enterprise distribution reading
 tenant-scoped values from a secret store) can supply credentials without a core
 change per backend. Unset, :class:`EnvFileProvider` preserves the open-source
 behaviour exactly. A bad plugin raises and never falls back to ambient
-environment values.
+environment values: the plural ``PIPELINE_CREDENTIALS_PLUGINS`` is refused
+outright, because the seam has exactly one provider and silently ignoring a
+configured list would be a fallback.
+
+:class:`EnvFileProvider` only reads *declared* ``purpose="env"`` credential
+names (:data:`_ENV_CREDENTIAL_NAMES`), so the default provider is not a generic
+orchestrator environment-read primitive: adding a credential class is an
+explicit edit to this file, never a caller-chosen variable name.
 
 The dispatch rule: a dispatched agent child is prompt-injectable, so it must
 never receive a raw operator credential except through ONE named injection
@@ -19,13 +26,20 @@ function per credential class, and the raw string is obtained with
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.plugin_loader import load_plugin, plugin_spec, require_methods
+from app.plugin_loader import (
+    PluginError,
+    load_plugin,
+    plugin_env_name,
+    plugin_spec,
+    require_methods,
+)
 
 _LOGGER = logging.getLogger("app.credentials")
 
@@ -40,6 +54,19 @@ _LEGACY_ENV = {
     ("model", "anthropic_api_key"): "PIPELINE_ANTHROPIC_API_KEY",
     ("model", "claude_oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN",
 }
+
+# The only ``purpose="env"`` credential names the default provider will read.
+# This is an allowlist, not a naming convention: without it ``purpose="env"``
+# would let any caller (or plan/story content reflected into a ref) read an
+# arbitrary orchestrator variable such as ``GITHUB_TOKEN`` or
+# ``PIPELINE_PLUGIN_MODULES`` through the credential seam. Declaring a new
+# credential class is therefore a reviewed edit to this file.
+_ENV_CREDENTIAL_NAMES = frozenset(
+    {
+        "PIPELINE_ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+)
 
 _REDACTED = "<redacted>"
 
@@ -151,6 +178,20 @@ class Credential:
     value: SecretValue
     expires_at: float | None = None
 
+    def __post_init__(self) -> None:
+        # A plugin is arbitrary code: a plain string here would walk straight
+        # past every redaction in SecretValue, so the value is checked at the
+        # boundary too (``resolve`` re-checks the result defensively).
+        if not isinstance(self.value, SecretValue):
+            raise CredentialError("invalid credential: value")
+        if self.expires_at is not None and (
+            isinstance(self.expires_at, bool)
+            or not isinstance(self.expires_at, (int, float))
+            or not math.isfinite(self.expires_at)
+        ):
+            # Messages name the field only; a value could be a secret.
+            raise CredentialError("invalid credential: expires_at")
+
 
 class CredentialProvider(Protocol):
     """The seam an operator plugin implements."""
@@ -178,6 +219,11 @@ class EnvFileProvider:
         # open-source deployment is single-tenant, so there is nothing to
         # select between. An enterprise provider overrides this seam.
         if ref.purpose == "env":
+            # Only declared credential names may be read. This is the control
+            # that stops the seam becoming a generic environment-read
+            # primitive; an undeclared name is simply "not configured".
+            if ref.name not in _ENV_CREDENTIAL_NAMES:
+                return None
             variable = ref.name
         else:
             variable = _LEGACY_ENV.get((ref.purpose, ref.name))
@@ -189,6 +235,27 @@ class EnvFileProvider:
         return Credential(SecretValue(raw))
 
 
+def _credentials_plugin_spec(environ=None) -> str | None:
+    """Return the singular credentials plugin spec, refusing the plural var.
+
+    The seam has exactly one provider, so ``PIPELINE_CREDENTIALS_PLUGINS`` is a
+    configuration error rather than something to ignore: silently ignoring it
+    would fall back to :class:`EnvFileProvider` and ambient environment values,
+    which contradicts the loader's documented fail-closed rule.
+    """
+    env = os.environ if environ is None else environ
+    singular = plugin_env_name("credentials")
+    plural = singular + "S"
+    if str(env.get(plural, "")).strip():
+        if str(env.get(singular, "")).strip():
+            raise PluginError(f"set only one of {singular} and {plural}")
+        raise PluginError(
+            f"{plural} is not supported for the credentials seam; "
+            f"set {singular} instead"
+        )
+    return plugin_spec("credentials", env)
+
+
 def credential_provider(environ=None) -> CredentialProvider:
     """Return the configured provider: the operator plugin, else the default.
 
@@ -197,11 +264,16 @@ def credential_provider(environ=None) -> CredentialProvider:
     environment provider. A provider is cached per spec only after it has been
     validated.
     """
-    spec = plugin_spec("credentials", environ)
+    spec = _credentials_plugin_spec(environ)
     if spec is None:
         return EnvFileProvider(environ)
     if spec in _PLUGIN_PROVIDERS:
+        # Keyed by spec only: a spec fully determines the module and factory,
+        # so a second ``environ`` selecting the same spec selects the same
+        # provider (and must not construct a second one).
         return _PLUGIN_PROVIDERS[spec]
+    # ``load_plugin``'s ``required_methods`` validates the *factory*; the seam's
+    # protocol is on the provider the factory returns, so it is checked here.
     factory = load_plugin("credentials", environ)
     provider = factory()
     require_methods(provider, ("get",), "credentials")
@@ -258,7 +330,12 @@ def resolve(
     if result is None:
         _log_outcome(ref, "unset", logging.INFO)
         return None
-    if not isinstance(result, Credential):
+    if not isinstance(result, Credential) or not isinstance(
+        result.value, SecretValue
+    ):
+        # Defence in depth: ``Credential`` validates this too, but a plugin can
+        # defeat a constructor (subclass, ``object.__setattr__``) and a plain
+        # string escaping here would leak past every redaction.
         _log_outcome(ref, "invalid", logging.WARNING)
         raise CredentialError("credential provider returned an invalid result")
     if result.expires_at is not None:

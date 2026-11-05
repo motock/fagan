@@ -18,10 +18,18 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api_contract, auth, chat, dashboard_schemas, oidc_login, role_registry
+from app import (
+    api_contract,
+    auth,
+    chat,
+    dashboard_schemas,
+    dashboard_ui,
+    oidc_login,
+    role_registry,
+)
 from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved routes use them)
     _LOG_TAIL_CAP,
@@ -77,6 +85,12 @@ from app.dashboard_routes_story import (
     set_story_status_route,
     start_story_route,
 )
+
+# The index handler moved to app/dashboard_ui.py (which registers it only when
+# the UI is enabled); this re-export keeps ``app.dashboard.dashboard_index``
+# resolvable for the append-only placement check in
+# tests/unit/test_propose_patch_route.py.
+from app.dashboard_ui import build_index_handler as dashboard_index  # noqa: F401
 from app.identity import IdentityError
 from app.oidc import OidcProvider, build_identity_provider
 from app.story_replay import build_replay_events  # noqa: F401
@@ -723,23 +737,6 @@ def _degraded_liveness_report() -> dict[str, Any]:
 app.include_router(chat.chat_router, prefix="/api")
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def dashboard_index() -> HTMLResponse:
-    """Serve static/index.html with the shared-secret API key injected.
-
-    The browser cannot know the key on its own, so the server reads the
-    static file's text at request time and str.replace()s the
-    ``<!--PIPELINE_API_KEY-->`` placeholder with a small inline script that
-    publishes the key as ``window.__PIPELINE_API_KEY__``. The key store is
-    persistent: every request serves the same stored key, so already-open
-    dashboard tabs keep working. The key is never logged.
-    """
-    key = get_or_create_api_key()
-    html_text = (STATIC_DIR / "index.html").read_text()
-    script = f"<script>window.__PIPELINE_API_KEY__={json.dumps(key)};</script>"
-    return HTMLResponse(content=html_text.replace("<!--PIPELINE_API_KEY-->", script))
-
-
 # ---------------------------------------------------------------------------
 # WAP-9: propose a unified diff against a stuck story's worktree
 # ---------------------------------------------------------------------------
@@ -996,5 +993,7 @@ _oidc_login_config = oidc_login.load_config()
 if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+if dashboard_ui.ui_enabled():
+    dashboard_ui.register_index(app, STATIC_DIR, get_or_create_api_key)
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

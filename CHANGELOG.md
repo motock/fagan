@@ -9,6 +9,14 @@ in practice.
 
 ## [Unreleased]
 
+### Added
+
+- Operator-supplied adapters for the identity provider, authorizer, event bus,
+  forge, ticket provider and notification channels via
+  `PIPELINE_<SEAM>_PLUGIN=module:attr` (and `PIPELINE_CHANNEL_PLUGINS` for
+  registrars), off by default; the remote MCP transport now accepts any identity
+  provider declaring `network_grade = True` instead of only `OidcProvider`.
+
 ### Fixed
 
 - A notification channel that keeps failing now backs off - one minute,

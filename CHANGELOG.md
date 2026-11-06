@@ -58,6 +58,12 @@ in practice.
 
 ### Fixed
 
+- A durable event type is no longer handled twice: `NatsEventBus.publish` used
+  to run the publishing process's handlers for every acknowledged event, so a
+  `notification` was dispatched inline *and* replayed by its durable consumer,
+  sending every Slack and e-mail notice twice. A type listed in
+  `PIPELINE_NATS_DURABLE_TYPES` is now handled only by its durable consumer;
+  non-durable types keep their inline dispatch.
 - A skipped re-review now says why it was skipped and how to get out of it:
   `review_story`'s unchanged-since-last-review result carries `reason`,
   the truncated `head` and `last_reviewed` SHAs, the `stored_verdict` still in

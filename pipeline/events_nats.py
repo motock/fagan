@@ -17,13 +17,17 @@ Design notes
   created it: after ``fork()`` the child drops the inherited references and
   builds its own, because a thread does not survive ``fork`` while its
   ``asyncio`` loop object does (ADR 0010 consequences).
-* **Broker and subscribers both.** Like ``DispatchingJsonlEventBus``, this bus
-  persists *and* delivers: it publishes to JetStream and then dispatches the
-  event to its own subscribers. Selecting a bus that only persisted would stop
-  every handler in the publishing process from running. The one exception is a
+* **Broker and subscribers both, once per event.** Like
+  ``DispatchingJsonlEventBus``, this bus persists *and* delivers: it publishes
+  to JetStream and then dispatches the event to its own subscribers. Selecting
+  a bus that only persisted would stop every handler in the publishing process
+  from running. Two exceptions keep an event from being handled twice: a
   publish the stream reports as a duplicate -- that event was already
   delivered, so dispatching it again would double the work the message id
-  exists to suppress.
+  exists to suppress -- and a type in ``PIPELINE_NATS_DURABLE_TYPES``, which
+  its durable consumer serves from the stream. A publisher that believes a
+  type is consumed elsewhere stops doing the work inline; that is the promise
+  ``_parse_durable_types`` makes.
 * **No ack bookkeeping here.** ``nats-py`` tracks outstanding PubAcks on its own
   JetStream context. This module keeps only the loop/connection state and the
   handler registry; a per-publish map would go stale the moment a publish timed
@@ -303,8 +307,9 @@ class NatsEventBus(EventBus):
     def subscribe(self, event_type: str, handler) -> None:
         """Record *handler* for *event_type*.
 
-        Recorded handlers run in this process after a successful publish, and
-        are the same handlers the durable consumer process serves.
+        Recorded handlers run in this process after a successful publish of a
+        type no durable consumer serves. For a durable type the same handler is
+        run by the durable consumer instead, from the stream, exactly once.
         """
         self._handlers.setdefault(event_type, []).append(handler)
 
@@ -363,7 +368,13 @@ class NatsEventBus(EventBus):
                 f"publishing a {event_type} event to JetStream failed"
             ) from None
 
-        if not getattr(ack, "duplicate", False):
+        # A durable type is consumed by its durable consumer: dispatching it
+        # here as well would run the same handler twice, once in the
+        # publishing process and once from the stream (issue 9652184e).
+        if (
+            not getattr(ack, "duplicate", False)
+            and event_type not in self._durable_types
+        ):
             self._dispatch(event_type, event)
 
     def close(self) -> None:

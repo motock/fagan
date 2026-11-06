@@ -1951,7 +1951,7 @@ and — only when it is `nats` — the broker's delivery state under
 | `PIPELINE_NATS_MANAGE_STREAM` | unset (`0`) | `1` lets the bus create the stream when it is missing; otherwise a missing stream is refused before anything is published. |
 | `PIPELINE_NATS_CREDS_FILE` | unset | Optional NATS user-credentials file; it must be readable by its owner only (mode `600`). |
 | `PIPELINE_NATS_TLS_CA_FILE` | unset | CA bundle used to verify a `nats://` connection to a non-loopback host. |
-| `PIPELINE_NATS_DURABLE_TYPES` | `notification,agent_done` | Comma-separated event types that get one durable consumer each. Unset means the default set; set-but-blank means no durable types. |
+| `PIPELINE_NATS_DURABLE_TYPES` | `notification,agent_done` | Comma-separated event types that get one durable consumer each. Unset means the default set; set-but-blank means no durable types. A listed type is handled only by its durable consumer, never also inline by the publishing process. |
 | `PIPELINE_EVENT_PUBLISH_TIMEOUT_S` | `5` | Upper bound on one publish, and on the connection dial. |
 | `PIPELINE_EVENT_MAX_DELIVER` | `5` | Delivery attempts before an event is dead-lettered. |
 

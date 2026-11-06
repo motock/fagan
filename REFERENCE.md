@@ -965,6 +965,36 @@ the plan's stream. The advance tick — `advance_pipeline`, and therefore
 denied tick appends one `denied` record. `record_security_audit`'s `config:write`
 decision has no plan to scope a record to, so it goes to the host chain.
 
+#### `story.review_start`
+
+`pipeline/review_audit.py` marks the beginning of a review, so time-in-review can be
+computed from the stream later (liveness S9). It computes nothing itself. One record:
+
+- `action` `story.review_start`, `outcome` `started`.
+- `target` `{"plan": <plan>, "story": <story key>}`.
+- `detail.started_at`: ISO-8601 UTC, seconds precision — the moment the review call began.
+- `detail.forced`: `true` when the call was `force=True`, else `false`.
+
+Those four values are the whole record: no verdict, diff, feedback, path or sha, so no
+review prose reaches the audit stream.
+
+A call that is not a review writes nothing. Every skip — `unchanged_since_last_review`,
+`not_reviewable_state`, `locked` — appends no record, and neither does an `ok: False`
+result. The event is emitted after the review call returns, so the record's own `ts` is
+the END of the call while `detail.started_at` is the start; `started_at` is never later
+than `ts`.
+
+Known limit: a detached review (a story holding a `review_job` handle) returns a handle
+long before its verdict lands, so for those the event marks when review was **started**,
+not when the verdict arrived. Time-in-review computed from this stream is therefore a
+lower bound for them.
+
+An audit failure — a read-only plan directory, a full disk — is logged once at WARNING
+by exception type only (the message can carry a story key, which does not belong in an
+operator log) and the review result is returned untouched: a review never fails because
+its audit line could not be written. `force=True` writes two different actions, the
+pre-existing `story:force_review` entry and this `story.review_start` record.
+
 The `verify_audit()` MCP tool runs both over the whole plan directory and returns
 `{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad seq>}`. Every
 plan with an audit file appears, keyed by its bare name; a plan with no audit file

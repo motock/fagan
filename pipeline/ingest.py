@@ -44,6 +44,7 @@ from .repo_config import load_repo_config
 from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
+from .sizing_class import needs_small_story_caps, sizing_applies
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -104,20 +105,19 @@ def _is_test_path(path) -> bool:
 def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     """Return a non-blocking warning string when a story's own
     agent_instructions names more production files than
-    .claude/rules/agent-dispatch-story-sizing.md's caps for a non-Claude
-    dispatch tier, or names a file that already exceeds the file-size
-    cap on disk. Returns None when the story looks fine or the backend
-    isn't a non-Claude tier (only local/cloud-open-source stories are
-    checked -- Claude-class dispatch doesn't need this crutch, mirroring
-    the same backend gate the test-author/planner phases already use).
-    Never raises; a filesystem read failure degrades to None (this must
-    stay an observability hook, never a gate -- see
-    pipeline/dispatch.py's 'multi-model concurrent dispatch' and 'ollama
-    serving parallelism' warnings for the established pattern this
-    mirrors)."""
-    backend = (story.get("backend") or "").strip().lower()
-    if backend not in ("local", "ollama", "lmstudio", "mlx", "litellm", "auto"):
+    .claude/rules/agent-dispatch-story-sizing.md's caps for its dispatch
+    tier, or names a file that already exceeds the file-size cap on disk.
+    Returns None when the story is not sized at all (only the local/
+    cloud-open backends and explicitly on-device providers are checked --
+    Claude-class dispatch does not need this crutch). The 2-file cap is
+    lifted for an entry declaring "class": "capable"; the file-size cap
+    applies to every class. Never raises; a filesystem read failure
+    degrades to None (this must stay an observability hook, never a gate
+    -- see pipeline/dispatch.py's 'multi-model concurrent dispatch'
+    warnings for the established pattern this mirrors)."""
+    if not sizing_applies(story, role_registry):
         return None
+    small_caps = needs_small_story_caps(story, role_registry)
     instructions = story.get("agent_instructions") or ""
     # Reuse the same backtick-quoted-repo-path convention every brief in
     # this codebase already follows (see any story's "Files:" line).
@@ -141,7 +141,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
         ]
         size_paths = production_paths
     reasons = []
-    if len(production_paths) > _SIZING_MAX_PRODUCTION_FILES:
+    if small_caps and len(production_paths) > _SIZING_MAX_PRODUCTION_FILES:
         reasons.append(
             f"names {len(production_paths)} production files "
             f"({', '.join(production_paths)}), over the "

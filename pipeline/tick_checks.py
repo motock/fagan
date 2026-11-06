@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 
-from pipeline import paths, persistence
+from pipeline import outbox_health, paths, persistence
 from pipeline.consumer_watchdog import ConsumerWatchdog
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 #: Only the NATS bus has durable consumers, so only it has stalls to report.
 EVENT_BUS_ENV = "PIPELINE_EVENT_BUS"
 NATS_BUS = "nats"
+
+#: Whether the last tick saw a stale outbox. Kept here, next to the other
+#: per-tick check state, so the notice fires once per transition rather than
+#: once per tick: ``True`` after ``outbox_stale``, reset by ``outbox_recovered``.
+_OUTBOX_STALE = False
 
 #: One watchdog per daemon, so its in-memory stall clock spans ticks. Building
 #: a fresh one each tick would restart the clock every tick and never fire.
@@ -111,6 +116,74 @@ def _notify_transition(durable: str, transition: str) -> None:
         logger.exception("consumer watchdog notification failed for %s", durable)
 
 
+def _notify_outbox(event: str, summary: dict) -> None:
+    """Tell the user the outbox stalled, or that it is draining again.
+
+    Attribution mirrors :meth:`SchedulerDaemon._notify_if_checkout_stale`: the
+    notice goes to the first manifest plan. The outbox is instance-wide, so that
+    plan owns a platform-wide alert that is not really its own -- which is why
+    the same stopgap is flagged for the tenancy work there.
+    """
+    # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
+    plan_name = next(
+        (
+            path.name.removesuffix(".manifest.json")
+            for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
+        ),
+        None,
+    )
+    if plan_name is None:
+        return
+    if event == "outbox_stale":
+        message = (
+            f"The notification outbox is not draining: {summary['records']} "
+            f"record(s) in {summary['files']} file(s), oldest "
+            f"{summary['oldest_age_s']}s old. Notifications are not being "
+            "delivered; check the notification channel and the drain."
+        )
+        severity = "error"
+    else:
+        message = "The notification outbox is draining again."
+        severity = "info"
+    try:
+        persistence._notify_user(
+            plan_name,
+            message,
+            event=event,
+            severity=severity,
+            dedup_key=event,
+        )
+    except Exception:
+        logger.exception("outbox staleness notification failed")
+
+
+def _check_outbox() -> None:
+    """Probe the outbox and emit one notice per staleness transition.
+
+    The probe runs outside any lock the drain needs: :mod:`pipeline.outbox_health`
+    only opens files for reading, and the summary is computed before anything
+    touches the notifier.
+    """
+    global _OUTBOX_STALE
+
+    summary = outbox_health.outbox_summary(paths.PLAN_DIR)
+    event, stale = outbox_health.stale_transition(
+        _OUTBOX_STALE,
+        summary["oldest_age_s"],
+        outbox_health.outbox_stale_seconds(),
+    )
+    # Store the new flag FIRST: the next tick's decision depends on it, and an
+    # unset flag would re-fire the same notice tick after tick.
+    _OUTBOX_STALE = stale
+    # An unknown age (unreadable spool) is not a recovery: claiming the outbox
+    # "is draining again" would be a false all-clear, so only an age we could
+    # actually measure may clear the stall.
+    if event == "outbox_recovered" and summary["oldest_age_s"] is None:
+        return
+    if event is not None:
+        _notify_outbox(event, summary)
+
+
 def run_tick_checks(daemon, config: dict) -> None:
     """Run the advisory per-tick checks for *daemon*. Never raises.
 
@@ -124,6 +197,12 @@ def run_tick_checks(daemon, config: dict) -> None:
         daemon._notify_if_checkout_stale(config)
     except Exception:
         logger.exception("scheduler staleness check failed")
+
+    # Advisory: the outbox depth/age verdict has the same fail-soft contract.
+    try:
+        _check_outbox()
+    except Exception:
+        logger.exception("outbox staleness check failed")
 
     if os.environ.get(EVENT_BUS_ENV) != NATS_BUS:
         return

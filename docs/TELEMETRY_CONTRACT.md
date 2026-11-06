@@ -93,3 +93,69 @@ exporter.
 Renaming one of these is a breaking change. It needs a CHANGELOG entry marked
 **BREAKING**, because dashboards, alerts and downstream queries are written
 against the published names and no alias is kept.
+
+## Data classification
+
+| Allowed | Never |
+| --- | --- |
+| Enum-bounded outcome, status and action labels | Prompts |
+| Plan name | Briefs |
+| Story key | Model output |
+| Event type | Agent transcripts |
+| Backend, provider and model names | Diffs |
+| Counts | File contents |
+| Durations | Principals or user identifiers as metric labels |
+| Token counts | Query strings |
+| Estimated cost | Request headers or bodies |
+| | Secrets |
+
+The left column is metadata that can be exported at any profile. The right
+column is content, and content is never an attribute, a metric label or a span
+name on either profile. A value that does not fit an enum belongs on the usage
+record or in the audit stream, not in a label: unbounded values are also how
+cardinality explodes.
+
+## Usage record
+
+There is exactly one usage record per model call, with exactly these fields:
+`ts`, `plan`, `story_key`, `attempt`, `correlation_id`, `role`, `backend`,
+`model`, `served_model`, `input_tokens`, `output_tokens`,
+`cache_creation_input_tokens`, `cache_read_input_tokens`, `cost_usd` and
+`duration_ms`. The record carries no content — no prompt, no output, no
+principal.
+
+A first record looks like this: `ts=2026-11-05T10:12:33.412Z`, `plan=default`,
+`story_key=STORY-42`, `attempt=2`, `correlation_id=0f9c4b7e`, `role=dispatch`,
+`backend=claude`, `model=claude-sonnet-4-5`,
+`served_model=claude-sonnet-4-5-20250929`, `input_tokens=1200`,
+`output_tokens=350`, `cache_creation_input_tokens=0`,
+`cache_read_input_tokens=800`, `cost_usd=0.0042`, `duration_ms=2340`. The
+follow-up call on the same story is `attempt=3` with `model=claude-sonnet-4-5`,
+but the router fell back, so its record must report
+`served_model=gpt-5.1-2026-09-01` and `cost_usd=0.0031`. `model` is what was
+requested; `served_model` is the model that actually served the call. Dropping
+`served_model` because it "usually equals `model`" destroys attribution exactly
+when a fallback happens, reusing the previous record's `served_model` for the
+follow-up is equally wrong, and appending the prompt or a principal breaks the
+no-content rule.
+
+The four token counts — `input_tokens`, `output_tokens`,
+`cache_creation_input_tokens` and `cache_read_input_tokens` — are measured and
+reliable. `cost_usd` is the figure the provider reports, and under a subscription
+that figure is notional rather than billed, so treat it as an estimate. The
+record is still the billing-grade source for token volume; the cost column is the
+part that is approximate.
+
+## Retention and tenancy
+
+Telemetry and usage records are deleted per namespace, so one tenant's retention
+policy never reaches another's data. Content, when a namespace has enabled
+capture, has its own retention and is purged on its own schedule rather than with
+the metadata. Because deletion is keyed by namespace, a signal carrying the wrong
+`fagan.namespace` is a retention defect, not a cosmetic one.
+
+Each deployment serves one organization, as recorded in
+`docs/adr/0012-store-contract-v2.md`. A deployment is therefore not a multi-tenant
+router: isolation between customers comes from deploying separately, and
+`fagan.namespace` distinguishes the environments and namespaces inside the one
+organization a deployment serves.

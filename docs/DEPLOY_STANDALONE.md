@@ -445,6 +445,19 @@ transport also checks `Host` against `PIPELINE_MCP_ALLOWED_HOSTS`. If you
 override that list and leave your hostname out, the request gets **421 Invalid
 Host** even though the certificate, the DNS and the login all work.
 
+### Reading `/api/health`
+
+`ok` means the API answered; `healthy` and `degraded` carry the verdict. `/livez`
+("restart me"; scheduler freshness only) and `/readyz` ("route to me"; adds the
+broker and the outbox) are the anonymous probes; Docker alone never restarts an
+unhealthy container. Never put a dependency check in a liveness probe. Untested
+example, using the image's 30s interval and 5s timeout:
+
+```yaml
+livenessProbe: {httpGet: {path: /livez, port: 8000}, periodSeconds: 30, timeoutSeconds: 5}
+readinessProbe: {httpGet: {path: /readyz, port: 8000}, periodSeconds: 30, timeoutSeconds: 5}
+```
+
 ## 5. Connecting clients
 
 > Remote-only setup at a glance — the OpenCode and Claude Code configs, the

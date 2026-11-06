@@ -17,6 +17,7 @@ in practice.
   registrars), off by default; the remote MCP transport now accepts any identity
   provider declaring `network_grade = True` instead of only `OidcProvider`.
 - An operator-supplied credential provider (`PIPELINE_CREDENTIALS_PLUGIN`) for the model credential and notification secrets, off by default, with `password_ref` and `webhook_url_ref` channel settings.
+- The liveness signals are documented: the four health thresholds (`PIPELINE_HEALTH_STALE_SECONDS`, `PIPELINE_HEALTH_REQUIRE_SCHEDULER`, `PIPELINE_CONSUMER_STALL_SECONDS`, `PIPELINE_OUTBOX_STALE_SECONDS`) with their defaults and malformed-value rules in `REFERENCE.md`, and how to read `/api/health`, `/livez` and `/readyz` — with example Kubernetes probes — in `docs/DEPLOY_STANDALONE.md`.
 
 **Plan approval**
 

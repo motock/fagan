@@ -337,43 +337,17 @@ is `/app/.venv/bin/python3`, while the virtualenv built by the image lives at
 The image declares
 
 ```
-HEALTHCHECK CMD python -c "... http://127.0.0.1:$DASHBOARD_PORT/livez ..."
+HEALTHCHECK CMD python -c "... http://127.0.0.1:$DASHBOARD_PORT/ ..."
 ```
 
-It probes `/livez`, the liveness endpoint, rather than the MCP endpoint, an
-`/api/` route, or the dashboard's index route. MCP verifies a bearer token,
-and `PIPELINE_IDENTITY_PROVIDER=oidc` puts the same requirement on every
-`/api/*` route, `/api/health` included; `/livez` and `/readyz` both sit
-outside that prefix, so either needs nothing but the loopback `Host` the gate
-already allows — no credential at all.
-
-Liveness means *restart me*, so the probe answers `503` for one reason only:
-the scheduler daemon's own heartbeat is stale or missing while
-`PIPELINE_HEALTH_REQUIRE_SCHEDULER=1` (set in the image). It never contacts
-NATS, Keycloak, the outbox or any other dependency, and it never renders a
-page, so it does not exercise the plan directory or the API-key store. A
-container that cannot write its own state, or whose broker is briefly down,
-therefore stays healthy instead of being restarted — a liveness probe that
-fails on a dependency turns a blip into a restart storm. The endpoint is
-cheap: it reads a timestamp and answers immediately.
-
-Readiness is the other question — *do not send me traffic* — and is published
-separately as `GET /readyz` for an orchestrator that routes requests (this
-image ships no Kubernetes manifest). It answers `503` when the instance is not
-live, when the event bus is `nats` and the broker is unreachable, or when
-records are stalled in the outbox. `/readyz` is the readiness probe to
-configure; `/livez` is the one the image's own `HEALTHCHECK` uses.
-
-Both bodies carry a boolean plus `degraded`, a list of fixed reason strings
-(`scheduler_stale`, `scheduler_unreported`, `broker_unreachable`,
-`outbox_stale`, `probe_error`) — never a path, count, plan name or version —
-and an internal failure answers `503` with `probe_error`, never `500`.
-`/api/health` keeps its richer, credential-gated payload and is unchanged.
-
-Note what a Docker `HEALTHCHECK` can and cannot do: it records the
-`unhealthy` status, and Docker itself does not restart a container for it.
-Use `/livez` with an orchestrator that acts on liveness, or wrap the
-container in something that does.
+It probes the dashboard's index route rather than the MCP endpoint or an
+`/api/` route, because neither of those is reachable without a credential:
+MCP verifies a bearer token, and `PIPELINE_IDENTITY_PROVIDER=oidc` puts the
+same requirement on every `/api/*` route, `/api/health` included. `/` sits
+outside that prefix, so the probe needs nothing but the loopback `Host` the
+gate already allows — and rendering it reads the plan directory and the
+dashboard's API-key store, so a container that cannot write its own state (or
+whose dashboard died) turns unhealthy instead of staying green.
 
 The probe is deliberately shallow: it starts the container healthy only after
 `--start-period`, and reports `unhealthy` after three consecutive failures

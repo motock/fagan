@@ -153,6 +153,19 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   invoking the reviewer backend, or writing the manifest. This guard runs
   before the `last_reviewed_sha` check above, so a stale call never reaches a
   removed/cleaned-up worktree at all.
+  `review_story(plan_name, story_key, force=False)` takes an explicit `force`
+  flag, default false, for the case where the caller genuinely wants the
+  reviewer to look again at the same commit: `force=True` deletes the story's
+  last-reviewed markers (`last_reviewed_sha`, `last_reviewed_logic_fingerprint`
+  and `skip_notified_sha`) under the plan lock so the review is not skipped, and
+  records one `story:force_review` audit entry. Because the first review after a
+  force has no `last_reviewed_sha`, it is a first-style full-branch review of
+  HEAD, not a `since_sha` rework diff. It refuses, changing nothing, while a
+  detached review job holds the story and for any status other than
+  `tests_passed`; it never merges anything; and it leaves `review_verdict`,
+  `review_feedback` and `rework_attempts` alone, so a forced review that lands
+  `REQUEST_CHANGES` counts against the rework budget exactly like any other and
+  `force` cannot be used to loop past `PIPELINE_REWORK_MAX_ATTEMPTS`.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless

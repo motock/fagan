@@ -189,6 +189,31 @@ _SKIP_EXPLAINS_ITSELF_PARAGRAPH = (
 )
 
 
+# FSG-1 added `force=False` to review_story: an explicit, audited way to re-run a
+# review the unchanged-since-last-review skip would otherwise decline (it clears
+# the story's last-reviewed markers and records one story:force_review audit
+# entry, and never merges or resets the rework budget). That paragraph was added
+# to the review/merge text inside this section after the README split, so the
+# pre-split README cannot contain it. Require it to be present and then
+# normalize it away — the presence assertion means the normalization can never
+# mask its removal.
+_FORCE_REVIEW_PARAGRAPH = (
+    "  `review_story(plan_name, story_key, force=False)` takes an explicit `force`\n"
+    "  flag, default false, for the case where the caller genuinely wants the\n"
+    "  reviewer to look again at the same commit: `force=True` deletes the story's\n"
+    "  last-reviewed markers (`last_reviewed_sha`, `last_reviewed_logic_fingerprint`\n"
+    "  and `skip_notified_sha`) under the plan lock so the review is not skipped, and\n"
+    "  records one `story:force_review` audit entry. Because the first review after a\n"
+    "  force has no `last_reviewed_sha`, it is a first-style full-branch review of\n"
+    "  HEAD, not a `since_sha` rework diff. It refuses, changing nothing, while a\n"
+    "  detached review job holds the story and for any status other than\n"
+    "  `tests_passed`; it never merges anything; and it leaves `review_verdict`,\n"
+    "  `review_feedback` and `rework_attempts` alone, so a forced review that lands\n"
+    "  `REQUEST_CHANGES` counts against the rework budget exactly like any other and\n"
+    "  `force` cannot be used to loop past `PIPELINE_REWORK_MAX_ATTEMPTS`."
+)
+
+
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
 # ---------------------------------------------------------------------------
@@ -843,6 +868,18 @@ def test_moved_section_body_is_verbatim(title):
                 )
                 reference_body = reference_body.replace(
                     "\n" + _SKIP_EXPLAINS_ITSELF_PARAGRAPH, ""
+                )
+                # FSG-1 added review_story's explicit force flag (see
+                # _FORCE_REVIEW_PARAGRAPH). It postdates the README split, so
+                # require it to be present and then normalize it away for the
+                # byte comparison.
+                assert _FORCE_REVIEW_PARAGRAPH in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must document "
+                    f"review_story's force flag, its audit entry and that it "
+                    f"never merges or resets the rework budget."
+                )
+                reference_body = reference_body.replace(
+                    "\n" + _FORCE_REVIEW_PARAGRAPH, ""
                 )
         if title == "Monitoring dashboard":
             assert _STORY_DIFF_PARAGRAPH in reference_body

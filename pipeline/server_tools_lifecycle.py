@@ -105,7 +105,9 @@ def list_decisions(plan_name: str) -> list[dict]:
     return _service.list_decisions(plan_name)
 
 
-def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
+def review_story(
+    plan_name: str, story_key: str, force: bool = False
+) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
     open a PR via gh and set status to pr_open; otherwise set status to
@@ -114,8 +116,20 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     Only reviewable when story["status"] == "tests_passed" - any other status
     (a stale/duplicate call, e.g. a second tick racing an already-merged
     story) is a no-op skip; see README.md's "Review & merge" section.
+
+    force (default false) is the explicit, audited way to re-run a review the
+    unchanged-since-last-review skip would otherwise decline: it clears the
+    story's last-reviewed markers (last_reviewed_sha, the reviewing-logic
+    fingerprint and skip_notified_sha) so the review actually runs, and records
+    one story:force_review audit entry. The first review after a force has no
+    last_reviewed_sha and is therefore a first-style full-branch review of HEAD,
+    not a since_sha rework diff. It refuses (changing nothing) while a detached
+    review job holds the story, and for any status but tests_passed; it never
+    merges anything, and it leaves review_verdict, review_feedback and the
+    rework budget alone, so a forced review counts against that budget like any
+    other.
     """
-    return _service.review_story(plan_name, story_key)
+    return _service.review_story(plan_name, story_key, force=force)
 
 
 def advance_pipeline(plan_name: str) -> dict[str, Any]:

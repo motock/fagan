@@ -945,7 +945,9 @@ class PipelineService(PlanApprovalMixin):
         record_dispatch_attempt(result)
         return result
 
-    def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
+    def review_story(
+        self, plan_name: str, story_key: str, force: bool = False
+    ) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
         from .authorization import authorize
@@ -961,6 +963,13 @@ class PipelineService(PlanApprovalMixin):
                     "skipped": "locked",
                     "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
                 }
+            if force:
+                # Clears the last-reviewed markers under this lock so the
+                # review below runs instead of skipping.
+                from .review_force import prepare_forced_review
+                prepared = prepare_forced_review(plan_name, story_key)
+                if not prepared.get("ok"):
+                    return prepared
             return _original_review_story(plan_name, story_key)
     def advance_pipeline(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)

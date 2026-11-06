@@ -45,6 +45,7 @@ in practice.
 
 ### Changed
 
+- The dispatch rules now distinguish a capable class (Claude and cloud-served open-weight models) from an on-device class; PIPELINE_BACKEND_DISPATCH=auto takes the class of the model that resolves for the first attempt.
 - **BREAKING:** telemetry names moved to the `fagan` namespace: service name `fagan-pipeline` is now `fagan`, metrics `pipeline.*` are now `fagan.*`, spans `dashboard.request` and `pipeline.lifecycle` are now `fagan.dashboard.request` and `fagan.lifecycle`, and span attributes `pipeline.*` are now `fagan.*`. Dashboards and alerts keyed on the old names must be updated.
 - `/openapi.json`, `/docs` and `/redoc` are **no longer served
   unauthenticated**. FastAPI's documentation endpoints sat outside the `/api/`

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STANDARDS = ROOT / "global-rules" / "standards.md"
 WORKFLOW = ROOT / "global-rules" / "pipeline-workflow.md"
 STANDARDS_SHA256 = "f9880ec9d311b266f9b7918daddd5240fef4d05bb453edecd32072e591b94c18"
-WORKFLOW_SHA256 = "148737b03e51bc6033fef0442a23cac9d2e8fdfbf5b0735454d7df572fe97b46"
+WORKFLOW_SHA256 = "46c62ada19244b40304a882b996f339a579f8ab1ff48669f23c4e884afc67da1"
 
 
 def _sha256(path: Path) -> str:

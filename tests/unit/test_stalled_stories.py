@@ -9,9 +9,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pipeline.stalled_stories import stalled_stories
 
 from pipeline import stall_scan
+from pipeline.stalled_stories import stalled_stories
 
 PLAN = "demo-plan"
 ELIGIBLE_AGE = 40

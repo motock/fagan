@@ -56,6 +56,12 @@ in practice.
 
 ### Fixed
 
+- A skipped re-review now says why it was skipped and how to get out of it:
+  `review_story`'s unchanged-since-last-review result carries `reason`,
+  the truncated `head` and `last_reviewed` SHAs, the `stored_verdict` still in
+  force and a `to_force` hint. The skip only holds while HEAD and the
+  review-logic fingerprint are both unchanged; land a new commit (redispatch or
+  rework) or clear `last_reviewed_sha` with `patch_story` to force a review.
 - A notification channel that keeps failing now backs off - one minute,
   doubling up to an hour - instead of retrying on every scheduler tick, so a
   broken channel stops hammering its endpoint. The email channel now reports a

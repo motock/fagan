@@ -1788,7 +1788,7 @@ who is authenticated or allowed without saying so.
 
 | Seam | Variable | Factory signature | Notes |
 | --- | --- | --- | --- |
-| Identity provider | `PIPELINE_IDENTITY_PLUGIN` | `factory(secret_reader, env) -> IdentityProvider` | The remote MCP transport accepts it only if the provider sets `network_grade = True` (exactly `True`). `PIPELINE_IDENTITY_PROVIDER` must stay at its `shared-secret` default. The dashboard browser login stays OIDC-only. |
+| Identity provider | `PIPELINE_IDENTITY_PLUGIN` | `factory(secret_reader, env) -> IdentityProvider` | The remote MCP transport accepts it only if the provider sets `network_grade = True` (exactly `True`). `PIPELINE_IDENTITY_PROVIDER` must stay at its `shared-secret` default. The dashboard browser login stays OIDC-only. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Authorizer | `PIPELINE_AUTHORIZER_PLUGIN` | `factory() -> Authorizer` | Cached per process: the first plugin authorizer built wins for the life of the process. Requires `PIPELINE_PLUGIN_MODULES`, the loader's module allowlist. |
 | Event bus | `PIPELINE_EVENT_BUS_PLUGIN` | `factory() -> EventBus` | `/api/health` reports the selection as `plugin` under `runtime.event_bus`. `PIPELINE_EVENT_BUS` must stay at its `inprocess` default. |
 | Forge | `PIPELINE_FORGE_PLUGIN` | `factory(repo_root) -> Forge` | An instance is cached per repository root. `PIPELINE_FORGE` must stay at its `auto` default. |
@@ -1810,10 +1810,10 @@ agrees with the plugin.
 **Trust.** A plugin is code run with the server's privileges, and it is chosen
 only by operator-controlled environment — never by plan, job, manifest or
 request data. Whoever can set the variable runs code in the orchestrator. The
-enterprise image can supply modules from `/app/overlay` (for example
-`overlay.adapters:build_authorizer`). `PIPELINE_PLUGIN_MODULES` narrows the
-loader to an allowlist of module prefixes; it is required for the authorizer
-seam and recommended wherever more than one principal can write the checkout.
+enterprise image can supply modules from `/app/overlay` (a module placed under
+that directory is importable as `overlay.<module>`). `PIPELINE_PLUGIN_MODULES` narrows the
+loader to an allowlist of module prefixes; it is required for the identity and
+authorizer seams and recommended wherever more than one principal can write the checkout.
 
 **Error behavior.** Error messages name the variable and never echo the spec
 value, which may carry a path or a secret. A refused spec imports nothing.

@@ -71,6 +71,13 @@ def _isolate_environ():
     os.environ.update(snapshot)
 
 
+@pytest.fixture(autouse=True)
+def _clear_standard_otel_endpoint_env(monkeypatch):
+    for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                 "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

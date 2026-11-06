@@ -2430,7 +2430,7 @@ Unset — the default — the pipeline imports no `opentelemetry` module and exp
 nothing; the SDK is imported lazily, so a deployment that exports nothing pays no
 import cost. An empty value counts as unset. Set `PIPELINE_OTEL_ENDPOINT` to a
 collector URL and an OTLP/HTTP exporter is built for it, on a resource whose
-`service.name` is `fagan-pipeline` — the same string is the instrumentation-scope
+`service.name` is `fagan` — the same string is the instrumentation-scope
 name the metrics in the next subsection are created under. Both signals share
 this one switch.
 
@@ -2446,16 +2446,16 @@ emitted.
 ### OpenTelemetry metric names
 
 Three counters and two observable gauges describe what an operator alerts on.
-They are registered once, under the `fagan-pipeline` instrumentation scope, and
+They are registered once, under the `fagan` instrumentation scope, and
 only while `PIPELINE_OTEL_ENDPOINT` is set.
 
 | Metric | Kind | What it measures | Labels |
 | --- | --- | --- | --- |
-| `pipeline.dispatch.outcomes` | counter | one record per dispatch attempt | `outcome` — one of `dispatched`, `skipped`, `pending`, `failed` |
-| `pipeline.authz.decisions` | counter | one record per authorization decision | `action` — one of the enumerated `Action` values (`plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`); `outcome` — `allowed` or `denied`. The principal is never a label: it is PII and its cardinality is unbounded. |
-| `pipeline.merge.results` | counter | one record per adjudicated story | `result` — one of `merged`, `parked`, `failed` |
-| `pipeline.stories` | observable gauge | how many stories are in each status | `status` — one of the enumerated story statuses (`todo`, `in_progress`, `running`, `interrupted`, `failed`, `tests_passed`, `pr_open`, `changes_requested`, `parked`, `done`) |
-| `pipeline.capacity.in_use` | observable gauge | how many stories hold a capacity slot — the `in_progress` count, summed over every unpaused plan manifest | none |
+| `fagan.dispatch.outcomes` | counter | one record per dispatch attempt | `outcome` — one of `dispatched`, `skipped`, `pending`, `failed` |
+| `fagan.authz.decisions` | counter | one record per authorization decision | `action` — one of the enumerated `Action` values (`plan:ingest`, `plan:approve`, `plan:reject`, `plan:dispatch`, `plan:pause`, `story:patch`, `story:interrupt`, `decision:answer`, `story:merge`, `story:mark_done`, `config:write`); `outcome` — `allowed` or `denied`. The principal is never a label: it is PII and its cardinality is unbounded. |
+| `fagan.merge.results` | counter | one record per adjudicated story | `result` — one of `merged`, `parked`, `failed` |
+| `fagan.stories` | observable gauge | how many stories are in each status | `status` — one of the enumerated story statuses (`todo`, `in_progress`, `running`, `interrupted`, `failed`, `tests_passed`, `pr_open`, `changes_requested`, `parked`, `done`) |
+| `fagan.capacity.in_use` | observable gauge | how many stories hold a capacity slot — the `in_progress` count, summed over every unpaused plan manifest | none |
 
 Neither gauge touches the filesystem on collection. Both are read from the
 manifest snapshot the scheduler tick publishes as its last statement, built from

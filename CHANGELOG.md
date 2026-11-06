@@ -44,6 +44,7 @@ in practice.
 
 ### Changed
 
+- **BREAKING:** telemetry names moved to the `fagan` namespace: service name `fagan-pipeline` is now `fagan`, metrics `pipeline.*` are now `fagan.*`, spans `dashboard.request` and `pipeline.lifecycle` are now `fagan.dashboard.request` and `fagan.lifecycle`, and span attributes `pipeline.*` are now `fagan.*`. Dashboards and alerts keyed on the old names must be updated.
 - `/openapi.json`, `/docs` and `/redoc` are **no longer served
   unauthenticated**. FastAPI's documentation endpoints sat outside the `/api/`
   credential gate; the spec now lives at `/api/openapi.json` behind the same

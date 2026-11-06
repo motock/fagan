@@ -8,7 +8,7 @@ that exports nothing pays no import cost.
 Tracing
 -------
 Spans are exported over OTLP/HTTP under the resource
-``service.name=fagan-pipeline``. Two kinds of span are produced:
+``service.name=fagan``. Two kinds of span are produced:
 
 * one per dashboard ``/api/`` request (:data:`REQUEST_SPAN_NAME`), carrying
   the HTTP method, the *route template*, the response status and the
@@ -61,16 +61,16 @@ ENDPOINT_ENV = "PIPELINE_OTEL_ENDPOINT"
 
 #: ``service.name`` resource attribute every exported span carries; also the
 #: instrumentation scope name the metrics are created under.
-SERVICE_NAME = "fagan-pipeline"
+SERVICE_NAME = "fagan"
 
-REQUEST_SPAN_NAME = "dashboard.request"
-LIFECYCLE_SPAN_NAME = "pipeline.lifecycle"
+REQUEST_SPAN_NAME = "fagan.dashboard.request"
+LIFECYCLE_SPAN_NAME = "fagan.lifecycle"
 
-METRIC_DISPATCH_OUTCOMES = "pipeline.dispatch.outcomes"
-METRIC_AUTHZ_DECISIONS = "pipeline.authz.decisions"
-METRIC_MERGE_RESULTS = "pipeline.merge.results"
-METRIC_STORIES = "pipeline.stories"
-METRIC_CAPACITY_IN_USE = "pipeline.capacity.in_use"
+METRIC_DISPATCH_OUTCOMES = "fagan.dispatch.outcomes"
+METRIC_AUTHZ_DECISIONS = "fagan.authz.decisions"
+METRIC_MERGE_RESULTS = "fagan.merge.results"
+METRIC_STORIES = "fagan.stories"
+METRIC_CAPACITY_IN_USE = "fagan.capacity.in_use"
 
 #: Fixed label values for :data:`METRIC_DISPATCH_OUTCOMES`. They are exactly
 #: the result shapes ``dispatch_story`` returns: a launch (``dispatched``), a
@@ -354,12 +354,12 @@ def record_lifecycle_event(event: dict) -> None:
     with span(
         LIFECYCLE_SPAN_NAME,
         {
-            "pipeline.plan": plan,
-            "pipeline.story_key": event.get("story_key"),
-            "pipeline.event_type": event_type,
-            "pipeline.outcome": payload.get("outcome"),
-            "pipeline.backend": backend,
-            "pipeline.provider": provider,
+            "fagan.plan": plan,
+            "fagan.story_key": event.get("story_key"),
+            "fagan.event_type": event_type,
+            "fagan.outcome": payload.get("outcome"),
+            "fagan.backend": backend,
+            "fagan.provider": provider,
             "correlation_id": event.get("correlation_id"),
         },
     ):

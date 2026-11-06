@@ -175,11 +175,11 @@ def test_lifecycle_event_yields_one_span_with_its_outcome():
     assert len(spans) == 1
     span = spans[0]
     assert span.name == telemetry.LIFECYCLE_SPAN_NAME
-    assert span.attributes["pipeline.plan"] == "demo"
-    assert span.attributes["pipeline.story_key"] == "OT-1"
-    assert span.attributes["pipeline.event_type"] == "agent_dispatched"
-    assert span.attributes["pipeline.outcome"] == "merged"
-    assert span.attributes["pipeline.backend"] == "claude"
+    assert span.attributes["fagan.plan"] == "demo"
+    assert span.attributes["fagan.story_key"] == "OT-1"
+    assert span.attributes["fagan.event_type"] == "agent_dispatched"
+    assert span.attributes["fagan.outcome"] == "merged"
+    assert span.attributes["fagan.backend"] == "claude"
     assert span.attributes["correlation_id"] == "corr-2"
     assert "prompt" not in {k.split(".")[-1] for k in span.attributes}
     assert "SECRET PROMPT TEXT" not in {str(v) for v in span.attributes.values()}
@@ -261,9 +261,9 @@ def test_published_lifecycle_event_produces_a_span():
     lifecycle = [s for s in exporter.get_finished_spans() if s.name == telemetry.LIFECYCLE_SPAN_NAME]
     assert len(lifecycle) == 1
     span = lifecycle[0]
-    assert span.attributes["pipeline.story_key"] == "OT-2"
-    assert span.attributes["pipeline.outcome"] == "dispatched"
-    assert span.attributes["pipeline.provider"] == "ollama"
+    assert span.attributes["fagan.story_key"] == "OT-2"
+    assert span.attributes["fagan.outcome"] == "dispatched"
+    assert span.attributes["fagan.provider"] == "ollama"
 
 
 def test_malformed_event_never_raises_and_emits_nothing():

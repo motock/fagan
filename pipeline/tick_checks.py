@@ -167,7 +167,7 @@ def _check_outbox() -> None:
     global _OUTBOX_STALE
 
     summary = outbox_health.outbox_summary(paths.PLAN_DIR)
-    event, stale = outbox_health._stale_transition(
+    event, stale = outbox_health.stale_transition(
         _OUTBOX_STALE,
         summary["oldest_age_s"],
         outbox_health.outbox_stale_seconds(),
@@ -175,6 +175,11 @@ def _check_outbox() -> None:
     # Store the new flag FIRST: the next tick's decision depends on it, and an
     # unset flag would re-fire the same notice tick after tick.
     _OUTBOX_STALE = stale
+    # An unknown age (unreadable spool) is not a recovery: claiming the outbox
+    # "is draining again" would be a false all-clear, so only an age we could
+    # actually measure may clear the stall.
+    if event == "outbox_recovered" and summary["oldest_age_s"] is None:
+        return
     if event is not None:
         _notify_outbox(event, summary)
 

@@ -69,7 +69,9 @@ def outbox_stale_seconds() -> int:
         return DEFAULT_OUTBOX_STALE_SECONDS
     if not math.isfinite(value) or value <= 0:
         return DEFAULT_OUTBOX_STALE_SECONDS
-    return int(value)
+    # Round a positive fractional threshold up instead of truncating: ``0.5``
+    # would otherwise become ``0`` and make every non-empty outbox stale.
+    return max(1, math.ceil(value))
 
 
 def _age_seconds(raw_ts, now: datetime) -> int | None:
@@ -91,8 +93,10 @@ def _age_seconds(raw_ts, now: datetime) -> int | None:
     except (OverflowError, ValueError):  # pragma: no cover - exotic timestamps
         return None
     if age < 0:
-        # A clock skew into the future is not an age; treat it as unknown
-        # rather than as a negative (which would hide a real backlog).
+        # A timestamp in the future (clock skew) clamps to an age of zero: as
+        # far as this probe can tell the record was written just now. Keeping
+        # the negative value would count as *very* fresh, which is the one
+        # direction that can hide a growing backlog.
         return 0
     return int(age)
 
@@ -156,28 +160,38 @@ def outbox_summary(plan_dir) -> dict:
     return summary
 
 
-def outbox_is_stale(summary: dict, threshold: int) -> bool:
-    """True when the oldest record is strictly older than *threshold* seconds.
+def _age_is_stale(oldest_age_s: int | None, threshold: int) -> bool:
+    """True when *oldest_age_s* is strictly older than *threshold* seconds.
 
-    Strictly older, so a record exactly at the threshold is not yet stale; the
-    notice should mean "this is past the limit", not "this reached it".
+    The single definition of "stale", so the health verdict and the notice
+    clock cannot drift apart. Strictly older, so a record exactly at the
+    threshold is not yet stale; a notice should mean "this is past the limit",
+    not "this reached it". ``None`` (unknown age) is never stale.
     """
-    oldest = summary.get("oldest_age_s")
-    return oldest is not None and oldest > threshold
+    return oldest_age_s is not None and oldest_age_s > threshold
 
 
-def _stale_transition(
+def outbox_is_stale(summary: dict, threshold: int) -> bool:
+    """True when the oldest record is strictly older than *threshold* seconds."""
+    return _age_is_stale(summary.get("oldest_age_s"), threshold)
+
+
+def stale_transition(
     prev_stale: bool, oldest_age_s: int | None, threshold: int
 ) -> tuple[str | None, bool]:
     """Return ``(event, new_stale)`` for one tick of the staleness clock.
 
     *prev_stale* is the flag stored by the previous tick. The returned flag is
-    what the caller must store: the event fires once per transition into stale
-    (``outbox_stale``) and once on recovery (``outbox_recovered``), and is
-    ``None`` while the state holds, so a persistently stale outbox raises one
-    notice rather than one per tick.
+    what the caller must store -- storing anything else either re-fires the
+    same notice on the next tick or swallows the next real transition. The
+    event fires once per transition into stale (``outbox_stale``) and once on
+    recovery (``outbox_recovered``), and is ``None`` while the state holds, so
+    a persistently stale outbox raises one notice rather than one per tick.
+
+    Public because the scheduler tick (another module) owns the stored flag;
+    the state machine lives here, next to the predicate it uses.
     """
-    is_stale = oldest_age_s is not None and oldest_age_s > threshold
+    is_stale = _age_is_stale(oldest_age_s, threshold)
     if not prev_stale and is_stale:
         return "outbox_stale", True
     if prev_stale and not is_stale:

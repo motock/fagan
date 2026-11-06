@@ -298,49 +298,49 @@ def test_health_block_carries_no_names_paths_or_payloads(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# _stale_transition: exactly one notice per transition
+# stale_transition: exactly one notice per transition
 # --------------------------------------------------------------------------
 
 
 def test_stale_then_still_stale_then_recovered_then_quiet():
     prev = False
 
-    event, prev = outbox_health._stale_transition(prev, 1200, 900)
+    event, prev = outbox_health.stale_transition(prev, 1200, 900)
     assert (event, prev) == ("outbox_stale", True)
 
-    event, prev = outbox_health._stale_transition(prev, 1500, 900)
+    event, prev = outbox_health.stale_transition(prev, 1500, 900)
     assert (event, prev) == (None, True)
 
-    event, prev = outbox_health._stale_transition(prev, 10, 900)
+    event, prev = outbox_health.stale_transition(prev, 10, 900)
     assert (event, prev) == ("outbox_recovered", False)
 
-    event, prev = outbox_health._stale_transition(prev, 200, 900)
+    event, prev = outbox_health.stale_transition(prev, 200, 900)
     assert (event, prev) == (None, False)
 
 
 def test_boundary_transition_leaves_the_correct_state_behind():
     prev = False
 
-    event, prev = outbox_health._stale_transition(prev, 1200, 900)
+    event, prev = outbox_health.stale_transition(prev, 1200, 900)
     assert (event, prev) == ("outbox_stale", True)
 
-    event, prev = outbox_health._stale_transition(prev, 900, 900)
+    event, prev = outbox_health.stale_transition(prev, 900, 900)
     assert (event, prev) == ("outbox_recovered", False)
 
-    event, prev = outbox_health._stale_transition(prev, 900, 900)
+    event, prev = outbox_health.stale_transition(prev, 900, 900)
     assert (event, prev) == (None, False)
 
 
 def test_unknown_age_recovers_a_stalled_outbox():
     prev = False
 
-    event, prev = outbox_health._stale_transition(prev, 1200, 900)
+    event, prev = outbox_health.stale_transition(prev, 1200, 900)
     assert (event, prev) == ("outbox_stale", True)
 
-    event, prev = outbox_health._stale_transition(prev, None, 900)
+    event, prev = outbox_health.stale_transition(prev, None, 900)
     assert (event, prev) == ("outbox_recovered", False)
 
-    event, prev = outbox_health._stale_transition(prev, 1000, 900)
+    event, prev = outbox_health.stale_transition(prev, 1000, 900)
     assert (event, prev) == ("outbox_stale", True)
 
 
@@ -349,7 +349,7 @@ def test_transition_returns_the_stored_flag_last():
     # re-fires the notice on the next tick, or suppresses the next real stall.
     for prev_stale in (False, True):
         for age in (None, 0, 900, 901):
-            event, new_stale = outbox_health._stale_transition(prev_stale, age, 900)
+            event, new_stale = outbox_health.stale_transition(prev_stale, age, 900)
             stale = age is not None and age > 900
             assert new_stale is stale
             if not prev_stale and stale:
@@ -358,6 +358,90 @@ def test_transition_returns_the_stored_flag_last():
                 assert event == "outbox_recovered"
             else:
                 assert event is None
+
+
+# --------------------------------------------------------------------------
+# Review fixes: clock skew and fractional thresholds
+# --------------------------------------------------------------------------
+
+
+def test_future_timestamp_clamps_to_a_fresh_age(tmp_path):
+    # A timestamp ahead of the clock must not report a negative age (which
+    # would look infinitely fresh and hide a backlog); it clamps to zero.
+    future = datetime.now(UTC) + timedelta(seconds=600)
+    path = tmp_path / "plan.outbox.jsonl"
+    path.write_text(json.dumps({"ts": future.isoformat()}) + "\n", encoding="utf-8")
+
+    summary = outbox_health.outbox_summary(tmp_path)
+
+    assert summary["records"] == 1
+    assert summary["oldest_age_s"] == 0
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0.5", 1), ("1.5", 2), ("900.9", 901)])
+def test_fractional_threshold_rounds_up(monkeypatch, raw, expected):
+    # Truncating a positive fractional threshold to 0 would make every
+    # non-empty outbox stale, so positive fractions round up instead.
+    monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", raw)
+    assert outbox_health.outbox_stale_seconds() == expected
+
+
+# --------------------------------------------------------------------------
+# health_extras: the literals /api/health ends up carrying
+# --------------------------------------------------------------------------
+
+
+def test_health_extras_reports_the_endpoint_visible_literals(tmp_path, monkeypatch):
+    from pipeline import health_freshness
+
+    monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    _write(tmp_path / "plan.outbox.jsonl", [_record(1200)])
+
+    extras = health_freshness.health_extras(tmp_path)
+
+    assert "outbox" in extras
+    assert extras["healthy"] is False
+    assert "outbox_stale" in extras["degraded"]
+    assert set(extras["outbox"]) == {"files", "records", "oldest_age_s"}
+    assert extras["outbox"]["oldest_age_s"] >= 1200
+
+
+def test_health_extras_stays_healthy_for_a_fresh_outbox(tmp_path, monkeypatch):
+    from pipeline import health_freshness
+
+    monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    _write(tmp_path / "plan.outbox.jsonl", [_record(100)])
+
+    extras = health_freshness.health_extras(tmp_path)
+
+    assert extras["healthy"] is True
+    assert extras["degraded"] == []
+    assert extras["outbox"]["oldest_age_s"] < 900
+
+
+def test_health_extras_missing_dir_stays_healthy(tmp_path, monkeypatch):
+    from pipeline import health_freshness
+
+    monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+
+    extras = health_freshness.health_extras(tmp_path / "does-not-exist")
+
+    assert extras["outbox"] == {"files": 0, "records": 0, "oldest_age_s": None}
+    assert extras["healthy"] is True
+    assert extras["degraded"] == []
+
+
+def test_health_extras_carries_no_names_paths_or_payloads(tmp_path, monkeypatch):
+    from pipeline import health_freshness
+
+    monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    _write(tmp_path / "tenant-name.outbox.jsonl", [_record(1200, "SECRET-PAYLOAD-XYZ")])
+
+    dumped = json.dumps(health_freshness.health_extras(tmp_path))
+
+    assert "SECRET-PAYLOAD-XYZ" not in dumped
+    assert "tenant-name" not in dumped
+    assert str(tmp_path) not in dumped
 
 
 # --------------------------------------------------------------------------
@@ -431,3 +515,29 @@ def test_run_tick_checks_survives_a_broken_outbox_probe(tick_env, monkeypatch):
     tick_checks.run_tick_checks(_FakeDaemon(), {})
 
     assert events == []
+
+
+def test_run_tick_checks_does_not_claim_recovery_on_unknown_age(tick_env, monkeypatch):
+    # An unknown age (unreadable spool) clears the stored flag, but announcing
+    # "draining again" would be a false all-clear, so no recovery is emitted.
+    plan_dir, tick_checks, events = tick_env
+    _write(plan_dir / "alpha.outbox.jsonl", [_record(1200)])
+    real_summary = outbox_health.outbox_summary
+
+    tick_checks.run_tick_checks(_FakeDaemon(), {})
+
+    monkeypatch.setattr(
+        outbox_health,
+        "outbox_summary",
+        lambda _plan_dir: {"files": 0, "records": 0, "oldest_age_s": None},
+    )
+    tick_checks.run_tick_checks(_FakeDaemon(), {})
+
+    assert [event for _, event, _ in events] == ["outbox_stale"]
+
+    # Once a real age is measurable again the stall is reported afresh: the
+    # suppressed recovery must not leave the flag stuck in "stale".
+    monkeypatch.setattr(outbox_health, "outbox_summary", real_summary)
+    tick_checks.run_tick_checks(_FakeDaemon(), {})
+
+    assert [event for _, event, _ in events] == ["outbox_stale", "outbox_stale"]

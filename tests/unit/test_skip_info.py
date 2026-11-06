@@ -20,7 +20,11 @@ from pipeline.review_orchestrator import skip_info
 
 SHA40 = "deadbeefcafe1234567890abcdef1234567890ab"
 SHA12 = "deadbeefcafe"
-TO_FORCE = "push a new commit, or clear last_reviewed_sha with patch_story"
+# The escape hatch has to name a command that actually exists: patch_story
+# refuses last_reviewed_sha (it is not in _PATCHABLE_STORY_FIELDS), so the
+# sanctioned route is the unpark CLI, whose UNPARKABLE_FIELDS does contain it.
+UNPARK = "python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha"
+TO_FORCE = f"push a new commit, or clear last_reviewed_sha with `{UNPARK}`"
 
 
 def _story(**overrides):
@@ -54,6 +58,19 @@ def test_skip_info_explains_the_skip_and_the_way_out():
     assert result["last_reviewed"] == SHA12
     assert result["stored_verdict"] == "approve"
     assert result["to_force"] == TO_FORCE
+
+
+def test_the_way_out_names_a_command_that_can_actually_clear_the_field():
+    hint = skip_info(_story(), SHA40)["to_force"]
+
+    assert UNPARK in hint
+    # patch_story cannot clear last_reviewed_sha, so the hint must not send a
+    # stuck operator into a hard "cannot patch field(s)" error.
+    assert "with patch_story" not in hint
+    assert "last_reviewed_sha" in UNPARK
+    from pipeline.unpark import UNPARKABLE_FIELDS
+
+    assert "last_reviewed_sha" in UNPARKABLE_FIELDS
 
 
 def test_skip_info_truncates_both_shas_to_twelve_chars():

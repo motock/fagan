@@ -109,7 +109,6 @@ REWORK_MAX_ATTEMPTS_ESCALATED = _ServerRef("REWORK_MAX_ATTEMPTS_ESCALATED")
 REWORK_MAX_ATTEMPTS_ORACLE = _ServerRef("REWORK_MAX_ATTEMPTS_ORACLE")
 _LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
 
-
 _SECURITY_COMMENT_MAX_CHARS = 8_000
 
 
@@ -121,7 +120,8 @@ def _format_security_comment(report: str) -> str:
 
 
 def skip_info(story: dict, current_sha: str) -> dict:
-    return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review", "reason": "head_and_review_logic_unchanged", "head": current_sha[:12], "last_reviewed": story["last_reviewed_sha"][:12], "stored_verdict": story.get("review_verdict") or "", "to_force": "push a new commit, or clear last_reviewed_sha with patch_story"}
+    """Explain the skip; `to_force` names `pipeline.unpark`, the only route that can clear `last_reviewed_sha`."""
+    return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review", "reason": "head_and_review_logic_unchanged", "head": current_sha[:12], "last_reviewed": story.get("last_reviewed_sha", "")[:12], "stored_verdict": story.get("review_verdict") or "", "to_force": "push a new commit, or clear last_reviewed_sha with `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`"}
 
 
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:

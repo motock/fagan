@@ -61,7 +61,9 @@ in practice.
   the truncated `head` and `last_reviewed` SHAs, the `stored_verdict` still in
   force and a `to_force` hint. The skip only holds while HEAD and the
   review-logic fingerprint are both unchanged; land a new commit (redispatch or
-  rework) or clear `last_reviewed_sha` with `patch_story` to force a review.
+  rework), or force one with
+  `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`
+  (`patch_story` cannot clear that field).
 - A notification channel that keeps failing now backs off - one minute,
   doubling up to an hour - instead of retrying on every scheduler tick, so a
   broken channel stops hammering its endpoint. The email channel now reports a

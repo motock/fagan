@@ -175,13 +175,17 @@ _SKIP_EXPLAINS_ITSELF_PARAGRAPH = (
     '  returned dict also carries `reason: "head_and_review_logic_unchanged"`, the\n'
     "  truncated `head` and `last_reviewed` SHAs (12 characters each), the\n"
     "  `stored_verdict` still in force (empty when the story recorded none) and a\n"
-    "  `to_force` hint. The skip holds only while **both** conditions are true — HEAD\n"
-    "  still equals `last_reviewed_sha` **and** the stored fingerprint still equals\n"
-    "  the digest of the verdict-forming modules. There are exactly two ways out:\n"
-    "  land a new commit (redispatch or rework) so HEAD moves, or clear\n"
-    "  `last_reviewed_sha` with `patch_story`. A change to any verdict-forming\n"
-    "  module also lifts the guard: it forces exactly one re-review of that same\n"
-    "  commit, after which the new digest is stored and the skip resumes."
+    "  `to_force` hint — the literal form above predates these extra keys. The skip\n"
+    "  holds only while **both** conditions are true — HEAD still equals\n"
+    "  `last_reviewed_sha` **and** the stored fingerprint still equals the digest of\n"
+    "  the verdict-forming modules. There are two operator-visible ways out: land a\n"
+    "  new commit (redispatch or rework) so HEAD moves, or clear `last_reviewed_sha`\n"
+    "  with\n"
+    "  `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`\n"
+    "  (`patch_story` refuses that field). A third, automatic route follows from the\n"
+    "  fingerprint condition: a change to any verdict-forming module lifts the guard\n"
+    "  too, forcing exactly one re-review of that same commit, after which the new\n"
+    "  digest is stored and the skip resumes."
 )
 
 

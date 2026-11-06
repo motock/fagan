@@ -278,6 +278,20 @@
     "title": "IngestPlanResponse",
     "type": "object"
    },
+   "Live": {
+    "description": "Body of a 2xx ``GET /livez``; a 503 adds the verdicts to ``degraded``.",
+    "properties": {
+     "live": {
+      "title": "Live",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "live"
+    ],
+    "title": "Live",
+    "type": "object"
+   },
    "PatchApplyResponse": {
     "additionalProperties": true,
     "description": "Response of ``POST /api/worktree/patch/{patch_id}/apply``.\n\nA refused apply raises HTTPException with the engine's ``status_code``, so a\n200 always carries ``ok: true``; the rest of the engine result is\nengine-defined and therefore documented as allowed but not required.",
@@ -343,6 +357,20 @@
      "unified_diff"
     ],
     "title": "ProposePatchRequest",
+    "type": "object"
+   },
+   "Ready": {
+    "description": "Body of a 2xx ``GET /readyz``; a 503 adds the verdicts to ``degraded``.",
+    "properties": {
+     "ready": {
+      "title": "Ready",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "ready"
+    ],
+    "title": "Ready",
     "type": "object"
    },
    "RequestChangesBody": {
@@ -3359,6 +3387,50 @@
      }
     },
     "summary": "Apply Worktree Patch Route"
+   }
+  },
+  "/livez": {
+   "get": {
+    "description": "Liveness: restart-worthy problems only.",
+    "operationId": "livez_livez_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Live"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "503": {
+      "description": "degraded"
+     }
+    },
+    "summary": "Livez"
+   }
+  },
+  "/readyz": {
+   "get": {
+    "description": "Readiness: live, broker reachable, outbox drained.",
+    "operationId": "readyz_readyz_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ready"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "503": {
+      "description": "degraded"
+     }
+    },
+    "summary": "Readyz"
    }
   }
  }

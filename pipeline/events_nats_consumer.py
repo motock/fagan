@@ -665,11 +665,13 @@ async def _collect_consumer_status_async() -> dict:
     * ``redelivered`` — deliveries the broker repeated
       (``ConsumerInfo.num_redelivered``);
     * ``dead_lettered`` — messages retained for this type's dead-letter
-      subject (``pipeline.deadletter.<type>.>``), counted with a
-      subject-filtered ``StreamInfo``. JetStream's consumer info carries no
-      dead-letter counter of its own, and the managed stream captures
-      ``pipeline.>``, so that filtered count is the dead-letter backlog as the
-      broker holds it.
+      subject (``pipeline.deadletter.<type>.>``), summed from the per-subject
+      counts of a subject-filtered ``StreamInfo``. JetStream's consumer info
+      carries no dead-letter counter of its own, and the managed stream
+      captures ``pipeline.>``. ``StreamState.messages`` is *not* used: it stays
+      the whole stream's total even when ``subjects_filter`` narrows the
+      request, so it reports the stream backlog as dead letters (74029 instead
+      of 0 when this was measured).
     * ``subscribed`` — whether a client is currently fetching this consumer
       (:func:`_consumer_subscribed`); these are pull consumers, so that is the
       broker's count of waiting fetches, not a push binding;
@@ -726,10 +728,16 @@ async def _collect_consumer_status_async() -> dict:
                 settings.stream,
                 subjects_filter=f"{DEAD_LETTER_PREFIX}.{event_type}.>",
             )
+            # state.messages is the whole stream's total: subjects_filter only
+            # narrows state.subjects, so the dead letters are the sum of that
+            # per-subject map. getattr with ``or {}`` covers clients whose
+            # state has no subjects attribute, or carries None.
+            subjects = getattr(dead_letters.state, "subjects", None) or {}
+            dead_lettered = sum(v for v in subjects.values() if isinstance(v, int))
             status[durable] = {
                 "pending": int(info.num_pending or 0),
                 "redelivered": int(info.num_redelivered or 0),
-                "dead_lettered": int(getattr(dead_letters.state, "messages", 0) or 0),
+                "dead_lettered": dead_lettered,
                 "subscribed": _consumer_subscribed(info),
                 "oldest_pending_age_s": _oldest_pending_age_seconds(info),
             }

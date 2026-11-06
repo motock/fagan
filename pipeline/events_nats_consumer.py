@@ -606,6 +606,54 @@ _STATUS_TTL_SECONDS = 30.0
 _status_cache: dict[str, Any] = {"expires_at": None, "value": None}
 
 
+def _consumer_subscribed(info) -> bool:
+    """Whether a client is attached to *info*'s consumer, never raising.
+
+    The durable consumers here are pull consumers (``_start_one`` uses
+    ``pull_subscribe``), so a client that is fetching shows up as the broker's
+    ``ConsumerInfo.num_waiting`` — outstanding fetch requests. ``push_bound``
+    belongs to push consumers and is ``None`` for these, so it is not read.
+
+    An older client, or an info object built without the field, has no
+    ``num_waiting``: that reads as not subscribed rather than as an error, so
+    one odd consumer cannot turn the whole probe into
+    ``{"reachable": False}``.
+    """
+    try:
+        return bool(int(getattr(info, "num_waiting", 0) or 0)) > 0
+    except Exception:  # noqa: BLE001 - a probe read must never raise
+        return False
+
+
+def _oldest_pending_age_seconds(info) -> int | None:
+    """Age in whole seconds of the oldest undelivered work, never raising.
+
+    JetStream keeps no timestamp per undelivered message, so the newest
+    information available is ``ack_floor.last_active`` / ``delivered.last_active``
+    — when the consumer last recorded an ack or delivery. The value is an
+    approximation and only reported while messages are pending: with an empty
+    backlog there is nothing to age and the answer is ``None``.
+
+    Truncation (not rounding) keeps the type ``int`` and never overstates the
+    age; a timestamp in the future — two clocks disagreeing — clamps to ``0``
+    rather than reporting a negative age. Any other read failure is ``None``.
+    """
+    try:
+        if int(getattr(info, "num_pending", 0) or 0) <= 0:
+            return None
+        last_active = None
+        for sequence in ("ack_floor", "delivered"):
+            last_active = getattr(getattr(info, sequence, None), "last_active", None)
+            if last_active is not None:
+                break
+        if last_active is None:
+            return None
+        age = int(time.time() - last_active.timestamp())
+    except Exception:  # noqa: BLE001 - a probe read must never raise
+        return None
+    return max(0, age)
+
+
 async def _collect_consumer_status_async() -> dict:
     """Read every durable consumer's delivery state from the broker.
 
@@ -622,6 +670,13 @@ async def _collect_consumer_status_async() -> dict:
       dead-letter counter of its own, and the managed stream captures
       ``pipeline.>``, so that filtered count is the dead-letter backlog as the
       broker holds it.
+    * ``subscribed`` — whether a client is currently fetching this consumer
+      (:func:`_consumer_subscribed`); these are pull consumers, so that is the
+      broker's count of waiting fetches, not a push binding;
+    * ``oldest_pending_age_s`` — whole seconds since the consumer's last ack or
+      delivery, or ``None`` when nothing is pending
+      (:func:`_oldest_pending_age_seconds`). An approximation: the broker keeps
+      no timestamp per undelivered message.
 
     The connection is per call and short-lived: this runs in a process that
     does not own the consumers (the dashboard), so it must not assume a bus.
@@ -675,6 +730,8 @@ async def _collect_consumer_status_async() -> dict:
                 "pending": int(info.num_pending or 0),
                 "redelivered": int(info.num_redelivered or 0),
                 "dead_lettered": int(getattr(dead_letters.state, "messages", 0) or 0),
+                "subscribed": _consumer_subscribed(info),
+                "oldest_pending_age_s": _oldest_pending_age_seconds(info),
             }
         return status
     finally:
@@ -697,7 +754,8 @@ def consumer_status() -> dict:
     """Per durable consumer delivery state, cached and never raising.
 
     Returns ``{durable_name: {"pending": int, "redelivered": int,
-    "dead_lettered": int}}`` on success, or exactly ``{"reachable": False}``
+    "dead_lettered": int, "subscribed": bool, "oldest_pending_age_s": int | None}}``
+    on success, or exactly ``{"reachable": False}``
     when the broker cannot be queried — the health payload has one shape per
     outcome, and a probe must never turn into a 500.
 

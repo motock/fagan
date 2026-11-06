@@ -181,6 +181,7 @@ def translate_line(raw: str, state: dict) -> list[str]:
         if kind == "assistant":
             return _step_lines(obj, state)
         if kind == "result":
+            state["result"] = obj
             return _done_line(obj, state)
         return []  # user, tool_result, unknown, missing, non-string type
     except Exception:  # noqa: BLE001 - never raise inside the log-drain thread

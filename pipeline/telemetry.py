@@ -59,6 +59,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from .events import EVENT_TYPES
+from .trace_context import parse_traceparent
 
 logger = logging.getLogger(__name__)
 
@@ -375,13 +376,44 @@ class _RequestSpan:
             _log_export_failure(exc)
 
 
+def _traceparent_parent_context(request: Any) -> Any | None:
+    """Return a Context carrying the caller's remote parent span, or None.
+
+    The traceparent header is caller-controlled, so it is accepted only when
+    pipeline.trace_context.parse_traceparent validates it. tracestate is never
+    propagated, and the raw header value is never logged.
+    """
+    header = request.headers.get("traceparent")
+    if header is None:
+        return None
+    parsed = parse_traceparent(header)
+    if parsed is None:
+        return None
+    from opentelemetry import trace
+
+    parent = trace.SpanContext(
+        trace_id=int(parsed["trace_id"], 16),
+        span_id=int(parsed["span_id"], 16),
+        is_remote=True,
+        trace_flags=trace.TraceFlags(int(parsed["flags"], 16)),
+    )
+    return trace.set_span_in_context(trace.NonRecordingSpan(parent))
+
+
 def start_request_span(request: Any, correlation_id: str | None = None) -> _RequestSpan:
-    """Open the span for a dashboard request; caller closes it via ``finish``."""
+    """Open the span for a dashboard request; caller closes it via ``finish``.
+
+    A valid inbound ``traceparent`` becomes the span's remote parent, so the
+    caller's trace continues instead of forking. The sampled flag of the inbound
+    context is honoured by the SDK's parent-based sampler; Fagan does not
+    override it.
+    """
     tracer = _tracer()
     span_: Any | None = None
     if tracer is not None:
         try:
-            span_ = tracer.start_span(REQUEST_SPAN_NAME)
+            parent_context = _traceparent_parent_context(request)
+            span_ = tracer.start_span(REQUEST_SPAN_NAME, context=parent_context)
             span_.set_attribute("http.request.method", request.method)
             if correlation_id:
                 span_.set_attribute("correlation_id", correlation_id)

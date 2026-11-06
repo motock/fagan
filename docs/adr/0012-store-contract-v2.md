@@ -76,6 +76,7 @@ deployment model assumed there is one organization per deployment (decided
    | Decisions | `<plan>.decisions.json` | |
    | Journal (per story) | `<plan>.<key>.journal.json` | |
    | Notification outbox (per channel) and notification history | `.notifications.jsonl`, `.log`, outbox suffixes | the only durable event-derived record (decision 9) |
+   | Usage (one record per model call) | none yet: `review_token_costs.jsonl` is written only for benchmark cells | append-only and namespaced; written in the same transaction family as the notification outbox; fields in `docs/TELEMETRY_CONTRACT.md` |
    | Audit chain | `<plan>.audit.jsonl` | append-only table, hash-chained, one chain per plan plus a host chain per namespace (decision 10) |
    | Context snapshot (content-addressed, immutable) | `context/<digest>/` | org-owned, namespaced blob; see decision 11 |
    | Plan completion marker and report | `.plan_completed`, `.report.md` | |

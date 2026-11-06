@@ -2501,11 +2501,13 @@ Unset — the default — the pipeline imports no `opentelemetry` module and exp
 nothing; the SDK is imported lazily, so a deployment that exports nothing pays no
 import cost. An empty value counts as unset. Set `PIPELINE_OTEL_ENDPOINT` to a
 collector URL and an OTLP/HTTP exporter is built for it, on a resource whose
-`service.name` is `fagan` — the same string is the instrumentation-scope
-name the metrics in the next subsection are created under. Both signals share
-this one switch.
+`service.name` is `fagan` unless `OTEL_SERVICE_NAME` overrides it; the
+instrumentation-scope name the metrics in the next subsection are created under
+is always `fagan`. Both signals share this one switch.
 
 The standard OpenTelemetry variables also switch it on and configure the exporter: `OTEL_EXPORTER_OTLP_ENDPOINT` (or the signal-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`), `OTEL_EXPORTER_OTLP_HEADERS` for an authenticated collector, and `OTEL_EXPORTER_OTLP_CERTIFICATE`. When a standard endpoint variable is set for a signal it wins and `PIPELINE_OTEL_ENDPOINT` is ignored for that signal. `PIPELINE_OTEL_ENDPOINT` remains a deprecated alias that enables both signals exactly as before. With neither set the pipeline exports nothing.
+
+Every signal carries the resource attributes `service.name` (`fagan` unless `OTEL_SERVICE_NAME` says otherwise), `service.instance.id` (a fresh identifier per process) and `fagan.namespace` (`default` unless `OTEL_RESOURCE_ATTRIBUTES` sets it, for example `OTEL_RESOURCE_ATTRIBUTES=fagan.namespace=acme`). The namespace is read only from the environment, never from a request, a plan name or a repo path. See docs/TELEMETRY_CONTRACT.md.
 
 The exporter can never break the work it instruments: an exporter failure never
 fails a request and never fails a scheduler tick. The error is caught, the

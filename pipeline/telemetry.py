@@ -11,8 +11,9 @@ that exports nothing pays no import cost.
 
 Tracing
 -------
-Spans are exported over OTLP/HTTP under the resource
-``service.name=fagan``. Two kinds of span are produced:
+Spans are exported over OTLP/HTTP under the resource ``service.name``, which
+is ``fagan`` unless ``OTEL_SERVICE_NAME`` overrides it. Two kinds of span are
+produced:
 
 * one per dashboard ``/api/`` request (:data:`REQUEST_SPAN_NAME`), carrying
   the HTTP method, the *route template*, the response status and the
@@ -51,9 +52,11 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import unquote
 
 from .events import EVENT_TYPES
 
@@ -81,8 +84,39 @@ def _signal_endpoint(standard_envs: tuple[str, ...]) -> tuple[bool, str | None]:
     alias = os.environ.get(ENDPOINT_ENV)
     return (True, alias) if alias else (False, None)
 
-#: ``service.name`` resource attribute every exported span carries; also the
-#: instrumentation scope name the metrics are created under.
+
+#: One identifier per process, so every signal's resource names the same instance.
+_INSTANCE_ID = uuid.uuid4().hex
+
+#: Namespace core reports when the deployment supplies none. Core gives it no meaning (ADR 0012).
+DEFAULT_NAMESPACE = "default"
+
+
+def _resource_attributes() -> dict[str, str]:
+    """Resource attributes: Fagan defaults, overridden by the standard environment.
+
+    OTEL_RESOURCE_ATTRIBUTES (comma-separated key=value, values percent-decoded) and
+    OTEL_SERVICE_NAME override the defaults. The namespace comes only from this environment
+    or the default, never from request data.
+    """
+    attributes = {
+        "service.name": SERVICE_NAME,
+        "service.instance.id": _INSTANCE_ID,
+        "fagan.namespace": DEFAULT_NAMESPACE,
+    }
+    for pair in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
+        key, separator, value = pair.partition("=")
+        if separator and key.strip():
+            attributes[key.strip()] = unquote(value.strip())
+    service_name = os.environ.get("OTEL_SERVICE_NAME", "").strip()
+    if service_name:
+        attributes["service.name"] = service_name
+    return attributes
+
+
+#: Default ``service.name`` resource attribute (``OTEL_SERVICE_NAME`` overrides
+#: it on the exported resource); also the instrumentation scope name the metrics
+#: are created under.
 SERVICE_NAME = "fagan"
 
 REQUEST_SPAN_NAME = "fagan.dashboard.request"
@@ -252,7 +286,7 @@ def configure(exporter: Any | None = None) -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-    provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
+    provider = TracerProvider(resource=Resource.create(_resource_attributes()))
     guarded = _GuardedExporter(exporter)
     if batch:
         # The OTLP/HTTP exporter retries with backoff; exporting on the span's
@@ -424,7 +458,7 @@ def configure_metrics(provider: Any | None = None) -> bool:
         from opentelemetry.sdk.resources import Resource
 
         provider = MeterProvider(
-            resource=Resource.create({"service.name": SERVICE_NAME}),
+            resource=Resource.create(_resource_attributes()),
             metric_readers=[
                 PeriodicExportingMetricReader(
                     OTLPMetricExporter(endpoint=endpoint)

@@ -309,6 +309,7 @@ def test_docker_usable_probe_handles_missing_binary_and_dead_daemon(
     assert _docker_usable() is False
 
 
+@pytest.mark.docker
 def test_docker_build_and_mcp_introspection() -> None:
     """Build the image and prove the container answers initialize + tools/list."""
     if shutil.which("docker") is None:

@@ -20,7 +20,11 @@ pythonpath = ["."]
 # default, so a bare `pytest` invocation is parallel without anyone having to
 # remember the flag. The suite is xdist-safe (isolated tmp_path dirs,
 # ephemeral ports via _free_port(), monkeypatched env) - see 8822b38.
-addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
+#
+# `-m "not docker"` keeps the one real `docker build` (~160s) out of the default
+# local run. CI's full-suite step passes `-m ""` to run it anyway, and
+# `pytest -m docker` runs it alone.
+addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto -m \"not docker\""
 # Marks the durable (broker-backed) half of the EventBus contract suite in
 # tests/contract/test_event_bus_contract.py. Registering it keeps
 # `pytest -W error` and the unknown-mark warning clean, and lets a run select
@@ -28,6 +32,7 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 # without an nats-server on the machine.
 markers = [
     "durable_bus: contract tests for durable broker-backed event buses, parametrized over durable implementations only",
+    "docker: builds and runs the real container image; excluded from the default run, executed by CI and `pytest -m docker`",
 ]
 # A test parametrized over an empty implementation list must collect without
 # failing: the durable tier's cases are written once and skipped, not deleted,

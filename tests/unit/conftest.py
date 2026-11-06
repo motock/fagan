@@ -32,6 +32,9 @@ def _isolate_environ():
     for key in list(os.environ):
         if key.startswith(_ISOLATED_ENV_PREFIXES) and key != _SESSION_ENV_KEPT:
             del os.environ[key]
+    # Tests that hold a plan lock and assert `skipped: "locked"` would otherwise
+    # wait out the 30s default; a test needing a longer wait sets its own.
+    os.environ["PIPELINE_COMMAND_LOCK_WAIT_SECONDS"] = "0.2"
     yield
     os.environ.clear()
     os.environ.update(snapshot)

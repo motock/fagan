@@ -126,6 +126,21 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   commit under unchanged reviewing logic, never the story's forward progress.
   Both `last_reviewed_sha` and `last_reviewed_logic_fingerprint` are cleared
   on `APPROVE`.
+  A skip now explains itself instead of just saying nothing happened: the
+  returned dict also carries `reason: "head_and_review_logic_unchanged"`, the
+  truncated `head` and `last_reviewed` SHAs (12 characters each), the
+  `stored_verdict` still in force (empty when the story recorded none) and a
+  `to_force` hint — the literal form above predates these extra keys. The skip
+  holds only while **both** conditions are true — HEAD still equals
+  `last_reviewed_sha` **and** the stored fingerprint still equals the digest of
+  the verdict-forming modules. There are two operator-visible ways out: land a
+  new commit (redispatch or rework) so HEAD moves, or clear `last_reviewed_sha`
+  with
+  `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`
+  (`patch_story` refuses that field). A third, automatic route follows from the
+  fingerprint condition: a change to any verdict-forming module lifts the guard
+  too, forcing exactly one re-review of that same commit, after which the new
+  digest is stored and the skip resumes.
   Separately, `review_story` only ever reviews a story whose status is
   `tests_passed` — its sole legitimate entry state, matching the gate
   `advance_pipeline` itself applies before ever calling it. A call on a story

@@ -56,6 +56,14 @@ in practice.
 
 ### Fixed
 
+- A skipped re-review now says why it was skipped and how to get out of it:
+  `review_story`'s unchanged-since-last-review result carries `reason`,
+  the truncated `head` and `last_reviewed` SHAs, the `stored_verdict` still in
+  force and a `to_force` hint. The skip only holds while HEAD and the
+  review-logic fingerprint are both unchanged; land a new commit (redispatch or
+  rework), or force one with
+  `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`
+  (`patch_story` cannot clear that field).
 - A notification channel that keeps failing now backs off - one minute,
   doubling up to an hour - instead of retrying on every scheduler tick, so a
   broken channel stops hammering its endpoint. The email channel now reports a

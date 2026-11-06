@@ -164,6 +164,30 @@ _REVIEW_FINGERPRINT_TAIL_ORIG = (
     "  story's forward progress. `last_reviewed_sha` is cleared on `APPROVE`."
 )
 
+# The skip result now explains itself: it carries the reason, the two
+# truncated SHAs, the verdict still in force and a hint on how to force a
+# re-review. That paragraph was added to the review/merge text inside this
+# section after the README split, so the pre-split README cannot contain it.
+# Require it to be present and then normalize it away — the presence
+# assertion means the normalization can never mask its removal.
+_SKIP_EXPLAINS_ITSELF_PARAGRAPH = (
+    "  A skip now explains itself instead of just saying nothing happened: the\n"
+    '  returned dict also carries `reason: "head_and_review_logic_unchanged"`, the\n'
+    "  truncated `head` and `last_reviewed` SHAs (12 characters each), the\n"
+    "  `stored_verdict` still in force (empty when the story recorded none) and a\n"
+    "  `to_force` hint — the literal form above predates these extra keys. The skip\n"
+    "  holds only while **both** conditions are true — HEAD still equals\n"
+    "  `last_reviewed_sha` **and** the stored fingerprint still equals the digest of\n"
+    "  the verdict-forming modules. There are two operator-visible ways out: land a\n"
+    "  new commit (redispatch or rework) so HEAD moves, or clear `last_reviewed_sha`\n"
+    "  with\n"
+    "  `python -m pipeline.unpark <plan> <story-key> --clear last_reviewed_sha`\n"
+    "  (`patch_story` refuses that field). A third, automatic route follows from the\n"
+    "  fingerprint condition: a change to any verdict-forming module lifts the guard\n"
+    "  too, forcing exactly one re-review of that same commit, after which the new\n"
+    "  digest is stored and the skip resumes."
+)
+
 
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
@@ -808,6 +832,17 @@ def test_moved_section_body_is_verbatim(title):
                 reference_body = reference_body.replace(
                     _REVIEW_FINGERPRINT_TAIL_NEW,
                     _REVIEW_FINGERPRINT_TAIL_ORIG,
+                )
+                # The skip result gained its self-explaining paragraph (see
+                # _SKIP_EXPLAINS_ITSELF_PARAGRAPH). It postdates the README
+                # split, so require it to be present and then normalize it
+                # away for the byte comparison.
+                assert _SKIP_EXPLAINS_ITSELF_PARAGRAPH in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must explain "
+                    f"why a review was skipped and how to force one."
+                )
+                reference_body = reference_body.replace(
+                    "\n" + _SKIP_EXPLAINS_ITSELF_PARAGRAPH, ""
                 )
         if title == "Monitoring dashboard":
             assert _STORY_DIFF_PARAGRAPH in reference_body

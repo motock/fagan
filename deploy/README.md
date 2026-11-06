@@ -337,21 +337,38 @@ is `/app/.venv/bin/python3`, while the virtualenv built by the image lives at
 The image declares
 
 ```
-HEALTHCHECK CMD python -c "... http://127.0.0.1:$DASHBOARD_PORT/ ..."
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ... http://127.0.0.1:$DASHBOARD_PORT/livez ...
 ```
 
-It probes the dashboard's index route rather than the MCP endpoint or an
-`/api/` route, because neither of those is reachable without a credential:
-MCP verifies a bearer token, and `PIPELINE_IDENTITY_PROVIDER=oidc` puts the
-same requirement on every `/api/*` route, `/api/health` included. `/` sits
-outside that prefix, so the probe needs nothing but the loopback `Host` the
-gate already allows — and rendering it reads the plan directory and the
-dashboard's API-key store, so a container that cannot write its own state (or
-whose dashboard died) turns unhealthy instead of staying green.
+so it probes `http://127.0.0.1:$DASHBOARD_PORT/livez`; `DASHBOARD_PORT`
+defaults to `8000`.
+
+`/livez` answers "restart me". It fails (503) only when the scheduler daemon is
+stale or unreported — enforced because the image sets
+`PIPELINE_HEALTH_REQUIRE_SCHEDULER=1`. It never fails because NATS, Keycloak or
+the outbox is down: a liveness probe that depends on a dependency turns an
+outage into restart loops, restarting a process that is doing its job.
+
+It sits outside `/api/`, so it needs no credential. With
+`PIPELINE_IDENTITY_PROVIDER=oidc` every `/api/*` route, `/api/health` included,
+requires a bearer token, and MCP verifies a bearer token too, so an anonymous
+probe there can only ever get a 401. The probe needs only the loopback `Host`
+the gate already allows.
+
+`/readyz` is the readiness question, "do not send me traffic": it additionally
+fails when the broker is unreachable (only with `PIPELINE_EVENT_BUS=nats`) or
+the outbox is stale. Orchestrators such as Kubernetes should use `/livez` for
+liveness and `/readyz` for readiness. Docker alone does not restart an
+unhealthy container — an orchestrator, or a restart policy plus a supervisor,
+does.
 
 The probe is deliberately shallow: it starts the container healthy only after
 `--start-period`, and reports `unhealthy` after three consecutive failures
-~30 s apart.
+~30 s apart. The same `PIPELINE_HEALTH_STALE_SECONDS` (default `300`) bounds
+"stale"; see
+[the health probe rows in `REFERENCE.md`](../REFERENCE.md#health-probes-and-liveness-thresholds-livez-readyz)
+for the semantics of each variable rather than a second copy here.
 
 ## What the image is not
 

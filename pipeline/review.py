@@ -195,16 +195,15 @@ def _review_git(worktree: str, args: list[str], timeout: int = 15) -> str | None
 
 def _first_review_base(worktree: str) -> str | None:
     """The commit this branch diverged from, for a first (non-rework)
-    review's full diff. Tries common default-branch names/remotes in order,
-    since the pipeline operates across repos that differ on default-branch
-    naming and on whether a remote exists at all (mirrors rebrief.py's
-    _base_commit, duplicated rather than imported to keep review.py's diff
-    materialization independent of rebrief's private helpers).
+    review's full diff.
 
     Delegates to `resolve_review_base`, which refreshes `origin` once and then
-    picks the candidate closest to HEAD instead of the first one that resolves:
-    in a long-lived clone a stale `origin/main` used to win on order alone and
-    the review graded history from several stories back."""
+    picks the candidate closest to HEAD - across repos that differ on
+    default-branch naming and on whether a remote exists at all - instead of
+    the first one that resolves: in a long-lived clone a stale `origin/main`
+    used to win on order alone and the review graded history from several
+    stories back. The returned commit is the candidate's merge-base with HEAD,
+    i.e. the fork point."""
     return resolve_review_base(worktree)
 
 

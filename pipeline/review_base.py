@@ -8,8 +8,10 @@ then carries unrelated history and the reviewer grades work that isn't in the
 story.
 
 The fix is two-part: refresh `origin` best-effort, then pick the candidate with
-the fewest commits between it and HEAD - the closest trunk, i.e. the truest
-fork point - instead of trusting candidate order.
+the fewest commits between it and HEAD - the closest trunk - instead of
+trusting candidate order. The candidate's *merge-base* with HEAD is what gets
+returned, not the candidate's tip: the branch fork point is the last commit the
+story actually built on.
 
 Anti-patterns this module deliberately avoids:
 
@@ -19,7 +21,10 @@ Anti-patterns this module deliberately avoids:
   per candidate, and later candidates would be scored against different refs
   than earlier ones);
 * running `rev-list --count` on a ref *name* that may not exist (rev-list fails
-  on an unknown ref, so each candidate is first pinned to a commit SHA).
+  on an unknown ref, so each candidate is first pinned to a commit SHA);
+* returning the winning candidate's *tip* instead of its merge-base with HEAD
+  (after the fetch the trunk tip usually sits ahead of the fork point, and
+  every consumer takes a two-dot diff against the returned commit).
 
 No module-level "already fetched" flag or cache: the pipeline server is
 long-lived, so a process-wide flag would let one unreachable-remote call pin
@@ -100,15 +105,32 @@ def _commits_ahead(worktree: str, sha: str) -> int | None:
         return None
 
 
+def _merge_base(worktree: str, sha: str) -> str | None:
+    """`git merge-base <sha> HEAD`, or None when the histories are unrelated."""
+    out = _git(worktree, ["merge-base", sha, "HEAD"])
+    if not out or not out.strip():
+        return None
+    return out.strip()
+
+
 def resolve_review_base(
     worktree: str, fetch: bool = True, timeout: int = 30,
 ) -> str | None:
     """The commit a first review's `<base>..HEAD` diff should start from.
 
-    Fetches `origin` once (best effort, see `_fetch_origin`), then returns the
+    Fetches `origin` once (best effort, see `_fetch_origin`), then picks the
     candidate trunk commit with the fewest commits between it and HEAD. Ties
     keep `_CANDIDATES` order. Returns None when no candidate resolves, so
     callers fall back to letting the reviewer discover the diff itself.
+
+    The count chooses the candidate; the *merge-base* with HEAD is returned.
+    Every consumer takes a two-dot diff against this commit
+    (`git diff <base> HEAD`, `git diff --name-only <base>..HEAD`), which only
+    means "this story's changes" when `<base>` is an ancestor of HEAD. After
+    the fetch, `origin/main` is typically *ahead* of the branch's fork point,
+    so returning the trunk tip would smuggle other stories' landed commits
+    into the first-review diff - as deletions - and the scope gate would
+    report their files as outside the story's scope.
     """
     if fetch:
         _fetch_origin(worktree, timeout)
@@ -126,4 +148,8 @@ def resolve_review_base(
         # earlier one, so the most specific trunk wins the tie.
         if best_count is None or count < best_count:
             best_sha, best_count = sha, count
-    return best_sha
+    if best_sha is None:
+        return None
+    # Fall back to the tip only for a genuinely unrelated history, where no
+    # merge-base exists; there is no ancestor to diff from in that case.
+    return _merge_base(worktree, best_sha) or best_sha

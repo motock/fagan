@@ -241,3 +241,55 @@ def test_warning_never_leaks_the_remote_url(repro, caplog):
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
     assert "SECRET" not in caplog.text
     assert "https://" not in caplog.text
+
+
+@pytest.fixture
+def trunk_moved_on(tmp_path):
+    """origin/main advanced to m3 *after* the story forked from m2.
+
+    This is the ordinary case once the fetch succeeds: the trunk tip is ahead
+    of the fork point, and the extra commit belongs to another story. The
+    story branch was cut from m2 and carries `story.py`.
+    """
+    bare, seed, shas = _make_remote(tmp_path)
+    m0, m1, m2 = shas
+    (seed / "other_story.py").write_text("landed by another story\n")
+    _git(seed, "add", "other_story.py")
+    m3 = _commit(seed, "other: land another story")
+    _git(seed, "push", "origin", "main")
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(bare), str(clone))
+    _git(clone, "checkout", "-b", "story", m2)
+    (clone / "story.py").write_text("this story's change\n")
+    _git(clone, "add", "story.py")
+    s1 = _commit(clone, "s: the story commit")
+    return Repro(bare, clone, m0, m1, m2, s1), m3
+
+
+def test_base_is_the_fork_point_when_trunk_advanced_past_it(trunk_moved_on):
+    """The winner's *merge-base*, not its tip, is the first-review base.
+
+    origin/main is one commit from HEAD either way, so it still wins on
+    count; but it carries another story's commit on top of the fork point.
+    Returning the tip makes `git diff <base>..HEAD` report that file as a
+    deletion and the scope gate flag it as outside the story's files.
+    """
+    repro, m3 = trunk_moved_on
+    clone = repro.clone
+    assert _sha(clone, "origin/main") == m3  # clone saw the landed commit
+    assert _count(clone, "origin/main") == 1  # only s1 after the fork
+    assert _count(clone, repro.m2) == 1  # tie on count
+
+    base = resolve_review_base(str(clone))
+
+    assert base == repro.m2
+    assert base != m3  # the tip is not an ancestor of HEAD
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base, "HEAD"],
+        check=False, cwd=str(clone), capture_output=True,
+    ).returncode == 0
+    changed = _git(clone, "diff", "--name-only", f"{base}..HEAD").split()
+    assert changed == ["story.py"]
+    assert "other_story.py" not in changed
+

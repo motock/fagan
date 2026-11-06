@@ -11,8 +11,9 @@ that exports nothing pays no import cost.
 
 Tracing
 -------
-Spans are exported over OTLP/HTTP under the resource
-``service.name=fagan``. Two kinds of span are produced:
+Spans are exported over OTLP/HTTP under the resource ``service.name``, which
+is ``fagan`` unless ``OTEL_SERVICE_NAME`` overrides it. Two kinds of span are
+produced:
 
 * one per dashboard ``/api/`` request (:data:`REQUEST_SPAN_NAME`), carrying
   the HTTP method, the *route template*, the response status and the
@@ -113,8 +114,9 @@ def _resource_attributes() -> dict[str, str]:
     return attributes
 
 
-#: ``service.name`` resource attribute every exported span carries; also the
-#: instrumentation scope name the metrics are created under.
+#: Default ``service.name`` resource attribute (``OTEL_SERVICE_NAME`` overrides
+#: it on the exported resource); also the instrumentation scope name the metrics
+#: are created under.
 SERVICE_NAME = "fagan"
 
 REQUEST_SPAN_NAME = "fagan.dashboard.request"

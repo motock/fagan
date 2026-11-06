@@ -45,7 +45,7 @@ in practice.
 
 ### Changed
 
-- The ingest story-sizing warning now applies the 2-production-file cap only to stories whose resolved dispatch model is on-device; capable targets (Claude, litellm, or an `ollama` `:cloud` tag) keep only the 1000-line file-size cap, whose message no longer calls itself the weakest-tier limit. The class is read from the resolved dispatch model, derived from the provider and model tag unless a registry entry declares one.
+- The ingest story-sizing auto-route decision now applies the 2-production-file cap only to stories whose resolved dispatch model is on-device, so a capable target (Claude, litellm, or an `ollama` `:cloud` tag) is not re-routed to the host default and its file-size reason no longer ends `for the weakest dispatch tier`; the advisory `sizing_risk` notification and the 1000-line file-size cap are unchanged for both classes. The class is read from the resolved dispatch model, derived from the provider and model tag unless a registry entry declares one.
 - The dispatch rules now distinguish a capable class (Claude and cloud-served open-weight models) from an on-device class; PIPELINE_BACKEND_DISPATCH=auto takes the class of the model that resolves for the first attempt.
 - **BREAKING:** telemetry names moved to the `fagan` namespace: service name `fagan-pipeline` is now `fagan`, metrics `pipeline.*` are now `fagan.*`, spans `dashboard.request` and `pipeline.lifecycle` are now `fagan.dashboard.request` and `fagan.lifecycle`, and span attributes `pipeline.*` are now `fagan.*`. Dashboards and alerts keyed on the old names must be updated.
 - `/openapi.json`, `/docs` and `/redoc` are **no longer served

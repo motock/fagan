@@ -547,9 +547,8 @@ def sizing_repo(tmp_path):
 
 class TestClassAwareSizingWarning:
     def test_on_device_story_is_byte_identical_to_today(self, sizing_repo):
-        from pipeline.sizing_by_class import class_aware_sizing_warning
-
         from pipeline.ingest import _story_sizing_warning
+        from pipeline.sizing_by_class import class_aware_sizing_warning
 
         story = {"backend": "ollama", "files": ["a.py", "b.py", "c.py", "docs.md"]}
         assert (
@@ -558,9 +557,8 @@ class TestClassAwareSizingWarning:
         )
 
     def test_capable_story_drops_the_production_file_cap(self, sizing_repo):
-        from pipeline.sizing_by_class import class_aware_sizing_warning
-
         from pipeline.ingest import _story_sizing_warning
+        from pipeline.sizing_by_class import class_aware_sizing_warning
 
         story = {
             "backend": "ollama",
@@ -578,9 +576,8 @@ class TestClassAwareSizingWarning:
         assert capable is None
 
     def test_capable_story_keeps_the_file_size_cap_without_weakest(self, sizing_repo):
-        from pipeline.sizing_by_class import class_aware_sizing_warning
-
         from pipeline.ingest import _story_sizing_warning
+        from pipeline.sizing_by_class import class_aware_sizing_warning
 
         story = {
             "backend": "ollama",
@@ -600,9 +597,8 @@ class TestClassAwareSizingWarning:
         assert "1000-line file-size cap" in warning
 
     def test_capable_story_with_only_the_size_cap_still_warns(self, sizing_repo):
-        from pipeline.sizing_by_class import class_aware_sizing_warning
-
         from pipeline.ingest import _story_sizing_warning
+        from pipeline.sizing_by_class import class_aware_sizing_warning
 
         story = {"backend": "claude", "files": ["docs.md"]}
         # claude is not gated by the on-device hook at all...
@@ -636,9 +632,8 @@ class TestClassAwareSizingWarning:
         )
 
     def test_plan_role_config_reaches_the_class_derivation(self, sizing_repo):
-        from pipeline.sizing_by_class import class_aware_sizing_warning
-
         from pipeline.ingest import _story_sizing_warning
+        from pipeline.sizing_by_class import class_aware_sizing_warning
 
         # The story declares no backend of its own, so the plan's dispatch
         # provider decides: an ollama plan with a :cloud model is capable.

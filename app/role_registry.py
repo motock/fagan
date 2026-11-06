@@ -24,8 +24,10 @@ import copy
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from pipeline.strength_class import strength_class
 
 _REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
 _DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "model_registry.json"
@@ -54,6 +56,10 @@ class RoleRegistryError(ValueError):
 class RoleResolution:
     provider: str
     model: str
+    # "capable" or "on-device" (see pipeline/strength_class.py). Excluded from
+    # equality/hashing on purpose: it is derived context about the resolved
+    # model, not part of the (provider, model) identity every caller compares.
+    strength_class: str = field(default="on-device", compare=False)
 
 
 @dataclass(frozen=True)
@@ -215,16 +221,23 @@ def resolve_role(
                 f"model {model_name!r}, which is not declared under "
                 f"providers.{provider}.models"
             )
-        model = provider_models[model_name]["tag"]
+        entry = provider_models[model_name]
+        model = entry["tag"]
+        entry_class = entry.get("class")
     else:
         model = _fallback_value(model_fallback)
+        entry_class = None
         if not model:
             raise RoleRegistryError(
                 f"role {role!r}: no model configured (plan_role_config, "
                 f"registry, and the caller's fallback are all empty)"
             )
 
-    return RoleResolution(provider=provider, model=model)
+    return RoleResolution(
+        provider=provider,
+        model=model,
+        strength_class=strength_class(provider, model, entry_class),
+    )
 
 
 def resolve_route(

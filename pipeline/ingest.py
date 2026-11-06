@@ -43,6 +43,7 @@ from .plan_approval_notice import notify_approval_event, pending_notice_due
 from .repo_config import load_repo_config
 from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
+from .sizing_by_class import class_aware_sizing_warning
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -875,12 +876,11 @@ def _ingest_plan_impl(
         # dispatched, just not to a local executor that would choke on it.
         # Mutate the story dicts final_manifest holds so the route is
         # persisted; the routed-key set is per-ingest only (a re-ingested
-        # story already on a :cloud model fails _on_device_route_target and
-        # is never re-routed).
+        # story already on a :cloud model fails _on_device_route_target.)
         routed_keys: set[str] = set()
         routed: list[tuple[str, str, str]] = []
         for key, story in final_manifest["stories"].items():
-            warning = _story_sizing_warning(story, repo_root)
+            warning = class_aware_sizing_warning(story, repo_root, plan.get("role_config"), _story_sizing_warning)
             if warning is None:
                 continue
             tag = _on_device_route_target(story)

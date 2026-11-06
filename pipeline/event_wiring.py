@@ -214,9 +214,11 @@ def _subscribe_handlers(bus: EventBus) -> EventBus:
     bus.subscribe("agent_done", wake_handler)
     bus.subscribe("notification", file_log_sink)
     bus.subscribe("notification", outbox_sink)
-    # Lifecycle tracing is opt-in: with no OTLP endpoint configured this adds
-    # no handler at all, so an untraced process pays nothing per tick.
-    if telemetry.enabled():
+    # Lifecycle telemetry is opt-in: with no OTLP endpoint configured this adds
+    # no handler at all, so an uninstrumented process pays nothing per tick.
+    # The same sink feeds the duration histograms, so a metrics-only deployment
+    # (OTEL_EXPORTER_OTLP_METRICS_ENDPOINT set, traces off) must subscribe too.
+    if telemetry.enabled() or telemetry.metrics_enabled():
         for event_type in telemetry.LIFECYCLE_EVENT_TYPES:
             bus.subscribe(event_type, telemetry.record_lifecycle_event)
     return bus

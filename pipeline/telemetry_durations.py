@@ -1,7 +1,6 @@
 """Story lifecycle duration histograms fed by the events already on the bus.
 
-Three label-free histograms, each measuring one hop of a story's life in
-seconds:
+Three label-free histograms, each measuring one hop of a story's life in seconds:
 
 * ``fagan.story.dispatch_to_pr.duration`` -- ``agent_dispatched`` -> ``pr_open``;
 * ``fagan.story.pr_to_ci.duration`` -- ``pr_open`` -> ``ci_complete``;
@@ -51,16 +50,16 @@ def register(meter: Meter) -> None:
     """Create the three histograms on *meter* (unit seconds, no labels)."""
     global _instruments
     _instruments = {
-        name: meter.create_histogram(
-            name, unit="s", description=f"Lifecycle duration {name}."
-        )
+        name: meter.create_histogram(name, unit="s", description=f"Duration {name}.")
         for name in (DISPATCH_TO_PR, PR_TO_CI, PR_TO_DONE)
     }
 
 
 def reset() -> None:
-    """Forget every pending start (``telemetry.reset_metrics`` and tests)."""
+    """Forget the instruments and every pending start (``reset_metrics``)."""
+    global _instruments
     with _lock:
+        _instruments = None
         _starts.clear()
 
 

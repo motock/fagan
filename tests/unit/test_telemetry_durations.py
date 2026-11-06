@@ -42,6 +42,8 @@ pytest.importorskip("opentelemetry.sdk.metrics.export")
 #: Standard OTLP metrics endpoint variable: set means "metrics are configured".
 METRICS_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
 LEGACY_ENDPOINT_ENV = "PIPELINE_OTEL_ENDPOINT"
+#: Every variable that turns *tracing* on, so a metrics-only test can turn it off.
+TRACES_ENDPOINT_ENVS = ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT")
 
 DISPATCH_TO_PR = "fagan.story.dispatch_to_pr.duration"
 PR_TO_CI = "fagan.story.pr_to_ci.duration"
@@ -224,8 +226,7 @@ def test_invalid_durations_are_dropped_silently(
     metrics: Harness, start_ts: str, end_ts: str
 ) -> None:
     """Out-of-range and unparseable pairs record nothing and never raise."""
-    _record(_event("agent_dispatched", start_ts)) if start_ts else None
-    _record(_event("pr_open", end_ts))
+    _record(_event("agent_dispatched", start_ts), _event("pr_open", end_ts))
 
     assert _recorded(metrics.reader, DISPATCH_TO_PR) == (0, 0)
 
@@ -328,3 +329,48 @@ def test_disabled_module_imports_no_opentelemetry() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "[]"
+
+
+def test_reset_metrics_stops_recording_into_the_old_meter(metrics: Harness) -> None:
+    """``reset_metrics`` forgets the instruments, so later events add no sample.
+
+    The meter provider stays alive here, so a recorder that kept its old
+    instrument would still be able to record; only dropping it keeps the
+    "Forget the instruments and the published snapshot" contract true.
+    """
+    import pipeline.telemetry as telemetry
+
+    _record(_event("agent_dispatched", _at(0)), _event("pr_open", _at(90)))
+    assert _recorded(metrics.reader, DISPATCH_TO_PR) == (1, pytest.approx(90.0))
+
+    telemetry.reset_metrics()
+    _record(_event("agent_dispatched", _at(0)), _event("pr_open", _at(180)))
+
+    assert _recorded(metrics.reader, DISPATCH_TO_PR) == (1, pytest.approx(90.0))
+    assert _recorded(metrics.reader, PR_TO_CI) == (0, 0)
+
+
+def test_metrics_only_deployment_subscribes_the_lifecycle_sink(
+    metrics: Harness, monkeypatch
+) -> None:
+    """A bus built with only a metrics endpoint records durations from the bus.
+
+    Tracing stays off, so the subscription has to be justified by the metrics
+    switch too; otherwise the histograms exist but never receive a sample.
+    """
+    import pipeline.event_wiring as event_wiring
+    import pipeline.telemetry as telemetry
+
+    for name in TRACES_ENDPOINT_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(LEGACY_ENDPOINT_ENV, raising=False)
+    monkeypatch.setattr(telemetry, "_EXPORTER", None, raising=False)
+    monkeypatch.setattr(telemetry, "_TRACER", None, raising=False)
+    assert telemetry.enabled() is False
+    assert telemetry.metrics_enabled() is True
+
+    bus = event_wiring.build_bus()
+    bus.publish(_event("agent_dispatched", _at(0)))
+    bus.publish(_event("pr_open", _at(90)))
+
+    assert _recorded(metrics.reader, DISPATCH_TO_PR) == (1, pytest.approx(90.0))

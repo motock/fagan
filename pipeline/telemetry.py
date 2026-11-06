@@ -21,7 +21,9 @@ produced:
 * one per pipeline lifecycle event (:data:`LIFECYCLE_SPAN_NAME`), fed by the
   telemetry sink the event bus subscribes when tracing is enabled, carrying
   plan, story key, event type, outcome and backend/provider name -- never a
-  prompt, brief or model output.
+  prompt, brief or model output. The events of one dispatch attempt share one
+  trace, derived from the story's correlation id and the attempt number, and an
+  attempt after the first links back to the previous attempt's root span.
 
 Metrics
 -------
@@ -51,15 +53,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote
 
 from .events import EVENT_TYPES
-from .trace_context import parse_traceparent
+from .trace_context import ATTEMPT_ROOT_SPAN_ID, attempt_trace_id, parse_traceparent
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +93,18 @@ def _signal_endpoint(standard_envs: tuple[str, ...]) -> tuple[bool, str | None]:
 
 #: One identifier per process, so every signal's resource names the same instance.
 _INSTANCE_ID = uuid.uuid4().hex
+
+#: Correlation ids are opaque routing keys, so only their shape is checked before
+#: one feeds the trace-id derivation; anything else keeps today's root-span path.
+_CORRELATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+#: ``(plan, story_key) -> attempt`` for the attempt currently being traced. The
+#: attempt number rides only on ``agent_dispatched``, so it is remembered here and
+#: applied to the events that follow. Bounded and lossy on purpose: telemetry is
+#: lossy by contract, and a sink must never grow with the number of stories.
+_ATTEMPTS: OrderedDict[tuple[str, str], int] = OrderedDict()
+_ATTEMPTS_LOCK = threading.Lock()
+_ATTEMPTS_MAX = 512
 
 #: Namespace core reports when the deployment supplies none. Core gives it no meaning (ADR 0012).
 DEFAULT_NAMESPACE = "default"
@@ -311,8 +328,10 @@ def _tracer() -> Any | None:
 
 
 def reset() -> None:
-    """Drop the tracer/exporter state (used by tests and on shutdown)."""
+    """Drop the tracer/exporter state and the remembered attempts (tests, shutdown)."""
     global _TRACER, _PROVIDER, _EXPORTER, _last_export_warning
+    with _ATTEMPTS_LOCK:
+        _ATTEMPTS.clear()
     provider, _PROVIDER = _PROVIDER, None
     _TRACER = None
     _EXPORTER = None
@@ -334,16 +353,26 @@ def _set_attributes(target: Any, attributes: dict[str, Any]) -> None:
 
 
 @contextmanager
-def span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
+def span(
+    name: str,
+    attributes: dict[str, Any] | None = None,
+    *,
+    context: Any | None = None,
+    links: Any | None = None,
+) -> Iterator[Any]:
     """Start a span named *name* for the duration of the block.
 
-    Yields ``None`` (and costs nothing) when tracing is disabled.
+    Yields ``None`` (and costs nothing) when tracing is disabled. *context* (a
+    parent ``Context``) and *links* are forwarded to the tracer; both default to
+    ``None``, which is exactly what omitting them means.
     """
     tracer = _tracer()
     if tracer is None:
         yield None
         return
-    with tracer.start_as_current_span(name) as current:
+    with tracer.start_as_current_span(
+        name, context=context, links=links
+    ) as current:
         _set_attributes(current, attributes or {})
         yield current
 
@@ -423,6 +452,71 @@ def start_request_span(request: Any, correlation_id: str | None = None) -> _Requ
     return _RequestSpan(span_, request)
 
 
+def _attempt_span_kwargs(
+    plan: Any,
+    story_key: Any,
+    correlation_id: Any,
+    event_type: Any,
+    payload: dict,
+) -> tuple[Any | None, Any | None]:
+    """Parent context and links that scope one lifecycle span to its attempt.
+
+    The attempt number is carried only by ``agent_dispatched``, so it is
+    remembered per ``(plan, story_key)`` for the events that follow, and the
+    trace id is derived from ``(correlation_id, attempt)``: every event of one
+    attempt lands in one trace, and a new attempt opens a new one. Attempt 1 and
+    later link back to the previous attempt's root span.
+
+    An event arriving in a process that never saw the attempt's
+    ``agent_dispatched`` is filed under attempt 0; that is acceptable loss for
+    the telemetry plane.
+
+    Returns ``(None, None)`` -- today's root-span behaviour -- when there is no
+    usable correlation id. Any failure here degrades to the same pair, so the
+    bus subscriber can never raise.
+    """
+    try:
+        from opentelemetry import trace
+
+        attempt = payload.get("attempt")
+        if event_type == "agent_dispatched" and isinstance(attempt, int) and attempt >= 0:
+            with _ATTEMPTS_LOCK:
+                _ATTEMPTS[(plan, story_key)] = attempt
+                # Re-dispatching an existing story refreshes its recency, so the
+                # bound evicts the story that has been quiet longest.
+                _ATTEMPTS.move_to_end((plan, story_key))
+                while len(_ATTEMPTS) > _ATTEMPTS_MAX:
+                    _ATTEMPTS.popitem(last=False)
+        with _ATTEMPTS_LOCK:
+            attempt = _ATTEMPTS.get((plan, story_key), 0)
+        if not isinstance(correlation_id, str) or not _CORRELATION_ID_RE.fullmatch(
+            correlation_id
+        ):
+            return None, None
+        # A sampled parent: the process-wide default sampler is parent-based, so
+        # an unsampled remote parent would drop every child span of the attempt
+        # and this plane would export nothing at all.
+        parent = trace.SpanContext(
+            trace_id=int(attempt_trace_id(correlation_id, attempt), 16),
+            span_id=int(ATTEMPT_ROOT_SPAN_ID, 16),
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        links = None
+        if attempt > 0:
+            previous = trace.SpanContext(
+                trace_id=int(attempt_trace_id(correlation_id, attempt - 1), 16),
+                span_id=int(ATTEMPT_ROOT_SPAN_ID, 16),
+                is_remote=True,
+                trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+            )
+            links = [trace.Link(previous)]
+        return trace.set_span_in_context(trace.NonRecordingSpan(parent)), links
+    except Exception as exc:  # noqa: BLE001 - tracing never breaks the bus
+        _log_export_failure(exc)
+        return None, None
+
+
 def record_lifecycle_event(event: dict) -> None:
     """Emit one span for a lifecycle *event* published on the bus.
 
@@ -439,6 +533,11 @@ def record_lifecycle_event(event: dict) -> None:
     payload = event.get("payload") or {}
     backend = payload.get("backend") or payload.get("provider")
     provider = payload.get("provider") or payload.get("backend")
+    story_key = event.get("story_key")
+    correlation_id = event.get("correlation_id")
+    parent_context, links = _attempt_span_kwargs(
+        plan, story_key, correlation_id, event_type, payload
+    )
     with span(
         LIFECYCLE_SPAN_NAME,
         {
@@ -450,6 +549,8 @@ def record_lifecycle_event(event: dict) -> None:
             "fagan.provider": provider,
             "correlation_id": event.get("correlation_id"),
         },
+        context=parent_context,
+        links=links,
     ):
         pass
 

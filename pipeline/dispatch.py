@@ -37,6 +37,7 @@ from .dispatch_routing import (
 )
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
 from .service import _ServerRef
+from .trace_context import agent_traceparent
 
 # Server-sourced members the moved functions reference as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -919,11 +920,18 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         prev_correlation_env = os.environ.get("PIPELINE_CORRELATION_ID")
         if story.get("correlation_id"):
             os.environ["PIPELINE_CORRELATION_ID"] = story["correlation_id"]
+        prev_traceparent = os.environ.get("TRACEPARENT")
+        traceparent = agent_traceparent(story.get("correlation_id"), story.get("dispatch_attempts", 0))
+        if traceparent is not None:
+            os.environ["TRACEPARENT"] = traceparent
         try:
             handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
                 **dispatch_kwargs
             )
         finally:
+            os.environ.pop("TRACEPARENT", None)
+            if prev_traceparent is not None:
+                os.environ["TRACEPARENT"] = prev_traceparent
             if prev_correlation_env is None:
                 os.environ.pop("PIPELINE_CORRELATION_ID", None)
             else:

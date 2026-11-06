@@ -197,6 +197,21 @@ def _write_notification_record(plan_name: str, record: dict) -> None:
     except OSError as exc:  # pragma: no cover - exercised by tests
         logger.error("Failed to write notification record for plan %s: %s", plan_name, exc)
 
+def _usage_jsonl_path(plan_name: str) -> Path:
+    return PLAN_DIR / f"{plan_name}.usage.jsonl"
+
+
+def _write_usage_record(plan_name: str, record: dict) -> None:
+    """Append one usage record as a JSONL line (same retention as the notifications sidecar)."""
+    try:
+        path = _usage_jsonl_path(plan_name)
+        _rotate_if_needed(path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        logger.error("Failed to write usage record for plan %s: %s", plan_name, type(exc).__name__)
+
+
 # Reimplement _notify_user with keyword-only parameters and JSONL sidecar.
 
 def _notify_user(

@@ -83,19 +83,27 @@ def test_heartbeat_interval_is_reexported_from_daemon():
 # ---------------------------------------------------------------------------
 
 def test_heartbeat_refreshes_health_file_during_long_scan(tmp_path, monkeypatch):
-    monkeypatch.setenv(SCAN_JOIN_ENV, "5.0")
+    monkeypatch.setenv(SCAN_JOIN_ENV, "10.0")
     monkeypatch.setenv(HEARTBEAT_ENV, "0.05")
     health = tmp_path / "health.json"
     observed = []
 
     def scan_fn():
-        deadline = time.monotonic() + 0.7
+        # Hold the scan open until the heartbeat has demonstrably refreshed the
+        # file, not for a fixed wall-clock window: under CPU contention the
+        # main thread can be starved past any fixed window. The deadline only
+        # bounds a genuinely broken heartbeat.
+        deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
-            time.sleep(0.02)
+            time.sleep(0.01)
             if health.exists():
                 observed.append(
                     (health.stat().st_mtime_ns, json.loads(health.read_text()))
                 )
+                if len({mt for mt, _ in observed}) >= 2 and any(
+                    p.get("phase") == "scan" for _, p in observed
+                ):
+                    return "ok"
         return "ok"
 
     daemon = _make_daemon(scan_fn, health_path=str(health))

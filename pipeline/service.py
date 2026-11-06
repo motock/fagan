@@ -967,7 +967,7 @@ class PipelineService(PlanApprovalMixin):
                 # Clears the last-reviewed markers under this lock so the
                 # review below runs instead of skipping.
                 from .review_force import prepare_forced_review
-                prepared = prepare_forced_review(plan_name, story_key)
+                prepared = prepare_forced_review(plan_name, story_key, _store)
                 if not prepared.get("ok"):
                     return prepared
             return _original_review_story(plan_name, story_key)

@@ -33,10 +33,17 @@ FIRST-style full-branch review of the current HEAD, not a ``since_sha`` rework
 diff. ``force`` never merges anything: the merged-or-not decision stays with
 ``advance_pipeline``'s risk adjudication.
 
-The caller owns the lock: :func:`prepare_forced_review` performs no
-``transaction`` of its own, because ``PipelineService.review_story`` calls it
-inside the plan transaction it already holds. It is only ever called there, with
-both keys already validated.
+The caller owns the lock *and* the store: :func:`prepare_forced_review` takes
+the very store object whose ``transaction`` ``PipelineService.review_story``
+already holds, performs no ``transaction`` of its own, and never calls
+:func:`pipeline.store.build_store`. This is not a detail. ``build_store`` picks
+``SqliteStore`` under ``PIPELINE_STORE=sqlite``; a second store object is a
+second sqlite3 connection, and writing through it while connection A sits inside
+``BEGIN IMMEDIATE`` fails with ``database is locked`` (or serves a stale JSON
+projection on the read side). The same reasoning is why :mod:`pipeline.unpark`
+may open its own store: unpark owns its own transaction. This module does not.
+It is only ever called from inside that transaction, with both keys already
+validated.
 """
 
 from __future__ import annotations
@@ -46,7 +53,6 @@ from typing import Any
 
 from .audit import record_audit
 from .review_logic import REVIEW_LOGIC_FINGERPRINT_KEY
-from .store import build_store
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +68,17 @@ FORCED_REVIEW_CLEARED_FIELDS: tuple[str, ...] = (
 )
 
 
-def prepare_forced_review(plan_name: str, story_key: str) -> dict[str, Any]:
+def prepare_forced_review(
+    plan_name: str, story_key: str, store: Any
+) -> dict[str, Any]:
     """Clear *story_key*'s last-reviewed markers so its next review runs.
 
-    Must be called inside the plan transaction (it neither locks nor re-reads
-    under a lock of its own). Returns ``{"ok": True}`` once the markers are
-    cleared and the ``story:force_review`` audit entry is written.
+    Must be called inside the caller's plan transaction, passing that same
+    transaction's *store*: it neither locks nor re-reads under a lock of its
+    own, and it never builds a second store (a second connection would deadlock
+    against the transaction this runs inside). Returns ``{"ok": True}`` once
+    the markers are cleared and the ``story:force_review`` audit entry is
+    written.
 
     Returns -- changing nothing -- ``{"ok": False, "error": "review_job_running"}``
     while the story carries a ``review_job`` handle (a detached review is live
@@ -81,7 +92,6 @@ def prepare_forced_review(plan_name: str, story_key: str) -> dict[str, Any]:
     review budget counter are left exactly as they were, so the forced review
     is judged and budgeted like any other.
     """
-    store = build_store()
     manifest = store.get_manifest(plan_name)
     story = manifest["stories"].get(story_key)
     if not story:

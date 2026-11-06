@@ -215,9 +215,9 @@ def _spy_prepare(monkeypatch):
     calls = []
     real = review_force.prepare_forced_review
 
-    def _spy(plan_name, story_key):
+    def _spy(plan_name, story_key, store):
         calls.append((plan_name, story_key))
-        return real(plan_name, story_key)
+        return real(plan_name, story_key, store)
 
     monkeypatch.setattr(review_force, "prepare_forced_review", _spy)
     return calls
@@ -232,7 +232,7 @@ def test_refuses_while_a_review_job_is_running(plan_dir):
 
     _write_manifest(plan_dir, "pl", {"S1": _skipped_story(review_job={"id": "job-7"})})
 
-    result = prepare_forced_review("pl", "S1")
+    result = prepare_forced_review("pl", "S1", pstore.build_store())
 
     assert result == {"ok": False, "error": "review_job_running"}
     story = _read_story(plan_dir, "pl", "S1")
@@ -249,7 +249,7 @@ def test_refuses_a_story_that_is_not_at_tests_passed(plan_dir):
 
     _write_manifest(plan_dir, "pl", {"S1": _skipped_story(status="in_progress")})
 
-    result = prepare_forced_review("pl", "S1")
+    result = prepare_forced_review("pl", "S1", pstore.build_store())
 
     assert result == {"ok": False, "error": "not_reviewable_state"}
     assert "last_reviewed_sha" in _read_story(plan_dir, "pl", "S1")
@@ -266,7 +266,7 @@ def test_live_review_job_is_reported_before_a_wrong_status(plan_dir):
         {"S1": _skipped_story(status="in_progress", review_job={"id": "job-7"})},
     )
 
-    assert prepare_forced_review("pl", "S1") == {
+    assert prepare_forced_review("pl", "S1", pstore.build_store()) == {
         "ok": False,
         "error": "review_job_running",
     }
@@ -278,7 +278,7 @@ def test_unknown_story_is_refused_like_the_unforced_path(plan_dir):
 
     _write_manifest(plan_dir, "pl", {"S1": _skipped_story()})
 
-    assert prepare_forced_review("pl", "NOPE") == {
+    assert prepare_forced_review("pl", "NOPE", pstore.build_store()) == {
         "ok": False,
         "error": "No such story NOPE",
     }
@@ -291,7 +291,7 @@ def test_refused_force_changes_nothing_and_a_follow_up_forces_once(plan_dir):
     story = _skipped_story(review_job={"id": "job-7"})
     _write_manifest(plan_dir, "pl", {"S1": story})
 
-    first = prepare_forced_review("pl", "S1")
+    first = prepare_forced_review("pl", "S1", pstore.build_store())
 
     assert first == {"ok": False, "error": "review_job_running"}
     unchanged = _read_story(plan_dir, "pl", "S1")
@@ -307,7 +307,7 @@ def test_refused_force_changes_nothing_and_a_follow_up_forces_once(plan_dir):
     del manifest["stories"]["S1"]["review_job"]
     (plan_dir / "pl.manifest.json").write_text(json.dumps(manifest))
 
-    second = prepare_forced_review("pl", "S1")
+    second = prepare_forced_review("pl", "S1", pstore.build_store())
 
     assert second == {"ok": True}
     forced = _read_story(plan_dir, "pl", "S1")
@@ -327,7 +327,7 @@ def test_success_clears_exactly_the_three_markers(plan_dir):
 
     _write_manifest(plan_dir, "pl", {"S1": _skipped_story()})
 
-    assert prepare_forced_review("pl", "S1") == {"ok": True}
+    assert prepare_forced_review("pl", "S1", pstore.build_store()) == {"ok": True}
 
     story = _read_story(plan_dir, "pl", "S1")
     assert "last_reviewed_sha" not in story
@@ -346,7 +346,7 @@ def test_success_records_exactly_one_audit_entry(plan_dir):
 
     _write_manifest(plan_dir, "pl", {"S1": _skipped_story()})
 
-    prepare_forced_review("pl", "S1")
+    prepare_forced_review("pl", "S1", pstore.build_store())
 
     records = _audit_records(plan_dir, "pl")
     assert len(records) == 1
@@ -371,7 +371,7 @@ def test_force_keeps_budget_counters_so_request_changes_still_counts(plan_dir):
         },
     )
 
-    prepare_forced_review("pl", "S1")
+    prepare_forced_review("pl", "S1", pstore.build_store())
 
     story = _read_story(plan_dir, "pl", "S1")
     assert story["rework_attempts"] == 2
@@ -614,3 +614,90 @@ def test_review_story_is_still_reachable_through_the_remote_policy():
 
     assert asyncio.run(_run()) == {"ok": True}
     assert len(reached) == 1
+
+
+# ---------------------------------------------------------------------------
+# The store the force writes through
+# ---------------------------------------------------------------------------
+
+def test_force_writes_through_the_callers_sqlite_store(plan_dir, tmp_path, monkeypatch):
+    """Under ``PIPELINE_STORE=sqlite`` the force uses the open transaction's store.
+
+    ``build_store()`` selects a fresh ``SqliteStore`` -- a second sqlite3
+    connection. Writing through it while the caller's connection sits inside
+    ``BEGIN IMMEDIATE`` fails with ``database is locked`` (and the read side can
+    serve a stale projection), so ``prepare_forced_review`` takes the caller's
+    store instead. Driving the real ``SqliteStore`` pins that choice.
+    """
+    from pipeline.review_force import prepare_forced_review
+    from pipeline.review_logic import REVIEW_LOGIC_FINGERPRINT_KEY
+    from pipeline.store_sqlite import SqliteStore
+
+    db = str(tmp_path / "plans.db")
+    monkeypatch.setenv("PIPELINE_STORE", "sqlite")
+    monkeypatch.setenv("PIPELINE_STORE_PATH", db)
+    store = SqliteStore(db)
+    store.save_manifest("pl", {"epics": {}, "stories": {"S1": _skipped_story()}})
+
+    with store.transaction("pl") as acquired:
+        assert acquired
+        assert prepare_forced_review("pl", "S1", store) == {"ok": True}
+
+    story = SqliteStore(db).get_manifest("pl")["stories"]["S1"]
+    for field in ("last_reviewed_sha", REVIEW_LOGIC_FINGERPRINT_KEY, "skip_notified_sha"):
+        assert field not in story
+    assert story["review_verdict"] == "REQUEST_CHANGES"
+    assert story["rework_attempts"] == 2
+    assert len(_audit_records(plan_dir, "pl", action="story:force_review")) == 1
+
+
+def test_force_never_opens_a_store_of_its_own(plan_dir, monkeypatch):
+    """A second store is the bug: opening one is a hard failure here."""
+    from pipeline import review_force
+    from pipeline import store as store_module
+    from pipeline.review_force import prepare_forced_review
+
+    # No store factory on the module at all: a bound ``build_store`` is exactly
+    # what opened the second sqlite connection and locked the transaction.
+    assert not hasattr(review_force, "build_store")
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("prepare_forced_review must not build its own store")
+
+    monkeypatch.setattr(store_module, "build_store", _forbidden)
+    _write_manifest(plan_dir, "pl", {"S1": _skipped_story()})
+
+    assert prepare_forced_review("pl", "S1", store_module.FileStore()) == {"ok": True}
+    assert _read_story(plan_dir, "pl", "S1").get("last_reviewed_sha") is None
+
+
+def test_a_forced_review_runs_end_to_end_on_a_sqlite_backed_service(
+    plan_dir, tmp_path, monkeypatch
+):
+    """The whole path -- service transaction, force, reviewer -- on sqlite.
+
+    ``pipeline.server._store`` is built once at import, so a sqlite deployment
+    hands ``review_story`` an ordinary ``SqliteStore``; the force must run
+    inside that store's own transaction and write through it, or the review is
+    never unskipped.
+    """
+    from pipeline.store_sqlite import SqliteStore
+
+    _quiet_environment(monkeypatch)
+    reviewer_calls = _record_reviewer(monkeypatch)
+    db = str(tmp_path / "plans.db")
+    monkeypatch.setenv("PIPELINE_STORE", "sqlite")
+    monkeypatch.setenv("PIPELINE_STORE_PATH", db)
+    store = SqliteStore(db)
+    monkeypatch.setattr(p, "_store", store)
+    repo = _init_repo(plan_dir.parent)
+    store.save_manifest("pe", {"epics": {}, "stories": {"S1": _reviewed_story(repo)}})
+
+    result = p.review_story("pe", "S1", force=True)
+
+    assert not result.get("skipped")
+    assert len(reviewer_calls) == 1
+    # The markers were cleared on this connection, so the review is a
+    # first-style full-branch pass rather than a since_sha rework diff.
+    assert reviewer_calls[0]["kwargs"]["since_sha"] is None
+    assert len(_audit_records(plan_dir, "pe", action="story:force_review")) == 1

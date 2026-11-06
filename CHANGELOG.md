@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- Documented trace propagation in the telemetry contract: strict validation of an inbound `traceparent`, one trace per dispatch attempt with `TRACEPARENT` handed to the agent subprocess, and the attempt-0 attribution limit when a dispatch event is missed.
 - Operator-supplied adapters for the identity provider, authorizer, event bus,
   forge, ticket provider and notification channels via
   `PIPELINE_<SEAM>_PLUGIN=module:attr` (and `PIPELINE_CHANNEL_PLUGINS` for

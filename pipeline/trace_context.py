@@ -108,3 +108,34 @@ def attempt_trace_id(correlation_id: str, attempt: int) -> str:
     if digest == _ALL_ZERO_TRACE_ID:
         return "0" * 31 + "1"
     return digest
+
+
+_CORRELATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def agent_traceparent(correlation_id: object, attempt: object) -> str | None:
+    """Return the ``traceparent`` for one dispatch attempt, or ``None``.
+
+    The trace id is :func:`attempt_trace_id` of ``(correlation_id, attempt)``,
+    the same id the lifecycle sink files that attempt's ``agent_dispatched``
+    span under, so the agent's own spans join the attempt that launched it.
+    ``ATTEMPT_ROOT_SPAN_ID`` is the attempt's root span and the value is
+    sampled.
+
+    ``None`` means "stage nothing": the id is unusable when it is not a
+    ``str`` of 1-64 ``[A-Za-z0-9._-]`` characters (a correlation id is
+    caller-influenced, so it is validated rather than trusted), and the
+    attempt is unusable when it is not a non-negative ``int`` -- ``bool`` is
+    rejected even though it subclasses ``int``. Arguments are never logged.
+    """
+    if not isinstance(correlation_id, str) or (
+        _CORRELATION_ID_RE.fullmatch(correlation_id) is None
+    ):
+        return None
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:
+        return None
+    return format_traceparent(
+        attempt_trace_id(correlation_id, attempt),
+        ATTEMPT_ROOT_SPAN_ID,
+        sampled=True,
+    )

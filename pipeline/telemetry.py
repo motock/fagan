@@ -63,6 +63,7 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote
 
+from . import telemetry_durations
 from .events import EVENT_TYPES
 from .trace_context import ATTEMPT_ROOT_SPAN_ID, attempt_trace_id, parse_traceparent
 
@@ -523,6 +524,7 @@ def record_lifecycle_event(event: dict) -> None:
     Only the event's routing keys and its outcome/backend payload fields are
     recorded: prompts, briefs and model output never reach a span.
     """
+    telemetry_durations.observe(event)
     tracer = _tracer()
     if tracer is None:
         return
@@ -631,6 +633,7 @@ def configure_metrics(provider: Any | None = None) -> bool:
     )
     _METER = meter
     _METER_PROVIDER = provider
+    telemetry_durations.register(meter)
     return True
 
 
@@ -642,6 +645,7 @@ def reset_metrics() -> None:
     """
     global _METER, _METER_PROVIDER, _SNAPSHOT
     _COUNTERS.clear()
+    telemetry_durations.reset()
     _METER = None
     _METER_PROVIDER = None
     _SNAPSHOT = None

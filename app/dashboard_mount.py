@@ -100,8 +100,10 @@ def mount_routes(app) -> None:
     startup fails: a half-mounted dashboard is not a safe state.
     """
     from app.dashboard_routes_approval import router as approval_router
+    from app.dashboard_routes_metrics import router as metrics_router
 
     app.include_router(approval_router, prefix="/api")
+    app.include_router(metrics_router, prefix="/api")
     ctx = DashboardContext(app)
     registrars = load_plugin_list("dashboard")
     for registrar in registrars:

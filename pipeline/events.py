@@ -40,7 +40,7 @@ EVENT_TYPES = frozenset(
 
 def make_event(type: str, plan: str, story_key=None, payload=None,
                correlation_id=None, *, event_id=None, schema_version=None,
-               idempotency_key=None) -> dict:
+               idempotency_key=None, traceparent=None) -> dict:
     """Create a new event dictionary.
 
     Parameters
@@ -73,15 +73,26 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         Optional producer-supplied idempotency key, stamped as a TOP-LEVEL
         ``"idempotency_key"`` key. Must be a non-empty string of at most 128
         characters. When ``None`` (the default) the key is absent.
+    traceparent:
+        Optional W3C ``traceparent`` value, stamped as a TOP-LEVEL
+        ``"traceparent"`` key so a consumer can correlate the event with the
+        span that produced it. When ``None`` (the default) the value of
+        :func:`pipeline.trace_context.current_traceparent` is used instead, so
+        the active span is stamped automatically. Either way nothing is
+        stamped when no span is active, and a supplied or resolved value must
+        pass :func:`pipeline.trace_context.parse_traceparent`.
 
     Returns
     -------
     dict
         A mapping with keys ``type``, ``plan``, ``story_key``, ``payload`` and
         ``ts`` (timestamp in ISO‑8601 UTC format), plus each of
-        ``correlation_id``, ``event_id``, ``schema_version`` and
-        ``idempotency_key`` only when it is supplied. Each call builds a fresh
-        dict, so optional fields never leak between calls.
+        ``correlation_id``, ``event_id``, ``schema_version``,
+        ``idempotency_key`` and ``traceparent`` only when it is supplied or
+        active. ``traceparent`` is optional and additive: ``schema_version``
+        is unchanged by it, and its absence means no trace context was active.
+        Each call builds a fresh dict, so optional fields never leak between
+        calls.
 
     Raises
     ------
@@ -125,6 +136,16 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
     }
     if correlation_id is not None:
         event["correlation_id"] = correlation_id
+    if traceparent is None:
+        from pipeline.trace_context import current_traceparent
+
+        traceparent = current_traceparent()
+    if traceparent is not None:
+        from pipeline.trace_context import parse_traceparent
+
+        if not isinstance(traceparent, str) or parse_traceparent(traceparent) is None:
+            raise ValueError("traceparent must be a W3C traceparent")
+        event["traceparent"] = traceparent
     if event_id is not None:
         event["event_id"] = event_id
     if schema_version is not None:

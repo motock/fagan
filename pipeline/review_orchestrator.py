@@ -18,6 +18,7 @@ patch it land too.
 """
 
 import subprocess as _subprocess  # the real module; `subprocess` below is a _ServerRef
+from datetime import UTC, datetime
 from pathlib import Path as _Path  # likewise; `Path` below is a _ServerRef
 from typing import Any
 
@@ -34,6 +35,7 @@ from .review_logic import (
     review_logic_fingerprint,
 )
 from .review_refs import _ServerRef
+from .review_verdict_binding import bind_verdict
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 from .story_commit import commit_story
 
@@ -194,12 +196,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
 
     plan_role_config = _plan_role_config(plan_name)
-    # Reviewer self-fix (2026-07-29): captured before invoking the reviewer
-    # so a later APPROVE_WITH_FIX can be mechanically verified against what
-    # actually changed. Guarded like the last_reviewed_sha capture above -
-    # a missing/fake worktree (or any git error) must not crash review;
-    # _verify_reviewer_auto_fix treats a None before_sha as unverifiable and
-    # downgrades to REQUEST_CHANGES rather than trusting an unbounded diff.
+    # Captured before invoking the reviewer: a later APPROVE_WITH_FIX is
+    # verified against it, and the verdict is bound to the sha the reviewer
+    # actually saw (issue 9012b28e). None -> unverifiable; never crash review.
     before_sha = None
     if worktree and os.path.isdir(worktree):
         try:
@@ -466,12 +465,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
 
     # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
-    # confident" self-assessment is never trusted alone - mechanically
-    # re-verify risk, diff size, and the full test suite before honoring it.
-    # Folds into the existing APPROVE/REQUEST_CHANGES branches below
-    # unchanged: verified -> APPROVE (opens a PR like any other approval);
-    # unverified -> REQUEST_CHANGES (counts against the rework budget like
-    # any other rejection, so an unverifiable self-fix can't loop forever).
+    # confident" self-assessment is never trusted alone - re-verify risk,
+    # diff size, and the full test suite before honoring it. Unverified ->
+    # REQUEST_CHANGES, so an unverifiable self-fix can't loop forever.
     if verdict == "APPROVE_WITH_FIX":
         import pipeline.server as _server
 
@@ -482,7 +478,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             before_sha,
         )
 
-    story["review_verdict"] = verdict
+    bind_verdict(story, verdict, before_sha, datetime.now(UTC))
     story["review_deferred_count"] = 0
 
     # High-risk stories require an additional security-engineer pass; both
@@ -872,6 +868,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     capture_output=True,
                     text=True,
                 ).stdout.strip()
+                if story["last_reviewed_sha"] != before_sha:
+                    logging.getLogger("pipeline").info(
+                        "review head moved during review",
+                        extra={"plan": plan_name, "story": story_key})
                 story[REVIEW_LOGIC_FINGERPRINT_KEY] = review_logic_fingerprint()
             except (subprocess.CalledProcessError, OSError):
                 pass

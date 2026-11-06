@@ -1,6 +1,10 @@
 """Opt-in OpenTelemetry tracing and metrics for the pipeline.
 
-Both signals share one switch: ``PIPELINE_OTEL_ENDPOINT``. With it unset this
+Both signals share one switch: an OTLP endpoint. It is set either by the
+standard OpenTelemetry variables (``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` /
+``OTEL_EXPORTER_OTLP_METRICS_ENDPOINT``, or the shared
+``OTEL_EXPORTER_OTLP_ENDPOINT``) or by the deprecated ``PIPELINE_OTEL_ENDPOINT``
+alias. When no OTLP endpoint is configured this
 module is a no-op and never imports ``opentelemetry`` -- the SDK is imported
 lazily inside :func:`configure` and :func:`configure_metrics`, so a deployment
 that exports nothing pays no import cost.
@@ -55,9 +59,27 @@ from .events import EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
-#: Environment variable that turns tracing and metrics on. Unset (or empty)
-#: means no-op.
+#: Deprecated alias that turns tracing and metrics on. Unset (or empty) means no-op.
+#: ``_signal_endpoint`` prefers the standard OpenTelemetry endpoint variables.
 ENDPOINT_ENV = "PIPELINE_OTEL_ENDPOINT"
+
+#: Standard OpenTelemetry endpoint variables. A set standard variable wins over the alias
+#: and is read by the OTLP exporter itself, so headers, certificates and timeouts
+#: (OTEL_EXPORTER_OTLP_HEADERS, _CERTIFICATE, _TIMEOUT) apply with no code here.
+_TRACES_ENDPOINT_ENVS = ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT")
+_METRICS_ENDPOINT_ENVS = ("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT")
+
+
+def _signal_endpoint(standard_envs: tuple[str, ...]) -> tuple[bool, str | None]:
+    """(configured, explicit endpoint) for one signal.
+
+    A set standard variable means configured with no explicit endpoint (the exporter reads
+    the environment itself); otherwise the deprecated alias means configured with that URL.
+    """
+    if any(os.environ.get(name) for name in standard_envs):
+        return True, None
+    alias = os.environ.get(ENDPOINT_ENV)
+    return (True, alias) if alias else (False, None)
 
 #: ``service.name`` resource attribute every exported span carries; also the
 #: instrumentation scope name the metrics are created under.
@@ -153,8 +175,8 @@ def __getattr__(name: str) -> Any:
 
 
 def enabled() -> bool:
-    """Is tracing on? True once an exporter is configured or the env var is set."""
-    return _EXPORTER is not None or bool(os.environ.get(ENDPOINT_ENV))
+    """Is tracing on? True once an exporter is configured or an OTLP endpoint variable is set."""
+    return _EXPORTER is not None or _signal_endpoint(_TRACES_ENDPOINT_ENVS)[0]
 
 
 def _log_export_failure(exc: BaseException) -> None:
@@ -209,22 +231,22 @@ def configure(exporter: Any | None = None) -> None:
     ----------
     exporter:
         Exporter to send spans to. ``None`` builds the OTLP/HTTP exporter from
-        ``PIPELINE_OTEL_ENDPOINT``; when that variable is unset the call is a
-        no-op and ``opentelemetry`` is never imported.
+        an OTLP endpoint read from the environment; when no OTLP endpoint is
+        configured the call is a no-op and ``opentelemetry`` is never imported.
     """
     global _TRACER, _PROVIDER, _EXPORTER
     if _TRACER is not None:
         return
     batch = exporter is None
     if exporter is None:
-        endpoint = os.environ.get(ENDPOINT_ENV)
-        if not endpoint:
+        configured, endpoint = _signal_endpoint(_TRACES_ENDPOINT_ENVS)
+        if not configured:
             return
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter,
         )
 
-        exporter = OTLPSpanExporter(endpoint=endpoint)
+        exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
 
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
@@ -248,7 +270,7 @@ def configure(exporter: Any | None = None) -> None:
 
 def _tracer() -> Any | None:
     """The tracer, lazily configured from the environment; None when disabled."""
-    if _TRACER is None and os.environ.get(ENDPOINT_ENV):
+    if _TRACER is None and _signal_endpoint(_TRACES_ENDPOINT_ENVS)[0]:
         configure()
     return _TRACER
 
@@ -375,7 +397,7 @@ def configure_metrics(provider: Any | None = None) -> bool:
     """Create the counters and gauges once; return whether they are registered.
 
     Returns ``False`` -- and registers nothing, not even on a supplied
-    ``provider`` -- when ``PIPELINE_OTEL_ENDPOINT`` is unset, so the disabled
+    ``provider`` -- when no OTLP endpoint is configured, so the disabled
     path exports nothing and imports no ``opentelemetry`` module.
 
     Parameters
@@ -383,12 +405,12 @@ def configure_metrics(provider: Any | None = None) -> bool:
     provider:
         Meter provider to create the instruments on. ``None`` builds a
         ``MeterProvider`` exporting over OTLP/HTTP to
-        ``PIPELINE_OTEL_ENDPOINT``. A second call is a no-op: repeated
-        registration would duplicate every series.
+        an OTLP endpoint read from the environment. A second call is a no-op:
+        repeated registration would duplicate every series.
     """
     global _METER, _METER_PROVIDER
-    endpoint = os.environ.get(ENDPOINT_ENV)
-    if not endpoint:
+    configured, endpoint = _signal_endpoint(_METRICS_ENDPOINT_ENVS)
+    if not configured:
         return False
     if _METER is not None:
         return True
@@ -404,7 +426,11 @@ def configure_metrics(provider: Any | None = None) -> bool:
         provider = MeterProvider(
             resource=Resource.create({"service.name": SERVICE_NAME}),
             metric_readers=[
-                PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint))
+                PeriodicExportingMetricReader(
+                    OTLPMetricExporter(endpoint=endpoint)
+                    if endpoint
+                    else OTLPMetricExporter()
+                )
             ],
         )
 
@@ -582,7 +608,7 @@ def flush(timeout_millis: int = 5000) -> None:
     Flushing and shutting the providers down here makes the export happen
     before the interpreter goes away.
 
-    No-op when nothing is configured (``PIPELINE_OTEL_ENDPOINT`` unset), and
+    No-op when no OTLP endpoint is configured, and
     never raises: telemetry must not be able to fail a run, so a provider error
     is logged by exception class only (the message can carry paths). The module
     globals keep their providers so a second call flushes just as effectively.

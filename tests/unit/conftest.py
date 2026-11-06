@@ -13,7 +13,9 @@ import pytest
 # agent's pytest subprocess and makes every park-expecting guard test fail
 # on a correct codebase (observed live 2026-07-22 - the agent could never
 # see green, so it "fixed" a correct file until it broke).
-_ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_")
+# OTEL_EXPORTER_OTLP_* is scrubbed too, so an exported standard OpenTelemetry
+# endpoint cannot switch telemetry on under the suite.
+_ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_", "OTEL_EXPORTER_OTLP_")
 
 # Set by tests/conftest.py to a nonexistent path so no test reads a developer's
 # real notifications.json; this scrub must not undo it.

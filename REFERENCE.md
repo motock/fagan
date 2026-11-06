@@ -2463,6 +2463,8 @@ collector URL and an OTLP/HTTP exporter is built for it, on a resource whose
 name the metrics in the next subsection are created under. Both signals share
 this one switch.
 
+The standard OpenTelemetry variables also switch it on and configure the exporter: `OTEL_EXPORTER_OTLP_ENDPOINT` (or the signal-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`), `OTEL_EXPORTER_OTLP_HEADERS` for an authenticated collector, and `OTEL_EXPORTER_OTLP_CERTIFICATE`. When a standard endpoint variable is set for a signal it wins and `PIPELINE_OTEL_ENDPOINT` is ignored for that signal. `PIPELINE_OTEL_ENDPOINT` remains a deprecated alias that enables both signals exactly as before. With neither set the pipeline exports nothing.
+
 The exporter can never break the work it instruments: an exporter failure never
 fails a request and never fails a scheduler tick. The error is caught, the
 request or tick carries on, and a warning naming only the error's type — never
@@ -2476,7 +2478,9 @@ emitted.
 
 Three counters and two observable gauges describe what an operator alerts on.
 They are registered once, under the `fagan` instrumentation scope, and
-only while `PIPELINE_OTEL_ENDPOINT` is set.
+only while an OTLP endpoint is configured for metrics — the deprecated
+`PIPELINE_OTEL_ENDPOINT` alias, the shared `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
 
 | Metric | Kind | What it measures | Labels |
 | --- | --- | --- | --- |

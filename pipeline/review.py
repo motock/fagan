@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from app import backend, role_registry
+from pipeline.review_base import resolve_review_base
 
 from . import context_sources as ctxsrc
 from . import paths
@@ -198,12 +199,13 @@ def _first_review_base(worktree: str) -> str | None:
     since the pipeline operates across repos that differ on default-branch
     naming and on whether a remote exists at all (mirrors rebrief.py's
     _base_commit, duplicated rather than imported to keep review.py's diff
-    materialization independent of rebrief's private helpers)."""
-    for candidate in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
-        merge_base = _review_git(worktree, ["merge-base", "HEAD", candidate])
-        if merge_base and merge_base.strip():
-            return merge_base.strip()
-    return None
+    materialization independent of rebrief's private helpers).
+
+    Delegates to `resolve_review_base`, which refreshes `origin` once and then
+    picks the candidate closest to HEAD instead of the first one that resolves:
+    in a long-lived clone a stale `origin/main` used to win on order alone and
+    the review graded history from several stories back."""
+    return resolve_review_base(worktree)
 
 
 def _materialize_review_diff(worktree: str, base_ref: str) -> str | None:

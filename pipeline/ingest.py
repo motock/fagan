@@ -66,8 +66,8 @@ _scaffolding_provider_mismatch_warning = _ServerRef(
 role_registry = _ServerRef("role_registry")
 
 # .claude/rules/agent-dispatch-story-sizing.md's mechanically-checkable caps
-# for a story dispatched to a non-Claude executor: at most 2 production files
-# in scope, and no production file over ~1000 lines.
+# for a story dispatched to a non-capable (on-device) executor: at most 2
+# production files in scope, and no production file over ~1000 lines.
 _SIZING_MAX_PRODUCTION_FILES = 2
 _SIZING_MAX_FILE_LINES = 1000
 
@@ -108,12 +108,12 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     .claude/rules/agent-dispatch-story-sizing.md's caps for its dispatch
     tier, or names a file that already exceeds the file-size cap on disk.
     Returns None when the story is not sized at all (only the local/
-    cloud-open backends and explicitly on-device providers are checked --
-    Claude-class dispatch does not need this crutch). The 2-file cap is
-    lifted for an entry declaring "class": "capable"; the file-size cap
-    applies to every class. Never raises; a filesystem read failure
-    degrades to None (this must stay an observability hook, never a gate
-    -- see pipeline/dispatch.py's 'multi-model concurrent dispatch'
+    cloud-open backends are sized, so nothing that used to be silent
+    starts warning; Claude-class dispatch does not need this crutch). The
+    2-file cap is lifted for an entry declaring "class": "capable"; the
+    file-size cap applies to every class. Never raises; a filesystem read
+    failure degrades to None (this must stay an observability hook, never
+    a gate -- see pipeline/dispatch.py's 'multi-model concurrent dispatch'
     warnings for the established pattern this mirrors)."""
     if not sizing_applies(story, role_registry):
         return None

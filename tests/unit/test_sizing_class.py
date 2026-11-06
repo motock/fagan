@@ -2,14 +2,16 @@
 
 `pipeline.sizing_class.needs_small_story_caps` is the tier decision that used to
 be a bare backend-name tuple inside `pipeline.ingest._story_sizing_warning`. The
-count cap is a crutch for small on-device models, so a dispatch target declared
-``"class": "capable"`` is not capped on file count; ``"class": "on-device"`` is
-capped whatever its provider is called; and an unset or unrecognised class keeps
-the pre-existing backend-name behaviour.
+count cap is a crutch for small on-device models, so a provider whose model entry
+explicitly declares ``"class": "capable"`` is not capped on file count, while one
+declaring ``"class": "on-device"`` is. An unset or unrecognised class keeps the
+pre-existing backend-name behaviour: the declared value is read and interpreted
+through `pipeline.strength_class`, never re-derived here, so this hook cannot
+diverge from it about what a declared class *means*.
 
-`pipeline.sizing_class.sizing_applies` is the wider scope question: today only
-the local/cloud-open backends are sized at all, and a story is sized when its
-effective provider is one of those OR its declared class is ``on-device``.
+`pipeline.sizing_class.sizing_applies` is the wider scope question, narrowed to
+the pre-existing gate: only the local/cloud-open backends are sized at all, so
+no provider that used to be silent starts emitting sizing warnings.
 
 Nothing here may ever raise: this gates an advisory observability hook, so an
 unreadable registry degrades to the old backend-name behaviour.
@@ -20,12 +22,16 @@ from __future__ import annotations
 import pytest
 
 from app import role_registry
-from pipeline.sizing_class import needs_small_story_caps, sizing_applies
+from pipeline.sizing_class import (
+    CAPABLE,
+    ON_DEVICE,
+    needs_small_story_caps,
+    sizing_applies,
+)
+from pipeline.strength_class import strength_class
 
 OLD_BACKEND = "ollama"
 NON_OLD_BACKEND = "vllm"
-CAPABLE = "capable"
-ON_DEVICE = "on-device"
 
 THREE_PRODUCTION_FILES = ["app/a.py", "app/b.py", "app/c.py"]
 
@@ -37,16 +43,22 @@ def _isolate_dispatch_env(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_DEFAULT", raising=False)
 
 
-def _registry(provider: str, declared_class: str | None = None) -> dict:
-    """A synthetic registry declaring *provider* (and optionally its class)."""
-    entry: dict = {"models": {"m": {"tag": "m:latest"}}}
+def _registry(
+    provider: str, declared_class: str | None = None, tag: str = "m:latest"
+) -> dict:
+    """A synthetic registry declaring *provider* with one model entry.
+
+    ``class`` goes where `REFERENCE.md` documents it: on the
+    ``providers.<name>.models.<model>`` entry.
+    """
+    model: dict = {"tag": tag}
     if declared_class is not None:
-        entry["class"] = declared_class
-    return {"providers": {provider: entry}}
+        model["class"] = declared_class
+    return {"providers": {provider: {"models": {"m": model}}}}
 
 
-def _story(backend: str | None) -> dict:
-    story = {"model": "m", "files": list(THREE_PRODUCTION_FILES)}
+def _story(backend: str | None, model: str = "m") -> dict:
+    story = {"model": model, "files": list(THREE_PRODUCTION_FILES)}
     if backend is not None:
         story["backend"] = backend
     return story
@@ -75,44 +87,107 @@ def test_needs_small_story_caps_truth_table(backend, declared_class, expected):
     assert needs_small_story_caps(_story(backend), registry) is expected
 
 
-@pytest.mark.parametrize(
-    "backend,declared_class,expected",
-    [
-        (OLD_BACKEND, CAPABLE, True),
-        (OLD_BACKEND, ON_DEVICE, True),
-        (OLD_BACKEND, None, True),
-        (NON_OLD_BACKEND, ON_DEVICE, True),
-        # A capable provider the old tuple never sized stays unsized: only the
-        # size cap would apply to it and today it is not inspected at all.
-        (NON_OLD_BACKEND, CAPABLE, False),
-        (NON_OLD_BACKEND, None, False),
-        ("claude", None, False),
-    ],
-)
-def test_sizing_applies_covers_old_backends_and_on_device_classes(
-    backend, declared_class, expected
-):
+@pytest.mark.parametrize("backend", [OLD_BACKEND, NON_OLD_BACKEND])
+@pytest.mark.parametrize("declared_class", [CAPABLE, ON_DEVICE])
+def test_an_explicitly_capable_class_is_never_capped(backend, declared_class):
+    """No second, divergent tier decision: an explicit `capable` is uncapped.
+
+    The declared value is interpreted with `pipeline.strength_class`, so the two
+    can never disagree about what a declared class means. The converse does not
+    hold, by design: an unset class on a provider outside the old backend set
+    derives as on-device yet keeps the old (uncapped) answer, so nothing that
+    used to be silent starts warning.
+    """
     registry = _registry(backend, declared_class)
 
-    assert sizing_applies(_story(backend), registry) is expected
+    shared = strength_class(backend, "m:latest", declared_class)
+    capped = needs_small_story_caps(_story(backend), registry)
+
+    assert (shared == CAPABLE) is (capped is False)
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [
+        # `claude` is outside the old backend set, so it was never sized at all.
+        ("claude", False),
+        # `litellm` IS in the old set and declares no class, so the base hook
+        # keeps its pre-existing capped answer; the ingest path's
+        # `class_aware_sizing_warning` is what lifts the count cap for it.
+        ("litellm", True),
+    ],
+)
+def test_derived_capable_providers_keep_the_old_answer(provider, expected):
+    """This hook only reads an EXPLICIT class; derivation stays where it is.
+
+    `claude`/`litellm` are capable by provider name in `pipeline.strength_class`,
+    but the ingest notice's count cap is lifted for them by
+    `pipeline.sizing_by_class.class_aware_sizing_warning` (which the ingest
+    manifest write goes through), not by this advisory hook -- see the
+    pre-existing `test_ingest_story_sizing_warning` pins for `litellm` and for a
+    `:cloud` model.
+    """
+    assert (
+        needs_small_story_caps(_story(provider), _registry(provider)) is expected
+    ), provider
+
+
+def test_an_ollama_cloud_tag_keeps_the_old_answer_for_this_hook():
+    """`:cloud` capability is derived, so this hook keeps the old behaviour."""
+    registry = _registry("ollama", tag="glm-5.3-flash:cloud")
+
+    assert needs_small_story_caps(_story("ollama"), registry) is True
+
+
+def test_sizing_applies_is_the_pre_existing_backend_gate():
+    """Only the six old backend names are sized; nothing new starts warning."""
+    old_backends = ("local", "ollama", "lmstudio", "mlx", "litellm", "auto")
+    for backend in old_backends:
+        assert sizing_applies(_story(backend), _registry(backend)) is True, backend
+    for backend in ("claude", NON_OLD_BACKEND):
+        assert sizing_applies(_story(backend), _registry(backend)) is False, backend
+
+
+@pytest.mark.parametrize(
+    "backend,declared_class",
+    [
+        (NON_OLD_BACKEND, ON_DEVICE),
+        (NON_OLD_BACKEND, CAPABLE),
+        (NON_OLD_BACKEND, None),
+        ("claude", ON_DEVICE),
+        ("claude", None),
+    ],
+)
+def test_sizing_applies_does_not_widen_beyond_the_old_backend_set(
+    backend, declared_class
+):
+    """A provider the old gate ignored stays unsized, whatever it declares."""
+    assert sizing_applies(_story(backend), _registry(backend, declared_class)) is False
 
 
 def test_unset_class_with_every_old_backend_name_is_capped():
-    """The tuple that moved out of ingest.py keeps all six of its names."""
+    """The tuple that moved out of ingest.py keeps all six of its names.
+
+    None of them declares a class, so all keep the pre-existing answer --
+    including `litellm`, whose derived capability is handled by
+    `pipeline.sizing_by_class.class_aware_sizing_warning` in the ingest path.
+    """
     old_backends = ("local", "ollama", "lmstudio", "mlx", "litellm", "auto")
     for backend in old_backends:
-        assert needs_small_story_caps(_story(backend), _registry(backend)) is True, backend
+        assert (
+            needs_small_story_caps(_story(backend), _registry(backend)) is True
+        ), backend
     for backend in ("claude", NON_OLD_BACKEND):
         assert needs_small_story_caps(_story(backend), _registry(backend)) is False, backend
 
 
-def test_missing_backend_resolves_through_the_registry_dispatch_role():
+def test_missing_backend_and_model_resolve_through_the_registry_dispatch_role():
     registry = _registry("ollama", CAPABLE)
-    registry["roles"] = {"dispatch": {"provider": "ollama"}}
+    registry["roles"] = {"dispatch": {"provider": "ollama", "model": "m"}}
 
     assert needs_small_story_caps({"files": list(THREE_PRODUCTION_FILES)}, registry) is False
 
-    registry["providers"]["ollama"].pop("class")
+    registry["providers"]["ollama"]["models"]["m"].pop("class")
     assert needs_small_story_caps({"files": list(THREE_PRODUCTION_FILES)}, registry) is True
 
 
@@ -122,15 +197,6 @@ def test_missing_backend_and_no_dispatch_role_is_not_capped():
 
     assert needs_small_story_caps({"files": list(THREE_PRODUCTION_FILES)}, registry) is False
     assert sizing_applies({"files": list(THREE_PRODUCTION_FILES)}, registry) is False
-
-
-def test_a_model_entry_class_is_honoured_without_a_provider_level_one():
-    """REFERENCE.md documents `class` on the providers.<name>.models.<model> entry."""
-    registry = {
-        "providers": {"ollama": {"models": {"m": {"tag": "m:latest", "class": CAPABLE}}}}
-    }
-
-    assert needs_small_story_caps(_story(OLD_BACKEND), registry) is False
 
 
 class _BrokenRegistry:
@@ -173,6 +239,16 @@ def test_the_live_registry_module_is_read_through_load_registry(monkeypatch):
     assert needs_small_story_caps(_story(OLD_BACKEND), role_registry) is False
 
 
+def test_the_live_registry_module_failing_degrades_to_old_behaviour(monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(role_registry, "load_registry", _boom)
+
+    assert needs_small_story_caps(_story(OLD_BACKEND), role_registry) is True
+    assert needs_small_story_caps(_story(NON_OLD_BACKEND), role_registry) is False
+
+
 @pytest.mark.parametrize(
     "story",
     [None, [], {}, {"backend": None}, {"backend": 7}, {"backend": "  "},
@@ -190,9 +266,14 @@ def test_malformed_registry_payloads_degrade_to_the_old_behaviour():
         assert needs_small_story_caps(_story(NON_OLD_BACKEND), payload) is False, payload
 
 
-def test_provider_class_is_normalised_and_unknown_values_are_ignored():
-    registry = _registry(OLD_BACKEND, " Capable ")
+@pytest.mark.parametrize("declared", [" Capable ", "CAPABLE", "", "on_device"])
+def test_unrecognised_class_values_keep_the_old_behaviour(declared):
+    """Only exactly `capable`/`on-device` are honoured; anything else is old.
 
-    assert needs_small_story_caps(_story(OLD_BACKEND), registry) is False
-    assert needs_small_story_caps(_story(OLD_BACKEND), _registry(OLD_BACKEND, "CAPABLE")) is False
-    assert needs_small_story_caps(_story(OLD_BACKEND), _registry(OLD_BACKEND, "")) is True
+    `pipeline.strength_class` logs and ignores an unrecognised value, so the
+    sizing decision must fall back to the backend name, never guess.
+    """
+    registry = _registry(OLD_BACKEND, declared)
+
+    assert needs_small_story_caps(_story(OLD_BACKEND), registry) is True
+    assert needs_small_story_caps(_story(NON_OLD_BACKEND), registry) is False

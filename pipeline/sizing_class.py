@@ -3,26 +3,30 @@
 `.claude/rules/agent-dispatch-story-sizing.md` prescribes two caps for an
 on-device dispatch tier: at most 2 production files in scope, and no production
 file over ~1000 lines. The file-COUNT cap is a crutch for small models with a
-limited hold-in-head budget; a dispatch target whose registry entry declares
-``"class": "capable"`` does not need it. The file-SIZE cap still applies to
-every class -- a 1200-line file is a problem for any model.
+limited hold-in-head budget; a dispatch target the strength classifier calls
+``capable`` (``claude``, ``litellm``, an ``ollama`` model tagged ``:cloud``, or a
+registry entry declaring ``"class": "capable"``) does not need it. The file-SIZE
+cap still applies to every class -- a 1200-line file is a problem for any model.
 
-Until now `pipeline.ingest._story_sizing_warning` decided all of this from a
-bare backend-name tuple, so a provider declared capable was still capped to 2
-files. This module holds that decision instead:
+The class is read, never re-derived: the ``class`` a
+``providers.<name>.models.<model>`` entry declares is looked up with
+`pipeline.strength_class`'s ``registry_entry_class`` and interpreted with its
+``strength_class``, so there is no second private notion of what a declared
+class means. Only an EXPLICIT ``capable``/``on-device`` changes the answer; an
+unset (or unrecognised) class keeps the pre-existing backend-name behaviour, so
+`pipeline.strength_class`'s name/``:cloud`` derivation of capability does not
+silently widen or narrow this advisory. That mirrors
+`pipeline.sizing_by_class`, which is where the ingest path lifts the count cap
+for a derived-capable target (``class_aware_sizing_warning``): the base hook
+this module gates keeps today's message, and the wrapper filters it.
 
-* ``sizing_applies`` -- is the story sized at all? True for the pre-existing
+* ``sizing_applies`` -- is the story sized at all? Exactly the pre-existing
   backend set (``local``/``ollama``/``lmstudio``/``mlx``/``litellm``/``auto``,
-  notably excluding ``claude``) or for any provider declared ``on-device``.
+  notably excluding ``claude``), so nothing that used to be silent starts
+  warning.
 * ``needs_small_story_caps`` -- does the 2-production-file cap apply? False for
-  a ``capable`` target, True for an ``on-device`` one, and the old backend-name
-  answer when the class is unset or unrecognised.
-
-The class itself is the ``"class"`` field documented for a registry entry
-(``REFERENCE.md``, per-model ``class``): an explicit value on the provider's own
-entry wins, else the effective dispatch model's entry is consulted. Derivation
-by provider name / ``:cloud`` tag is deliberately NOT repeated here -- an unset
-class must keep the old backend-name behaviour, not tighten it.
+  a ``capable`` class, True for an entry explicitly declaring ``on-device``, and
+  the old backend-name answer when the class is unset or unrecognised.
 
 Neither function ever raises: this gates an advisory, non-blocking observability
 hook, so an unreadable registry degrades to the old backend-name behaviour.
@@ -31,10 +35,12 @@ from __future__ import annotations
 
 import os
 
-from .strength_class import registry_entry_class
-
-CAPABLE = "capable"
-ON_DEVICE = "on-device"
+from .strength_class import (
+    CAPABLE,
+    ON_DEVICE,
+    registry_entry_class,
+    strength_class,
+)
 
 # The backend-name gate this decision replaced in
 # ``pipeline.ingest._story_sizing_warning``: a story on one of these backends
@@ -46,6 +52,9 @@ OLD_SMALL_STORY_BACKENDS = frozenset(
 _PROVIDER_ENV = "PIPELINE_BACKEND_DISPATCH"
 _MODEL_ENV = "PIPELINE_LOCAL_MODEL_DEFAULT"
 _ROLE = "dispatch"
+# Only an explicit value from this set moves the sizing answer; every other
+# value (including a malformed one) falls back to the old backend-name rule.
+_DECLARED_CLASSES = frozenset({CAPABLE, ON_DEVICE})
 # ``pipeline.ingest._preflight_dispatch_provider`` falls back to "claude" when
 # nothing declares a provider; mirroring it keeps the two in step.
 _DEFAULT_PROVIDER = "claude"
@@ -111,76 +120,69 @@ def _effective_model(story, payload: dict) -> str | None:
     return None
 
 
-def _declared_class(payload: dict, provider: str, model: str | None) -> str | None:
-    """Return the class declared for *provider*, else for its effective model.
-
-    An explicit value on the provider's own entry wins outright; otherwise the
-    per-model entry documented in ``REFERENCE.md`` is consulted. Anything that
-    is not ``"capable"``/``"on-device"`` is returned as its normalised string so
-    the caller can treat it as unrecognised. Never raises.
-    """
-    providers = payload.get("providers")
-    entry = providers.get(provider) if isinstance(providers, dict) else None
-    if isinstance(entry, dict):
-        declared = entry.get("class")
-        if isinstance(declared, str):
-            return _normalise(declared)
-    if model:
-        declared = registry_entry_class(payload, provider, model)
-        if declared:
-            return _normalise(declared)
-    return None
+def _story_backend(story) -> str:
+    """The story's own stamped dispatch backend, normalised (``""`` if none)."""
+    return _normalise(story.get("backend") if isinstance(story, dict) else None)
 
 
 def _old_backend(story) -> bool:
     """The pre-existing answer: is the story's own backend in the old set?"""
-    backend = story.get("backend") if isinstance(story, dict) else None
-    if not _normalise(backend):
-        backend = os.environ.get(_PROVIDER_ENV)
-    return _normalise(backend) in OLD_SMALL_STORY_BACKENDS
+    backend = _story_backend(story) or _normalise(os.environ.get(_PROVIDER_ENV))
+    return backend in OLD_SMALL_STORY_BACKENDS
 
 
-def _decide(story, registry) -> tuple[bool, bool]:
-    """Return ``(sizing_applies, needs_small_story_caps)``; may raise."""
-    payload = _payload(registry)
+def _needs_caps(story, payload: dict) -> bool:
+    """Return the 2-file-cap answer for a readable *payload*; may raise."""
     provider = _effective_provider(story, payload)
     old = provider in OLD_SMALL_STORY_BACKENDS
-    declared = _declared_class(payload, provider, _effective_model(story, payload))
-    if declared == CAPABLE:
-        # A capable target loses the count cap but keeps the size cap.
-        return old, False
-    if declared == ON_DEVICE:
-        # An explicit on-device class is sized even on a provider the old
-        # backend-name tuple would have ignored.
-        return True, True
-    # Unset, unrecognised or non-string class: exactly the old behaviour.
-    return old, old
+    model = _effective_model(story, payload)
+    declared = registry_entry_class(payload, provider, model) if model else None
+    if declared in _DECLARED_CLASSES:
+        # Interpret the declared class with `pipeline.strength_class`, so there
+        # is one definition of what "capable"/"on-device" means. Only an
+        # EXPLICIT class moves the answer: a class derived from the provider
+        # name or an ollama `:cloud` tag keeps the old backend-name behaviour
+        # here, because the ingest notice goes through
+        # `pipeline.sizing_by_class.class_aware_sizing_warning`, which lifts the
+        # count cap for derived-capable targets. Widening this hook instead
+        # would change the message of every existing :cloud story.
+        return strength_class(provider, model, declared) == ON_DEVICE
+    # Unset or unrecognised class: exactly the old backend-name behaviour.
+    return old
 
 
 def sizing_applies(story: dict, registry) -> bool:
     """Return True when *story* is sized at all; never raises.
 
-    True for a story on one of the old backend names, and for any story whose
-    effective provider declares ``"class": "on-device"``. A ``claude``-class
-    dispatch target is not sized (only the size cap would ever apply to it and
-    the old gate never inspected it), which keeps today's silence intact.
+    True for a story on one of the old backend names and False otherwise, which
+    is the pre-existing gate: ``claude``-class dispatch is not sized, and an
+    explicitly on-device provider outside the old set is not newly warned about.
+    The file-size cap inside that gate applies to every class.
     """
+    backend = _story_backend(story)
+    if backend:
+        # The ingest path always stamps the story's backend, so the common case
+        # needs no registry read at all.
+        return backend in OLD_SMALL_STORY_BACKENDS
     try:
-        return _decide(story, registry)[0]
+        provider = _effective_provider(story, _payload(registry))
     except Exception:  # noqa: BLE001 - advisory hook: degrade, never gate
         return _old_backend(story)
+    return provider in OLD_SMALL_STORY_BACKENDS
 
 
 def needs_small_story_caps(story: dict, registry) -> bool:
     """Return True when the 2-production-file cap applies; never raises.
 
-    False for a ``"class": "capable"`` dispatch target; True for an
-    ``"class": "on-device"`` one; otherwise the old backend-name answer (True
-    for ``local``/``ollama``/``lmstudio``/``mlx``/``litellm``/``auto``).
+    False for a ``capable`` class (``claude``, ``litellm``, an ``ollama``
+    ``:cloud`` tag, or an explicit ``"class": "capable"`` entry); True for an
+    entry explicitly declaring ``"class": "on-device"``; otherwise the old
+    backend-name answer (True for
+    ``local``/``ollama``/``lmstudio``/``mlx``/``litellm``/``auto``).
     An unreadable registry or a malformed story degrades to that same old
     answer, so the sizing notice stays advisory.
     """
     try:
-        return _decide(story, registry)[1]
+        return _needs_caps(story, _payload(registry))
     except Exception:  # noqa: BLE001 - advisory hook: degrade, never gate
         return _old_backend(story)

@@ -61,7 +61,8 @@ neither profile.
 ## Mandatory attributes
 
 Every signal — trace or metric — carries these resource attributes:
-`service.name` is always `fagan`; `service.instance.id` identifies the process
+`service.name` is `fagan` unless the deployment sets `OTEL_SERVICE_NAME`;
+`service.instance.id` identifies the process
 emitting; `fagan.namespace` is an opaque string that is `default` in core. The
 namespace comes from deployment configuration through
 `OTEL_RESOURCE_ATTRIBUTES` and from nowhere else. It is never taken from request

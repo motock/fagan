@@ -47,8 +47,21 @@ class JsonLogFormatter(logging.Formatter):
             "level": record.levelname,
             "service": record.name,
             "correlation_id": current_correlation_id(),
-            "message": record.getMessage(),
         }
+        try:
+            from pipeline.trace_context import current_traceparent, parse_traceparent
+
+            traceparent = current_traceparent()
+            parsed = parse_traceparent(traceparent) if traceparent else None
+            if parsed is not None:
+                payload["trace_id"] = parsed["trace_id"]
+                payload["span_id"] = parsed["span_id"]
+        except Exception:  # noqa: BLE001 - a trace lookup must never break log emission
+            # Trace-id enrichment is best effort: a lookup failure must never
+            # break log emission, and the raw header value must never be logged.
+            payload.pop("trace_id", None)
+            payload.pop("span_id", None)
+        payload["message"] = record.getMessage()
         payload.update(
             {
                 key: value

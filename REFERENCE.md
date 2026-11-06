@@ -2518,6 +2518,8 @@ The throttle suppresses rather than resets: a burst of failures produces one
 warning, and the next warning is permitted a full minute after the one actually
 emitted.
 
+Trace propagation is part of the same contract: the dashboard accepts a W3C `traceparent` on `/api/` requests, lifecycle spans form one trace per dispatch attempt, and the agent subprocess receives that attempt's `TRACEPARENT` environment variable so its own spans join the trace that dispatched it. A process that never saw an attempt's dispatch event files later events under attempt 0, because telemetry is lossy by contract. See [the trace propagation section of the telemetry contract](docs/TELEMETRY_CONTRACT.md#trace-propagation).
+
 ### OpenTelemetry metric names
 
 Three counters and two observable gauges describe what an operator alerts on.

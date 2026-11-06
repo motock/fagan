@@ -97,6 +97,48 @@ Renaming one of these is a breaking change. It needs a CHANGELOG entry marked
 **BREAKING**, because dashboards, alerts and downstream queries are written
 against the published names and no alias is kept.
 
+## Trace propagation
+
+Fagan speaks the W3C trace-context vocabulary, within limits set by who controls
+each value.
+
+**Inbound.** The dashboard accepts the W3C `traceparent` header on `/api/`
+requests. The header is caller-controlled, so it is read only through
+`pipeline.trace_context.parse_traceparent`, which returns `None` for anything
+that is not exactly version `00`, a 32-character lowercase hex trace id that is
+not all zeros, a 16-character lowercase hex span id that is not all zeros and 2
+hex flags. `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01` is accepted;
+an uppercase trace id, an all-zero trace id or a version other than `00` is
+rejected. A rejected value is ignored, and the raw header is never logged.
+`tracestate` is never propagated: it is unbounded, caller-controlled data, so it
+is dropped rather than forwarded.
+
+**Outbound.** A published event carries an optional top-level `traceparent` key,
+present only when a span is active or the emitter supplied one. A consumer
+validates it with `parse_traceparent` before using it.
+
+**Attempts.** The lifecycle spans form one trace per dispatch attempt. The trace
+id is derived from the story's correlation id and the attempt number, so every
+event of an attempt lands in one trace and a new attempt opens a new one.
+Attempt 1 and later carry a span link to the previous attempt's root span, which
+is how an operator walks a rework chain. The agent subprocess receives
+`TRACEPARENT` for the attempt it was launched for, so the agent's own spans join
+the trace that dispatched it.
+
+**Logs and metrics.** A log line carries `trace_id` and `span_id` when a span is
+active, and neither key otherwise. Trace and span ids are never metric labels:
+they are unbounded, per-request values, and a label per value buys cardinality
+without buying a query.
+
+**Loss.** Telemetry is lossy by contract. The attempt number travels only on the
+`agent_dispatched` event, and a process files each event under the last attempt
+it saw for that story — attempt 0 when it has seen none. Missing the event never
+buffers or drops an event, and the process never advances its notion of the
+attempt by inferring one from the order of the events it emits: with correlation
+id `c-7f3a`, a process that has seen no dispatch event files the events it emits
+during attempts 3, 4 and 5 under attempt 0 — the trace id derived from `c-7f3a`
+and `0` — not under 3, 4 or 5.
+
 ## Data classification
 
 | Allowed | Never |

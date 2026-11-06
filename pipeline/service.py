@@ -164,7 +164,7 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import remote_scope
+from . import remote_scope, review_audit
 from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -948,6 +948,7 @@ class PipelineService(PlanApprovalMixin):
         return result
 
     @scoped_story_call
+    @review_audit.audited_review
     def review_story(
         self, plan_name: str, story_key: str, force: bool = False
     ) -> dict[str, Any]:

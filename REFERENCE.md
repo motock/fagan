@@ -965,6 +965,46 @@ the plan's stream. The advance tick — `advance_pipeline`, and therefore
 denied tick appends one `denied` record. `record_security_audit`'s `config:write`
 decision has no plan to scope a record to, so it goes to the host chain.
 
+#### `story.review_start`
+
+`pipeline/review_audit.py` marks the beginning of a review, so time-in-review can be
+computed from the stream later (liveness S9). It computes nothing itself. One record:
+
+- `action` `story.review_start`, `outcome` `started`.
+- `target` `{"plan": <plan>, "story": <story key>}`.
+- `detail.started_at`: ISO-8601 UTC, seconds precision — the moment the review call began.
+- `detail.forced`: `true` when the call was `force=True`, else `false`.
+
+Those four values are the whole record: no verdict, diff, feedback, path or sha, so no
+review prose reaches the audit stream.
+
+A call that is not a review writes nothing. Every skip — `unchanged_since_last_review`,
+`not_reviewable_state`, `locked` — appends no record, and neither does an `ok: False`
+result. A *deferred* result is the exception: a review that started and backed off
+(`rate_limited`, `transient_backend`, `backend_error`) has already run, so it records
+one event like any other. The event is emitted after the review call returns, so the
+record's own `ts` is the END of the call while `detail.started_at` is the start;
+`started_at` is never later than `ts`.
+
+Known limit: a detached review (a story holding a `review_job` handle) returns a handle
+long before its verdict lands, so for those the event marks when review was **started**,
+not when the verdict arrived. Time-in-review computed from this stream is therefore a
+lower bound for them.
+
+An audit failure never fails the review: the result is returned untouched. The two log
+paths differ, and only one of them is this module's. An append that fails with an
+`OSError` — a read-only plan directory, a full disk — is already swallowed inside
+`pipeline.audit.record_audit`, which logs it once at **ERROR** with the action and the
+plan name and a full traceback; that is the same behaviour every other audit call site
+gets, and `story.review_start` never adds a second line for it. Only an *unexpected*
+non-`OSError` is caught here, and that is logged once at **WARNING** by exception type
+alone — the exception message can carry a story key, which does not belong in an
+operator log. So a read-only plan directory shows up as an ERROR from `pipeline.audit`,
+not as a warning from `pipeline.review_audit`.
+
+`force=True` writes two different actions, the pre-existing `story:force_review` entry
+and this `story.review_start` record.
+
 The `verify_audit()` MCP tool runs both over the whole plan directory and returns
 `{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad seq>}`. Every
 plan with an audit file appears, keyed by its bare name; a plan with no audit file
@@ -1049,6 +1089,8 @@ Actions recorded today:
 - `plan.paused` / `plan.resumed` — the pause and resume transition.
 - `story.merge` — a merge that completed.
 - `story.dispatch` — a dispatch, outcome `allowed` or `refused` (stale base).
+- `story.review_start` — a review that began, with `detail.started_at` and
+  `detail.forced`; a skipped or locked review records nothing.
 
 Three limits are worth stating plainly:
 

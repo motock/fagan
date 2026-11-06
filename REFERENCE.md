@@ -2470,6 +2470,28 @@ minting a series.
 Every label value is validated against an enum before the meter is touched, so a
 new series cannot be minted by an unexpected value.
 
+### Health probes and liveness thresholds (`/livez`, `/readyz`)
+
+The dashboard answers three questions about itself, and they are deliberately
+not the same one. `/api/health` is the diagnostic body: `ok` means "the API
+answered", while `healthy` and its `degraded` verdict list carry the actual
+judgement about scheduler freshness and the outbox. `/livez` and `/readyz` are
+the two orchestrator probes; they sit outside `/api/` so a caller without a
+credential can reach them even under `PIPELINE_IDENTITY_PROVIDER=oidc`.
+`/livez` means "restart me" and fails only when the scheduler daemon's own
+heartbeat is missing or too old. `/readyz` means "do not route traffic to me"
+and adds the dependencies the request path needs: the broker (only when
+`PIPELINE_EVENT_BUS=nats`) and the outbox. A liveness probe that fails on a
+dependency restarts a healthy process and turns a blip into a restart storm, so
+the split is load-bearing, not cosmetic.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `PIPELINE_HEALTH_STALE_SECONDS` | `300` | Scheduler freshness bound, in seconds, for `/api/health` and both probes: a snapshot whose newest timestamp is strictly older than this is `scheduler_stale` (exactly at the bound is not yet stale). Re-read on every call, so retuning it needs no restart. Malformed (`abc`, empty), non-finite (`inf`, `nan`) and non-positive (`0`, `-5`) values all fall back to `300` — a typo must not disable the check or make every scheduler look stale — and a fraction is honoured as given (`0.5` is half a second). |
+| `PIPELINE_HEALTH_REQUIRE_SCHEDULER` | unset (`0`); the image sets `1` | Opts a deployment into requiring a live scheduler: with it on, a missing, empty, malformed or unparseable `.scheduler_health.json` reports `scheduler_unreported` instead of the healthy "no daemon here" default. Only the exact string `1` turns it on; `true`, `yes`, `0`, an empty value and anything else all mean off. |
+| `PIPELINE_CONSUMER_STALL_SECONDS` | `300` | How long a JetStream durable may sit with a non-empty backlog and no subscriber before one `consumer_stalled` notice is emitted, and one `consumer_recovered` when it clears. Re-read on every tick, so an operator can tune it without a restart. Missing, non-integer (`abc`, `3.5`, empty) and non-positive (`0`, `-5`) values all fall back to `300`, so a typo can never turn every tick into a notice. |
+| `PIPELINE_OUTBOX_STALE_SECONDS` | `900` | How old the oldest undelivered outbox record must be before `/api/health` reports `outbox_stale` and `/readyz` fails (`/livez` keeps answering — a stale spool is not a reason to restart). Read on every call. Malformed, non-finite and non-positive values fall back to `900`; a positive fractional value is rounded up (`0.5` becomes `1`) rather than truncated to `0`, which would make every non-empty outbox stale. |
+
 ### Structured log format (`PIPELINE_LOG_FORMAT`)
 
 Unset — the default — logging is exactly as it was before: plain-text lines

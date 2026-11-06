@@ -15,8 +15,8 @@ then claim it, then work on the branch the pipeline names.
    `fagan-rules/agent-dispatch-story-sizing.md`). Check a `dispatch` role in the
    live model registry (the path in `PIPELINE_MODEL_REGISTRY_PATH`, not
    necessarily `model_registry.json`), then `PIPELINE_BACKEND_DISPATCH`. State what
-   you found and let the user confirm. Unset means Claude-class. `auto` means
-   assume the weak end.
+   you found and let the user confirm. Unset means Claude-class. `auto` takes the
+   class of the model that resolves for the story's first attempt.
 2. Turn the goal into a plan with `decompose_plan` (or the `product-analyst`
    persona). Pass the confirmed tier explicitly; the decomposer cannot ask.
    Do not hand-write large stories.

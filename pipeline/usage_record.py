@@ -165,3 +165,59 @@ def scoped_story_call(fn):
             return fn(self, plan_name, story_key, *args, **kwargs)
 
     return wrapper
+
+
+def record_claude_result(
+    payload: dict[str, Any],
+    *,
+    model: str,
+    role: str,
+    scope: dict[str, Any] | None = None,
+) -> None:
+    """Record token usage from a Claude CLI ``--output-format json`` result object."""
+    if not isinstance(payload, dict):
+        return
+    raw_usage = payload.get("usage")
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    record_usage(
+        role=role,
+        backend="claude",
+        model=model,
+        served_model=payload.get("model"),
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
+        cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+        cost_usd=payload.get("total_cost_usd"),
+        duration_ms=payload.get("duration_ms"),
+        scope=scope,
+    )
+
+
+def record_ollama_envelope(
+    envelope: dict,
+    *,
+    model: str,
+    role: str,
+    scope: dict[str, Any] | None = None,
+) -> None:
+    """Record token usage from an Ollama ``/api/chat`` response envelope."""
+    if not isinstance(envelope, dict):
+        return
+    total_duration = envelope.get("total_duration")
+    duration_ms = (
+        total_duration / 1_000_000
+        if isinstance(total_duration, (int, float))
+        else None
+    )
+    record_usage(
+        role=role,
+        backend="ollama",
+        model=model,
+        served_model=None,
+        input_tokens=envelope.get("prompt_eval_count", 0),
+        output_tokens=envelope.get("eval_count", 0),
+        cost_usd=None,
+        duration_ms=duration_ms,
+        scope=scope,
+    )

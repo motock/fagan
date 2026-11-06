@@ -105,7 +105,7 @@ from pipeline.actor import (
     request_correlation_id,
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
-from pipeline.health_freshness import health_extras
+from pipeline.health_freshness import health_extras, register_probes
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService
@@ -366,6 +366,7 @@ def health() -> dict[str, Any]:
         "runtime": resolved_runtime(),
         **health_extras(PLAN_DIR),
     }
+register_probes(app, lambda: PLAN_DIR)
 
 
 @app.get("/api/dispatch_health")

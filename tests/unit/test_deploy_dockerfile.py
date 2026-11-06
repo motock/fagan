@@ -170,9 +170,12 @@ def test_healthcheck_probes_a_credential_free_dashboard_route() -> None:
     ``app/dashboard.py``'s middleware requires a bearer token on every
     ``/api/`` route -- ``/api/health`` included. A probe that fetched
     ``/api/health`` anonymously would get a 401 and mark the container
-    unhealthy forever. The probe must hit the dashboard on a path outside the
-    gated ``/api/`` prefix, which still exercises the app and its API-key
-    store.
+    unhealthy forever. The probe must hit the dashboard's liveness endpoint
+    ``/livez`` instead: it is outside the gated ``/api/`` prefix, so no
+    credential is needed, and it reports only restart-worthy problems (a stale
+    or unreported scheduler), never a dependency outage -- a probe that fails
+    on NATS or Keycloak would restart a healthy container and make an outage
+    worse.
     """
     healthchecks = _instructions(_dockerfile(), "HEALTHCHECK")
     assert healthchecks, "deploy/Dockerfile must declare a HEALTHCHECK"
@@ -182,8 +185,8 @@ def test_healthcheck_probes_a_credential_free_dashboard_route() -> None:
         "PIPELINE_IDENTITY_PROVIDER=oidc, so every /api/ route needs a bearer "
         "token and an anonymous probe can only ever get 401"
     )
-    assert re.search(r"127\.0\.0\.1:%s/['\"]", probe), (
-        f"the HEALTHCHECK must GET the dashboard's index route; got {probe!r}"
+    assert re.search(r"127\.0\.0\.1:%s/livez['\"]", probe), (
+        f"the HEALTHCHECK must GET /livez; got {probe!r}"
     )
     assert "status==200" in probe.replace(" ", ""), (
         "the probe must treat a non-200 response as unhealthy"

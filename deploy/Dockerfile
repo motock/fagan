@@ -16,7 +16,8 @@
 #     pipeline/remote_transport.py);
 #   * a HEALTHCHECK on a credential-free dashboard route: the image exports
 #     PIPELINE_IDENTITY_PROVIDER=oidc, which puts a bearer-token gate on every
-#     /api/ route (app/dashboard.py), so the probe uses "/" instead;
+#     /api/ route (app/dashboard.py), so the probe uses the liveness endpoint
+#     "/livez" instead;
 #   * no secrets baked in. Every credential arrives as a mounted file at
 #     runtime; nothing secret is COPYed. There are no build args at all, not
 #     even for the public tooling versions: build args land in image history
@@ -85,6 +86,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIPELINE_MCP_HOST=0.0.0.0 \
     PIPELINE_MCP_PORT=8080 \
     PIPELINE_IDENTITY_PROVIDER=oidc \
+    PIPELINE_HEALTH_REQUIRE_SCHEDULER=1 \
     PIPELINE_POLICY_ENFORCE=1 \
     PIPELINE_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 
@@ -225,14 +227,19 @@ USER 10001:10001
 
 EXPOSE 8000 8080
 
-# Probe the dashboard's index route, not the MCP endpoint and not an /api/
-# route: this image exports PIPELINE_IDENTITY_PROVIDER=oidc, and
+# Probe the dashboard's liveness endpoint, not the MCP endpoint and not an
+# /api/ route: this image exports PIPELINE_IDENTITY_PROVIDER=oidc, and
 # app/dashboard.py's middleware then requires a bearer token on *every*
 # /api/ route -- /api/health included -- so an anonymous probe there can only
-# ever get a 401. "/" is outside that prefix, so it is reachable without a
-# credential, and rendering it still reads the API-key store and the plan
-# directory, which is where a wedged or mis-owned container fails first.
+# ever get a 401. "/livez" is outside that prefix, so it is reachable without a
+# credential, and it answers "restart me": it fails only when the scheduler
+# daemon is stale or unreported (PIPELINE_HEALTH_REQUIRE_SCHEDULER=1 above),
+# never because NATS, Keycloak or the outbox is down. Docker alone will not
+# restart an unhealthy container; an orchestrator (or --restart policy plus a
+# supervisor) does that. Readiness is a separate question -- Kubernetes should
+# probe "/readyz", which additionally fails when the broker is unreachable or
+# the outbox is stale, so a container is not restarted for a dependency blip.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import os,sys,urllib.request; port=os.environ.get('DASHBOARD_PORT','8000'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/' % port, timeout=4).status==200 else 1)"
+    CMD python -c "import os,sys,urllib.request; port=os.environ.get('DASHBOARD_PORT','8000'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/livez' % port, timeout=4).status==200 else 1)"
 
 ENTRYPOINT ["/app/deploy/entrypoint.sh"]

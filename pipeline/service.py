@@ -26,6 +26,7 @@ from typing import Any
 from pipeline import cross_plan, plan_activity, wake
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.telemetry import record_dispatch_attempt
+from pipeline.usage_record import scoped_story_call
 from pipeline.workspace import (
     check_repo_root_allowed,
     normalize_workspace_path,
@@ -918,6 +919,7 @@ class PipelineService(PlanApprovalMixin):
             return refusal
         return _patch_plan_impl(self, plan_name, fields)
 
+    @scoped_story_call
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         try:
             result = _dispatch_story_impl(plan_name, story_key)
@@ -945,6 +947,7 @@ class PipelineService(PlanApprovalMixin):
         record_dispatch_attempt(result)
         return result
 
+    @scoped_story_call
     def review_story(
         self, plan_name: str, story_key: str, force: bool = False
     ) -> dict[str, Any]:

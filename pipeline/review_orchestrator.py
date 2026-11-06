@@ -120,6 +120,10 @@ def _format_security_comment(report: str) -> str:
     return header + report
 
 
+def skip_info(story: dict, current_sha: str) -> dict:
+    return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review", "reason": "head_and_review_logic_unchanged", "head": current_sha[:12], "last_reviewed": story["last_reviewed_sha"][:12], "stored_verdict": story.get("review_verdict") or "", "to_force": "push a new commit, or clear last_reviewed_sha with patch_story"}
+
+
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -187,11 +191,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                         )
                         story["skip_notified_sha"] = current_sha
                     commit_story(plan_name, story_key, story, manifest_path)
-                    return {
-                        "ok": True,
-                        "status": story["status"],
-                        "skipped": "unchanged_since_last_review",
-                    }
+                    return skip_info(story, current_sha)
             except (subprocess.CalledProcessError, OSError):
                 pass
 

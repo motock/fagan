@@ -24,6 +24,7 @@ from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.events_nats_consumer import start_consumers, stop_consumers
 from pipeline.paths import PLAN_DIR
+from pipeline.tick_checks import run_tick_checks
 from pipeline.watchers import scan_all_plans
 
 from .actor import SYSTEM_SCHEDULER, bind_principal
@@ -423,12 +424,10 @@ class SchedulerDaemon:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
         os.replace(tmp_path, path)
-        # Advisory: a merged orchestration change stays inert until restart.
-        # Never let this check break the health write above.
-        try:
-            self._notify_if_checkout_stale(config)
-        except Exception:
-            logger.exception("scheduler staleness check failed")
+        # Advisory: a merged orchestration change stays inert until restart,
+        # and a stalled consumer stops the pipeline silently. Neither check
+        # may break the health write above; both are fail-soft inside.
+        run_tick_checks(self, config)
 
     def _join_with_heartbeat(self, worker, timeout_s, label):
         """Join *worker* in heartbeat-sized slices, refreshing health between.

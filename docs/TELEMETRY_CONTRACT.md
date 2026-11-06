@@ -88,7 +88,9 @@ Every Fagan metric, span and attribute name lives under the `fagan.` prefix:
 `fagan.lifecycle`, `fagan.dashboard.request`, `fagan.dispatch.outcomes`,
 `fagan.story_key`, `fagan.outcome`. The prefix is what makes the harness's own
 signals separable from framework and runtime instrumentation sharing the same
-exporter.
+exporter. The only exceptions are the OTEL-standard resource keys mandated by
+the previous section, `service.name` and `service.instance.id`, which keep their
+upstream names.
 
 Renaming one of these is a breaking change. It needs a CHANGELOG entry marked
 **BREAKING**, because dashboards, alerts and downstream queries are written
@@ -109,9 +111,10 @@ against the published names and no alias is kept.
 | Estimated cost | Request headers or bodies |
 | | Secrets |
 
-The left column is metadata that can be exported at any profile. The right
-column is content, and content is never an attribute, a metric label or a span
-name on either profile. A value that does not fit an enum belongs on the usage
+The left column is metadata that is never content; the profile a signal is
+emitted under still decides which of these it carries. The right column is
+content, and content is never an attribute, a metric label or a span name on
+either profile. A value that does not fit an enum belongs on the usage
 record or in the audit stream, not in a label: unbounded values are also how
 cardinality explodes.
 

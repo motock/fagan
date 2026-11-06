@@ -21,6 +21,8 @@ package has a pre-existing import cycle this suite inherits (same idiom as
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import pipeline.server  # noqa: F401  -- import-cycle anchor; must come first
@@ -36,6 +38,13 @@ _STANDARD_ENVS = (
     "OTEL_EXPORTER_OTLP_CERTIFICATE",
     "OTEL_EXPORTER_OTLP_TIMEOUT",
 )
+
+
+#: Exported into the process at import time on purpose. This name is NOT one the
+#: module-level fixture below clears, so only the suite-wide
+#: ``OTEL_EXPORTER_OTLP_`` prefix scrub in ``tests/conftest.py`` can remove it.
+_AMBIENT_STANDARD_ENV = "OTEL_EXPORTER_OTLP_PROTOCOL"
+os.environ[_AMBIENT_STANDARD_ENV] = "http/protobuf"
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +93,18 @@ def _record_span_exporter(monkeypatch) -> list[dict]:
 
     monkeypatch.setattr(module, "OTLPSpanExporter", _RecordingExporter)
     return calls
+
+
+def test_suite_scrubs_ambient_standard_otel_variables():
+    """A shell-exported OTEL_EXPORTER_OTLP_* variable must not reach a test.
+
+    ``tests/conftest.py`` scrubs every ``OTEL_EXPORTER_OTLP_``-prefixed variable
+    at import time and before each test, so an operator's or CI runner's
+    standard OpenTelemetry configuration can never switch telemetry on under
+    the suite. The variable is written at this module's import time, above, and
+    is deliberately not one the fixture below clears.
+    """
+    assert os.environ.get(_AMBIENT_STANDARD_ENV) is None
 
 
 def test_enabled_with_generic_standard_endpoint(monkeypatch):

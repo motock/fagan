@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-# Clear PIPELINE_*/LOCAL_AGENT_* env vars at conftest import time, before any
-# test module is collected. Several pipeline modules read these via
+# Clear PIPELINE_*/LOCAL_AGENT_*/OTEL_EXPORTER_OTLP_* env vars at conftest import
+# time, before any test module is collected. Several pipeline modules read these via
 # os.environ.get(...) ONCE at their own import time (e.g. pipeline.ci's
 # PIPELINE_MERGE_CI_GATE, pipeline.config's SESSION_PAUSE_THRESHOLD). When the
 # suite runs inside a dispatched agent's own bash tool, the scheduler plist
@@ -15,8 +15,11 @@ import pytest
 # (e.g. tests/benchmark) imports such a pipeline module while the var is set,
 # the module-level constant binds to the leaked value and pollutes the shared
 # module for the rest of the session, making unrelated tests fail on a correct
-# codebase. Clearing here, at the suite root, covers every test directory.
-_ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_")
+# codebase. The OTEL_EXPORTER_OTLP_ prefix is scrubbed for the same reason: a
+# developer's or CI shell's standard OpenTelemetry endpoint must not switch
+# telemetry on under the suite. Clearing here, at the suite root, covers every
+# test directory.
+_ISOLATED_ENV_PREFIXES = ("PIPELINE_", "LOCAL_AGENT_", "OTEL_EXPORTER_OTLP_")
 #: CI-only gates that are not runtime configuration, so the scrub below keeps
 #: them: no pipeline module reads them, and the broker suites must see the
 #: value CI exported -- a broker suite that silently skipped cannot catch a
@@ -69,13 +72,6 @@ def _isolate_environ():
     yield
     os.environ.clear()
     os.environ.update(snapshot)
-
-
-@pytest.fixture(autouse=True)
-def _clear_standard_otel_endpoint_env(monkeypatch):
-    for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-                 "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"):
-        monkeypatch.delenv(name, raising=False)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]

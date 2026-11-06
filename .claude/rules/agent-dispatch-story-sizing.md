@@ -4,10 +4,15 @@
 > dispatch — hard-won rules" section. That section's ≤2-production-file cap
 > is necessary but not sufficient — every failure below satisfied the file
 > cap and still overwhelmed the executor. Read both together when authoring
-> a story for local or weaker-than-Claude dispatch; each rule here is a
-> distinct axis the file-count cap does not capture.
+> a story for non-Claude dispatch; each rule here is a distinct axis the
+> file-count cap does not capture.
+>
+> **Strength classes** (defined in `local-dispatch-preflight.md`): *capable*
+> (frontier and cloud-served open-weight) and *on-device* (runs on the
+> operator's hardware). Each section below says which class it binds. A rule
+> marked **both** binds both classes (the incidents behind it happened on cloud models).
 
-## Count verifiable outcomes, not files
+## Count verifiable outcomes, not files (both classes)
 
 A story is one concern. The per-file and per-function caps are necessary but not sufficient: a brief with several independent fixes, each with its own test, exhausts the rework budget even when every file fits. Count the distinct, separately verifiable outcomes in the brief; more than roughly two should be split into dependent stories — on every tier, not just the weakest.
 
@@ -15,7 +20,7 @@ A story is one concern. The per-file and per-function caps are necessary but not
 
 **How to apply:** write each outcome as a sentence ("the host header is accepted on port 443", "the doc example matches the compose path") and make each one its own story or an explicitly graded step. A code change and the doc it invalidates are one outcome, not two — do not split them, but do not let them hide a third independent fix either.
 
-## Function count, not file count, is the real budget
+## Function count, not file count, is the real budget (on-device; capable: about 5)
 
 Cap a single dispatch story at ~2-3 **new functions**, not just ≤2
 production files. Function count is the actual step/context budget the
@@ -33,7 +38,7 @@ the story creates. If more than ~3, split: separate pure/render logic from
 side-effecting wiring logic into a dependent follow-up story rather than
 asking one dispatch to produce both.
 
-## File size gates the dispatch tier, independent of model tier
+## File size gates the dispatch tier, independent of model tier (both classes)
 
 A story that edits a large existing file (roughly 1000+ lines) should not
 run on the weakest dispatch tier, regardless of how capable that tier's
@@ -61,7 +66,7 @@ Better still, split the story so no single dispatch has to edit deep inside
 a large file's interior; a story that only appends a new method at the end,
 or only reads the file for context, is fine on a weaker tier.
 
-## Some edits are hard independent of file count
+## Some edits are hard independent of file count (on-device; capable: split when in doubt)
 
 Two edit *shapes* overwhelm a weak executor even when the file-count cap is
 satisfied, and each deserves its own story (or its own step in a dependency

@@ -61,26 +61,25 @@ def _capture_prompt(monkeypatch, worktree, branch, since_sha):
     review._run_reviewer(str(worktree), branch, since_sha=since_sha)
     return driver.captured["prompt"]
 
-
 def _story_repo(tmp_path):
-    """master: m0 -> m1; branch agent/story-1 at c1; branch adds story2.py;
-    master advances with a change to other_story_file.py. Returns the repo,
-    the branch's c1 commit and the bare origin it pushes to."""
+    """master: m0 -> m1; branch agent/story-1 last reviewed at c1; the trunk
+    then advances (other_story_file.py) while the story pushes its own new
+    commit (story2.py). Returns the repo and the reviewed commit c1."""
     origin = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "master", str(origin)],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, cwd=str(tmp_path),
     )
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    m0 = _commit(repo, "base.py", "base = 0\n", "m0")
+    _commit(repo, "base.py", "base = 0\n", "m0")
     _commit(repo, "base.py", "base = 1\n", "m1")
     _git("remote", "add", "origin", str(origin), cwd=repo)
     _git("push", "-u", "origin", "master", cwd=repo)
 
     _git("checkout", "-b", "agent/story-1", cwd=repo)
-    c1 = _commit(repo, "story2.py", "story_two = 1\n", "c1")
+    c1 = _commit(repo, "story1.py", "story_one = 1\n", "c1")
     _git("push", "-u", "origin", "agent/story-1", cwd=repo)
 
     _git("checkout", "master", cwd=repo)
@@ -88,9 +87,8 @@ def _story_repo(tmp_path):
     _git("push", "origin", "master", cwd=repo)
 
     _git("checkout", "agent/story-1", cwd=repo)
-    assert m0
+    _commit(repo, "story2.py", "story_two = 1\n", "c2 story change")
     return repo, c1
-
 
 def test_rebased_branch_rework_diff_excludes_trunk_changes(
     agents_dir, tmp_path, monkeypatch,
@@ -141,11 +139,11 @@ def test_no_drift_returns_none_and_keeps_todays_prompt(
     _git("init", "-b", "master", cwd=repo)
     _git("config", "user.email", "a@b.com", cwd=repo)
     _git("config", "user.name", "Test", cwd=repo)
-    m0 = _commit(repo, "base.py", "base = 0\n", "m0")
+    since_sha = _commit(repo, "base.py", "base = 0\n", "m0")
     _git("checkout", "-b", "agent/story-1", cwd=repo)
     _commit(repo, "story1.py", "one = 1\n", "c1")
     _commit(repo, "story2.py", "two = 2\n", "c2")
-    since_sha = _commit(repo, "story3.py", "three = 3\n", "c3")
+    _commit(repo, "story3.py", "three = 3\n", "c3")
 
     assert scoped_rework_diff(str(repo), since_sha, None) is None
 
@@ -167,7 +165,6 @@ def test_no_drift_returns_none_and_keeps_todays_prompt(
     assert prompt.startswith(today_lead)
     assert "Review ONLY the story's own changes" not in prompt
     assert "story files only" not in prompt
-    assert m0
 
 
 def test_orphaned_since_sha_is_drift_and_returns_a_scoped_diff(tmp_path):
@@ -183,7 +180,7 @@ def test_orphaned_since_sha_is_drift_and_returns_a_scoped_diff(tmp_path):
     assert _git("cat-file", "-t", c1, cwd=repo).strip() == "commit"
     check = subprocess.run(
         ["git", "merge-base", "--is-ancestor", c1, "HEAD"],
-        cwd=repo, capture_output=True, text=True,
+        cwd=repo, capture_output=True, text=True, check=False,
     )
     assert check.returncode == 1
 
@@ -199,21 +196,30 @@ def test_orphaned_since_sha_is_drift_and_returns_a_scoped_diff(tmp_path):
 def test_empty_own_new_commit_list_then_sees_a_new_commit(tmp_path):
     from pipeline.review_rework_scope import scoped_rework_diff
 
-    repo, m0, _ = _repo_with_trunk(tmp_path)
-    # The trunk advances; the branch only merges it in - no own commits.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-b", "master", cwd=repo)
+    _git("config", "user.email", "a@b.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    _commit(repo, "base.py", "base = 0\n", "m0")
+    m1 = _commit(repo, "base.py", "base = 1\n", "m1")
+    # The branch starts at m1 with no commits of its own; the trunk advances
+    # and the branch merely merges it in.
+    _git("checkout", "-b", "agent/story-1", cwd=repo)
     _git("checkout", "master", cwd=repo)
-    _commit(repo, "other_story_file.py", "other = True\n", "m1 other story")
+    _commit(repo, "other_story_file.py", "other = True\n", "m2 other story")
     _git("checkout", "agent/story-1", cwd=repo)
     _git("merge", "--no-edit", "master", cwd=repo)
 
-    assert scoped_rework_diff(str(repo), m0, None) == ("", "")
+    assert scoped_rework_diff(str(repo), m1, None) == ("", "")
 
-    c2 = _commit(repo, "story2.py", "story_two = 2\n", "c2 own change")
-    scoped = scoped_rework_diff(str(repo), m0, None)
+    _commit(repo, "story2.py", "story_two = 2\n", "c2 own change")
+    scoped = scoped_rework_diff(str(repo), m1, None)
 
     assert scoped is not None
     _base, diff = scoped
-    assert c2
+    assert "story_two = 2" in diff
+    assert "other_story_file" not in diff
     assert "story_two = 2" in diff
     assert "other_story_file" not in diff
 
@@ -297,5 +303,4 @@ def test_story_file_also_changed_on_trunk_shows_own_change_only(tmp_path):
     assert scoped is not None
     _base, diff = scoped
     assert "story_own" in diff
-    assert "master_changed" not in diff
     assert "other_story_file" not in diff

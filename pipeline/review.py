@@ -7,6 +7,7 @@ sites use bare names -> re-export -> patch lands.
 """
 
 import hashlib
+import logging
 import os
 import re
 import shlex
@@ -25,6 +26,7 @@ from .config import (
     REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
 from .persona import _persona_body, _persona_default_model
+from .review_rework_scope import scoped_rework_diff
 
 # Story-context injection (PLD90-W2-CTX): the reviewer prompt carries the
 # story's own brief plus its siblings' status so the reviewer can tell
@@ -344,49 +346,78 @@ def _run_reviewer(
     # comment for the measured cost this addresses. base_ref/inline_diff stay
     # None on any failure (bad worktree, no common base, diff over budget),
     # which falls through to the exact prior explore-yourself instructions.
-    base_ref = since_sha or _first_review_base(worktree)
-    inline_diff = _materialize_review_diff(worktree, base_ref) if base_ref else None
-    if since_sha:
-        if inline_diff:
+    # Rework review scoping (D-A): when the branch was rebased or had the
+    # trunk merged in since the last review, `git diff {since_sha}..HEAD`
+    # also contains the trunk's own changes, so the reviewer would flag work
+    # this story never touched. scoped_rework_diff narrows the diff to the
+    # story's own files against the merge-base with the trunk. It returns
+    # None on no drift (the prompt below stays byte-for-byte unchanged) and
+    # ("", "") when drift was detected but the story has no new files of its
+    # own (also today's prompt, plus the INFO notice below).
+    scoped = scoped_rework_diff(worktree, since_sha, None) if since_sha else None
+    if scoped is not None:
+        logging.getLogger(__name__).info(
+            "review rework scope: drift detected", extra={"drift": True},
+        )
+    if scoped and scoped[1]:
+        base_ref, inline_diff = scoped
+        lead = (
+            f"Review ONLY the story's own changes since your last review. "
+            f"The branch was updated from the base branch since then; the "
+            f"base branch's own changes are NOT part of this review and must "
+            f"not be flagged. The story's own changed files since your last "
+            f"review are listed in the diff below.\n\n"
+            f"--- git diff {base_ref}..HEAD (story files only) ---\n"
+            f"{inline_diff}\n"
+            f"--- end diff ---\n\n"
+        )
+    else:
+        # No drift (or no scoped diff): today's exact behaviour, unchanged.
+        base_ref = since_sha or _first_review_base(worktree)
+        inline_diff = (
+            _materialize_review_diff(worktree, base_ref) if base_ref else None
+        )
+        if since_sha:
+            if inline_diff:
+                lead = (
+                    f"Review ONLY the new changes pushed since your last review "
+                    f"(commit {shlex.quote(since_sha)}). The implementer addressed "
+                    f"your prior feedback; do NOT re-review files that were already "
+                    f"approved and have not changed since. The full diff since your "
+                    f"last review is included below - do NOT re-run `git diff` to "
+                    f"fetch it again; Bash/view_file remain available for anything "
+                    f"not shown here (e.g. surrounding lines in a file, or a related "
+                    f"file the diff doesn't touch).\n\n"
+                    f"--- git diff {since_sha}..HEAD ---\n{inline_diff}\n"
+                    f"--- end diff ---\n\n"
+                )
+            else:
+                lead = (
+                    f"Review ONLY the new changes pushed since your last review "
+                    f"(commit {shlex.quote(since_sha)}). The implementer addressed "
+                    f"your prior feedback; do NOT re-review files that were already "
+                    f"approved and have not changed since. See the new diff with: "
+                    f"git diff {shlex.quote(since_sha)}..HEAD\n"
+                    f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
+                    f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
+                    f"<file>` per file, and `view_file` for surrounding context).\n\n"
+                )
+        elif inline_diff:
             lead = (
-                f"Review ONLY the new changes pushed since your last review "
-                f"(commit {shlex.quote(since_sha)}). The implementer addressed "
-                f"your prior feedback; do NOT re-review files that were already "
-                f"approved and have not changed since. The full diff since your "
-                f"last review is included below - do NOT re-run `git diff` to "
-                f"fetch it again; Bash/view_file remain available for anything "
-                f"not shown here (e.g. surrounding lines in a file, or a related "
-                f"file the diff doesn't touch).\n\n"
-                f"--- git diff {since_sha}..HEAD ---\n{inline_diff}\n"
+                f"Review the changes on branch {branch} in this worktree against "
+                f"our standards. The full diff against the branch's base is "
+                f"included below - do NOT re-run `git diff` to fetch it again; "
+                f"Bash/view_file remain available for anything not shown here "
+                f"(e.g. surrounding lines in a file, or a related file the diff "
+                f"doesn't touch).\n\n"
+                f"--- git diff {base_ref}..HEAD ---\n{inline_diff}\n"
                 f"--- end diff ---\n\n"
             )
         else:
             lead = (
-                f"Review ONLY the new changes pushed since your last review "
-                f"(commit {shlex.quote(since_sha)}). The implementer addressed "
-                f"your prior feedback; do NOT re-review files that were already "
-                f"approved and have not changed since. See the new diff with: "
-                f"git diff {shlex.quote(since_sha)}..HEAD\n"
-                f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
-                f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
-                f"<file>` per file, and `view_file` for surrounding context).\n\n"
+                f"Review the changes on branch {branch} in this worktree against "
+                f"our standards.\n\n"
             )
-    elif inline_diff:
-        lead = (
-            f"Review the changes on branch {branch} in this worktree against "
-            f"our standards. The full diff against the branch's base is "
-            f"included below - do NOT re-run `git diff` to fetch it again; "
-            f"Bash/view_file remain available for anything not shown here "
-            f"(e.g. surrounding lines in a file, or a related file the diff "
-            f"doesn't touch).\n\n"
-            f"--- git diff {base_ref}..HEAD ---\n{inline_diff}\n"
-            f"--- end diff ---\n\n"
-        )
-    else:
-        lead = (
-            f"Review the changes on branch {branch} in this worktree against "
-            f"our standards.\n\n"
-        )
     # Reviewer self-fix (2026-07-29): only ever offered for a low-risk story
     # when the operator has explicitly opted in - never mentioned otherwise,
     # so an unconfigured install's reviewer behaves exactly as before. Even

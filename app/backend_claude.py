@@ -14,7 +14,7 @@ from app.harness import (
     get_harness,
     resolve_harness_name,
 )
-from pipeline import claude_log_translate, execution
+from pipeline import claude_log_translate, execution, usage_record
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
 # (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
@@ -194,18 +194,22 @@ class ClaudeCliDriver:
         # backward-compat signature parity with OllamaDriver.complete() (Ollama
         # caps via num_ctx, not a CLI flag) but is otherwise unused here.
         del max_tokens
-        # When cell_dir is set, switch to --output-format json so we can
-        # extract per-call usage (input_tokens, output_tokens,
-        # total_cost_usd, duration_ms) and append it to the cell's
-        # token-cost sidecar. Falls back to text output for any caller that
-        # doesn't pass cell_dir (the overlord path, ad-hoc single-shots).
-        if cell_dir is not None:
+        # When cell_dir is set, or a usage scope is bound, switch to
+        # --output-format json so we can extract per-call usage (input_tokens,
+        # output_tokens, total_cost_usd, duration_ms), append it to the cell's
+        # token-cost sidecar and emit a scoped usage record. Falls back to text
+        # output for any caller with neither (the overlord path, ad-hoc
+        # single-shots).
+        # The decision is made once, here: the guard below and the parse path
+        # must agree with the command actually built.
+        recording = cell_dir is not None or usage_record.is_recording()
+        if recording:
             cmd += ["--output-format", "json"]
         proc = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see backend.py test suite)
             cmd, cwd=cwd, capture_output=True, text=True,
             env=_first_party_claude_env(),
         )
-        if cell_dir is None:
+        if cell_dir is None and not recording:
             # Fail closed on CLI transport errors. A non-zero returncode or
             # an "API Error:" body (e.g. "API Error: Connection closed
             # mid-response...") is not valid output - returning it as-is
@@ -223,6 +227,15 @@ class ClaudeCliDriver:
                     f"{detail[:500]}"
                 )
             return proc.stdout
+        # The recording path (no cell_dir, but a usage scope bound) asks for
+        # JSON too, so it must apply the same fail-closed check: a transport
+        # error is not valid output and must never be handed back as a review.
+        # A benchmark cell_dir call keeps its existing behavior.
+        if cell_dir is None and (proc.returncode != 0 or "API Error:" in (proc.stdout or "")):
+            detail = (proc.stdout or getattr(proc, "stderr", "") or "").strip()
+            raise RuntimeError(
+                f"claude CLI call failed (returncode={proc.returncode}): {detail[:500]}"
+            )
         # Structured path: parse the JSON envelope, record usage, return
         # just the `result` field so callers (and _parse_verdict) see the
         # same text they would have seen without --output-format json.
@@ -249,6 +262,7 @@ class ClaudeCliDriver:
             },
             cell_dir=cell_dir, role=role,
         )
+        usage_record.record_claude_result(payload, model=model, role=role)
         expected_prefix = _CLAUDE_TIER_MODEL_PREFIXES.get(model)
         served_model = payload.get("model")
         if expected_prefix and served_model and not served_model.startswith(expected_prefix):

@@ -142,7 +142,7 @@ def _stop_nats_server(server):
         server.kill()
 
 
-def _new_nats_bus(url, env, *, publish_timeout_s=None):
+def _new_nats_bus(url, env, *, publish_timeout_s=None, durable_types=None):
     """Build a ``NatsEventBus`` aimed at *url*, owning a stream of its own.
 
     The stream name is unique per bus, so cases never read one another's
@@ -163,13 +163,15 @@ def _new_nats_bus(url, env, *, publish_timeout_s=None):
         "PIPELINE_NATS_DURABLE_TYPES",
     ):
         env.delenv(name, raising=False)
+    if durable_types is not None:
+        env.setenv("PIPELINE_NATS_DURABLE_TYPES", durable_types)
 
     from pipeline.events_nats import NatsEventBus
 
     return NatsEventBus()
 
 
-def _make_nats_durable(root, *, url=None, publish_timeout_s=None):
+def _make_nats_durable(root, *, url=None, publish_timeout_s=None, durable_types=None):
     """Build a NATS bus for the publish-side durable cases.
 
     *root* is unused: this bus writes no plan sidecar. A case that supplies
@@ -187,7 +189,12 @@ def _make_nats_durable(root, *, url=None, publish_timeout_s=None):
         server = None
     env = pytest.MonkeyPatch()
     try:
-        bus = _new_nats_bus(url, env, publish_timeout_s=publish_timeout_s)
+        bus = _new_nats_bus(
+            url,
+            env,
+            publish_timeout_s=publish_timeout_s,
+            durable_types=durable_types,
+        )
     except BaseException:
         env.undo()
         if server is not None:
@@ -213,8 +220,15 @@ def _make_nats(tmp_path):
     One ``nats-server -js`` per bus (random loopback port, private store
     directory) keeps every case hermetic and leaves no state behind: the
     returned bus's ``close`` also stops the server it started.
+
+    The base tier runs no durable consumer, so no type is declared durable
+    (set-but-blank means "nothing is consumed durably"): a type the bus hands
+    to a durable consumer is, by design, not also dispatched to the publisher's
+    own subscribers, and this tier asserts in-process delivery. That a durable
+    type is dispatched only by its consumer is pinned in
+    tests/unit/test_nats_no_double_dispatch.py.
     """
-    return _make_nats_durable(tmp_path)
+    return _make_nats_durable(tmp_path, durable_types="")
 
 
 def _wait_until_listening(port, server, timeout=20.0):

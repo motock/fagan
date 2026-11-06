@@ -1451,6 +1451,28 @@
     "summary": "Ingestable Plans"
    }
   },
+  "/api/metrics": {
+   "get": {
+    "description": "Return the metrics exposition to an operator, or a fixed 403.",
+    "operationId": "get_metrics_api_metrics_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       },
+       "text/plain": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      },
+      "description": "Prometheus text exposition format 0.0.4."
+     }
+    },
+    "summary": "Get Metrics"
+   }
+  },
   "/api/plans": {
    "get": {
     "description": "List plan summaries, newest first.\n\n``repo`` is an optional filter: absent, empty (``repo=``), or ``all``\nreturns ALL plans exactly as before. Any other value returns only plans\nwhose manifest ``repo_root`` matches, after applying ``os.path.expanduser``\n+ ``os.path.realpath`` normalization to BOTH the param and each candidate\n(so ``~/repo`` and trailing-slash variants still match). A ``repo`` value\nmatching no plans yields HTTP 200 with an empty ``plans`` list. Composes\nwith ``include_archived`` (AND).",

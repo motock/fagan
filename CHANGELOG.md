@@ -18,6 +18,7 @@ in practice.
   provider declaring `network_grade = True` instead of only `OidcProvider`.
 - An operator-supplied credential provider (`PIPELINE_CREDENTIALS_PLUGIN`) for the model credential and notification secrets, off by default, with `password_ref` and `webhook_url_ref` channel settings.
 - The liveness signals are documented: the four health thresholds (`PIPELINE_HEALTH_STALE_SECONDS`, `PIPELINE_HEALTH_REQUIRE_SCHEDULER`, `PIPELINE_CONSUMER_STALL_SECONDS`, `PIPELINE_OUTBOX_STALE_SECONDS`) with their defaults and malformed-value rules in `REFERENCE.md`, and how to read `/api/health`, `/livez` and `/readyz` — with example Kubernetes probes — in `docs/DEPLOY_STANDALONE.md`.
+- An operator-only Prometheus scrape endpoint, `GET /api/metrics`, serving the scheduler, outbox, broker/durable-consumer and plan-approval-status signals as text exposition format 0.0.4; unknown values are omitted rather than rendered as NaN, a failing producer bumps `fagan_metrics_errors_total{source}` instead of failing the scrape, and every label value comes from a closed set or a broker durable name.
 
 **Plan approval**
 

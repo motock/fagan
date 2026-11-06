@@ -2525,6 +2525,54 @@ the split is load-bearing, not cosmetic.
 | `PIPELINE_CONSUMER_STALL_SECONDS` | `300` | How long a JetStream durable may sit with a non-empty backlog and no subscriber before one `consumer_stalled` notice is emitted, and one `consumer_recovered` when it clears. Re-read on every tick, so an operator can tune it without a restart. Missing, non-integer (`abc`, `3.5`, empty) and non-positive (`0`, `-5`) values all fall back to `300`, so a typo can never turn every tick into a notice. |
 | `PIPELINE_OUTBOX_STALE_SECONDS` | `900` | How old the oldest undelivered outbox record must be before `/api/health` reports `outbox_stale` and `/readyz` fails (`/livez` keeps answering — a stale spool is not a reason to restart). Read on every call. Malformed, non-finite and non-positive values fall back to `900`; a positive fractional value is rounded up (`0.5` becomes `1`) rather than truncated to `0`, which would make every non-empty outbox stale. |
 
+### Metrics scrape endpoint (`/api/metrics`)
+
+`GET /api/metrics` serves the pipeline's own signals in Prometheus text
+exposition format 0.0.4 (`text/plain; version=0.0.4; charset=utf-8`), for a
+Prometheus (or any compatible) scrape. It is **operator-only**: the caller must
+authenticate through the dashboard's middleware — the shared-secret key, an
+OIDC session or a bearer token — and then be an operator. Under the
+shared-secret provider the local operator *is* the administrator; under OIDC
+the caller must hold the `admin` role. Any other authenticated caller gets
+`403` with the fixed body `{"detail": "not authorized: operator"}`, and a
+missing credential gets exactly what the middleware returns (`401`).
+
+The endpoint is deliberately **not** served at `/livez` or `/readyz`: those
+probes are unauthenticated because an orchestrator has no credential, and this
+payload is operator data.
+
+Every metric name is `fagan_`-prefixed, carries a `# HELP` and a `# TYPE`
+line, and is emitted in a fixed order:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `fagan_scheduler_age_seconds` | gauge | — | Age of the scheduler's last health snapshot; omitted when no scheduler is reported. |
+| `fagan_scheduler_healthy` | gauge (1/0) | — | The scheduler probe's `healthy` verdict. |
+| `fagan_outbox_records` | gauge | — | Records waiting in the notification outbox. |
+| `fagan_outbox_oldest_age_seconds` | gauge | — | Age of the oldest outbox record; omitted when no record has a usable timestamp. |
+| `fagan_broker_reachable` | gauge (1/0) | — | Whether the broker answered the consumer-status probe. |
+| `fagan_consumer_pending` | gauge | `durable` | Messages pending for that durable consumer. |
+| `fagan_consumer_subscribed` | gauge (1/0) | `durable` | Whether the durable consumer is subscribed. |
+| `fagan_consumer_dead_lettered` | gauge | `durable` | Messages on the durable's dead-letter subject. |
+| `fagan_consumer_oldest_pending_age_seconds` | gauge | `durable` | Age of the oldest pending message; omitted when unknown. |
+| `fagan_plans` | gauge | `status` | Number of plan manifests by approval status (`approved`, `pending_approval`, `rejected`, `none`). |
+| `fagan_metrics_errors_total` | counter | `source` | Producer failures during collection, one series per source (`health_extras`, `outbox_summary`, `consumer_status`, `plans`). |
+
+A value that is not known is **omitted**, never rendered as `NaN`: a scrape
+shows only what was read. Label values come only from closed sets (the
+approval statuses, the producer names) or from the broker durable name
+(`pipeline-<event_type>`); no plan name, story key, file path, subject, e-mail
+address or exception text ever appears in a label or a value. Collection never
+fails the scrape: a producer that raises omits its metric and bumps
+`fagan_metrics_errors_total{source}`, so a broken broker shows up as a counter
+rather than a 500.
+
+The consumer numbers are served from the same **30-second cache** that
+`/api/health` uses: a scrape interval below 30 s sees the same broker numbers
+until the cache expires, and a cache hit does not extend the deadline. The plan
+count re-reads each manifest per scrape, so a large plan directory makes that
+one metric the expensive part of the call.
+
 ### Structured log format (`PIPELINE_LOG_FORMAT`)
 
 Unset — the default — logging is exactly as it was before: plain-text lines

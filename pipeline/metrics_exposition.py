@@ -8,10 +8,11 @@ same snapshot can be asserted byte-for-byte in a unit test. Two functions:
   order of :data:`METRICS`, with label values escaped and a trailing newline.
   A sample whose value is ``None`` (unknown, rather than zero) is omitted: an
   exposition must never invent a ``NaN`` for "we could not tell".
-* :func:`collect` gathers the snapshot from the three producers the dashboard
+* :func:`collect` gathers the snapshot from the producers the dashboard
   already reads -- :func:`pipeline.health_freshness.health_extras`,
-  :func:`pipeline.outbox_health.outbox_summary` and
-  :func:`pipeline.events_nats_consumer.consumer_status` -- plus the plan
+  :func:`pipeline.outbox_health.outbox_summary`,
+  :func:`pipeline.events_nats_consumer.consumer_status` and
+  :func:`pipeline.service_levels.service_level_percentiles` -- plus the plan
   manifests' approval status. It NEVER raises: a producer that fails omits its
   metric and increments ``fagan_metrics_errors_total{source}``.
 
@@ -32,6 +33,8 @@ from pipeline import parsers
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.outbox_health import outbox_summary
+from pipeline.service_levels import MEASURES as SERVICE_LEVEL_MEASURES
+from pipeline.service_levels import service_level_percentiles
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,17 @@ logger = logging.getLogger(__name__)
 PLAN_STATUSES = ("approved", "pending_approval", "rejected", "none")
 
 #: The producers whose failure is counted, as the ``source`` label values.
-SOURCES = ("health_extras", "outbox_summary", "consumer_status", "plans")
+SOURCES = (
+    "health_extras",
+    "outbox_summary",
+    "consumer_status",
+    "plans",
+    "service_levels",
+)
+
+#: The quantile label values the service-level gauges carry, with the key each
+#: one reads from a measure's payload.
+QUANTILES: tuple[tuple[str, str], ...] = (("0.5", "p50"), ("0.9", "p90"))
 
 #: The complete metric set, in the one order :func:`render` emits it:
 #: ``(name, type, help)``. Every name is ``fagan_``-prefixed.
@@ -95,6 +108,26 @@ METRICS: tuple[tuple[str, str, str], ...] = (
         "fagan_plans",
         "gauge",
         "Number of plan manifests by approval status.",
+    ),
+    (
+        "fagan_story_dispatch_to_review_seconds",
+        "gauge",
+        "Seconds from a story's first dispatch to the start of its first review.",
+    ),
+    (
+        "fagan_story_review_to_merge_seconds",
+        "gauge",
+        "Seconds from a story's first review start to its merge, rework included.",
+    ),
+    (
+        "fagan_story_cycle_seconds",
+        "gauge",
+        "Seconds from a story's first dispatch to its merge.",
+    ),
+    (
+        "fagan_story_service_level_samples",
+        "gauge",
+        "Stories behind each service-level percentile in the window.",
     ),
     (
         "fagan_metrics_errors_total",
@@ -250,6 +283,31 @@ def _consumer_samples(snapshot: dict, status: Any) -> None:
         ]
 
 
+def _service_level_samples(snapshot: dict, percentiles: Any) -> None:
+    """Add the service-level percentile gauges for a percentiles payload.
+
+    Every measure's sample count is rendered, including a zero: a thin sample
+    is then visible next to the percentile instead of the percentile silently
+    standing alone. The quantile samples are rendered only for a measure that
+    has samples at all (``n > 0``), so an unknown p90 is absent rather than 0.
+    """
+    if not isinstance(percentiles, dict):
+        return
+    counts: list[tuple[dict[str, Any], Any]] = []
+    for measure in SERVICE_LEVEL_MEASURES:
+        bucket = percentiles.get(measure)
+        if not isinstance(bucket, dict):
+            bucket = {"n": 0}
+        counts.append(({"measure": measure}, bucket.get("n", 0)))
+        if not bucket.get("n"):
+            continue
+        for label, key in QUANTILES:
+            snapshot.setdefault(f"fagan_story_{measure}_seconds", []).append(
+                ({"quantile": label}, bucket.get(key))
+            )
+    snapshot["fagan_story_service_level_samples"] = counts
+
+
 def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, Any]]]:
     """Return the metrics snapshot, never raising.
 
@@ -295,6 +353,14 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["plans"] += 1
         logger.warning("metrics producer failed", extra={"metrics_source": "plans"})
+
+    try:
+        _service_level_samples(snapshot, service_level_percentiles(plan_dir))
+    except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
+        errors["service_levels"] += 1
+        logger.warning(
+            "metrics producer failed", extra={"metrics_source": "service_levels"}
+        )
 
     snapshot["fagan_metrics_errors_total"] = [
         ({"source": source}, errors[source]) for source in SOURCES

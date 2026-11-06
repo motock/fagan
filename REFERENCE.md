@@ -2600,7 +2600,11 @@ line, and is emitted in a fixed order:
 | `fagan_consumer_dead_lettered` | gauge | `durable` | Messages on the durable's dead-letter subject. |
 | `fagan_consumer_oldest_pending_age_seconds` | gauge | `durable` | Age of the oldest pending message; omitted when unknown. |
 | `fagan_plans` | gauge | `status` | Number of plan manifests by approval status (`approved`, `pending_approval`, `rejected`, `none`). |
-| `fagan_metrics_errors_total` | counter | `source` | Producer failures during collection, one series per source (`health_extras`, `outbox_summary`, `consumer_status`, `plans`). |
+| `fagan_story_dispatch_to_review_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to the start of its first review, at `quantile="0.5"` and `quantile="0.9"`. |
+| `fagan_story_review_to_merge_seconds` | gauge | `quantile` | Seconds from the start of the first review to the merge, rework loops included, at the same two quantiles. |
+| `fagan_story_cycle_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to its merge, at the same two quantiles. |
+| `fagan_story_service_level_samples` | gauge | `measure` | Number of stories behind each service-level percentile (`dispatch_to_review`, `review_to_merge`, `cycle`); `0` means "no sample", and then that measure renders no quantile sample at all. |
+| `fagan_metrics_errors_total` | counter | `source` | Producer failures during collection, one series per source (`health_extras`, `outbox_summary`, `consumer_status`, `plans`, `service_levels`). |
 
 A value that is not known is **omitted**, never rendered as `NaN`: a scrape
 shows only what was read. Label values come only from closed sets (the
@@ -2616,6 +2620,42 @@ The consumer numbers are served from the same **30-second cache** that
 until the cache expires, and a cache hit does not extend the deadline. The plan
 count re-reads each manifest per scrape, so a large plan directory makes that
 one metric the expensive part of the call.
+
+### Story service levels
+
+The four `fagan_story_*` gauges are read off the audit stream and are
+**fleet-wide** aggregates for the operator. A story counts only when its
+**merge** falls inside the 30-day window ending at the scrape. Per story the
+stream supplies the first `story.dispatch` with outcome `allowed`, the earliest
+`story.review_start` (its `detail.started_at`, which marks the START of the
+review call, not its verdict), and the first `story.merge` with outcome
+`allowed`; `story:merge`, the authorization action, is a different event and is
+never used.
+
+- `dispatch_to_review`: first dispatch to the start of the first review.
+- `review_to_merge`: start of the first review to the merge. This **includes
+  rework loops**: a story reviewed, reworked and reviewed again measures from
+  the earliest review start to the merge, not from the last review.
+- `cycle`: first dispatch to the merge.
+
+Percentiles are **nearest-rank**: for a measure's `n` durations sorted
+ascending, percentile `p` is the duration at 1-indexed rank `ceil(p * n)`, with
+no interpolation, so every rendered value is an observed duration. A story
+contributes a measure only when it has both endpoints and the duration is
+non-negative; a story dispatched and merged with no recorded review contributes
+to `cycle` alone. A measure with `n` 0 renders only
+`fagan_story_service_level_samples{measure="…"} 0` and no quantile sample,
+because an unknown p90 is not a zero.
+
+`fagan_story_service_level_samples` is how to tell a thin sample from a real
+one: a p50 over two stories is not a service level, and the count rendered
+beside it says so.
+
+Queue time is **not** measured. The stream records the first dispatch but never
+that a story became eligible, so time-to-dispatch would have to be invented
+from an event that does not exist; it is left out rather than approximated. No
+plan, story, team or actor label is rendered, so nothing here identifies a plan
+or a person — a per-team breakdown waits on the ScopeResolver in liveness S7.
 
 ### Structured log format (`PIPELINE_LOG_FORMAT`)
 

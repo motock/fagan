@@ -17,10 +17,22 @@ Two deliberate asymmetries in the record:
 * it carries identifiers and the two timing fields only - no verdict, diff,
   feedback, path or sha.
 
-Recording must never endanger the review it describes: a broken or read-only
-audit stream degrades to one WARNING and the caller's result is returned
-untouched, because a review must not fail because its audit line could not be
-written.
+Recording must never endanger the review it describes: the caller's result is
+always returned untouched, because a review must not fail because its audit line
+could not be written. Two log paths, and they differ:
+
+* an append that fails with an ``OSError`` - a read-only plan directory, a full
+  disk - is already swallowed inside :func:`pipeline.audit.record_audit`, which
+  logs it once at ERROR with the action and plan and a full traceback;
+* only an *unexpected* non-``OSError`` reaches this module's ``except``, which
+  logs one WARNING by exception type alone (a message can carry a story key,
+  which has no place in an operator log).
+
+A call that is not a review writes nothing: a non-dict result, a ``skipped``
+key - ``unchanged_since_last_review``, ``not_reviewable_state``, ``locked`` -
+or ``ok is False``. A ``deferred`` result (``rate_limited``,
+``transient_backend``, ``backend_error``) is a review that was started and
+backed off, so it does record one.
 """
 
 from __future__ import annotations
@@ -70,11 +82,14 @@ def audited_review(fn):
     failure is swallowed inside :func:`record_review_started`.
     """
 
+    # Computed once at decoration time, not on every call.
+    signature = inspect.signature(fn)
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         # Bind against the undecorated signature so the plan, story and force
         # are read without consuming anything the wrapped call needs.
-        bound = inspect.signature(fn).bind(*args, **kwargs)
+        bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         arguments = bound.arguments
         started = now()
@@ -101,9 +116,14 @@ def record_review_started(
     """Append one ``story.review_start`` record for a review that really ran.
 
     Emits nothing when *result* is not a dict, carries a ``skipped`` key (a
-    skip is not a review), or reports ``ok is False``. Never raises: the
-    exception is logged once at WARNING, by type only - the message can carry a
-    story key, which has no place in an operator log.
+    skip is not a review), or reports ``ok is False``. A ``deferred`` result is
+    a review that started and backed off, so it does emit one.
+
+    Never raises. An ``OSError`` from the append never even arrives here - it is
+    swallowed and logged at ERROR inside :func:`pipeline.audit.record_audit`.
+    Only an unexpected non-``OSError`` reaches this ``except``, which logs one
+    WARNING by exception type alone: the exception message can carry a story
+    key, which has no place in an operator log.
 
     ``detail["started_at"]`` is *started* (captured before the review call);
     the record's own ``ts`` is the end of the call.

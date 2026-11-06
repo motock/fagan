@@ -337,3 +337,80 @@ def test_the_audit_chain_still_verifies_with_the_new_event(plan_dir, monkeypatch
 
     assert _audit_records(plan_dir, "pe", action="story.review_start")
     assert audit.verify_audit_chain("pe") is None, "the new record must chain"
+
+
+def test_an_unwritable_audit_stream_returns_the_result_and_logs_error_once(
+    plan_dir, monkeypatch, caplog
+):
+    """The real failure mode: an ``OSError`` from the append.
+
+    ``pipeline.audit.record_audit`` swallows ``OSError`` itself and logs once at
+    ERROR with the action and plan, so this module's WARNING path must not fire
+    at all for a read-only plan directory or a full disk.
+    """
+    _quiet_environment(monkeypatch)
+    _record_reviewer(monkeypatch)
+    repo = _init_repo(plan_dir.parent)
+    _write_manifest(plan_dir, "pe", {"S1": _fresh_story(repo)})
+
+    real_original = p._original_review_story
+    captured = {}
+
+    def _capturing_original(plan_name, story_key):
+        captured["result"] = real_original(plan_name, story_key)
+        return captured["result"]
+
+    monkeypatch.setattr(p, "_original_review_story", _capturing_original)
+
+    def _permission_denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(audit, "append_audit", _permission_denied)
+
+    with caplog.at_level(logging.DEBUG):
+        result = p.review_story("pe", "S1")
+
+    # The review itself is unaffected: same dict, still ok.
+    assert result is captured["result"], "the audit failure must not alter the result"
+    assert result.get("ok") is True, result
+
+    errors = [
+        r for r in caplog.records
+        if r.levelno == logging.ERROR
+        and r.name == "pipeline.audit"
+        and "story.review_start" in r.getMessage()
+    ]
+    assert len(errors) == 1, [(r.name, r.levelno, r.getMessage()) for r in caplog.records]
+    message = errors[0].getMessage()
+    assert "action=story.review_start" in message, message
+    assert "plan=pe" in message, message
+
+    # No second line from the review wrapper: OSError never reaches it.
+    audit_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and r.name == "pipeline.review_audit"
+    ]
+    assert audit_warnings == [], [r.getMessage() for r in audit_warnings]
+
+    assert _audit_records(plan_dir, "pe", action="story.review_start") == []
+
+
+def test_a_deferred_review_records_the_event(plan_dir, monkeypatch):
+    """A review that ran and backed off is a started review, not a skip."""
+    _quiet_environment(monkeypatch)
+    _record_reviewer(monkeypatch)
+    repo = _init_repo(plan_dir.parent)
+    _write_manifest(plan_dir, "pe", {"S1": _fresh_story(repo)})
+
+    monkeypatch.setattr(
+        p, "_original_review_story",
+        lambda plan_name, story_key: {
+            "ok": True, "status": "tests_passed", "deferred": "rate_limited",
+        },
+    )
+
+    p.review_story("pe", "S1")
+
+    started = _audit_records(plan_dir, "pe", action="story.review_start")
+    assert len(started) == 1, started
+    assert started[0]["target"] == {"plan": "pe", "story": "S1"}

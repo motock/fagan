@@ -43,7 +43,7 @@ from app.ollama_resources import (  # noqa: F401 (re-exported: resource_status()
     _ollama_serving_parallelism,
     _total_memory_mb,
 )
-from pipeline import execution
+from pipeline import execution, usage_record
 
 # Rough chars-per-token estimate for sizing the review-loop trim budget below
 # (no tokenizer available here) - deliberately NOT dynamically calibrated
@@ -200,6 +200,7 @@ class OllamaDriver:
         # is in ["message"]. record_token_usage is best-effort and a no-op
         # when cell_dir is None, matching ClaudeCliDriver.complete()'s
         # "only record on the structured path" policy.
+        usage_record.record_ollama_envelope(envelope, model=resolved_model, role=role)
         if cell_dir is not None:
             self.record_token_usage(
                 {
@@ -419,6 +420,7 @@ class OllamaDriver:
                         f"is unreachable or errored during review: {e}"
                     ) from e
                 m = envelope["message"]
+                usage_record.record_ollama_envelope(envelope, model=resolved_model, role="review")
                 if cell_dir is not None:
                     self.record_token_usage(
                         {

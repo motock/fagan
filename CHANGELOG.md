@@ -61,6 +61,7 @@ in practice.
 
 ### Fixed
 
+- `consumer_status()` now reports `dead_lettered` as the sum of the durable's dead-letter subject counts instead of the whole stream message total, which `subjects_filter` never narrowed.
 - A durable event type is no longer handled twice: `NatsEventBus.publish` used
   to run the publishing process's handlers for every acknowledged event, so a
   `notification` was dispatched inline *and* replayed by its durable consumer,

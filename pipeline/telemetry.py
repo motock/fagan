@@ -59,8 +59,8 @@ from .events import EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
-#: Environment variable that turns tracing and metrics on. Unset (or empty)
-#: means no-op.
+#: Deprecated alias that turns tracing and metrics on. Unset (or empty) means no-op.
+#: ``_signal_endpoint`` prefers the standard OpenTelemetry endpoint variables.
 ENDPOINT_ENV = "PIPELINE_OTEL_ENDPOINT"
 
 #: Standard OpenTelemetry endpoint variables. A set standard variable wins over the alias
@@ -175,7 +175,7 @@ def __getattr__(name: str) -> Any:
 
 
 def enabled() -> bool:
-    """Is tracing on? True once an exporter is configured or the env var is set."""
+    """Is tracing on? True once an exporter is configured or an OTLP endpoint variable is set."""
     return _EXPORTER is not None or _signal_endpoint(_TRACES_ENDPOINT_ENVS)[0]
 
 

@@ -2478,7 +2478,9 @@ emitted.
 
 Three counters and two observable gauges describe what an operator alerts on.
 They are registered once, under the `fagan` instrumentation scope, and
-only while `PIPELINE_OTEL_ENDPOINT` is set.
+only while an OTLP endpoint is configured for metrics — the deprecated
+`PIPELINE_OTEL_ENDPOINT` alias, the shared `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
 
 | Metric | Kind | What it measures | Labels |
 | --- | --- | --- | --- |

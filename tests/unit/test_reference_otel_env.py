@@ -31,3 +31,11 @@ def test_reference_keeps_the_alias_documented_as_deprecated():
     text = (REPO_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
 
     assert "deprecated alias" in text
+
+
+def test_metric_names_section_does_not_only_name_the_alias():
+    """The instruments register for any configured endpoint, not just the alias."""
+    text = (REPO_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+
+    assert "only while `PIPELINE_OTEL_ENDPOINT` is set" not in text
+    assert "`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`" in text

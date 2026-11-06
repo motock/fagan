@@ -39,6 +39,7 @@ callers already expect.
 import json
 import os
 
+from tests.unit import _dom_shims
 from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,33 +55,7 @@ def _main_js_source():
 
 # === DOM shim (copied verbatim from test_dashboard_notification_filter.py) ===
 
-_SHIM = r"""
-        const noop = () => {};
-        const fakeEl = {
-            innerHTML: "",
-            classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
-            addEventListener: noop,
-            setAttribute: noop,
-            appendChild: noop,
-            querySelectorAll: () => [],
-            dataset: {},
-        };
-        globalThis.document = {
-            addEventListener: noop,
-            documentElement: { dataset: {} },
-            getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
-            createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
-        };
-        globalThis.window = {
-            location: { hash: "" },
-            addEventListener: noop,
-        };
-        globalThis.localStorage = { getItem: () => null, setItem: noop };
-        globalThis.fetch = () => new Promise(() => {});
-        process.on("unhandledRejection", () => {});
-        globalThis.setInterval = () => 0;
-        globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
-"""
+_SHIM = _dom_shims.DROPDOWN_SHIM
 
 
 def _run_app_js(expr):

@@ -105,6 +105,7 @@ from pipeline.actor import (
     request_correlation_id,
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
+from pipeline.health_freshness import health_extras
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService
@@ -319,22 +320,18 @@ def _write_archived_plans(archived: set[str]) -> None:
 def health() -> dict[str, Any]:
     """Liveness plus config-agreement: is the scheduler on the same config?
 
-    ``plan_dir`` keeps its existing meaning (the resolved canonical plan dir).
-    ``scheduler`` is the config fingerprint the scheduler daemon writes to
-    ``<plan_dir>/.scheduler_health.json`` (the CFG-B2 default path), or
-    ``None`` when that file is absent / unreadable / empty / malformed or
-    carries no usable ``config`` object. ``config_mismatch`` lists the
-    dashboard-resolved fields whose values differ from that fingerprint
-    (``plan_dir`` and ``worktree_root``); ``[]`` when they agree or when
-    there is no fingerprint to compare.
-
-    Fail-soft (mirrors ``_degraded_liveness_report``): any problem reading or
-    parsing the fingerprint degrades to ``scheduler=None`` /
-    ``config_mismatch=[]`` with HTTP 200 — a health check must never 500.
-
-    ``topology`` is additive and observational: the process's resolved
-    ``plan_dir`` / ``repo_root`` / branch and worktree namespaces, plus the
-    runtime selections ``resolved_runtime()`` reports, read live per request.
+    ``ok`` is literally ``True`` — the API answered. ``plan_dir`` is the resolved
+    canonical plan dir. ``scheduler`` is the config fingerprint the daemon writes
+    to ``<plan_dir>/.scheduler_health.json`` (CFG-B2 default path), or ``None``
+    when that file is absent / unreadable / empty / malformed or carries no usable
+    ``config`` object; ``config_mismatch`` lists the dashboard-resolved fields
+    whose values differ from it (``plan_dir``, ``worktree_root``), ``[]`` when they
+    agree or there is no fingerprint. ``scheduler_age_s`` is the age (seconds) of
+    the newest timestamp in that file or ``None``; ``healthy`` is ``False`` when
+    one is required (``PIPELINE_HEALTH_REQUIRE_SCHEDULER``) but unreported or that
+    age exceeds ``PIPELINE_HEALTH_STALE_SECONDS``; ``degraded`` names the reason.
+    Fail-soft (like ``_degraded_liveness_report``): a read/parse problem degrades to the empty defaults with HTTP 200 — a health check must never 500.
+    ``topology`` is additive: resolved ``plan_dir`` / ``repo_root`` / branch and live ``resolved_runtime()`` namespaces.
     """
     plan_dir = str(PLAN_DIR)
     scheduler: Any = None
@@ -366,6 +363,7 @@ def health() -> dict[str, Any]:
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),
         "runtime": resolved_runtime(),
+        **health_extras(PLAN_DIR),
     }
 
 

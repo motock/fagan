@@ -51,8 +51,11 @@ _NEWLINE_CLEAN = re.compile(r"\r\n|\n|\r")
 def new_state() -> dict:
     """Return a fresh step counter for a new translate session.
 
-    The dict is caller-owned: ``translate_line`` mutates ``state["step"]`` in
-    place and never reads or writes any other key.
+    The dict is caller-owned and carries two keys: ``state["step"]`` is the
+    step counter, which ``translate_line`` reads and bumps in place, and
+    ``state["result"]`` is the parsed object of the last ``result`` event,
+    which ``translate_line`` writes and the caller is expected to pop once it
+    has acted on it. Other keys are never read.
     """
     return {"step": 0}
 
@@ -164,6 +167,11 @@ def translate_line(raw: str, state: dict) -> list[str]:
     agent.log. Never raises: a missing key, a null, a wrong type, or an
     unexpected shape yields ``[]`` — this runs inside a live log-drain
     thread, where an exception would silently truncate the log.
+
+    A ``result`` event additionally leaves its parsed object on
+    ``state["result"]`` so the caller can act on it (the token accounting in
+    ``ClaudeCliDriver.dispatch`` relies on that seam); the caller pops the key
+    after handling it, so it is present only until then.
     """
     state.setdefault("step", 0)
     try:

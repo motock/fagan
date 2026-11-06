@@ -359,6 +359,12 @@ class ClaudeCliDriver:
         # counter. The sidecar write is best-effort (mirrors
         # record_token_usage's try/except OSError): a failed sidecar write
         # must never break the dispatch or the drain thread.
+        #
+        # The drain thread has two side effects: the canonical agent.log lines
+        # and, on a result event, the plan usage record. The scope is captured
+        # HERE, on the dispatching thread, because the drain thread does not
+        # inherit the context variable; the filter closes over it and records
+        # role "dispatch" under it.
         usage_scope_at_dispatch = usage_record.current_scope()
         state = claude_log_translate.new_state()
         raw_log_path = Path(log_path).with_name(log_path.name + ".raw")

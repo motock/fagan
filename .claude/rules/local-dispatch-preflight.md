@@ -10,10 +10,45 @@
 
 **The point of this pipeline is local and open-weight models.** A plan that
 only succeeds on Claude/frontier models has failed its purpose. Every story
-dispatched to a non-Claude tier must pass all of the checks below, and the
-plan author (not the executor, not the reviewer) owns them. No executor,
+dispatched to a non-Claude model must pass the checks below that apply to its
+strength class (next section), and the plan author (not the executor, not the
+reviewer) owns them. No executor,
 however capable, can recover from an ambiguous plan defect; each one burns a
 rework cycle. This is an authoring failure class, not a model-strength one.
+
+## Strength classes: capable vs on-device
+
+Two classes, taken from the **resolved dispatch model** (the model the
+registry or `PIPELINE_BACKEND_DISPATCH` actually selects for the story), not
+from the provider's name:
+
+- **capable**: frontier models (Claude) and cloud-served open-weight models
+  (for example `deepseek-v4.1-flash:cloud`, `glm-5.3-flash:cloud`, a LiteLLM
+  route to a hosted model). Treated the same: a capable model does not need
+  the plan hand-held, but it is still an executor that cannot see the plan.
+- **on-device**: models that run on the operator's own hardware through
+  Ollama, LM Studio or similar (for example `gpt-oss:20b`, `devstral:24b`,
+  the gemma-4 and Qwen3.x GGUF builds). Smaller context, a tighter step
+  budget and more fragile edits; these get every rule.
+
+How the class is read: the registry entry's `class` field
+(`"capable"` or `"on-device"`) when present; otherwise derived: provider
+`claude` or `litellm`, or an `ollama` tag ending `:cloud`, is capable;
+everything else, and anything unrecognised, is on-device (the stricter class
+is the default). `PIPELINE_BACKEND_DISPATCH=auto` takes the class of the
+model that resolves for the story's FIRST attempt; a later escalation to
+Claude does not change the class the plan was authored for.
+
+**Which checks apply.** Checks 1, 1b, 2, 3, 5, and the explicit-key and
+model-pin items of 6 apply to EVERY non-Claude story, whatever its class: the
+largest avoidable failure class (below) is a plan-authoring defect and a
+stronger model does not remove it. These apply to **on-device only**: quoting
+the applied stand-in verbatim into the brief (1, step 5), the function and
+hard-shape limits in 4, and the Ollama parallelism check in 6. Two sizing
+rules stay in force for BOTH classes because the incidents behind them
+happened on cloud models: more than about two separately verifiable outcomes
+per story, and a story that edits the interior of a file over about 1000
+lines (including Markdown) is split or routed up.
 
 ## Why a checklist and not more prose
 
@@ -36,7 +71,7 @@ Across 500 PRs since 2026-08-01, **72 of 149 gate-synthesized test failures
 single largest avoidable failure class, and it is entirely a plan-authoring
 defect: no executor, however strong, may fix a test it was told never to touch.
 
-## The checklist (every non-Claude story, every time — including follow-ups written mid-incident)
+## The checklist (every non-Claude story, every time — including follow-ups written mid-incident; items marked *on-device only* are skipped for the capable class)
 
 ### 1. Impact run — run the suite, don't grep it
 For each story, in a scratch worktree off current `master`
@@ -60,10 +95,16 @@ For each story, in a scratch worktree off current `master`
    - **split** the reconciling test edit into its own prerequisite story.
 4. Also note any failure that reproduces on untouched `master` — that is a
    broken baseline; fix or quarantine it before dispatching anything.
-5. Quote the applied stand-in into the story's `agent_instructions` verbatim
-   (the diff or the exact resulting lines) while the worktree still exists,
-   then remove the scratch worktree. The preflight is the known-good patch;
-   keep it instead of making the executor re-derive it.
+5. *On-device only:* quote the applied stand-in into the story's
+   `agent_instructions` verbatim (the diff or the exact resulting lines) while
+   the worktree still exists, then remove the scratch worktree. The preflight
+   is the known-good patch; keep it instead of making the executor re-derive
+   it. For the capable class it is enough to name the files and tests the
+   stand-in touched and which of them conflicted.
+6. Independent stories of one plan may share ONE scratch worktree and one
+   suite run when their stand-ins do not touch the same files; record in each
+   story's `Preflight:` line that the run was shared. Stories that edit the
+   same file are run in dependency order.
 
 ### 1b. Read the brief as an executor, line by line
 
@@ -120,13 +161,17 @@ brief or its siblings. It grades every PR as if it were a complete change.
   production change, the requirement list is over-specified — cut it to the
   assertions that grade the deliverable.
 
-### 4. Size the story to the tier
+### 4. Size the story to the class
 Apply `agent-dispatch-story-sizing.md` in full. Additionally, for the
-weakest (on-device ~20B) tier:
+**on-device** class (the weakest tier is on-device ~20B):
 - `.md` files count toward the ~1000-line file-size cap. REFERENCE.md
-  (~1330 lines) and README.md are **not** weak-tier files — route stories
-  that edit them to cloud open-source or Claude. The ingest-time sizing
-  warning does not check `.md` or repo-root files, so check by hand.
+  (~1330 lines) and README.md are **not** on-device files — route stories
+  that edit them to the capable class. A capable-class story that edits the
+  interior of a `.md` file over ~1000 lines must still prescribe anchored
+  edits (find this exact row, insert after it) and a verify command, because
+  the table-row corruption seen there is not model-size specific. The
+  ingest-time sizing warning does not check `.md` or repo-root files, so
+  check by hand.
 - One production concern per story; ≤2-3 new functions; no deletion without
   a survivor list.
 
@@ -143,15 +188,19 @@ REFERENCE.md" followed by "run `git checkout master -- REFERENCE.md`").
 - Every story in the plan JSON has an explicit `key` (re-ingest without keys
   mints duplicates that dispatch concurrently — see memory
   `project-ingest-duplicate-stories`).
-- `OLLAMA_NUM_PARALLEL` on the running Ollama ≥ `PIPELINE_MAX_CONCURRENT_AGENTS`
-  from the **installed** LaunchAgent (not the repo template), or set concurrency
-  to 1. The "serving parallelism below MAX_CONCURRENT_AGENTS" notification
-  is a stop sign, not noise.
+- *On-device only:* `OLLAMA_NUM_PARALLEL` on the running Ollama ≥
+  `PIPELINE_MAX_CONCURRENT_AGENTS` from the **installed** LaunchAgent (not the
+  repo template), or set concurrency to 1. The "serving parallelism below
+  MAX_CONCURRENT_AGENTS" notification is a stop sign, not noise. A cloud-served
+  model has no local serving parallelism to check.
 - A per-story `model` pin resolves to a tag declared in the live registry
   (`PIPELINE_MODEL_REGISTRY_PATH`, not the checked-in `model_registry.json`).
 
 ## Record the result
 Put a one-line `Preflight:` summary at the top of each non-Claude story's
-`agent_instructions` — e.g. `Preflight: impact run 2026-09-18 on 7ac2a04 —
-0 pre-existing failures` or `— 1 conflict (test_x::test_y), pre-authorized
-below`. A story without that line has not been preflighted.
+`agent_instructions` — e.g. `Preflight: impact run 2026-09-18 on 7ac2a04
+(class=capable) — 0 pre-existing failures` or `— 1 conflict
+(test_x::test_y), pre-authorized below`. State what was measured and what was
+NOT (for example "full suite not run"). A story without that line has not
+been preflighted; the ingest gate only checks that a real `Preflight:` line
+exists, so the class and the measured/unmeasured split are on the author.

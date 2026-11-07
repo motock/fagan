@@ -2,6 +2,7 @@
 
 - **Status:** Proposed (draft 2026-11-04, not yet reviewed)
 - **Date:** 2026-11-04
+- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope')
 - **Builds on:** [0008](0008-shared-control-plane-per-repo-workers.md) (store is
   the system of record for plan and control state; no write-through),
   [0009](0009-tenancy-and-authorization-model.md) (service-layer policy over a
@@ -45,8 +46,14 @@ provider's claims, how it maps to teams and roles, how isolation is enforced and
 audited, and any hosted multi-customer operation (per-namespace encryption
 keys, quotas, scheduler fair-share, billing) belong to the proprietary
 enterprise distribution and are described in its own documentation. The
-deployment model assumed there is one organization per deployment (decided
-2026-11-04).
+core distribution assumes nothing about how many organizations a deployment
+serves: it holds one opaque namespace and always passes "default". The hosted
+enterprise distribution serves many organizations, each with teams and one
+namespace per team, as decided in the enterprise tenancy ADR (enterprise
+distribution, ADR 0001, Accepted 2026-11-06). It realises that through a store
+plugin that supplies real namespaces; the Store signatures do not change.
+(Amended 2026-11-06; this replaces the earlier one-organization assumption
+decided 2026-11-04.)
 
 ## Decision
 

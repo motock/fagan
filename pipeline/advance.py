@@ -264,8 +264,7 @@ def _count_on_device_in_progress_agents() -> int:
     _story_dispatch_is_on_device).
     """
     count = 0
-    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
-        manifest = json.loads(manifest_path.read_text())
+    for manifest in _store.records().get_manifests("default").values():
         for story in manifest.get("stories", {}).values():
             if _has_live_test_author_phase(story):
                 if _story_dispatch_is_on_device(story):
@@ -343,7 +342,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     )
 
     done = _completed_dep_ids(stories)
-    neighbours = cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
+    neighbours = {
+        name: other
+        for name, other in _store.records().get_manifests("default").items()
+        if name != plan_name
+    }
     ready = [
         k
         for k, v in stories.items()

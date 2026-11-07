@@ -133,6 +133,12 @@ class _FakeStore:
     def get_manifest(self, plan_name):
         return json.loads(self.path.read_text())
 
+    def records(self):
+        return self
+
+    def get_manifests(self, namespace):
+        return {}
+
 
 def _story(status="tests_passed", **extra):
     story = {

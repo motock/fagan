@@ -61,6 +61,12 @@ class _FakeStore:
     def get_manifest(self, plan_name):
         return json.loads(self.path.read_text())
 
+    def records(self):
+        return self
+
+    def get_manifests(self, namespace):
+        return {}
+
 
 class _FakeBackend:
     """Per-story resource gate always reports healthy."""

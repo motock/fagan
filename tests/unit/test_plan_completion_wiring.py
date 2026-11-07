@@ -155,6 +155,8 @@ def _pr_open_story():
     return {
         "summary": "pr open story",
         "status": "pr_open",
+        "review_verdict": "APPROVE",
+        "review_verdict_sha": "stub-head",
         "worktree": "/nonexistent-plannotify03-worktree",
         "dependencies": [],
     }
@@ -282,7 +284,7 @@ def test_approve_merge_calls_notify_if_plan_completed(
         lambda plan_name, manifest: calls.append((plan_name, manifest)),
     )
     _write_manifest(plan_dir, "notify-approve", {
-        "S1": _story(status="parked", review_verdict="APPROVE", worktree="/nonexistent-plannotify03-approve-worktree"),
+        "S1": _story(status="parked", review_verdict="APPROVE", review_verdict_sha="stub-head", worktree="/nonexistent-plannotify03-approve-worktree"),
     })
 
     result = p.approve_merge("notify-approve", "S1")
@@ -304,7 +306,7 @@ def test_approve_merge_survives_notify_raising(
 
     monkeypatch.setattr(ppc, "notify_if_plan_completed", _boom)
     _write_manifest(plan_dir, "notify-approve-raises", {
-        "S1": _story(status="parked", review_verdict="APPROVE", worktree="/nonexistent-plannotify03-approve-worktree"),
+        "S1": _story(status="parked", review_verdict="APPROVE", review_verdict_sha="stub-head", worktree="/nonexistent-plannotify03-approve-worktree"),
     })
 
     result = p.approve_merge("notify-approve-raises", "S1")

@@ -103,7 +103,7 @@ def _story(**overrides):
     base = {
         "summary": "story on a plan-scoped repo",
         "status": "parked",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": "/nonexistent-worktree",
     }

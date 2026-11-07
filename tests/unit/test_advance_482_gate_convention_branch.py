@@ -156,7 +156,7 @@ def _story(worktree):
     return {
         "summary": "alias-head story ready to merge",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": worktree,
     }
@@ -333,7 +333,7 @@ def test_advance_tick_never_feeds_convention_branch_to_gate_across_calls(
     n_gate_calls_1 = len(gate_calls)
     man["stories"]["S10"].update({
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": pushed_sha_1,
         "risk": "low",
         "worktree": str(repo),
     })
@@ -384,7 +384,7 @@ def test_advance_tick_never_feeds_convention_branch_to_gate_across_calls(
     n_gate_calls_2 = len(gate_calls)
     man["stories"]["S10"].update({
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": str(tmp_path / "gone-worktree"),
     })

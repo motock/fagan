@@ -514,7 +514,7 @@ def test_approve_merge_returns_retriable_busy_when_lock_held(plan_dir, monkeypat
     already held by another context (scheduler tick). It returns a clean,
     retriable error instead of crashing or silently succeeding."""
     _write_manifest(plan_dir, "ambusy", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     merged = []
@@ -546,7 +546,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
     is taken from the on-disk manifest, so we change it and verify the
     merge used the fresh value)."""
     _write_manifest(plan_dir, "amfresh", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/old/wt"},
     })
 
@@ -569,7 +569,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
     # pass "/old/wt" to _merge_pr; if it re-reads inside the lock, it will
     # pass "/fresh/wt".
     _write_manifest(plan_dir, "amfresh", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/fresh/wt"},
     })
 
@@ -584,7 +584,7 @@ def test_approve_merge_revalidates_status_inside_lock(plan_dir, monkeypatch):
     (e.g. a scheduler tick already merged it), approve_merge must detect the
     stale state and return the validation error rather than proceeding."""
     _write_manifest(plan_dir, "amstale", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     merged = []
@@ -595,7 +595,7 @@ def test_approve_merge_revalidates_status_inside_lock(plan_dir, monkeypatch):
     # acquires the lock (the pre-lock read sees 'parked', but the in-lock
     # re-read sees 'done').
     _write_manifest(plan_dir, "amstale", {
-        "P1": {"summary": "approved", "status": "done", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "done", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
 
@@ -609,7 +609,7 @@ def test_approve_merge_revalidates_review_verdict_inside_lock(plan_dir, monkeypa
     """If the review_verdict changed on disk while waiting for the lock,
     approve_merge must detect it and refuse rather than merging unapproved work."""
     _write_manifest(plan_dir, "amverdict", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     merged = []
@@ -634,7 +634,7 @@ def test_merge_gate_park_sets_parked_reason(plan_dir, monkeypatch):
     string, matching the review-park sites."""
     _write_manifest(plan_dir, "mgpark", {
         "P1": {"summary": "approved but high risk", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "high", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "high", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
@@ -652,7 +652,7 @@ def test_approve_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     """A story leaving 'parked' status via successful approve_merge must no
     longer carry a stale parked_reason key."""
     _write_manifest(plan_dir, "amclear", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x", "parked_reason": "high risk held for human review"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
@@ -671,7 +671,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     that previously carried a parked_reason, the reason must be cleared."""
     _write_manifest(plan_dir, "smclear", {
         "P1": {"summary": "approved low risk", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x",
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x",
                "parked_reason": "stale reason from a prior park"},
     })
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")

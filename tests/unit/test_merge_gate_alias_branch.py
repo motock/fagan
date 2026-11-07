@@ -171,7 +171,7 @@ def _story(**overrides):
     base = {
         "summary": "alias-head story ready to merge",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": "/nonexistent-worktree",
     }

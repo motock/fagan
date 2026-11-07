@@ -122,7 +122,7 @@ def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch):
                     "P1": {
                         "summary": "approved",
                         "status": "pr_open",
-                        "review_verdict": "APPROVE",
+                        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                         "risk": "low",
                         "worktree": "/x",
                     }

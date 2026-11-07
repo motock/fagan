@@ -47,7 +47,7 @@ def test_advance_pipeline_push_failure_blocks_merge(plan_dir, monkeypatch, tmp_p
     wt = tmp_path / "wt"
     wt.mkdir()
     _write_manifest(plan_dir, "pushfail", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": str(wt)},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -81,7 +81,7 @@ def test_approve_merge_push_failure_returns_error(plan_dir, monkeypatch, tmp_pat
     wt = tmp_path / "wt"
     wt.mkdir()
     _write_manifest(plan_dir, "ampush", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": str(wt)},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -115,7 +115,7 @@ def test_advance_pipeline_rebase_conflict_retries_within_budget(plan_dir, monkey
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setenv("PIPELINE_REWORK_ON_CONFLICT", "0")
     _write_manifest(plan_dir, "rbconflict", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -142,7 +142,7 @@ def test_advance_pipeline_rebase_conflict_exhausts_budget(plan_dir, monkeypatch)
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "rbgiveup", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "merge_attempts": 2},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -165,7 +165,7 @@ def test_advance_pipeline_ci_fail_blocks_merge(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cifail", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -196,7 +196,7 @@ def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monke
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cifailrework", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -229,7 +229,7 @@ def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypat
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cireworkflag", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -262,7 +262,7 @@ def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, mo
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cireworkwired", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -291,7 +291,7 @@ def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkey
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 1)
     _write_manifest(plan_dir, "cifailnorework", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -319,7 +319,7 @@ def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_d
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cifailexhausted", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "merge_attempts": 3},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -354,7 +354,7 @@ def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_di
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cicycle", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -413,7 +413,7 @@ def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, 
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cipushfail", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -446,7 +446,7 @@ def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch)
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cipendingrework", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -477,7 +477,7 @@ def test_advance_pipeline_cancelled_ci_not_routed_to_rework(plan_dir, monkeypatc
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cicancelrework", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "ci_rerun_attempted": True},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -502,7 +502,7 @@ def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cipending", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -529,7 +529,7 @@ def test_advance_pipeline_rebase_and_ci_ok_merges(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "rbok", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "merge_attempts": 1},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -565,7 +565,7 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     # call would trip the guard.
     monkeypatch.setattr(backend.OllamaDriver, "resource_status", lambda self: {"ok": True, "reason": ""})
     _write_manifest(plan_dir, "cidisabled", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -597,7 +597,7 @@ def test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, 
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "cicancel", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -633,7 +633,7 @@ def test_advance_pipeline_cancelled_ci_second_time_does_not_rerun_again(plan_dir
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "cicancel2", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "ci_rerun_attempted": True},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -657,7 +657,7 @@ def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, mon
     # Same one-shot auto-rerun behavior on the human-driven approve_merge
     # path as the scheduler's merge gate.
     _write_manifest(plan_dir, "amcancel", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",

@@ -122,6 +122,8 @@ def _pr_open_story(**over):
     story = {
         "summary": "pr open story",
         "status": "pr_open",
+        "review_verdict": "APPROVE",
+        "review_verdict_sha": "stub-head",
         "worktree": "/nonexistent-plannotify-advance-worktree",
         "dependencies": [],
     }

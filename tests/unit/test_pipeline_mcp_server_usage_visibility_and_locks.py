@@ -109,7 +109,7 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "buildfail", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -135,7 +135,7 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "buildok", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -158,7 +158,7 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
     # The manual override must also refuse to land a branch whose build,
     # re-run independently right before merge, fails.
     _write_manifest(plan_dir, "ambuild", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -185,7 +185,7 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "accfail", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x",
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
@@ -219,7 +219,7 @@ def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkey
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "fsfail", {
         "P1": {"summary": "approved but rebased-broken", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x",
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x",
                # NO acceptance block - ordinary TDD story.
                },
     })
@@ -244,7 +244,7 @@ def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "accok", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x",
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
@@ -267,7 +267,7 @@ def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypa
     # The manual override must also refuse to land a branch whose acceptance
     # oracle fails on reverification, even with a prior reviewer APPROVE.
     _write_manifest(plan_dir, "amacc", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x",
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
@@ -290,7 +290,7 @@ def test_approve_merge_rebase_conflict_returns_error(plan_dir, monkeypatch):
     # The manual override must also refuse to land a conflicting branch; it
     # surfaces the rebase failure rather than calling _merge_pr.
     _write_manifest(plan_dir, "amrb", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -308,7 +308,7 @@ def test_approve_merge_rebase_conflict_returns_error(plan_dir, monkeypatch):
 def test_approve_merge_ci_fail_returns_error(plan_dir, monkeypatch):
     # The manual override must also refuse to land a CI-red PR.
     _write_manifest(plan_dir, "amci", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
@@ -329,7 +329,7 @@ def test_approve_merge_returns_error_on_merge_failure(plan_dir, monkeypatch):
     # The manual override surfaces a merge failure as a structured error to the
     # human invoking it rather than raising an unhandled exception.
     _write_manifest(plan_dir, "ammergefail", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr",
@@ -695,7 +695,7 @@ def test_advance_pipeline_plan_paused_skips_dispatch_review_and_merge(plan_dir, 
             "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
             "TP1": {"summary": "awaiting review", "status": "tests_passed",
                     "worktree": "/y", "risk": "low"},
-            "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+            "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                    "risk": "low", "worktree": "/z"},
         },
     }))

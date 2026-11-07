@@ -12,6 +12,18 @@ in practice.
 ### Added
 
 - Documented trace propagation in the telemetry contract: strict validation of an inbound `traceparent`, one trace per dispatch attempt with `TRACEPARENT` handed to the agent subprocess, and the attempt-0 attribution limit when a dispatch event is missed.
+- Merge now refuses an approval that does not cover the commit being merged:
+  `pipeline/review_merge_binding.py::check(story, branch_head_sha)` is a pure,
+  deny-by-default consumer of the `review_verdict_sha` that `review_story`
+  already records, called from `approve_merge` and from the scheduler merge
+  adjudication on the story-branch tip captured before the merge-time rebase.
+  A commit pushed after the review (agent rework or a human push) no longer
+  merges on the earlier approval; the refusal names both short shas, tells the
+  caller to re-run `review_story`, and appends one
+  `merge.review_binding_denied` audit record with identifiers only (plan,
+  story, the two short shas) and no diff or feedback text. The pipeline's own
+  post-review checkpoint/rebase/force-push re-binds the verdict at its commit
+  point instead of loosening the check.
 - Operator-supplied adapters for the identity provider, authorizer, event bus,
   forge, ticket provider and notification channels via
   `PIPELINE_<SEAM>_PLUGIN=module:attr` (and `PIPELINE_CHANNEL_PLUGINS` for

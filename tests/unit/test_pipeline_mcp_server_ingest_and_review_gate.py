@@ -781,7 +781,7 @@ def test_advance_pipeline_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_p
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
     _write_manifest(plan_dir, "rrmerge", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": str(tmp_path / "wt")},
     })
     manifest_path = plan_dir / "rrmerge.manifest.json"

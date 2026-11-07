@@ -37,7 +37,7 @@ def _write_manifest(plan_dir, plan_name):
         "P1": {
             "summary": "approved but parked",
             "status": "parked",
-            "review_verdict": "APPROVE",
+            "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
             "risk": "medium",
             "worktree": "/x",
         }

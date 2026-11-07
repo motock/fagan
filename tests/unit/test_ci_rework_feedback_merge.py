@@ -172,6 +172,8 @@ def test_merge_gate_ci_failure_keeps_prior_review_feedback(
         "P1": {
             "summary": "pr open story",
             "status": "pr_open",
+            "review_verdict": "APPROVE",
+            "review_verdict_sha": "stub-head",
             "worktree": "/nonexistent-cimerge-worktree",
             "dependencies": [],
             "review_feedback": PRIOR,

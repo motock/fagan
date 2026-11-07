@@ -319,7 +319,6 @@ def verify_audit() -> dict[str, Any]:
 # needed on the server side.
 TOOLS = (
     request_decision,
-    record_decision,
     list_decisions,
     review_story,
     advance_pipeline,
@@ -331,4 +330,5 @@ TOOLS = (
     approve_plan,
     reject_plan,
     verify_audit,
+    record_decision,
 )

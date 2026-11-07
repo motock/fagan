@@ -29,6 +29,7 @@ EXPECTED_TOOL_NAMES = [
     "approve_plan",
     "reject_plan",
     "verify_audit",
+    "record_decision",
 ]
 
 SERVER_PY = Path(__file__).resolve().parents[2] / "pipeline" / "server.py"
@@ -39,7 +40,7 @@ def test_tools_tuple_has_nine_entries_in_original_order():
     # plan-approval tools and AA-01 appended verify_audit, so the pin now covers
     # twelve. The assertion is unchanged in strength: exact length plus exact
     # order.
-    assert len(lifecycle.TOOLS) == 12
+    assert len(lifecycle.TOOLS) == 13
     assert [tool.__name__ for tool in lifecycle.TOOLS] == EXPECTED_TOOL_NAMES
 
 

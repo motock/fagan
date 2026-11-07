@@ -86,15 +86,25 @@ def _load_manifest(plan_name: str) -> dict:
 
 
 def _record_denial(
-    action: str, principal_subject: str, plan_name: str, story_key: str | None
+    action: str,
+    principal_subject: str,
+    plan_name: str,
+    story_key: str | None,
+    reason: str = "",
 ) -> None:
-    """Append an ``authorization_denied`` record to the plan's sidecar."""
+    """Append an ``authorization_denied`` record to the plan's sidecar.
+
+    ``reason`` names *why* the denial happened when the policy was never the
+    arbiter (the agent guard below sets ``agent_principal``), so an operator can
+    tell a policy refusal from a structural one.
+    """
     try:
         from .persistence import _notify_user
 
+        suffix = f" ({reason})" if reason else ""
         _notify_user(
             plan_name,
-            f"authorization denied: {action} by {principal_subject}",
+            f"authorization denied: {action} by {principal_subject}{suffix}",
             story_key=story_key,
             severity="warning",
             event="authorization_denied",
@@ -103,6 +113,13 @@ def _record_denial(
         logger.warning(
             "could not record authorization denial action=%s plan=%s", action, plan_name
         )
+
+
+#: ADR 0014 decision 3: an agent may draft, patch and dispatch, but the two
+#: decisions that need a human accountable for them -- approving a plan's work
+#: and writing configuration -- are never an agent's. Rejecting stays allowed:
+#: refusing work is safe, and a stuck plan must be unblockable without a human.
+AGENT_FORBIDDEN_ACTIONS = frozenset({"plan:approve", "config:write"})
 
 
 def authorize(
@@ -138,12 +155,22 @@ def authorize(
     principal = current_principal()
     if manifest is None:
         manifest = _load_manifest(plan_name)
-    allowed = is_allowed(
-        default_authorizer(),
-        principal,
-        action,
-        resource_for(manifest, plan_name, story_key),
-    )
+    # ADR 0014 decision 3: this refusal sits in ``authorize`` rather than in the
+    # policy because it is structural, not a grant an operator can hand out.
+    # Consulting the authorizer first would let an allow-everything plugin
+    # hand an agent the approval a human is accountable for, and would record
+    # a denial the policy never actually made.
+    denial_reason = ""
+    if principal.principal_type == "agent" and action_label in AGENT_FORBIDDEN_ACTIONS:
+        allowed = False
+        denial_reason = "agent_principal"
+    else:
+        allowed = is_allowed(
+            default_authorizer(),
+            principal,
+            action,
+            resource_for(manifest, plan_name, story_key),
+        )
     # The decision is final here, so record it once with the action label and
     # the outcome word only. The principal is deliberately not a label: it is
     # PII, and per-subject series would grow without bound. It stays in the
@@ -159,7 +186,9 @@ def authorize(
                 detail={"principal": principal.subject},
             )
         return None
-    _record_denial(action_label, principal.subject, plan_name, story_key)
+    _record_denial(
+        action_label, principal.subject, plan_name, story_key, reason=denial_reason
+    )
     record_audit(
         plan_name,
         action=action_label,

@@ -75,6 +75,20 @@ def actor_id() -> str:
     return current_principal().subject
 
 
+def principal_type() -> str:
+    """Return the current actor's kind (``human``/``agent``/``system``).
+
+    Stamped onto audit records so an agent's action is attributable to a
+    machine rather than to whichever human happens to own the client id.
+    """
+    return current_principal().principal_type
+
+
+def client_id() -> str:
+    """Return the OIDC client the current actor authenticated as, or ``""``."""
+    return current_principal().client_id
+
+
 def new_correlation_id() -> str:
     """Mint a correlation id: the 12-hex shape dispatch already uses per story."""
     return uuid.uuid4().hex[:12]

@@ -92,6 +92,20 @@ OIDC_CLOCK_SKEW_ENV = "PIPELINE_OIDC_CLOCK_SKEW_S"
 #: or ADFS inside a VPC). Off by default; only ``1``/``true`` enable it.
 OIDC_ALLOW_PRIVATE_JWKS_ENV = "PIPELINE_OIDC_ALLOW_PRIVATE_JWKS"
 
+#: Comma-separated OIDC client ids (``azp``) allowed to authenticate as an
+#: *agent* (ADR 0014). Empty - the default - means no client is an agent and
+#: every token is a human principal. Read on every verification so a rotated
+#: allowlist takes effect without a restart.
+OIDC_AGENT_CLIENTS_ENV = "PIPELINE_OIDC_AGENT_CLIENTS"
+
+#: The claim carrying an agent's ``<org-id>/<team-id>`` binding. Configurable
+#: because IdPs differ on where a service account's scope lives.
+OIDC_AGENT_SCOPE_CLAIM_ENV = "PIPELINE_OIDC_AGENT_SCOPE_CLAIM"
+DEFAULT_AGENT_SCOPE_CLAIM = "team_scope"
+
+#: The prefix reserved for agent subjects, alongside ``system:``.
+AGENT_SUBJECT_PREFIX = "agent:"
+
 #: The accepted ``PIPELINE_IDENTITY_PROVIDER`` values. ``shared-secret`` is the
 #: default and there is deliberately no "off": disabling authentication is not
 #: a configuration option (ADR 0004).
@@ -600,6 +614,44 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
         # so a system principal's authority is never reachable through the IdP.
         _log_rejection(settings, kid, "invalid token: reserved subject")
         raise _ReservedSubjectError("invalid token: reserved subject")
+    if subject.startswith(AGENT_SUBJECT_PREFIX):
+        # ``agent:`` is reserved too: an agent subject is *derived* below from
+        # the token's scope claim, so a token that claims the prefix could
+        # otherwise shadow or double-prefix another team's agent (ADR 0014).
+        _log_rejection(settings, kid, "invalid token: reserved subject")
+        raise _ReservedSubjectError("invalid token: reserved subject")
+    # ADR 0014: an agent is a machine client the operator allowlisted. Its
+    # ``azp`` is set by the IdP from the authenticated client, never by the
+    # caller, which is why the allowlist check is trustworthy. Any other token
+    # is a human principal and its scope claim is ignored outright.
+    azp = claims.get("azp")
+    if isinstance(azp, str) and azp in _agent_clients():
+        scope_claim = (
+            str(
+                os.environ.get(
+                    OIDC_AGENT_SCOPE_CLAIM_ENV, DEFAULT_AGENT_SCOPE_CLAIM
+                )
+            ).strip()
+            or DEFAULT_AGENT_SCOPE_CLAIM
+        )
+        team_scope = claims.get(scope_claim)
+        if not isinstance(team_scope, str):
+            _log_rejection(settings, kid, "invalid token: agent scope")
+            raise IdentityError("invalid token: agent scope")
+        try:
+            return Principal(
+                subject=f"{AGENT_SUBJECT_PREFIX}{team_scope}",
+                roles=frozenset(),
+                auth_method="oidc",
+                principal_type="agent",
+                client_id=azp,
+                team_scope=team_scope,
+            )
+        except IdentityError:
+            # ``Principal`` owns the team-scope grammar; the message stays a
+            # fixed reason token and never echoes the claim value.
+            _log_rejection(settings, kid, "invalid token: agent scope")
+            raise IdentityError("invalid token: agent scope") from None
     # A ``sub`` is unique per issuer, never globally (RFC 9068 2.2), so it is
     # qualified by the issuer the token proved it came from. Without this, any
     # issuer whose users choose their own account name could mint a token whose
@@ -613,7 +665,21 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
         scopes=_scopes_from_claims(claims),
         email=_email_from_claims(claims),
         auth_method="oidc",
+        principal_type="human",
+        client_id=azp if isinstance(azp, str) else "",
     )
+
+
+def _agent_clients() -> frozenset[str]:
+    """Return the allowlisted agent client ids, read from the env per call.
+
+    Read on every verification rather than at import: the allowlist is
+    operator configuration and a rotated value must take effect without a
+    process restart. Empty entries are dropped, so ``"a, b,,"`` allows exactly
+    ``a`` and ``b`` and an unset/empty variable allows no client at all.
+    """
+    raw = os.environ.get(OIDC_AGENT_CLIENTS_ENV, "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 
 class OidcProvider:

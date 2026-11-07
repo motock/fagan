@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from . import persistence
-from .actor import actor_id, current_correlation_id
+from .actor import actor_id, client_id, current_correlation_id, principal_type
 
 logger = logging.getLogger("pipeline.audit")
 
@@ -135,6 +135,8 @@ def _append_at(
             "prev_hash": "" if previous is None else previous.get("hash", ""),
             "ts": datetime.now(UTC).isoformat(),
             "actor": actor_id(),
+            "principal_type": principal_type(),
+            "client_id": client_id(),
             "correlation_id": current_correlation_id(),
             "action": action,
             "outcome": outcome,

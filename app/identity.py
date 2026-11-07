@@ -7,6 +7,7 @@ on it without creating an import cycle. It holds the identity data types, the
 policy, no wiring and no enforcement.
 """
 
+import re
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +23,19 @@ ROLE_ADMIN = "admin"
 ROLES = frozenset(
     {ROLE_AUTHOR, ROLE_OWNER, ROLE_APPROVER, ROLE_DELEGATE, ROLE_ADMIN}
 )
+
+
+#: The principal kinds ADR 0014 defines. ``human`` is the default so every
+#: pre-existing construction keeps its meaning; ``agent`` is a machine caller
+#: bound to one team; ``system`` is the deployment acting as itself.
+PRINCIPAL_TYPES = frozenset({"human", "agent", "system"})
+
+#: An agent's ``team_scope`` is an ``<org-id>/<team-id>`` pair. Both segments
+#: start with a letter or digit and continue with letters, digits, ``.``, ``_``
+#: or ``-``. ``fullmatch`` is load-bearing: ``re.match`` with a trailing ``$``
+#: would accept ``"acme/team-1\n"``, because ``$`` also matches before a final
+#: newline.
+TEAM_SCOPE_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*")
 
 
 class IdentityError(Exception):
@@ -43,7 +57,31 @@ class Principal:
     auth_method: str = ""
     correlation_id: str = ""
 
+    #: ``human`` | ``agent`` | ``system``. Defaulted so every pre-existing
+    #: construction is unchanged and still means "a human caller".
+    principal_type: str = "human"
+    #: The OIDC client (``azp``) the caller authenticated as, for attribution.
+    client_id: str = ""
+    #: An agent's ``<org-id>/<team-id>`` binding. Empty for non-agents.
+    team_scope: str = ""
+
     def __post_init__(self) -> None:
+        if self.principal_type not in PRINCIPAL_TYPES:
+            raise IdentityError("invalid principal type")
+
+        # ADR 0014 decision 3: an agent is only ever scoped to one team, and
+        # the scope comes from the signed token or operator config. Messages
+        # never echo the scope value.
+        if self.principal_type == "agent":
+            if not isinstance(self.team_scope, str) or not TEAM_SCOPE_PATTERN.fullmatch(
+                self.team_scope
+            ):
+                raise IdentityError(
+                    "invalid team scope: must be an <org-id>/<team-id> pair"
+                )
+        elif self.team_scope:
+            raise IdentityError("invalid team scope: only an agent may carry one")
+
         if not isinstance(self.subject, str) or not self.subject.strip():
             raise IdentityError("invalid subject: must be a non-empty string")
 
@@ -129,9 +167,11 @@ SYSTEM_AUTH_METHOD = "system"
 #: The scheduler daemon's own identity: it dispatches, merges, marks done and
 #: interrupts on the tick, and nothing else (see ``app.policy`` for the grants).
 SYSTEM_SCHEDULER = Principal(
-    subject="system:scheduler", auth_method=SYSTEM_AUTH_METHOD
+    subject="system:scheduler", auth_method=SYSTEM_AUTH_METHOD, principal_type="system"
 )
 
 #: A dispatched worker's own identity: it patches its own story, and nothing
 #: else (see ``app.policy`` for the grants).
-SYSTEM_WORKER = Principal(subject="system:worker", auth_method=SYSTEM_AUTH_METHOD)
+SYSTEM_WORKER = Principal(
+    subject="system:worker", auth_method=SYSTEM_AUTH_METHOD, principal_type="system"
+)

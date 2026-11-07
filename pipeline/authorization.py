@@ -86,15 +86,25 @@ def _load_manifest(plan_name: str) -> dict:
 
 
 def _record_denial(
-    action: str, principal_subject: str, plan_name: str, story_key: str | None
+    action: str,
+    principal_subject: str,
+    plan_name: str,
+    story_key: str | None,
+    reason: str = "",
 ) -> None:
-    """Append an ``authorization_denied`` record to the plan's sidecar."""
+    """Append an ``authorization_denied`` record to the plan's sidecar.
+
+    ``reason`` names *why* the denial happened when the policy was never the
+    arbiter (the agent guard below sets ``agent_principal``), so an operator can
+    tell a policy refusal from a structural one.
+    """
     try:
         from .persistence import _notify_user
 
+        suffix = f" ({reason})" if reason else ""
         _notify_user(
             plan_name,
-            f"authorization denied: {action} by {principal_subject}",
+            f"authorization denied: {action} by {principal_subject}{suffix}",
             story_key=story_key,
             severity="warning",
             event="authorization_denied",
@@ -103,6 +113,62 @@ def _record_denial(
         logger.warning(
             "could not record authorization denial action=%s plan=%s", action, plan_name
         )
+
+
+#: ADR 0014 decision 3: an agent may draft, patch and dispatch, but the two
+#: decisions that need a human accountable for them -- approving a plan's work
+#: and writing configuration -- are never an agent's. Rejecting stays allowed:
+#: refusing work is safe, and a stuck plan must be unblockable without a human.
+AGENT_FORBIDDEN_ACTIONS = frozenset({"plan:approve", "config:write"})
+
+
+def _manifest_team(manifest: dict | None) -> str:
+    """Return the plan's declared team, or ``""`` when it declares none.
+
+    Distinct from ``resource_for``'s ``Resource.team``, which substitutes
+    ``DEFAULT_TEAM`` for a missing one: the agent scope check below must tell
+    "this plan belongs to no team" from "this plan belongs to the local team".
+    """
+    data = manifest if isinstance(manifest, dict) else {}
+    return str(data.get("team") or "").strip()
+
+
+def _team_scope_covers(team_scope: str, team: str) -> bool:
+    """Return whether *team_scope* names *team* (its ``<team-id>`` segment).
+
+    ``Resource`` carries no org field, so the ``<org-id>`` segment is not
+    compared here; the team id is the boundary the plan manifest declares.
+    """
+    _org, _, scope_team = team_scope.partition("/")
+    return bool(team) and scope_team == team
+
+
+def _agent_structural_denial(
+    principal, action_label: str, team: str | None = None
+) -> str:
+    """Return the structural denial reason for *principal*, or ``""``.
+
+    One place for every rule that refuses an agent without asking the policy,
+    because the rules are structural rather than a grant an operator can hand
+    out. Two production paths reach them: ``authorize`` decides a plan-scoped
+    operation and ``refusal_for_host_config`` decides a host-scoped write
+    (``set_role_default``, ``record_security_audit``) against an empty resource.
+    Both call this before the authorizer, so no operator plugin can grant an
+    agent an approval, a configuration write, or another team's work.
+
+    ADR 0014 decision 3 says a team agent acts only inside its team scope, so an
+    agent is confined to plans whose manifest declares its own team id. ``team``
+    is that declared team for a plan-scoped decision and ``None`` for a
+    host-scoped one, which has no plan to scope. The check fails closed: an
+    agent is refused on a plan that declares no team at all.
+    """
+    if principal.principal_type != "agent":
+        return ""
+    if action_label in AGENT_FORBIDDEN_ACTIONS:
+        return "agent_principal"
+    if team is not None and not _team_scope_covers(principal.team_scope, team):
+        return "agent_team_scope"
+    return ""
 
 
 def authorize(
@@ -138,12 +204,23 @@ def authorize(
     principal = current_principal()
     if manifest is None:
         manifest = _load_manifest(plan_name)
-    allowed = is_allowed(
-        default_authorizer(),
-        principal,
-        action,
-        resource_for(manifest, plan_name, story_key),
+    # ADR 0014 decision 3: this refusal sits in ``authorize`` rather than in the
+    # policy because it is structural, not a grant an operator can hand out.
+    # Consulting the authorizer first would let an allow-everything plugin
+    # hand an agent the approval a human is accountable for, or another team's
+    # work, and would record a denial the policy never actually made.
+    denial_reason = _agent_structural_denial(
+        principal, action_label, _manifest_team(manifest)
     )
+    if denial_reason:
+        allowed = False
+    else:
+        allowed = is_allowed(
+            default_authorizer(),
+            principal,
+            action,
+            resource_for(manifest, plan_name, story_key),
+        )
     # The decision is final here, so record it once with the action label and
     # the outcome word only. The principal is deliberately not a label: it is
     # PII, and per-subject series would grow without bound. It stays in the
@@ -159,7 +236,9 @@ def authorize(
                 detail={"principal": principal.subject},
             )
         return None
-    _record_denial(action_label, principal.subject, plan_name, story_key)
+    _record_denial(
+        action_label, principal.subject, plan_name, story_key, reason=denial_reason
+    )
     record_audit(
         plan_name,
         action=action_label,
@@ -193,7 +272,9 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
     resource, which ``LocalPolicy`` grants only to the local operator, and the
     decision is recorded in the host-scoped chain
     (``<PLAN_DIR>/.audit.host.jsonl``) because no plan chain can own it.
-    ``what`` names the write in that record.
+    ``what`` names the write in that record. ADR 0014 decision 3 refuses
+    ``config:write`` for an agent principal here, before the authorizer, exactly
+    as ``authorize`` does for a plan-scoped action.
 
     Callers: ``set_role_default`` (rewrites ``model_registry.json``, the
     default model for every role on this host) and ``record_security_audit``
@@ -213,24 +294,34 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
 
     label = action.value if isinstance(action, Action) else str(action)
     principal = current_principal()
-    allowed = is_allowed(
+    # ADR 0014 decision 3: an agent never writes configuration. This is the same
+    # structural refusal ``authorize`` applies, needed here because the host-wide
+    # writes below (role defaults, the security-audit record) are decided against
+    # an empty resource and never pass through ``authorize``. Asking the
+    # authorizer first would let an allow-everything plugin grant it.
+    agent_refusal = _agent_structural_denial(principal, label)
+    allowed = not agent_refusal and is_allowed(
         default_authorizer(), principal, action, resource_for({}, "", None)
     )
+    detail = {"what": what, "principal": principal.subject}
+    if agent_refusal:
+        detail["reason"] = agent_refusal
     try:
         append_host_audit(
             action=label,
             outcome="allowed" if allowed else "denied",
-            detail={"what": what, "principal": principal.subject},
+            detail=detail,
         )
     except OSError:
         logger.warning("host audit append failed for a %s decision", label)
     if allowed:
         return None
     logger.warning(
-        "authorization denied action=%s principal=%s target=%s",
+        "authorization denied action=%s principal=%s target=%s reason=%s",
         label,
         principal.subject,
         what,
+        agent_refusal or "policy",
     )
     return {
         "ok": False,

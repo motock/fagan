@@ -97,6 +97,30 @@ Renaming one of these is a breaking change. It needs a CHANGELOG entry marked
 **BREAKING**, because dashboards, alerts and downstream queries are written
 against the published names and no alias is kept.
 
+## Metric catalogue
+
+The metrics the profile governs are listed here with their unit, their
+attributes and the profile that emits them. The three story lifecycle histograms
+are registered under both profiles because they are label-free; the three usage
+instruments carry model, role, backend and token metadata, so they are
+registered only under `harness` and a `customer` deployment emits no series for
+them.
+
+| Metric | Unit | Attributes | Profile |
+| --- | --- | --- | --- |
+| `fagan.story.dispatch_to_pr.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
+| `fagan.story.pr_to_ci.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
+| `fagan.story.pr_to_done.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
+| `fagan.usage.tokens` | `{token}` | `kind` (`input`, `output`, `cache_creation`, `cache_read`), `role`, `backend`, `model` | `harness` only |
+| `fagan.usage.cost` | `USD` | `role`, `backend`, `model` | `harness` only |
+| `fagan.usage.call.duration` | `ms` | `role`, `backend` | `harness` only |
+
+The usage JSONL remains the billing-grade source of truth. These metrics are
+lossy projections of it: a sample is dropped when a field is missing or
+malformed, and a record is exported only while the process that recorded it
+holds the instrument, so sums over the metrics need not agree with the JSONL
+totals.
+
 ## Trace propagation
 
 Fagan speaks the W3C trace-context vocabulary, within limits set by who controls

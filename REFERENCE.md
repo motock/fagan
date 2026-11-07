@@ -2581,6 +2581,52 @@ minting a series.
 Every label value is validated against an enum before the meter is touched, so a
 new series cannot be minted by an unexpected value.
 
+### Telemetry profile (`PIPELINE_TELEMETRY_PROFILE`)
+
+`PIPELINE_TELEMETRY_PROFILE` decides how much metadata a signal carries. Unset —
+the default — resolves to `customer`, which carries low-cardinality,
+enum-bounded metadata only. Exactly one value, `harness`, selects the `harness`
+profile, which adds per-attempt metadata such as role, backend, model, attempt
+number, token counts and estimated cost. Every other value resolves to
+`customer`: `customer` itself, an empty or blank string, or anything
+unrecognized. Leading and trailing whitespace is stripped and the comparison is
+case-insensitive, so `HARNESS` and ` harness ` select `harness`; an unrecognized
+value such as `production` resolves to `customer` and logs one warning per
+process naming the variable, never the value.
+
+The profile is a deployment setting, never request data. It is read from the
+environment only: no header, request body, plan field or story field can choose
+it, so a caller cannot ask for `harness`. The usage instruments are created when
+telemetry is configured, under the profile in force at that moment, so a process
+that configured itself with the variable unset exports no usage metrics even if
+the variable is set later — flipping the profile mid-process never retroactively
+adds them. Content — prompts, briefs, transcripts, diffs, file contents — is
+never an attribute, a label or a span name on either profile.
+
+The six metrics below follow that setting. The three story lifecycle histograms
+are registered under both profiles; the three usage instruments are registered
+only under `harness`, so a `customer` deployment exports no series for them.
+
+| Metric | Kind | Unit | Profile | Attributes |
+| --- | --- | --- | --- | --- |
+| `fagan.story.dispatch_to_pr.duration` | histogram | `s` | `customer` and `harness` | none — label-free, the resource attributes only |
+| `fagan.story.pr_to_ci.duration` | histogram | `s` | `customer` and `harness` | none — label-free, the resource attributes only |
+| `fagan.story.pr_to_done.duration` | histogram | `s` | `customer` and `harness` | none — label-free, the resource attributes only |
+| `fagan.usage.tokens` | counter | `{token}` | `harness` only | `kind` — one of `input`, `output`, `cache_creation`, `cache_read`; `role`; `backend`; `model` |
+| `fagan.usage.cost` | counter | `USD` | `harness` only | `role`; `backend`; `model` |
+| `fagan.usage.call.duration` | histogram | `ms` | `harness` only | `role`; `backend` |
+
+The story histograms measure one hop each, in seconds: `agent_dispatched` to
+`pr_open`, `pr_open` to `ci_complete`, and `pr_open` to `story_done`. They are
+label-free because plan names and story keys are unbounded, are tracked in the
+process that saw the start, and record nothing when it did not, so they are
+lossy by contract the same way the trace attribution above is.
+
+The usage instruments project the usage JSONL onto metrics; that JSONL stays the
+billing-grade source of truth, and the metrics are a lossy projection of it, so
+their sums need not match its totals. Zero is a real measurement and is
+exported; only a missing value drops a sample.
+
 ### Health probes and liveness thresholds (`/livez`, `/readyz`)
 
 The dashboard answers three questions about itself, and they are deliberately

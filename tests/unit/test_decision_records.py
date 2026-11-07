@@ -22,7 +22,8 @@ from typing import Any
 
 import pytest
 
-from pipeline import audit, audit_anchor, decision_records, paths, persistence
+from app.identity import Principal
+from pipeline import actor, audit, audit_anchor, decision_records, paths, persistence
 
 ANCHOR_VARIABLE = "PIPELINE_AUDIT_ANCHOR"
 
@@ -215,10 +216,12 @@ def test_tampered_record_is_reported_and_stays_reported(plan_dir: Path) -> None:
 
 def test_corrupt_line_is_skipped_by_read_and_left_on_disk(plan_dir: Path) -> None:
     first = _append()
-    path = _chain_path(plan_dir)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write('{"seq": 1, "truncat\n')
     third = _append()
+    path = _chain_path(plan_dir)
+    # Splice a truncated line between the two records: a mid-file corrupt line
+    # must be skipped by the reader and never "repaired" on disk.
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(lines[0] + '\n{"seq": 1, "truncat\n' + lines[1] + "\n", encoding="utf-8")
     before = path.read_bytes()
 
     records = decision_records.read_decision_records("p")
@@ -226,6 +229,26 @@ def test_corrupt_line_is_skipped_by_read_and_left_on_disk(plan_dir: Path) -> Non
     assert records == [first, third]
     assert path.read_bytes() == before
     assert len(_lines(path)) == 3
+    assert decision_records.verify_decision_chain("p") is not None
+
+
+def test_corrupt_tail_refuses_to_restart_the_chain(plan_dir: Path) -> None:
+    """A garbage last line must not let the next append root a second chain."""
+    first = _append()
+    path = _chain_path(plan_dir)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"seq": 1, "truncat\n')
+    before = path.read_bytes()
+
+    with pytest.raises(decision_records.DecisionRecordError) as excinfo:
+        _append()
+
+    # Fail closed: nothing written, the stream is byte-identical.
+    assert path.read_bytes() == before
+    assert "stream" in str(excinfo.value)
+    assert len(_lines(path)) == 2
+    # The intact record is still readable and the damage still reported.
+    assert decision_records.read_decision_records("p") == [first]
     assert decision_records.verify_decision_chain("p") is not None
 
 
@@ -546,3 +569,83 @@ def test_validation_happens_before_any_file_is_created(plan_dir: Path) -> None:
         decision_records.append_decision_record("p", {"decision_id": "0f" * 16})
 
     assert not _chain_path(plan_dir).exists()
+
+
+# --------------------------------------------------------------------------
+# Tier is bound to the transport identity (review BLOCKING 3)
+# --------------------------------------------------------------------------
+
+
+def test_agent_cannot_record_a_human_tier(plan_dir: Path) -> None:
+    """An agent claiming ``tier: "human"`` is repudiation in audit evidence."""
+    agent = Principal(
+        subject="agent/team",
+        auth_method="token",
+        principal_type="agent",
+        team_scope="org/team",
+    )
+    with actor.bind_principal(agent), pytest.raises(
+        decision_records.DecisionRecordError
+    ) as excinfo:
+        _append(tier="human")
+
+    assert "tier" in str(excinfo.value)
+    assert not _chain_path(plan_dir).exists()
+
+
+def test_agent_may_record_an_autonomous_tier(plan_dir: Path) -> None:
+    agent = Principal(
+        subject="agent/team",
+        auth_method="token",
+        principal_type="agent",
+        team_scope="org/team",
+    )
+    with actor.bind_principal(agent):
+        stored = _append(tier="auto")
+
+    assert stored["tier"] == "auto"
+    assert stored["principal_type"] == "agent"
+
+
+# --------------------------------------------------------------------------
+# The decisions: namespace is unambiguous (review BLOCKING 2)
+# --------------------------------------------------------------------------
+
+
+def test_colon_in_a_plan_name_is_refused(plan_dir: Path) -> None:
+    """``decisions:other`` would alias the decisions chain key of plan ``other``."""
+    with pytest.raises(decision_records.DecisionRecordError) as excinfo:
+        _append("decisions:other")
+
+    assert "plan" in str(excinfo.value)
+    assert not _chain_path(plan_dir, "decisions:other").exists()
+
+
+def test_colon_plan_audit_stream_does_not_alias_the_decisions_namespace(
+    plan_dir: Path, anchor_file: Path
+) -> None:
+    """Two streams must stay two anchor keys, never collapse into one.
+
+    An audit stream whose plan name carries a colon is not addressable, so it is
+    skipped rather than yielded under a key that also names another plan's
+    decisions chain: one of the two would otherwise never be verified and the
+    surviving anchor would be pointed at the wrong file.
+    """
+    for _ in range(3):
+        _append("p")
+    # A plan name that is not a legal key, as a stray file could still produce.
+    (plan_dir / "decisions:p.audit.jsonl").write_text(
+        json.dumps({"seq": 0, "hash": "0" * 64}) + "\n", encoding="utf-8"
+    )
+
+    chains = dict(audit_anchor._chain_streams())
+
+    assert list(chains).count("decisions:p") == 1
+    assert chains["decisions:p"] == _chain_path(plan_dir, "p")
+    assert audit_anchor._usable_chain("decisions:p") == "decisions:p"
+    assert audit_anchor._usable_chain("decisions:x:y") is None
+    assert audit_anchor._usable_chain("plan:audit") is None
+
+    audit_anchor.anchor_heads()
+    # The intact decisions chain is not falsely reported as tampered.
+    assert audit_anchor.verify_against_anchor("decisions:p") is None

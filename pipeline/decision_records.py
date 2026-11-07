@@ -146,13 +146,30 @@ def decision_stream_path(plan_name: str) -> Path:
 
 
 def _plan_key(plan_name: Any) -> str:
-    """*plan_name* when it is a bare file name, else ``DecisionRecordError``."""
+    """*plan_name* when it is a bare file name, else ``DecisionRecordError``.
+
+    ``:`` is refused even though it is a legal character in a path: the anchored
+    chain name for this stream is ``decisions:<plan>``, so a plan whose name
+    already contained a colon (``decisions:other``) would produce the same anchor
+    key as the decisions stream of plan ``other``. The two chains would collapse
+    into one entry in the anchor set, and the surviving anchor would be compared
+    against the wrong file - a permanent false "truncated" verdict on an intact
+    chain, or a real cut masked. A plan name is also validated to
+    ``[A-Za-z0-9._-]`` elsewhere (``pipeline.parsers._validate_key``), so no
+    legitimate plan name is lost by this.
+    """
     if not isinstance(plan_name, str) or not plan_name:
         raise DecisionRecordError("plan: must be a non-empty string")
     if plan_name in {".", "..", "*"} or "/" in plan_name or "\\" in plan_name:
         raise DecisionRecordError("plan: must be a bare name inside the plan directory")
     if "\x00" in plan_name or Path(plan_name).name != plan_name:
         raise DecisionRecordError("plan: must be a bare name inside the plan directory")
+    if any(character < " " or character == "\x7f" for character in plan_name):
+        raise DecisionRecordError("plan: must not contain control characters")
+    if ":" in plan_name:
+        raise DecisionRecordError(
+            "plan: ':' is not allowed; it would alias another stream's anchor key"
+        )
     return plan_name
 
 
@@ -162,6 +179,57 @@ def _namespace_key(namespace: Any) -> str:
     if len(namespace) > MAX_REFERENCE:
         raise DecisionRecordError("namespace: too long")
     return namespace
+
+
+def _chain_head(path: Path) -> dict[str, Any] | None:
+    """The last record of *path*, or ``None`` for a missing or empty stream.
+
+    ``audit._tail`` deliberately is not used here: it returns ``None`` both for a
+    missing file and for an unreadable tail, and this module must never treat the
+    second as "start a new chain". An append that restarted at ``seq: 0`` after a
+    corrupt line would root a second chain unlinked from the anchored one, so
+    every record written after the damage would sit outside the anchor and be
+    buried under an "altered" verdict for good. A tail that exists but cannot be
+    read is therefore a hard error, raised before anything is written.
+
+    Raises:
+        DecisionRecordError: The last record is unparsable, is not a record, or
+            carries no chain position. The message names the stream's state
+            only, never the bytes it refused.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise DecisionRecordError(
+            f"stream: could not be read ({type(exc).__name__})"
+        ) from None
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        record = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        raise DecisionRecordError(
+            "stream: the last record is unreadable; refusing to append"
+        ) from None
+    if not isinstance(record, dict):
+        raise DecisionRecordError(
+            "stream: the last record is not a record; refusing to append"
+        )
+    seq = record.get("seq")
+    digest = record.get("hash")
+    if (
+        not isinstance(seq, int)
+        or isinstance(seq, bool)
+        or not isinstance(digest, str)
+        or not digest
+    ):
+        raise DecisionRecordError(
+            "stream: the last record carries no chain position; refusing to append"
+        )
+    return record
 
 
 # --------------------------------------------------------------------------
@@ -197,14 +265,29 @@ def append_decision_record(
     path = decision_stream_path(plan_name)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o600)
     try:
+        # O_NOFOLLOW because a symlink planted at the stream path would redirect
+        # audit evidence elsewhere; the append is the one place that can refuse it.
+        fd = os.open(
+            path,
+            os.O_CREAT | os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as exc:
+        raise DecisionRecordError(
+            f"stream: could not be opened ({type(exc).__name__})"
+        ) from None
+    try:
+        # The mode passed to os.open applies only at creation; re-impose it on the
+        # descriptor so a pre-existing stream with a looser mode does not stay
+        # readable. This stream carries evidence references and rulings.
+        os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        previous = audit._tail(path)
+        previous = _chain_head(path)
         stored: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
-            "seq": 0 if previous is None else int(previous.get("seq", 0)) + 1,
-            "prev_hash": "" if previous is None else str(previous.get("hash", "")),
+            "seq": 0 if previous is None else int(previous["seq"]) + 1,
+            "prev_hash": "" if previous is None else str(previous["hash"]),
             "ts": datetime.now(UTC).isoformat(),
             "namespace": namespace_key,
             "actor": actor_id(),
@@ -252,12 +335,12 @@ def read_decision_records(
             record = json.loads(line)
         except json.JSONDecodeError:
             logger.warning(
-                "skipping a corrupt decision record plan=%s line=%d", plan_name, number
+                "skipping a corrupt decision record plan=%r line=%d", plan_name, number
             )
             continue
         if not isinstance(record, dict):
             logger.warning(
-                "skipping a malformed decision record plan=%s line=%d", plan_name, number
+                "skipping a malformed decision record plan=%r line=%d", plan_name, number
             )
             continue
         if record.get("namespace") != namespace_key:
@@ -314,6 +397,17 @@ def _validated(record: Any) -> dict[str, Any]:
     tier = record["tier"]
     if tier not in TIERS:
         raise DecisionRecordError("tier: not one of the recorded authority tiers")
+    # Who ruled is not a claim the caller gets to make. ``tier`` is the field an
+    # auditor reads to decide whether a high-risk merge was human-adjudicated, so
+    # an agent recording ``tier: "human"`` for a ruling it made alone is
+    # misattribution in audit evidence - and self-consistent hashes would never
+    # show it. The transport already says what kind of principal is recording;
+    # bind the tier to it rather than trusting the caller.
+    principal = principal_type()
+    if tier == "human" and principal != "human":
+        raise DecisionRecordError(
+            "tier: a human ruling cannot be recorded by a non-human principal"
+        )
 
     if not isinstance(record["reversible"], bool):
         raise DecisionRecordError("reversible: must be a boolean")

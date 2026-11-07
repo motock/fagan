@@ -24,12 +24,14 @@ import pytest
 import pipeline.server  # noqa: F401  -- import-cycle anchor; must come first
 from pipeline import telemetry, telemetry_profile
 
+pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
+
 PLAN = "harness-attributes"
 STORY = "harn-1"
 CID = "corr-harness-attributes"
 MODEL = "claude-sonnet-4-5"
 
-# The four attributes this feature can add; every negative test asserts their
+# The three attributes this feature can add; every negative test asserts their
 # absence one by one rather than asserting on the whole attribute dictionary.
 HARNESS_KEYS = ("fagan.role", "fagan.model", "fagan.attempt")
 

@@ -21,7 +21,10 @@ produced:
 * one per pipeline lifecycle event (:data:`LIFECYCLE_SPAN_NAME`), fed by the
   telemetry sink the event bus subscribes when tracing or metrics is enabled, carrying
   plan, story key, event type, outcome and backend/provider name -- never a
-  prompt, brief or model output. The events of one dispatch attempt share one
+  prompt, brief or model output. Under the ``harness`` deployment profile the
+  ``agent_dispatched`` span additionally carries ``fagan.role``,
+  ``fagan.model`` and ``fagan.attempt``; the ``customer`` attribute set is
+  unchanged. The events of one dispatch attempt share one
   trace, derived from the story's correlation id and the attempt number, and an
   attempt after the first links back to the previous attempt's root span.
 
@@ -531,8 +534,12 @@ def _attempt_span_kwargs(
 def record_lifecycle_event(event: dict) -> None:
     """Emit one span and record one duration sample for a lifecycle *event*.
 
-    Only the event's routing keys and its outcome/backend payload fields are
-    recorded: prompts, briefs and model output never reach a span or a metric.
+    The event's routing keys and its outcome/backend payload fields are
+    recorded, plus -- under the ``harness`` deployment profile only --
+    ``fagan.role``, ``fagan.model`` and ``fagan.attempt`` from an
+    ``agent_dispatched`` payload. The ``customer`` attribute set is unchanged,
+    and content (prompts, briefs, transcripts, diffs, file contents or model
+    output) never reaches a span or a metric on either profile.
     """
     telemetry_durations.observe(event)
     tracer = _tracer()

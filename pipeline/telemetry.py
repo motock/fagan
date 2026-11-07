@@ -19,7 +19,7 @@ produced:
   the HTTP method, the *route template*, the response status and the
   correlation id -- never a query string, header, or body;
 * one per pipeline lifecycle event (:data:`LIFECYCLE_SPAN_NAME`), fed by the
-  telemetry sink the event bus subscribes when tracing is enabled, carrying
+  telemetry sink the event bus subscribes when tracing or metrics is enabled, carrying
   plan, story key, event type, outcome and backend/provider name -- never a
   prompt, brief or model output. The events of one dispatch attempt share one
   trace, derived from the story's correlation id and the attempt number, and an
@@ -27,7 +27,8 @@ produced:
 
 Metrics
 -------
-Three counters and two observable gauges describe what an operator alerts on:
+Three counters, two observable gauges and three label-free duration
+histograms describe what an operator alerts on:
 
 * :data:`METRIC_DISPATCH_OUTCOMES` -- one record per dispatch attempt;
 * :data:`METRIC_AUTHZ_DECISIONS` -- one record per authorization decision,
@@ -36,7 +37,11 @@ Three counters and two observable gauges describe what an operator alerts on:
 * :data:`METRIC_MERGE_RESULTS` -- one record per adjudicated story;
 * :data:`METRIC_STORIES` / :data:`METRIC_CAPACITY_IN_USE` -- gauges read from a
   snapshot the scheduler tick publishes once per scan, so a collection never
-  touches the filesystem.
+  touches the filesystem;
+* :data:`pipeline.telemetry_durations.DISPATCH_TO_PR`,
+  :data:`~pipeline.telemetry_durations.PR_TO_CI` and
+  :data:`~pipeline.telemetry_durations.PR_TO_DONE` -- label-free seconds spent
+  in each hop of a story's life, recorded from the same lifecycle sink.
 
 Every label value comes from a fixed enum (see the ``*_OUTCOMES``,
 ``AUTHZ_ACTIONS``, ``MERGE_RESULTS`` and ``STORY_STATUSES`` sets), which is what
@@ -63,6 +68,7 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote
 
+from . import telemetry_durations
 from .events import EVENT_TYPES
 from .trace_context import ATTEMPT_ROOT_SPAN_ID, attempt_trace_id, parse_traceparent
 
@@ -229,6 +235,11 @@ def __getattr__(name: str) -> Any:
 def enabled() -> bool:
     """Is tracing on? True once an exporter is configured or an OTLP endpoint variable is set."""
     return _EXPORTER is not None or _signal_endpoint(_TRACES_ENDPOINT_ENVS)[0]
+
+
+def metrics_enabled() -> bool:
+    """Are metrics on? True once configured or an OTLP metrics endpoint is set."""
+    return _METER is not None or _signal_endpoint(_METRICS_ENDPOINT_ENVS)[0]
 
 
 def _log_export_failure(exc: BaseException) -> None:
@@ -518,11 +529,12 @@ def _attempt_span_kwargs(
 
 
 def record_lifecycle_event(event: dict) -> None:
-    """Emit one span for a lifecycle *event* published on the bus.
+    """Emit one span and record one duration sample for a lifecycle *event*.
 
     Only the event's routing keys and its outcome/backend payload fields are
-    recorded: prompts, briefs and model output never reach a span.
+    recorded: prompts, briefs and model output never reach a span or a metric.
     """
+    telemetry_durations.observe(event)
     tracer = _tracer()
     if tracer is None:
         return
@@ -631,6 +643,7 @@ def configure_metrics(provider: Any | None = None) -> bool:
     )
     _METER = meter
     _METER_PROVIDER = provider
+    telemetry_durations.register(meter)
     return True
 
 
@@ -642,6 +655,7 @@ def reset_metrics() -> None:
     """
     global _METER, _METER_PROVIDER, _SNAPSHOT
     _COUNTERS.clear()
+    telemetry_durations.reset()
     _METER = None
     _METER_PROVIDER = None
     _SNAPSHOT = None

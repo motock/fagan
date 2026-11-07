@@ -76,7 +76,7 @@ cycle.
 
 | Symbol | What it is |
 | --- | --- |
-| `Principal` | Frozen dataclass: `subject`, `roles`, `scopes`, `email`, `auth_method`, `correlation_id`. `__post_init__` rejects an empty subject, a role outside `ROLES`, and an empty scope with `IdentityError`. |
+| `Principal` | Frozen dataclass: `subject`, `roles`, `scopes`, `email`, `auth_method`, `correlation_id`, `principal_type`, `client_id`, `team_scope`. `principal_type` is `human`, `agent` or `system` (default `human`); `client_id` is the OIDC client that authenticated (default empty); `team_scope` is an agent's `<org-id>/<team-id>` binding, empty for non-agents. `__post_init__` rejects an empty subject, a role outside `ROLES`, an empty scope, an unknown principal type, an agent without a valid team scope, and a non-agent carrying a team scope — all with `IdentityError`. A valid team scope is `fullmatch`ed against `TEAM_SCOPE_PATTERN`, `[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*`: both segments start with a letter or digit and continue with letters, digits, `.`, `_` or `-`. |
 | `IdentityError` | Raised for every rejected principal or credential. Messages name the failure kind (`subject`/`role`/`scope`) and never echo the credential or scope value. |
 | `ROLE_AUTHOR`, `ROLE_OWNER`, `ROLE_APPROVER`, `ROLE_DELEGATE`, `ROLE_ADMIN` | The five ADR 0009 roles. |
 | `ROLES` | `frozenset` of the five roles; any other role is rejected. |
@@ -118,8 +118,37 @@ into `401 {"detail": "Unauthorized"}`.
 | `groups`, or `roles` when `groups` is absent | `Principal.roles` | Intersected with the ADR 0009 role set (`ROLES`). A group the role set does not name is dropped: no role is invented from an unrecognised group. |
 | `scope` (space-separated), or `scp` (list) when `scope` is absent | `Principal.scopes` | Empty and `*` parts are dropped. A token that says `*` means "no scope", not "every scope": the token cannot carry the whole authorization decision, so wildcards stay server-resolved. |
 | `email` | `Principal.email` | Carried **only** when the issuer also sets `email_verified: true`. `email` is user-editable on several issuers, so an unverified address would invite spoofing. |
+| `azp` | `Principal.client_id`, and the only thing that can make a token an agent | For a human principal it becomes `client_id` when it is a string, and empty otherwise. It is the **only** thing that can make a token an agent: when `azp` is in the `PIPELINE_OIDC_AGENT_CLIENTS` allowlist the token yields an agent principal. Any `azp` outside that allowlist is a human token whose scope claim is ignored. The IdP sets `azp` from the authenticated client, never from the caller, which is why the allowlist check is trustworthy. |
 
 `auth_method` is `"oidc"` for every principal this provider returns.
+
+**Agent mapping.** An agent principal is derived, never claimed: `azp` is set by
+the IdP from the authenticated client, and the scope claim supplies the team.
+Its `subject` is `agent:<team_scope>` and is deliberately **not**
+issuer-qualified — the qualified form belongs to human subjects only, and the
+`agent:` prefix is derived, so a token whose `sub` already starts with `agent:`
+is refused as a reserved subject exactly like `system:` (otherwise it could
+shadow or double-prefix another team's agent). An agent's `roles` are always
+empty: it holds the team's authority through `team_scope`, not through a role.
+The scope comes from the claim named by `PIPELINE_OIDC_AGENT_SCOPE_CLAIM`
+(default `team_scope`). A missing, non-string or malformed scope refuses the
+token with `invalid token: agent scope`, and the value is never echoed — the
+grammar belongs to `Principal`, and a rejected claim must not land in a log or
+an error body. The allowlist is read on **every** verification
+(`PIPELINE_OIDC_AGENT_CLIENTS`, comma-separated, empty entries dropped), so a
+rotated value takes effect without a restart. An `azp` outside the allowlist is
+a human token whose scope claim is ignored outright.
+
+Concretely, with `PIPELINE_OIDC_AGENT_CLIENTS=agent-client`: a token with
+`azp=agent-client`, `sub=alice` and `team_scope=acme-123/team-42` becomes an
+agent principal with subject `agent:acme-123/team-42`, `roles=frozenset()`,
+`client_id="agent-client"` and `team_scope="acme-123/team-42"`; on a later
+verification after `agent-client` is removed from the allowlist the *same*
+token becomes a human principal with `client_id="agent-client"`,
+`team_scope=""` and its scope claim ignored. A token with an allowlisted `azp`
+but a missing, non-string or malformed `team_scope` is refused with
+`invalid token: agent scope`; a token whose `sub` is `agent:foo` is refused as
+a reserved subject.
 
 **Boundary: OIDC authenticates API clients *and* the bundled browser UI.** The
 dashboard serves an authorization-code + PKCE login (`app/oidc_login.py`) whose

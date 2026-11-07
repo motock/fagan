@@ -6,13 +6,19 @@ of holding it unconditionally. The prose in ``overlord-policy.md`` and
 "always held regardless of level" sentence there silently re-teaches the old
 behaviour even though the code has moved on.
 
-Three guards, each of which fails if the old sentence is restored:
+Four guards, each of which fails if the old sentence is restored:
 
 1. neither doc claims a hold that is unconditional (``which is always held``);
 2. the policy names the authority matrix it is subordinate to
    (``overlord-authority.json``, ADR 0014);
 3. both the policy's and README's ``full`` description say the overlord
-   *adjudicates* the high-risk merge rather than holding it.
+   *adjudicates* the high-risk merge rather than holding it;
+4. the policy reconciles with the matrix actually shipped in this repo: the
+   shipped matrix resolves ``high_risk_merge`` to ``human``
+   (``authority_matrix.tier_for``), so the paragraph that cites it may not also
+   promise that every ``human`` class parks while ``full`` adjudicates one of
+   them. The paragraph must name the unbound merge gate as the reason the
+   ``full`` bullet is the rule in force today.
 
 The raw documents are hard-wrapped, so a naive substring search cannot see a
 sentence split across a line break. Everything here runs through
@@ -87,4 +93,51 @@ def test_full_level_is_adjudicated():
     assert "adjudicat" in readme_window.lower(), (
         "README's description of `full` must say the overlord adjudicates the "
         f"high-risk merge; got: {readme_window!r}"
+    )
+
+
+def test_policy_reconciles_with_shipped_matrix():
+    """One rule must stand: the matrix's `human` tier and the `full` bullet agree.
+
+    ``overlord-authority.json`` pins ``high_risk_merge`` to ``human`` and
+    ``authority_matrix.tier_for`` folds the rule's ``value``, so the matrix
+    shipped in this repo answers ``human`` for a high-risk merge. The policy
+    therefore cannot cite the matrix *and* claim that every ``human`` class
+    parks while ``full`` adjudicates one of them. What it must say instead is
+    that the merge gate does not read the matrix yet - so the ``full`` bullet
+    is the rule in force - and that binding the gate would park the merge at
+    every level.
+    """
+    from pipeline.authority_matrix import FileLayerSource, tier_for
+
+    resolved = FileLayerSource(REPO_ROOT / "overlord-authority.json").resolve()
+    assert resolved is not None, "the shipped overlord-authority.json must load"
+    assert tier_for(resolved, "high_risk_merge") == "human", (
+        "the shipped matrix resolves high_risk_merge to `human`; if that "
+        "changes, the policy paragraph and this test must change with it"
+    )
+
+    flat = _policy_flat(POLICY_PATH)
+    start = flat.index("The classes of decision")
+    end = flat.index("## Autonomy levels", start)
+    paragraph = flat[start:end]
+    print(f"merge adjudication matrix paragraph: {paragraph!r}")
+
+    assert "The merge gate is not yet bound to the matrix" in paragraph, (
+        "the paragraph must name the unbound merge gate as the reason `full` "
+        f"still adjudicates; got: {paragraph!r}"
+    )
+    assert "resolves to `human` and the merge parks at every level" in paragraph, (
+        "the paragraph must state that folding the matrix parks the high-risk "
+        f"merge at every level; got: {paragraph!r}"
+    )
+    # Fails if the contradictory form is restored: the matrix's `human` tier
+    # applied to every class while the `full` bullet adjudicates one of them.
+    assert (
+        "Where that file says `human`, the overlord parks regardless of the "
+        "autonomy level." not in flat
+    ), (
+        "the blanket `human` sentence is back; it contradicts the `full` "
+        "adjudication bullet because the shipped matrix says `human` for "
+        "high_risk_merge"
     )

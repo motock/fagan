@@ -65,7 +65,12 @@ When a branch has been reviewed and is a candidate to merge:
 
 The classes of decision the overlord may take unattended, and the tier each is
 allowed, are defined in `overlord-authority.json` (see ADR 0014). Where that
-file says `human`, the overlord parks regardless of the autonomy level. This
+file's tier for a class is `human`, the overlord parks that class regardless of
+the autonomy level. The merge gate is not yet bound to the matrix — nothing in
+the merge path reads the file — so `high_risk_merge` is the one class the
+autonomy level still decides: `dry-run` and `gated` hold it, and `full` has the
+overlord adjudicate it as the bullet below describes. Once the gate folds the
+matrix, that class resolves to `human` and the merge parks at every level. This
 policy never grants authority the matrix withholds.
 
 ## Autonomy levels (`PIPELINE_AUTONOMY`)

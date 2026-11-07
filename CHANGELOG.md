@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- Added the layered authority matrix as inert, versioned data: `pipeline/authority_matrix.py` loads and validates an org layer and an optional team layer, folds them tightest-first so a team can only narrow what the org allows, and ships every never-list rule locked, while `overlord-authority.json` puts all four initial decision classes at the `human` tier so the matrix grants no autonomy. Rejected team values are recorded as violations — returned, never sent, since the team-leader alert is a later story — and two `REFERENCE.md` rows document `PIPELINE_AUTHORITY_MATRIX` and `PIPELINE_AUTHORITY_TEAM_LAYER`.
 - Documented the `PIPELINE_TELEMETRY_PROFILE` deployment setting (`customer` by default, `harness` when set to that value, any other value falling back to `customer`) and the metrics it governs in `REFERENCE.md` and `docs/TELEMETRY_CONTRACT.md` — the story lifecycle histograms `fagan.story.dispatch_to_pr.duration`, `fagan.story.pr_to_ci.duration` and `fagan.story.pr_to_done.duration` that both profiles emit, and the `harness`-only `fagan.usage.tokens`, `fagan.usage.cost` and `fagan.usage.call.duration`; content capture, worker log shipping and failure-reason attributes are not built.
 - Documented trace propagation in the telemetry contract: strict validation of an inbound `traceparent`, one trace per dispatch attempt with `TRACEPARENT` handed to the agent subprocess, and the attempt-0 attribution limit when a dispatch event is missed.
 - Merge now refuses an approval that does not cover the commit being merged:

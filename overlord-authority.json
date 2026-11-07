@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "layer": "org",
+  "rules": [
+    {
+      "id": "high_risk_merge.tier",
+      "class": "high_risk_merge",
+      "type": "ordered_enum",
+      "values": ["human", "auto+notify", "auto"],
+      "value": "human",
+      "delegation": "locked",
+      "bounds": {"loosest": "auto+notify"}
+    },
+    {
+      "id": "override_false_positive_verdict.tier",
+      "class": "override_false_positive_verdict",
+      "type": "ordered_enum",
+      "values": ["human", "auto+notify", "auto"],
+      "value": "human",
+      "delegation": "locked",
+      "bounds": {"loosest": "auto+notify"}
+    },
+    {
+      "id": "scope_widen.tier",
+      "class": "scope_widen",
+      "type": "ordered_enum",
+      "values": ["human", "auto+notify", "auto"],
+      "value": "human",
+      "delegation": "locked",
+      "bounds": {"loosest": "auto+notify"}
+    },
+    {
+      "id": "existing_test_edit.tier",
+      "class": "existing_test_edit",
+      "type": "ordered_enum",
+      "values": ["human", "auto+notify", "auto"],
+      "value": "human",
+      "delegation": "locked",
+      "bounds": {"loosest": "auto+notify"}
+    },
+    {
+      "id": "gate_precondition_bypass",
+      "class": "gate_precondition_bypass",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    },
+    {
+      "id": "test_deletion",
+      "class": "test_deletion",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    },
+    {
+      "id": "matrix_edit",
+      "class": "matrix_edit",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    },
+    {
+      "id": "policy_edit",
+      "class": "policy_edit",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    },
+    {
+      "id": "persona_edit",
+      "class": "persona_edit",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    },
+    {
+      "id": "overlord_rule_file_edit",
+      "class": "overlord_rule_file_edit",
+      "type": "flag",
+      "value": false,
+      "tighter": false,
+      "delegation": "locked"
+    }
+  ],
+  "never": [
+    "gate_precondition_bypass",
+    "test_deletion",
+    "matrix_edit",
+    "policy_edit",
+    "persona_edit",
+    "overlord_rule_file_edit"
+  ]
+}

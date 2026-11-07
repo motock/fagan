@@ -68,7 +68,7 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote
 
-from . import telemetry_durations
+from . import telemetry_durations, telemetry_profile, telemetry_usage
 from .events import EVENT_TYPES
 from .trace_context import ATTEMPT_ROOT_SPAN_ID, attempt_trace_id, parse_traceparent
 
@@ -644,6 +644,8 @@ def configure_metrics(provider: Any | None = None) -> bool:
     _METER = meter
     _METER_PROVIDER = provider
     telemetry_durations.register(meter)
+    if telemetry_profile.is_harness():
+        telemetry_usage.register(meter)
     return True
 
 
@@ -656,6 +658,7 @@ def reset_metrics() -> None:
     global _METER, _METER_PROVIDER, _SNAPSHOT
     _COUNTERS.clear()
     telemetry_durations.reset()
+    telemetry_usage.reset()
     _METER = None
     _METER_PROVIDER = None
     _SNAPSHOT = None

@@ -32,7 +32,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from . import persistence
+from . import persistence, telemetry_usage
 from .actor import current_correlation_id
 
 #: The complete, closed key set of a usage record. Anything not listed here is
@@ -147,6 +147,7 @@ def record_usage(
             "duration_ms": _measure(duration_ms),
         }
         persistence._write_usage_record(record["plan"], record)
+        telemetry_usage.record(record)
     except Exception as exc:  # noqa: BLE001 - accounting must never break a call
         logger.warning("usage record dropped", extra={"error_type": type(exc).__name__})
 

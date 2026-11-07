@@ -1055,6 +1055,29 @@ alone: a chain with no externally recorded head cannot prove the newest records
 were not removed. Setting `PIPELINE_AUDIT_ANCHOR` supplies that head and adds an
 `anchor` mapping of the same chain names to the verdict described below.
 
+`pipeline/decision_records.py` keeps a second, separately anchored stream per plan
+for autonomous decisions (ADR 0014), `<PLAN_DIR>/<plan>.decisions.chain.jsonl`,
+and it is anchored by the same pass under the chain name `decisions:<plan>`. Each
+record is a JSON object carrying the chain fields a `audit.py` record carries —
+`schema_version` (`2`), `seq`, `prev_hash`, `hash`, `ts`, `namespace`, `actor`,
+`principal_type`, `client_id`, `correlation_id` — plus the caller fields
+`decision_id`, `class`, `subject` (`plan`, `story`, `pr`, `sha`), `evidence`
+(`kind`, `ref`, `sha256`), `rule` (`layer_shas`, `persona_sha`, `policy_sha`,
+`model`), `alternatives`, `ruling`, `tier`, `reversible` and `outcome`. The
+recorder owns the chain and identity fields: a caller supplying `actor`,
+`principal_type`, `client_id`, `correlation_id`, `seq`, `ts`, `hash`,
+`schema_version`, `prev_hash` or `namespace` is refused before anything is
+written, so a rejected append leaves the stream byte-identical. Data
+minimisation is enforced rather than documented — every string is capped at 500
+characters, `evidence[].ref` and each `alternatives` entry at 200, no key named
+`prompt`, `payload`, `secret`, `token` or `body` is accepted at any depth, and a
+rejection names the field path only, never the value. `read_decision_records(
+plan_name, namespace="default")` returns the records of one namespace (the
+isolation hook for later tenant layers) and skips a corrupt line without
+repairing the file; `verify_decision_chain(plan_name)` walks the chain read-only
+and returns the `seq` of the first altered record. Tail truncation of this stream
+is detected the same way the audit stream's is: by the anchor.
+
 #### Anchoring the heads (`PIPELINE_AUDIT_ANCHOR`)
 
 | Variable | Default | Meaning |

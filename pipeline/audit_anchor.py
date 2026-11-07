@@ -230,10 +230,17 @@ def _chain_streams() -> Iterator[tuple[str, Path]]:
     suffix = probe.name
     for path in sorted(probe.parent.glob(f"*{suffix}")):
         yield path.name.removesuffix(suffix), path
+    decisions_suffix = ".decisions.chain.jsonl"
+    for path in sorted(probe.parent.glob(f"*{decisions_suffix}")):
+        yield f"decisions:{path.name.removesuffix(decisions_suffix)}", path
     yield HOST_CHAIN, audit.host_audit_path()
 
 
 def _stream_for(chain: str) -> Path:
+    if chain.startswith("decisions:"):
+        return audit.audit_path(chain).with_name(
+            f"{chain.removeprefix('decisions:')}.decisions.chain.jsonl"
+        )
     return audit.host_audit_path() if chain == HOST_CHAIN else audit.audit_path(chain)
 
 

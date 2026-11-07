@@ -2,7 +2,7 @@
 
 An autonomous decision - a high-risk merge, an override of a false-positive
 verdict, a widened scope, an edit to an existing test, a triage ruling - is
-recorded in ``<PLAN_DIR>/<plan>.decisions.chain.jsonl``: a JSON object per line,
+recorded in the plan directory as ``<plan>.decisions.chain.jsonl``: a JSON object per line,
 each carrying the hash of the record before it. The chain is the same shape as
 ``pipeline.audit``'s (``seq``/``prev_hash``/``hash``) and reuses its canonical
 form, its record hash, and its tail reader, so one verifier understands both.
@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import audit, persistence
+from . import audit
 from .actor import actor_id, client_id, current_correlation_id, principal_type
 
 logger = logging.getLogger("pipeline.decision_records")
@@ -132,11 +132,17 @@ class DecisionRecordError(ValueError):
 def decision_stream_path(plan_name: str) -> Path:
     """Return the plan's decision-record stream path.
 
-    ``persistence.PLAN_DIR`` is read at call time, not captured at import, so a
+    The directory comes from :func:`pipeline.audit.audit_path`, which resolves
+    the plan directory at call time rather than capturing it at import, so a
     test or a re-rooted deployment redirects this stream with the audit stream
-    rather than appending to the operator's real plan directory.
+    instead of appending to the operator's real plan directory. Going through the
+    audit resolver rather than resolving the directory here keeps this module out
+    of ADR 0012's shrink-only list of modules that name the plan directory
+    directly: there is one resolver for "the plan's streams", and this is the
+    second stream in it rather than a second resolver.
     """
-    return persistence.PLAN_DIR / f"{_plan_key(plan_name)}.decisions.chain.jsonl"
+    plan_key = _plan_key(plan_name)
+    return audit.audit_path(plan_key).with_name(f"{plan_key}.decisions.chain.jsonl")
 
 
 def _plan_key(plan_name: Any) -> str:

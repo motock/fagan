@@ -550,6 +550,16 @@ def record_lifecycle_event(event: dict) -> None:
     parent_context, links = _attempt_span_kwargs(
         plan, story_key, correlation_id, event_type, payload
     )
+    harness_attributes: dict[str, Any] = {}
+    if telemetry_profile.is_harness() and event_type == "agent_dispatched":
+        role, model = payload.get("role"), payload.get("model")
+        attempt = payload.get("attempt")
+        if isinstance(role, str):
+            harness_attributes["fagan.role"] = role
+        if isinstance(model, str):
+            harness_attributes["fagan.model"] = model
+        if isinstance(attempt, int) and not isinstance(attempt, bool) and 0 <= attempt:
+            harness_attributes["fagan.attempt"] = attempt
     with span(
         LIFECYCLE_SPAN_NAME,
         {
@@ -560,6 +570,7 @@ def record_lifecycle_event(event: dict) -> None:
             "fagan.backend": backend,
             "fagan.provider": provider,
             "correlation_id": event.get("correlation_id"),
+            **harness_attributes,
         },
         context=parent_context,
         links=links,

@@ -363,6 +363,65 @@ def test_agent_may_perform_an_action_the_policy_allows(authorizer, denials):
     assert denials == []
 
 
+@pytest.fixture
+def host_audit(monkeypatch):
+    """Capture the host-scoped audit records instead of writing that chain."""
+    records: list[dict] = []
+    monkeypatch.setattr(
+        authorization, "append_host_audit", lambda **kwargs: records.append(kwargs)
+    )
+    return records
+
+
+def test_agent_is_denied_a_host_scoped_config_write(authorizer, host_audit):
+    """``refusal_for_host_config`` is the second ``config:write`` path.
+
+    ``set_role_default`` and ``record_security_audit`` never reach ``authorize``:
+    they decide a host-scoped write against an empty resource. ADR 0014 decision
+    3 refuses an agent there too, before the authorizer is asked, so an
+    allow-everything operator plugin cannot hand an agent configuration.
+    """
+    with bind_principal(AGENT):
+        refusal = authorization.refusal_for_host_config(
+            Action.CONFIG_WRITE, "the global role defaults"
+        )
+
+    assert refusal is not None
+    assert refusal["ok"] is False
+    assert refusal["forbidden"] is True
+    assert refusal["action"] == Action.CONFIG_WRITE.value
+    assert authorizer.calls == []
+    assert len(host_audit) == 1
+    assert host_audit[0]["outcome"] == "denied"
+    assert host_audit[0]["detail"]["reason"] == "agent_principal"
+    assert host_audit[0]["detail"]["what"] == "the global role defaults"
+
+
+def test_human_operator_may_write_host_config(authorizer, host_audit):
+    """The guard refuses agents only; a human operator still writes config."""
+    with bind_principal(LOCAL_OPERATOR):
+        refusal = authorization.refusal_for_host_config(
+            Action.CONFIG_WRITE, "the global role defaults"
+        )
+
+    assert refusal is None
+    assert authorizer.calls == [Action.CONFIG_WRITE]
+    assert len(host_audit) == 1
+    assert host_audit[0]["outcome"] == "allowed"
+    assert "reason" not in host_audit[0]["detail"]
+
+
+def test_agent_host_action_outside_the_forbidden_set_is_delegated(
+    authorizer, host_audit
+):
+    with bind_principal(AGENT):
+        refusal = authorization.refusal_for_host_config("config:read", "the globals")
+
+    assert refusal is None
+    assert authorizer.calls == ["config:read"]
+    assert host_audit[0]["outcome"] == "allowed"
+
+
 def test_human_operator_may_approve(authorizer, denials):
     with bind_principal(LOCAL_OPERATOR):
         refusal = authorization.authorize(

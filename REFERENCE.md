@@ -981,6 +981,14 @@ keys:
 - `outcome`: `allowed`, `denied`, or `refused`.
 - `target`: structural identifiers, usually `{"plan": ..., "story": ...}`.
 - `detail`: short structural extras — a branch, a base sha, a digest, a principal.
+- `principal_type`: `human`, `agent`, or `system` — what kind of principal made the
+  decision (`pipeline/actor.py`; from the signed token under OIDC). Records written
+  before this key existed lack it, and still verify: the hash covers whatever
+  fields a record carries.
+- `client_id`: the OIDC client the caller authenticated as (`azp`), `""` when the
+  provider does not supply one — attribution of *which* client acted, next to
+  `actor` naming *which* principal. Absent from pre-existing records, like
+  `principal_type`.
 
 `prev_hash` chains each record to the one before it, so rewriting, reordering, or
 deleting a record in the middle breaks the chain: `verify_audit_chain(plan_name)`

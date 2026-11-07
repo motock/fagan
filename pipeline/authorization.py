@@ -122,6 +122,21 @@ def _record_denial(
 AGENT_FORBIDDEN_ACTIONS = frozenset({"plan:approve", "config:write"})
 
 
+def _agent_structural_denial(principal, action_label: str) -> bool:
+    """Return whether ADR 0014 decision 3 refuses *action_label* for *principal*.
+
+    One place, because two production paths reach those actions: ``authorize``
+    decides a plan-scoped operation, and ``refusal_for_host_config`` decides a
+    host-scoped write (``set_role_default``, ``record_security_audit``) against
+    an empty resource. Both call this before the authorizer, so no operator
+    plugin can grant an agent an approval or a configuration write.
+    """
+    return (
+        principal.principal_type == "agent"
+        and action_label in AGENT_FORBIDDEN_ACTIONS
+    )
+
+
 def authorize(
     action: Action | str,
     *,
@@ -161,7 +176,7 @@ def authorize(
     # hand an agent the approval a human is accountable for, and would record
     # a denial the policy never actually made.
     denial_reason = ""
-    if principal.principal_type == "agent" and action_label in AGENT_FORBIDDEN_ACTIONS:
+    if _agent_structural_denial(principal, action_label):
         allowed = False
         denial_reason = "agent_principal"
     else:
@@ -222,7 +237,9 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
     resource, which ``LocalPolicy`` grants only to the local operator, and the
     decision is recorded in the host-scoped chain
     (``<PLAN_DIR>/.audit.host.jsonl``) because no plan chain can own it.
-    ``what`` names the write in that record.
+    ``what`` names the write in that record. ADR 0014 decision 3 refuses
+    ``config:write`` for an agent principal here, before the authorizer, exactly
+    as ``authorize`` does for a plan-scoped action.
 
     Callers: ``set_role_default`` (rewrites ``model_registry.json``, the
     default model for every role on this host) and ``record_security_audit``
@@ -242,24 +259,34 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
 
     label = action.value if isinstance(action, Action) else str(action)
     principal = current_principal()
-    allowed = is_allowed(
+    # ADR 0014 decision 3: an agent never writes configuration. This is the same
+    # structural refusal ``authorize`` applies, needed here because the host-wide
+    # writes below (role defaults, the security-audit record) are decided against
+    # an empty resource and never pass through ``authorize``. Asking the
+    # authorizer first would let an allow-everything plugin grant it.
+    agent_refusal = _agent_structural_denial(principal, label)
+    allowed = not agent_refusal and is_allowed(
         default_authorizer(), principal, action, resource_for({}, "", None)
     )
+    detail = {"what": what, "principal": principal.subject}
+    if agent_refusal:
+        detail["reason"] = "agent_principal"
     try:
         append_host_audit(
             action=label,
             outcome="allowed" if allowed else "denied",
-            detail={"what": what, "principal": principal.subject},
+            detail=detail,
         )
     except OSError:
         logger.warning("host audit append failed for a %s decision", label)
     if allowed:
         return None
     logger.warning(
-        "authorization denied action=%s principal=%s target=%s",
+        "authorization denied action=%s principal=%s target=%s reason=%s",
         label,
         principal.subject,
         what,
+        "agent_principal" if agent_refusal else "policy",
     )
     return {
         "ok": False,

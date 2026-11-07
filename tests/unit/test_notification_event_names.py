@@ -266,6 +266,12 @@ class _FakeStore:
     def get_manifest(self, plan_name):
         return json.loads(self.manifest_path(plan_name).read_text())
 
+    def records(self):
+        return self
+
+    def get_manifests(self, namespace):
+        return {}
+
 
 class _AutoAutonomy:
     """Stands in for the PIPELINE_AUTONOMY proxy (only _value() is used)."""

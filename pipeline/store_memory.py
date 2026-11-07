@@ -42,6 +42,17 @@ class InMemoryRecordStore:
                 return None
             return copy.deepcopy(manifest)
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        """Return a deep copy of every manifest stored in ``namespace``."""
+        validate_namespace(namespace)
+        with self._lock:
+            manifests = {
+                plan_name: copy.deepcopy(manifest)
+                for (stored_namespace, plan_name), manifest in self._manifests.items()
+                if stored_namespace == namespace
+            }
+        return dict(sorted(manifests.items()))
+
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None:
         """Store ``manifest`` as the whole document for ``plan_name``."""
         validate_namespace(namespace)

@@ -465,6 +465,16 @@ class SqliteRecords:
         validate_plan_name(plan_name)
         return self._store.get_manifest_or_none(plan_name)
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        """Return every manifest recorded in ``namespace``, keyed by plan name."""
+        self._namespace(namespace)
+        manifests: dict[str, dict] = {}
+        for plan_name in self.list_plans(namespace):
+            manifest = self.get_manifest(namespace, plan_name)
+            if manifest is not None:
+                manifests[plan_name] = manifest
+        return dict(sorted(manifests.items()))
+
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None:
         """Store ``manifest`` as the whole document for ``plan_name``."""
         self._namespace(namespace)

@@ -76,6 +76,38 @@ class RecordStoreContract:
         store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 2})
         assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 2}
 
+    # -- bulk manifest reads -------------------------------------------
+    def test_should_return_an_empty_mapping_for_an_empty_store(self):
+        store = self.make_store()
+        assert store.get_manifests(DEFAULT_NAMESPACE) == {}
+
+    def test_should_return_every_put_manifest_keyed_by_plan_name(self):
+        store = self.make_store()
+        manifest = {'title': _PLAN, 'steps': [{'id': 1, 'kind': 'build'}]}
+        other = {'title': _OTHER_PLAN}
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, manifest)
+        store.put_manifest(DEFAULT_NAMESPACE, _OTHER_PLAN, other)
+        assert store.get_manifests(DEFAULT_NAMESPACE) == {
+            _PLAN: manifest,
+            _OTHER_PLAN: other,
+        }
+
+    def test_should_return_keys_in_sorted_order(self):
+        store = self.make_store()
+        for name in ('zeta', 'alpha', 'mike'):
+            store.put_manifest(DEFAULT_NAMESPACE, name, {'version': name})
+        assert list(store.get_manifests(DEFAULT_NAMESPACE)) == ['alpha', 'mike', 'zeta']
+
+    def test_should_reject_an_invalid_namespace(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.get_manifests(_INVALID_NAMESPACE),
+        )
+        assert store.get_manifests(DEFAULT_NAMESPACE) == {_PLAN: {'version': 1}}
+
     # -- plan listing --------------------------------------------------
     def test_list_plans_of_an_empty_store_is_empty(self):
         store = self.make_store()
@@ -274,6 +306,12 @@ class MultiNamespaceContract:
         assert store.get_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY) == []
         assert store.list_plans(_SECOND_NAMESPACE) == []
 
+    def test_should_not_return_another_namespaces_manifests(self):
+        store = self.make_store()
+        store.put_manifest(_SECOND_NAMESPACE, _PLAN, {'version': 'acme'})
+        assert store.get_manifests(DEFAULT_NAMESPACE) == {}
+        assert store.get_manifests(_SECOND_NAMESPACE) == {_PLAN: {'version': 'acme'}}
+
 
 class SingleNamespaceContract:
     """Behaviour of stores that only serve :data:`DEFAULT_NAMESPACE`."""
@@ -281,6 +319,12 @@ class SingleNamespaceContract:
     def make_store(self):
         """Return a fresh, empty store under test."""
         raise NotImplementedError
+
+    def test_should_refuse_an_unknown_namespace(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        _expect(self, UnknownNamespaceError, lambda: store.get_manifests(_SECOND_NAMESPACE))
+        assert store.get_manifests(DEFAULT_NAMESPACE) == {_PLAN: {'version': 1}}
 
     def test_get_manifest_rejects_an_unknown_namespace(self):
         store = self.make_store()

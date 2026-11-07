@@ -80,6 +80,30 @@ class RecordStore(Protocol):
 
     def get_manifest(self, namespace: str, plan_name: str) -> dict | None: ...
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        """Return ``{plan_name: manifest}`` for every readable manifest.
+
+        One bulk read, so a caller that needs every manifest does not pay for a
+        ``list_plans`` + ``get_manifest`` loop.  The keys are the plan names in
+        sorted order; a namespace with no content yields ``{}``.
+
+        A manifest that cannot be read, or that is not a JSON object, is
+        skipped rather than raised, and the failure is logged at ``WARNING``
+        once per distinct failure: one bad file must not blind a caller that
+        scans every plan.
+
+        **The returned documents are read-only snapshots.** Implementations may
+        share parsed objects between calls (the file store does, through its
+        size-and-mtime parse cache), so a caller must not mutate them; a caller
+        that needs to mutate a manifest calls :meth:`get_manifest`, which
+        returns an independent copy.
+
+        The namespace is validated with ``validate_namespace`` and an unknown
+        namespace is refused exactly like the other operations, before storage
+        is touched.
+        """
+        ...
+
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None: ...
 
     def list_plans(self, namespace: str) -> list[str]: ...
@@ -97,6 +121,7 @@ class RecordStore(Protocol):
 
 RECORD_STORE_METHODS = (
     'get_manifest',
+    'get_manifests',
     'put_manifest',
     'list_plans',
     'get_decisions',

@@ -446,6 +446,21 @@ class FileRecords:
         self._refuse_other_namespace(namespace)
         return self._store.get_manifest_or_none(plan_name)
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        """Return every readable plan manifest for ``namespace``.
+
+        Reads through :mod:`pipeline.cross_plan` so the size-and-mtime parse
+        cache is shared with everything else that scans the plan directory: an
+        unchanged manifest is not re-parsed.  The values are those cached
+        objects, so treat them as read-only snapshots.  Imported here because
+        ``cross_plan`` cannot be imported at module level without a cycle.
+        """
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        from . import cross_plan
+
+        return cross_plan.load_manifests(PLAN_DIR._value())
+
     def put_manifest(
         self, namespace: str, plan_name: str, manifest: dict
     ) -> None:

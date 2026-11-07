@@ -41,7 +41,14 @@ from pathlib import Path
 from typing import Any
 
 from . import audit
-from .actor import actor_id, client_id, current_correlation_id, principal_type
+from .actor import (
+    ANONYMOUS,
+    actor_id,
+    client_id,
+    current_correlation_id,
+    current_principal,
+    principal_type,
+)
 
 logger = logging.getLogger("pipeline.decision_records")
 
@@ -407,6 +414,13 @@ def _validated(record: Any) -> dict[str, Any]:
     if tier == "human" and principal != "human":
         raise DecisionRecordError(
             "tier: a human ruling cannot be recorded by a non-human principal"
+        )
+    if tier == "human" and current_principal() == ANONYMOUS:
+        # ANONYMOUS is a Principal, so it defaults to principal_type "human"; the
+        # transport went out of its way to authenticate nobody, and such a caller
+        # must never be recorded as the human who adjudicated a ruling.
+        raise DecisionRecordError(
+            "tier: a human ruling cannot be recorded by an unauthenticated caller"
         )
 
     if not isinstance(record["reversible"], bool):

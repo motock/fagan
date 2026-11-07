@@ -1067,7 +1067,12 @@ record is a JSON object carrying the chain fields a `audit.py` record carries �
 recorder owns the chain and identity fields: a caller supplying `actor`,
 `principal_type`, `client_id`, `correlation_id`, `seq`, `ts`, `hash`,
 `schema_version`, `prev_hash` or `namespace` is refused before anything is
-written, so a rejected append leaves the stream byte-identical. Data
+written, so a rejected append leaves the stream byte-identical. `tier` is bound to
+that same transport identity — an agent may not record `tier: human` — and an
+append whose last line is unreadable fails closed rather than restarting the chain
+at `seq` 0, since a second root would sit outside the anchor. Plan names may not
+contain `:` (`[A-Za-z0-9._-]` only, as for any plan key), which keeps
+`decisions:<plan>` from aliasing another plan's audit chain. Data
 minimisation is enforced rather than documented — every string is capped at 500
 characters, `evidence[].ref` and each `alternatives` entry at 200, no key named
 `prompt`, `payload`, `secret`, `token` or `body` is accepted at any depth, and a

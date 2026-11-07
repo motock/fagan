@@ -607,6 +607,17 @@ def test_agent_may_record_an_autonomous_tier(plan_dir: Path) -> None:
     assert stored["principal_type"] == "agent"
 
 
+def test_unauthenticated_caller_cannot_record_a_human_tier(plan_dir: Path) -> None:
+    """``ANONYMOUS`` is a Principal defaulting to ``human``; it is not one."""
+    with actor.bind_principal(actor.ANONYMOUS), pytest.raises(
+        decision_records.DecisionRecordError
+    ) as excinfo:
+        _append(tier="human")
+
+    assert "tier" in str(excinfo.value)
+    assert not _chain_path(plan_dir).exists()
+
+
 # --------------------------------------------------------------------------
 # The decisions: namespace is unambiguous (review BLOCKING 2)
 # --------------------------------------------------------------------------

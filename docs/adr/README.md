@@ -27,5 +27,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0011](0011-scheduler-scale-out-leased-plan-advancement.md) | The scheduler advances plans as leased work items and runs heavy work as detached jobs | Accepted |
 | [0012](0012-store-contract-v2.md) | The Store holds namespaced records, and the file layout is one implementation of it | Proposed |
 | [0013](0013-plan-commands-and-lock-scope.md) | Operator commands wait a bounded time and compare-and-set the manifest revision, under a (namespace, plan) lock | Proposed |
+| [0014](0014-autonomous-decision-record-and-authority.md) | Autonomous decisions are recorded, bounded by layered authority and reviewed by humans | Proposed |
 
 See [`template.md`](template.md) when adding one.

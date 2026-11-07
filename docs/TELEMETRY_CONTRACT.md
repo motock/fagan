@@ -200,8 +200,9 @@ capture, has its own retention and is purged on its own schedule rather than wit
 the metadata. Because deletion is keyed by namespace, a signal carrying the wrong
 `fagan.namespace` is a retention defect, not a cosmetic one.
 
-Each deployment serves one organization, as recorded in
-`docs/adr/0012-store-contract-v2.md`. A deployment is therefore not a multi-tenant
-router: isolation between customers comes from deploying separately, and
-`fagan.namespace` distinguishes the environments and namespaces inside the one
-organization a deployment serves.
+Core attaches no meaning to `fagan.namespace` (see
+`docs/adr/0012-store-contract-v2.md`): it is an opaque string and core always
+reports `default`. Core is therefore not a multi-tenant router. A hosted
+enterprise deployment that serves several organizations supplies real
+namespaces, one per team, through its own store plugin; the retention and
+deletion rules above apply per namespace in either case.

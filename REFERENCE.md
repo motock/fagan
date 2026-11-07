@@ -1083,6 +1083,80 @@ repairing the file; `verify_decision_chain(plan_name)` walks the chain read-only
 and returns the `seq` of the first altered record. Tail truncation of this stream
 is detected the same way the audit stream's is: by the anchor.
 
+#### Recording a judgment call (`record_decision`)
+
+`record_decision(plan_name, story_key, decision_class, question, ruling, rationale,
+evidence, reversible=True)` is the MCP tool that writes one record into that
+stream; `pipeline/decision_record_tool.py` holds it. It authorizes
+`decision:record` on the plan first, then validates, then rate-limits, then
+appends and audits.
+
+`decision:record` is the one action every *authenticated* principal of type
+`human` or `agent` holds on a plan it may view: recording a judgment call is not
+an authority grant, so it needs no owner or delegate status, only visibility, and
+it can never widen what the caller may do next. A reserved `system:` principal
+holds exactly its `SYSTEM_PRINCIPAL_GRANTS` row, which has no `decision:record`,
+so a `system:worker` cannot record a judgment; the local operator is allowed
+every action. Visibility is `app.policy.can_view`, so a plan the caller may not
+see is refused *identically* to a plan that does not exist and the reply is no
+existence oracle. `record_decision` is in `REMOTE_ENFORCED` (its own service path
+calls `authorize`), so a remote principal may reach it; the `remote_tool_policy`
+middleware still refuses any caller claiming the local operator's identity,
+before the tool runs.
+
+Refusals never raise and never echo an argument value. The codes are fixed:
+`not_authorized` (the policy refused, or `plan_name` was empty/non-string),
+`empty_ruling`, `empty_rationale`, `empty_evidence` (not a list, empty, or no
+entry with a non-empty `kind` and `ref`), `invalid_decision_class` (not one of
+`pipeline.decision_records.DECISION_CLASSES`), `unknown_story` (the key is not in
+the visible plan's `stories`), `rate_limited` (with `retry_after_seconds`) and
+`record_refused` (defence in depth: the v2 validator rejected a record that
+passed the checks above). A refusal dict carries exactly `recorded` and `error`
+plus `retry_after_seconds` for a rate limit. The check order is fixed —
+authorize, `ruling`, `rationale`, `evidence`, `decision_class`, `story_key`,
+rate limit — so the code a caller sees is deterministic.
+
+The rate limit is `PIPELINE_RECORD_DECISION_PER_MINUTE` calls per minute per
+principal *subject*, default 30; a missing, malformed (`"abc"`) or non-positive
+(`"0"`, `"-5"`) value means 30 rather than "refuse everything". The window is a
+sliding one minute kept in this process's memory, so it resets when the process
+restarts and the limit applies per server process, not per deployment. Only an
+admitted call consumes a slot: a refusal is audited and returns
+`retry_after_seconds = max(1, ceil(oldest + 60 - now))` without extending the
+window, so waiting the advertised delay does admit the retry.
+
+What the record carries, and the two places it is narrower than the arguments:
+
+- `tier` follows the bound principal, never an argument. The v2 chain binds
+  `tier` to the transport identity and refuses `tier: human` from a non-human
+  principal, so a human caller records `human` and an agent principal records
+  `auto` (an agent ruling alone). Recording a judgment is a record, not an
+  authority grant.
+- the record has **no rationale field**, so the rationale is stored as the single
+  element `"rationale: <text>"` of `alternatives`. An `alternatives` entry is
+  capped at 200 characters, so the text keeps 189 of them after the 11-character
+  prefix (a dedicated rationale field is a later S3 revision); and
+- there is **no question field** in v2 either, so `question` is accepted and not
+  persisted — it appears in neither the record nor the audit chain.
+
+`rule` carries empty `layer_shas`, `persona_sha` and `policy_sha` and the model
+from `PIPELINE_RECORD_DECISION_MODEL` (default `unspecified`, since the v2
+validator requires a non-empty `rule.model`); `outcome` is `""`; the caller's
+identity is stamped from the bound principal (`pipeline.actor`), so an `actor`
+argument is ignored. Success returns
+`{"recorded": true, "decision_id": <32 hex>, "seq": <int>}`.
+
+Audit: exactly one `record_audit(plan_name, action="decision:record",
+outcome="recorded"|"refused", target={"story": <key>}, detail={"decision_id": <id
+or None>})` per attempt. No `ruling`, `rationale`, `question` or evidence text
+reaches the audit chain — it records that a decision was taken, not what it said.
+A `not_authorized` attempt is the exception: `authorization.authorize` already
+wrote the `denied` record (sidecar, audit and warning), so the tool adds nothing.
+
+Limited attribution, stated honestly: under the shared-secret provider the caller
+is `LOCAL_OPERATOR`, so a record cannot distinguish an agent session from a human
+one; agent attribution needs the OIDC identity seam (S2).
+
 #### Anchoring the heads (`PIPELINE_AUDIT_ANCHOR`)
 
 | Variable | Default | Meaning |
@@ -3145,7 +3219,8 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   the policy decides — `advance_all_plans`, `advance_pipeline`, `approve_merge`,
   `approve_plan`, `checkpoint`, `checkpoint_story`, `dispatch_story`, `ingest_plan`, `interrupt_story`, `mark_story_done`,
   `mark_story_in_progress`, `patch_plan`, `patch_story`, `pause_plan`,
-  `record_security_audit`, `reject_plan`, `request_decision`, `resume_plan`,
+  `record_decision`, `record_security_audit`, `reject_plan`,
+  `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
 - eight read-only tools — `check_story_status`, `check_usage`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
@@ -3170,7 +3245,8 @@ resource. The mutating tools ask for these actions: `save_plan` asks
 `plan:ingest`; `review_story`, `advance_pipeline` and `mark_story_in_progress`
 ask `plan:dispatch`; `request_decision`, `set_story_status`, `checkpoint` and
 `checkpoint_story` ask `story:patch`; `patch_plan` asks `config:write` scoped to
-its plan. `advance_all_plans` advances only plans the caller may see: its
+its plan. `record_decision` asks `decision:record`, which every authenticated
+human or agent holds on a plan it may view. `advance_all_plans` advances only plans the caller may see: its
 result is filtered to those plans, and each invisible plan's advance is refused
 by its own `plan:dispatch` check, so the filter hides names rather than gating
 work. `record_security_audit` asks a host-scoped `config:write`, which is never

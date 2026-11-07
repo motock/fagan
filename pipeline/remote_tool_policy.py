@@ -86,6 +86,7 @@ REMOTE_ENFORCED = frozenset(
         "patch_plan",
         "patch_story",
         "pause_plan",
+        "record_decision",
         "record_security_audit",
         "reject_plan",
         "request_decision",

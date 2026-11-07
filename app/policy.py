@@ -72,6 +72,7 @@ class Action(str, Enum):
     STORY_MERGE = "story:merge"
     STORY_MARK_DONE = "story:mark_done"
     CONFIG_WRITE = "config:write"
+    DECISION_RECORD = "decision:record"
 
 
 #: The actions each reserved ``system:`` principal holds, and nothing more.
@@ -172,6 +173,15 @@ class LocalPolicy:
     silently granted. The local operator is unaffected, because the operator
     check runs first. A plan owned by someone else stays closed, and nothing
     here widens any action beyond ``plan:ingest``.
+
+    The fourth exception is ``decision:record``: every *authenticated* human or
+    agent principal may record a judgment call on a plan it may view
+    (:func:`can_view`), whether or not it owns the plan. Recording a judgment is
+    not an authority grant -- it widens nothing the caller may do next -- but it
+    stays inside the tenancy seam: a plan the caller cannot see is denied exactly
+    as a missing plan is denied. A reserved ``system:`` principal holds no
+    ``decision:record`` because its grant row does not list it, and an
+    unauthenticated caller holds nothing.
     """
 
     def allow(
@@ -244,6 +254,28 @@ class LocalPolicy:
             )
         ):
             return True
+
+        # ``decision:record`` (the ``record_decision`` tool) is the one action
+        # every authenticated human or agent holds on a plan it may view:
+        # recording a judgment call is not an authority grant, so it needs no
+        # owner/delegate status, only visibility. The reserved ``system:``
+        # branch above already decided those principals by their grant row, so
+        # a ``system:worker`` never reaches this rule and never records a
+        # judgment. ``can_view`` is the same visibility rule the remote read
+        # path uses, so a plan the caller may not see is denied exactly as a
+        # plan that does not exist is denied -- the answer cannot be used to
+        # probe which plans are on disk. An unauthenticated caller is not an
+        # agent of the operator and records nothing.
+        if resolved_action is Action.DECISION_RECORD:
+            if not isinstance(principal, Principal):
+                return False
+            if principal.subject == LOCAL_OPERATOR_SUBJECT:
+                return True
+            return (
+                principal.principal_type in ("human", "agent")
+                and principal.auth_method not in UNAUTHENTICATED_AUTH_METHODS
+                and can_view(principal, resource)
+            )
 
         return (
             isinstance(principal, Principal)

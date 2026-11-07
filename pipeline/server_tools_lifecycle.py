@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import audit, audit_anchor, paths, security_audit
+from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -318,6 +319,7 @@ def verify_audit() -> dict[str, Any]:
 # needed on the server side.
 TOOLS = (
     request_decision,
+    record_decision,
     list_decisions,
     review_story,
     advance_pipeline,

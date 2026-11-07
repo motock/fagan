@@ -44,6 +44,13 @@ scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 The suite runs in parallel by default (pytest-xdist's `-n auto`, set in `pyproject.toml`'s
 `addopts`) — it fans out across your machine's cores automatically, no flag needed.
 
+To see which lines the suite does not exercise (optional, not a merge gate):
+
+```bash
+.venv/bin/python -m pytest -q --cov=pipeline --cov=app --cov=scripts \
+    --cov-report=term-missing:skip-covered
+```
+
 - Keep PRs focused — one concern per PR, under ~400 lines of diff as a
   guideline (see CLAUDE.md's "Pull request size"). A large change is better
   submitted as a sequence of smaller reviewable PRs than one big one.

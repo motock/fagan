@@ -19,6 +19,7 @@ These tests are RED until the implementation lands.
 import json
 import os
 
+from tests.unit import _dom_shims
 from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,111 +27,7 @@ APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 INDEX_HTML = os.path.join(REPO_ROOT, "static", "index.html")
 
 
-_SHIM = r"""
-        const noop = () => {};
-        const fakeEl = {
-            innerHTML: "",
-            classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
-            addEventListener: noop,
-            setAttribute: noop,
-            appendChild: noop,
-            querySelectorAll: () => [],
-            dataset: {},
-        };
-        globalThis.__commsThread = { appendChildCalls: 0, appendedClasses: [] };
-        globalThis.__commsLanding = { styleCalls: [] };
-        globalThis.__onAir = { classListAdd: [], classListRemove: [] };
-        globalThis.__commsSend = { disabledSet: [], classListAdd: [], classListRemove: [] };
-        const commsThreadEl = {
-            ...fakeEl,
-            dataset: {},
-            addEventListener: noop,
-            children: [],
-            style: { display: "" },
-            appendChild: function (child) {
-                globalThis.__commsThread.appendChildCalls += 1;
-                if (child && typeof child.className === "string") {
-                    globalThis.__commsThread.appendedClasses.push(child.className);
-                }
-                return child;
-            },
-        };
-        const commsLandingEl = {
-            ...fakeEl,
-            dataset: {},
-            style: { display: "", set display(v) { globalThis.__commsLanding.styleCalls.push(v); }, get display() { return ""; } },
-            classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
-        };
-        const onAirEl = {
-            ...fakeEl,
-            dataset: {},
-            classList: {
-                add: function (c) { globalThis.__onAir.classListAdd.push(c); },
-                remove: function (c) { globalThis.__onAir.classListRemove.push(c); },
-                toggle: noop, contains: () => false,
-            },
-        };
-        const commsSendEl = {
-            ...fakeEl,
-            dataset: {},
-            disabled: false,
-            set disabled(v) { globalThis.__commsSend.disabledSet.push(v); },
-            get disabled() { return false; },
-            classList: {
-                add: function (c) { globalThis.__commsSend.classListAdd.push(c); },
-                remove: function (c) { globalThis.__commsSend.classListRemove.push(c); },
-                toggle: noop, contains: () => false,
-            },
-        };
-        const commsInputEl = {
-            ...fakeEl,
-            dataset: {},
-            value: "",
-            addEventListener: noop,
-        };
-        globalThis.document = {
-            addEventListener: noop,
-            documentElement: { dataset: {} },
-            hidden: false,
-            getElementById: function (id) {
-                if (id === "comms-thread") return commsThreadEl;
-                if (id === "comms-landing") return commsLandingEl;
-                if (id === "on-air") return onAirEl;
-                if (id === "comms-send") return commsSendEl;
-                if (id === "comms-input") return commsInputEl;
-                // NOTE: deliberately NO special-case for "auto-refresh" -
-                // the implementation must not depend on that element
-                // existing anymore. Return a generic fake element so any
-                // stray lookup does not crash, but tests assert behavior
-                // is correct regardless of this fallback.
-                return { ...fakeEl, dataset: {}, addEventListener: noop, children: [] };
-            },
-            createElement: function (tag) {
-                return {
-                    tagName: tag,
-                    innerHTML: "",
-                    textContent: "",
-                    className: "",
-                    classList: {
-                        add: noop, remove: noop,
-                        toggle: function (c) { this._toggled = c; },
-                        contains: () => false,
-                    },
-                    addEventListener: noop,
-                    setAttribute: noop,
-                    appendChild: function (child) { return child; },
-                    querySelectorAll: () => [],
-                    dataset: {},
-                    style: { display: "" },
-                };
-            },
-        };
-        globalThis.window = {
-            location: { hash: "" },
-            addEventListener: noop,
-        };
-        globalThis.localStorage = { getItem: () => null, setItem: noop };
-"""
+_SHIM = _dom_shims.ALWAYS_POLL_SHIM
 
 _SHIM_FETCH_DEFAULT = "globalThis.fetch = () => new Promise(() => {});"
 

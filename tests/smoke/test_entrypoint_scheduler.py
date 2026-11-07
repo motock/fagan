@@ -110,6 +110,10 @@ def test_entrypoint_starts_and_supervises_the_daemon() -> None:
 
 def test_dead_daemon_takes_the_container_down(tmp_path: Path) -> None:
     env, argv_log = _stub_environment(tmp_path)
+    # The sibling stubs only need to outlive the daemon's 1s death. The
+    # entrypoint exits in ~2s; any longer sleep just keeps orphaned stubs
+    # holding the capture pipes open until subprocess.run gives up waiting.
+    env["STUB_OTHER_SLEEP"] = "10"
     result = _run_entrypoint(env, tmp_path)
 
     assert result.returncode != 0, (

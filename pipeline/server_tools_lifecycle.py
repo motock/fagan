@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import audit, audit_anchor, paths, security_audit
+from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -329,4 +330,5 @@ TOOLS = (
     approve_plan,
     reject_plan,
     verify_audit,
+    record_decision,
 )

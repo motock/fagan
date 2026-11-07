@@ -2511,8 +2511,8 @@ request.
 - `dry-run` — plan and log only; never dispatch, merge, or take irreversible
   action. Start here when trying a new plan.
 - `gated` (default) — act unattended up to `PIPELINE_RISK_THRESHOLD`; park higher.
-- `full` — act on all tiers except `park-and-ping` (high risk), which is always
-  held.
+- `full` — act on all tiers. A `park-and-ping` (high risk) merge is not held
+  automatically: the overlord adjudicates it and the ruling is recorded.
 - `PIPELINE_AUTO_MERGE=0` overrides every level above at the merge gate only — nothing else is gated.
 
 ### Opt-in gates: repo roots, worktree namespace, and plan approval

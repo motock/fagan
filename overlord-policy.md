@@ -63,14 +63,21 @@ When a branch has been reviewed and is a candidate to merge:
 - Otherwise **park the PR**: leave it open, record the decision, and notify the
   user. A `VERDICT: REQUEST_CHANGES` is never merged.
 
+The classes of decision the overlord may take unattended, and the tier each is
+allowed, are defined in `overlord-authority.json` (see ADR 0014). Where that
+file says `human`, the overlord parks regardless of the autonomy level. This
+policy never grants authority the matrix withholds.
+
 ## Autonomy levels (`PIPELINE_AUTONOMY`)
 
 - `dry-run` — plan and log only; never dispatch, never merge, never take an
   irreversible action. Use this when first trying a plan.
 - `gated` (default) — act unattended up to the risk threshold; park higher-risk
   items for the user.
-- `full` — act unattended on all tiers except `park-and-ping`, which is always
-  held regardless of level.
+- `full` — act unattended on all tiers. A `risk: high` merge (the
+  `park-and-ping` tier) is not held automatically: the overlord adjudicates it,
+  rules `proceed` or `park` with a rationale, and the ruling is recorded in the
+  decisions log; an absent or unparseable reply fails closed to the hold.
 
 ## Resumability & the usage gate
 

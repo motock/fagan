@@ -276,6 +276,38 @@ surfaces the message as `{"ok": false, "action": "park_for_human", "message":
 
 ---
 
+## Review-verdict binding at merge
+
+An `APPROVE` verdict records *which* commit was reviewed: `review_story` captures
+the story-branch head before the reviewer runs and stores it as the story's
+`review_verdict_sha` (see `pipeline/review_verdict_binding.py`). Both merge paths
+now consume it. `pipeline/review_merge_binding.py::check(story, branch_head_sha)`
+is pure and denies by default, returning `{"ok": bool, "reason": str}`: it is ok
+only when `review_verdict` is exactly `APPROVE` *and* `review_verdict_sha` is a
+non-empty `str` equal to `branch_head_sha`. A missing key, `None`, an empty
+string, a non-string value, an unavailable branch head or any mismatch is
+refused.
+
+`approve_merge` and the scheduler's merge adjudication both probe the remote
+branch tip (`git rev-parse` after fetch, before the merge-time rebase) and call
+`check` before rebasing or pushing, so a commit pushed after the review - agent
+rework or a human push - can no longer merge on the earlier approval. On denial
+the merge is refused with an error naming both short shas and telling the caller
+to `re-run review_story`; one audit record `merge.review_binding_denied` is
+appended with identifiers only (`plan`, `story`, `review_verdict_sha`,
+`branch_head_sha`) and no diff or feedback text. On the scheduler path the
+story is parked rather than retried, since no retry can re-earn a review.
+
+The pipeline's *own* post-review commits are expected, not denied. The
+merge-gate pre-rebase checkpoint commit and its rebase/force-push move the head
+by design, so the verdict is re-bound to the newly pushed head at that commit
+point (`rebind_after_pipeline_push`). A re-bind only ever moves an existing
+`APPROVE` to a head the pipeline itself pushed; it can never manufacture
+approval, and the check always runs first, so a human push is refused before any
+re-bind could bless it.
+
+---
+
 ## Status lifecycle
 
 ```

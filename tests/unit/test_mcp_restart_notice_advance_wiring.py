@@ -59,7 +59,7 @@ def _approved_story(worktree="/x", risk="low"):
     return {
         "summary": "approved",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": risk,
         "worktree": worktree,
     }

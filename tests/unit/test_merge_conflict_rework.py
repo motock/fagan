@@ -113,7 +113,7 @@ def _pr_open_story(**over):
         "status": "pr_open",
         "worktree": "/nonexistent-rc02-worktree",
         "dependencies": [],
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
     }
     story.update(over)

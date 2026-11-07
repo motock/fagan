@@ -51,7 +51,7 @@ def _approved_parked_story(worktree="/x"):
     return {
         "summary": "approved but parked",
         "status": "parked",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "medium",
         "worktree": worktree,
     }

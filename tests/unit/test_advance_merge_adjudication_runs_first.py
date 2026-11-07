@@ -93,6 +93,8 @@ def _pr_open_story():
     return {
         "summary": "pr open story",
         "status": "pr_open",
+        "review_verdict": "APPROVE",
+        "review_verdict_sha": "stub-head",
         "worktree": "/nonexistent-mergefirst-worktree",
         "dependencies": [],
     }

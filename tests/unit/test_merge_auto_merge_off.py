@@ -58,7 +58,7 @@ def _story(**overrides):
     story = {
         "key": "AM2-1",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "summary": "a story",
         "worktree": "",
@@ -217,7 +217,7 @@ def test_flag_off_does_not_block_human_approve_merge(monkeypatch, tmp_path):
             "AM2-1": {
                 "key": "AM2-1",
                 "status": "pr_open",
-                "review_verdict": "APPROVE",
+                "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                 "risk": "high",
                 "worktree": str(worktree),
             }

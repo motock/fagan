@@ -367,7 +367,7 @@ def test_merge_path_event_carries_correlation_id(plan_dir, monkeypatch):
     story = _story(
         plan_dir,
         status="parked",
-        review_verdict="APPROVE",
+        review_verdict="APPROVE", review_verdict_sha="stub-head",
         correlation_id=CID,
         worktree="/nonexistent-worktree",
     )
@@ -404,7 +404,7 @@ def test_merge_shared_helper_event_carries_correlation_id(
     story = _story(
         plan_dir,
         status="parked",
-        review_verdict="APPROVE",
+        review_verdict="APPROVE", review_verdict_sha="stub-head",
         correlation_id=CID,
         worktree="/nonexistent-worktree",
     )
@@ -563,7 +563,7 @@ def test_advance_merge_gate_park_event_carries_correlation_id(
     story = _story(
         plan_dir,
         status="pr_open",
-        review_verdict="APPROVE",
+        review_verdict="APPROVE", review_verdict_sha="stub-head",
         correlation_id=CID,
         worktree="/nonexistent-worktree",
         dispatch_attempts=5,
@@ -597,7 +597,7 @@ def test_advance_merge_gate_park_event_without_correlation_id_unchanged(
     story = _story(
         plan_dir,
         status="pr_open",
-        review_verdict="APPROVE",
+        review_verdict="APPROVE", review_verdict_sha="stub-head",
         worktree="/nonexistent-worktree",
         dispatch_attempts=5,
     )

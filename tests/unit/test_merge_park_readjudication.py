@@ -84,7 +84,7 @@ def _story(**overrides):
         "plan_name": PLAN,
         "status": "parked",
         "parked_reason": HOLD_REASON,
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "security_review_verdict": "APPROVE",
         "risk": "high",
         "summary": "Rewrite the auth token cache",

@@ -250,3 +250,34 @@ def _authenticated_test_client(monkeypatch):
         original_init(self, *args, headers=merged, **kwargs)
 
     monkeypatch.setattr(TestClient, "__init__", _init_with_api_key)
+
+
+STUB_HEAD = "stub-head"
+
+
+@pytest.fixture(autouse=True)
+def _stub_review_binding_head_probe(request, monkeypatch):
+    """Stand in for the one git/network probe of the review/merge binding.
+
+    Merge-path fixtures run without a remote, so the real probe finds no tip.
+    Only that I/O boundary is faked, as a one-branch remote: the tip is
+    ``STUB_HEAD`` until the pipeline pushes (the merge gate re-binds to the
+    pushed sha), after which it is that sha - as a real remote's would be. The
+    real ``check`` still runs, so a fixture must carry
+    ``review_verdict_sha == STUB_HEAD`` to merge. ``test_review_merge_binding``
+    opts out and uses the real probe seam.
+    """
+    if request.module.__name__.endswith("test_review_merge_binding"):
+        return
+    from pipeline import review_merge_binding
+
+    tip = {"sha": STUB_HEAD}
+    real_rebind = review_merge_binding.rebind_after_pipeline_push
+
+    def rebind(story, pushed_sha):
+        if isinstance(pushed_sha, str) and pushed_sha:
+            tip["sha"] = pushed_sha
+        return real_rebind(story, pushed_sha)
+
+    monkeypatch.setattr(review_merge_binding, "branch_head_sha", lambda *a, **k: tip["sha"])
+    monkeypatch.setattr(review_merge_binding, "rebind_after_pipeline_push", rebind)

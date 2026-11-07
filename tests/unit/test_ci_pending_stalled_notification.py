@@ -53,7 +53,7 @@ def _story(**overrides):
     base = {
         "summary": "ready pr",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": "/nonexistent-worktree",
     }

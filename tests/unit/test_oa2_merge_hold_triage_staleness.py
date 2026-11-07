@@ -118,7 +118,7 @@ def test_merge_park_writes_story_level_timestamp(monkeypatch, plan_dir):
         "status": "pr_open",
         "pr_checks": {"ci": "pending"},
         "pr_url": "https://example.test/pr/1",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "high",
         "worktree": "",
         "dependencies": [],
@@ -162,7 +162,7 @@ def test_merge_ruling_pops_timestamp(monkeypatch, plan_dir):
         "merge_parked_at": datetime.now(UTC).isoformat(),
         "pr_checks": {"ci": "pass"},
         "pr_url": "https://example.test/pr/1",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "worktree": "",
         "dependencies": [],
     }

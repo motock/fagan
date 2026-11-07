@@ -141,7 +141,7 @@ def _story(worktree):
     return {
         "summary": "alias-head story ready to merge",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": worktree,
     }
@@ -264,7 +264,7 @@ def test_advance_tick_clears_merge_gate_on_alias_head_across_calls(
     # approved, worktree still on the alias (now at the rebased SHA).
     man["stories"]["S10"].update({
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": pushed_sha_1,
         "risk": "low",
         "worktree": str(repo),
     })

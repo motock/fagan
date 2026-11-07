@@ -195,7 +195,7 @@ def test_merge_gate_counts_a_failed_fetch_as_a_merge_attempt_without_pushing(
     story = {
         "summary": "ready to merge",
         "status": "pr_open",
-        "review_verdict": "APPROVE",
+        "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
         "risk": "low",
         "worktree": str(repo),
     }

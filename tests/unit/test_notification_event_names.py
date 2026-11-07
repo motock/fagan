@@ -418,7 +418,7 @@ class TestStoryMergedBehavioralPath:
     ):
         plan = "evmerge"
         _write_manifest(
-            tmp_path, plan, {"S1": {"status": "pr_open", "correlation_id": "cid-m"}}
+            tmp_path, plan, {"S1": {"status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "correlation_id": "cid-m"}}
         )
         _stub_tick(monkeypatch, tmp_path, plan)
         self._merge_stubs(monkeypatch)
@@ -436,7 +436,7 @@ class TestStoryMergedBehavioralPath:
         self, tmp_path, monkeypatch, notify_spy
     ):
         plan = "evmerge"
-        _write_manifest(tmp_path, plan, {"S1": {"status": "pr_open"}})
+        _write_manifest(tmp_path, plan, {"S1": {"status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head"}})
         _stub_tick(monkeypatch, tmp_path, plan)
         self._merge_stubs(monkeypatch)
         advance._advance_pipeline_locked(plan)
@@ -455,7 +455,7 @@ class TestStoryMergedBehavioralPath:
         self, tmp_path, monkeypatch, notify_spy, merge_attempts
     ):
         plan = "evfail"
-        story = {"status": "pr_open", "correlation_id": "cid-f"}
+        story = {"status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "correlation_id": "cid-f"}
         if merge_attempts:
             story["merge_attempts"] = merge_attempts
         _write_manifest(tmp_path, plan, {"S1": story})
@@ -616,7 +616,7 @@ class TestStoryKeyAttributionBehavioral:
         self, tmp_path, monkeypatch, notify_spy
     ):
         plan = "evretry"
-        _write_manifest(tmp_path, plan, {"S1": {"status": "pr_open"}})
+        _write_manifest(tmp_path, plan, {"S1": {"status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head"}})
         _stub_tick(monkeypatch, tmp_path, plan)
         monkeypatch.delenv("PIPELINE_REWORK_ON_CI_FAIL", raising=False)
         TestStoryMergedBehavioralPath._merge_stubs(monkeypatch, ci_state="fail")

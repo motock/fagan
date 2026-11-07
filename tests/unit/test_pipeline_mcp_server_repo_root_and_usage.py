@@ -58,7 +58,7 @@ def test_advance_pipeline_dry_run_has_no_side_effects(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "dr", {
         "T1": {"summary": "todo one", "status": "todo", "dependencies": []},
         "P1": {"summary": "ready pr", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x"},
     })
 
     def _boom(*a, **k):
@@ -79,9 +79,9 @@ def test_advance_pipeline_gated_dispatches_merges_and_parks(plan_dir, monkeypatc
     _write_manifest(plan_dir, "go", {
         "T1": {"summary": "todo", "status": "todo", "dependencies": []},
         "P1": {"summary": "low approved", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x"},
         "P2": {"summary": "high approved", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "high", "worktree": "/y"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "high", "worktree": "/y"},
     })
 
     dispatched = []
@@ -114,7 +114,7 @@ def test_advance_pipeline_merge_transitions_plane_issue_to_done(plan_dir, monkey
     story_key = "11111111-1111-1111-1111-111111111111"
     _write_manifest(plan_dir, "planedone", {
         story_key: {"summary": "approved", "status": "pr_open",
-                     "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+                     "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(pt, "_get_state", lambda group: f"state-{group}")
@@ -137,7 +137,7 @@ def test_advance_pipeline_merge_tolerates_plane_failure(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "planefail", {
         "P1": {"summary": "approved", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(pt, "plane_request",
@@ -153,7 +153,7 @@ def test_advance_pipeline_merge_tolerates_plane_failure(plan_dir, monkeypatch):
 def test_approve_merge_merges_a_parked_approved_story(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "am", {
         "P1": {"summary": "approved but medium risk", "status": "parked",
-               "review_verdict": "APPROVE", "risk": "medium", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "medium", "worktree": "/x"},
     })
     merged = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
@@ -174,7 +174,7 @@ def test_approve_merge_merges_a_pr_open_approved_story(plan_dir, monkeypatch):
     # not only after it's been parked.
     _write_manifest(plan_dir, "am2", {
         "P1": {"summary": "approved, not yet adjudicated", "status": "pr_open",
-               "review_verdict": "APPROVE", "risk": "high", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "high", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
@@ -204,7 +204,7 @@ def test_approve_merge_rejects_story_without_approve_verdict(plan_dir, monkeypat
 def test_approve_merge_rejects_story_in_non_mergeable_status(plan_dir, monkeypatch, status):
     _write_manifest(plan_dir, "am4", {
         "P1": {"summary": "not ready", "status": status,
-               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+               "review_verdict": "APPROVE", "review_verdict_sha": "stub-head", "risk": "low", "worktree": "/x"},
     })
     merge_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merge_calls.append(key))
@@ -225,7 +225,7 @@ def test_approve_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
     real_repo = tmp_path / "real-repo"
     monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
     _write_manifest(plan_dir, "am6", {
-        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "medium", "worktree": str(tmp_path / "wt")},
     })
     manifest_path = plan_dir / "am6.manifest.json"
@@ -484,7 +484,7 @@ def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_pa
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "pausemerge", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     merged = []
@@ -503,7 +503,7 @@ def test_advance_pipeline_merge_failure_retries_within_budget(plan_dir, monkeypa
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "mergeretry", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr",
@@ -526,7 +526,7 @@ def test_advance_pipeline_merge_failure_exhausts_budget(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "mergegiveup", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "merge_attempts": 2},
     })
     monkeypatch.setattr(p, "_merge_pr",
@@ -549,7 +549,7 @@ def test_advance_pipeline_merge_success_clears_attempt_counter(plan_dir, monkeyp
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     _write_manifest(plan_dir, "mergerecover", {
-        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE", "review_verdict_sha": "stub-head",
                "risk": "low", "worktree": "/x", "merge_attempts": 1},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")

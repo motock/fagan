@@ -498,6 +498,12 @@ def _merge_decision(
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     from .authorization import authorize
     from .pr import _resolve_story_branch
+    from .review_merge_binding import (
+        branch_head_sha,
+        check,
+        rebind_after_pipeline_push,
+        refuse,
+    )
     from .server import (
         _atomic_write_json,
         _ci_rerun,
@@ -570,6 +576,13 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 branch = story_branch(story_key)
                 if worktree and Path(worktree).is_dir():
                     branch = _resolve_story_branch(worktree, story_key)
+                # The approval must cover the commit being merged: probe the
+                # remote tip AFTER fetch and BEFORE the merge-time rebase, and
+                # refuse here so nothing is rebased or pushed first.
+                head = branch_head_sha(branch)
+                binding = check(story, head)
+                if not binding["ok"]:
+                    return refuse(plan_name, story_key, story, head, binding)
                 rb = _rebase_onto_master(worktree, branch)
                 if rb.get("auto_resolved"):
                     # W4L-04: stamp the story's persisted correlation_id
@@ -616,6 +629,10 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         text=True,
                     )
                     pushed_sha = rev.stdout.strip()
+                    # The checkpoint/rebase/force-push above move the head after
+                    # the review by design: re-bind at the pipeline's own commit
+                    # point so a later retry does not deny known-good work.
+                    rebind_after_pipeline_push(story, pushed_sha)
                 ci = _ci_status(branch, sha=pushed_sha)
                 if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
                     # Same one-shot auto-rerun as the scheduler's merge gate:

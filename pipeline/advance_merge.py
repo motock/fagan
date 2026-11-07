@@ -336,6 +336,13 @@ def _merge_reverify_gate(
 
 
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
+    from .review_merge_binding import (
+        branch_head_sha,
+        check,
+        deny,
+        rebind_after_pipeline_push,
+    )
+
     manifest_path = _store.manifest_path(plan_name)
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
     manifest = json.loads(manifest_path.read_text())
@@ -428,6 +435,19 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # CI-gate-disabled path must run zero subprocesses, see
             # test_advance_pipeline_ci_gate_disabled_skips_ci).
             branch = ""
+        # The approval must cover the commit being merged: probe the remote
+        # tip AFTER fetch and BEFORE any rebase/checkpoint/push, and refuse
+        # here so nothing is rebased or pushed first. Keying this gate on
+        # `branch` alone conflated "no local worktree" (a missing checkout)
+        # with "no branch to bind against": the branch still exists remotely,
+        # so the gate probes the same fallback name the CI poll below uses
+        # instead of merging with zero binding verification.
+        gate_branch = branch or _degraded_ci_branch(key)
+        head = branch_head_sha(gate_branch)
+        binding = check(story, head)
+        if not binding["ok"]:
+            deny(plan_name, key, story, head, binding, summary)
+            continue
         gate_error = ""
         ci_definitive_fail = False
         ci_wait = False
@@ -467,6 +487,12 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 )
         else:
             gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
+        if not gate_error and pushed_sha:
+            # The merge gate's own rebase and force-push move the branch head
+            # AFTER the review: that is expected, so the verdict is re-bound to
+            # the head the pipeline just pushed HERE (at its commit point) -
+            # never by loosening the check, which already ran on the tip above.
+            rebind_after_pipeline_push(story, pushed_sha)
         if not gate_error:
             poll_branch = branch or _degraded_ci_branch(key)
             ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)

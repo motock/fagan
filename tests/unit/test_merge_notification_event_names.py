@@ -301,7 +301,7 @@ def test_merge_path_auto_resolved_record_carries_event_and_correlation_id(
     event="rebase_auto_resolved" AND the story's correlation_id."""
     _write_manifest(
         plan_dir,
-        _story(status="parked", review_verdict="APPROVE", correlation_id=CID),
+        _story(status="parked", review_verdict="APPROVE", review_verdict_sha="stub-head", correlation_id=CID),
     )
     _patch_merge_boundaries(monkeypatch)
 

@@ -344,7 +344,7 @@ def test_agent_is_denied_high_risk_actions(authorizer, denials, action):
 def test_agent_may_reject_a_plan(authorizer, denials):
     with bind_principal(AGENT):
         refusal = authorization.authorize(
-            Action.PLAN_REJECT, plan_name="p", manifest={}
+            Action.PLAN_REJECT, plan_name="p", manifest={"team": "team-1"}
         )
 
     assert refusal is None
@@ -355,7 +355,7 @@ def test_agent_may_reject_a_plan(authorizer, denials):
 def test_agent_may_perform_an_action_the_policy_allows(authorizer, denials):
     with bind_principal(AGENT):
         refusal = authorization.authorize(
-            Action.PLAN_DISPATCH, plan_name="p", manifest={}
+            Action.PLAN_DISPATCH, plan_name="p", manifest={"team": "team-1"}
         )
 
     assert refusal is None
@@ -499,3 +499,100 @@ def test_new_records_do_not_change_what_the_hash_covers(audit_dir):
     without_hash = {key: value for key, value in record.items() if key != "hash"}
 
     assert audit._record_hash(without_hash) == record["hash"]
+
+
+# --------------------------------------------------------------------------- #
+# Authorization: an agent is confined to its own team's plans (ADR 0014 dec. 3)
+# --------------------------------------------------------------------------- #
+
+
+def test_agent_is_refused_on_another_teams_plan(authorizer, denials):
+    with bind_principal(AGENT):
+        refusal = authorization.authorize(
+            Action.PLAN_DISPATCH, plan_name="p", manifest={"team": "team-2"}
+        )
+
+    assert refusal is not None
+    assert refusal["ok"] is False
+    # Structural, so the operator's allow-everything authorizer never decides.
+    assert authorizer.calls == []
+    assert [call["reason"] for call in denials] == ["agent_team_scope"]
+
+
+def test_agent_is_refused_on_a_plan_without_a_team(authorizer, denials):
+    with bind_principal(AGENT):
+        refusal = authorization.authorize(
+            Action.PLAN_DISPATCH, plan_name="p", manifest={}
+        )
+
+    assert refusal is not None
+    assert refusal["ok"] is False
+    assert authorizer.calls == []
+    assert [call["reason"] for call in denials] == ["agent_team_scope"]
+
+
+def test_agent_is_refused_when_the_manifest_is_unreadable(
+    authorizer, denials, monkeypatch
+):
+    monkeypatch.setattr(authorization, "_load_manifest", lambda plan_name: {})
+
+    with bind_principal(AGENT):
+        refusal = authorization.authorize(
+            Action.STORY_PATCH, plan_name="p", manifest=None
+        )
+
+    # An empty manifest stands in for the unreadable one: no team, so refused.
+    assert refusal is not None
+    assert [call["reason"] for call in denials] == ["agent_team_scope"]
+
+
+def test_agent_is_allowed_on_its_own_teams_plan_when_the_policy_allows(
+    authorizer, denials
+):
+    with bind_principal(AGENT):
+        refusal = authorization.authorize(
+            Action.PLAN_DISPATCH,
+            plan_name="p",
+            manifest={"team": "team-1", "owner": "agent:acme/team-1"},
+        )
+
+    assert refusal is None
+    assert denials == []
+    assert authorizer.calls == [Action.PLAN_DISPATCH]
+
+
+def test_agent_team_denial_is_distinct_from_the_forbidden_action_denial(
+    authorizer, denials
+):
+    with bind_principal(AGENT):
+        authorization.authorize(
+            Action.PLAN_DISPATCH, plan_name="p", manifest={"team": "team-2"}
+        )
+        authorization.authorize(
+            Action.PLAN_APPROVE, plan_name="q", manifest={"team": "team-1"}
+        )
+
+    assert [call["reason"] for call in denials] == [
+        "agent_team_scope",
+        "agent_principal",
+    ]
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        Principal("alice", frozenset({"author"})),
+        SYSTEM_SCHEDULER,
+    ],
+    ids=["human", "system"],
+)
+def test_team_scope_never_confines_a_human_or_a_system_principal(
+    authorizer, denials, principal
+):
+    with bind_principal(principal):
+        refusal = authorization.authorize(
+            Action.PLAN_DISPATCH, plan_name="p", manifest={"team": "team-2"}
+        )
+
+    assert refusal is None
+    assert denials == []

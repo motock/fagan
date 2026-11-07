@@ -2852,7 +2852,7 @@ and the session cookie" section below.
 | `PIPELINE_OIDC_JWKS_URL` | *(required when `oidc`)* | Where the issuer publishes its signing keys. Must use `https://`. A host that resolves to a private or loopback address is refused unless `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` is set. |
 | `PIPELINE_OIDC_CLOCK_SKEW_S` | `60` | Leeway, in seconds, applied to `exp` and `nbf`. Must be a non-negative integer and is capped at `300`; a larger value raises at startup. |
 | `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` | *(unset → off)* | Permits a JWKS host that resolves to a private or loopback address — what a self-hosted IdP inside a VPC (Keycloak, Dex, ADFS) needs. Only `1` or `true` (case-insensitive) enable it; any other value, including `yes` or `on`, leaves the restrictive default in place. Enabling it also pins the JWKS fetch to the resolved address, so the request cannot traverse an HTTP egress proxy — an operator behind one needs direct egress to the IdP. |
-| `PIPELINE_OIDC_AGENT_CLIENTS` | *(unset → none)* | Comma-separated OIDC client ids (`azp`) allowed to authenticate as an *agent* principal. Empty means no client is an agent and every token is a human principal. Read on every verification, so a rotated list takes effect without a restart. An agent never carries IdP roles and is bound to one team; its scope claim must be a valid `<org-id>/<team-id>` pair or the token is refused (`invalid token: agent scope`). |
+| `PIPELINE_OIDC_AGENT_CLIENTS` | *(unset → none)* | Comma-separated OIDC client ids (`azp`) allowed to authenticate as an *agent* principal. Empty means no client is an agent and every token is a human principal. Read on every verification, so a rotated list takes effect without a restart. An agent never carries IdP roles and is confined to one team: its scope claim must be a valid `<org-id>/<team-id>` pair or the token is refused (`invalid token: agent scope`), and `pipeline.authorization` refuses the agent on any plan whose manifest does not declare that same team id (see the verification rules below). |
 | `PIPELINE_OIDC_AGENT_SCOPE_CLAIM` | `team_scope` | The token claim carrying an agent's `<org-id>/<team-id>` binding. Only consulted for a token whose `azp` is in `PIPELINE_OIDC_AGENT_CLIENTS`; for any other token the claim is ignored. |
 
 The verification rules are fixed, not configurable:
@@ -2862,6 +2862,13 @@ The verification rules are fixed, not configurable:
   `pipeline.authorization.authorize` before the authorizer is consulted, so no
   policy or operator plugin can grant them (ADR 0014 decision 3). `plan:reject`
   stays allowed — rejecting work is safe.
+- An agent is confined to its own team's plans. `authorize` compares the
+  `<team-id>` segment of the principal's `team_scope` with the `team` the plan
+  manifest declares and refuses a mismatch — again before the authorizer is
+  consulted, so no policy can widen the boundary. The check fails closed: an
+  agent is refused on a plan whose manifest names no team. An agent of
+  `acme/team-1` can therefore ingest, dispatch, merge and mark done only inside
+  `team-1`. Humans and `system` principals are unaffected.
 - Agent attribution requires OIDC. Under the shared-secret provider every
   caller authenticates as `LOCAL_OPERATOR` (a human with an empty client id),
   so an agent session and a human are indistinguishable there and no audit

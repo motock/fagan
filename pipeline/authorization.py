@@ -122,19 +122,53 @@ def _record_denial(
 AGENT_FORBIDDEN_ACTIONS = frozenset({"plan:approve", "config:write"})
 
 
-def _agent_structural_denial(principal, action_label: str) -> bool:
-    """Return whether ADR 0014 decision 3 refuses *action_label* for *principal*.
+def _manifest_team(manifest: dict | None) -> str:
+    """Return the plan's declared team, or ``""`` when it declares none.
 
-    One place, because two production paths reach those actions: ``authorize``
-    decides a plan-scoped operation, and ``refusal_for_host_config`` decides a
-    host-scoped write (``set_role_default``, ``record_security_audit``) against
-    an empty resource. Both call this before the authorizer, so no operator
-    plugin can grant an agent an approval or a configuration write.
+    Distinct from ``resource_for``'s ``Resource.team``, which substitutes
+    ``DEFAULT_TEAM`` for a missing one: the agent scope check below must tell
+    "this plan belongs to no team" from "this plan belongs to the local team".
     """
-    return (
-        principal.principal_type == "agent"
-        and action_label in AGENT_FORBIDDEN_ACTIONS
-    )
+    data = manifest if isinstance(manifest, dict) else {}
+    return str(data.get("team") or "").strip()
+
+
+def _team_scope_covers(team_scope: str, team: str) -> bool:
+    """Return whether *team_scope* names *team* (its ``<team-id>`` segment).
+
+    ``Resource`` carries no org field, so the ``<org-id>`` segment is not
+    compared here; the team id is the boundary the plan manifest declares.
+    """
+    _org, _, scope_team = team_scope.partition("/")
+    return bool(team) and scope_team == team
+
+
+def _agent_structural_denial(
+    principal, action_label: str, team: str | None = None
+) -> str:
+    """Return the structural denial reason for *principal*, or ``""``.
+
+    One place for every rule that refuses an agent without asking the policy,
+    because the rules are structural rather than a grant an operator can hand
+    out. Two production paths reach them: ``authorize`` decides a plan-scoped
+    operation and ``refusal_for_host_config`` decides a host-scoped write
+    (``set_role_default``, ``record_security_audit``) against an empty resource.
+    Both call this before the authorizer, so no operator plugin can grant an
+    agent an approval, a configuration write, or another team's work.
+
+    ADR 0014 decision 3 says a team agent acts only inside its team scope, so an
+    agent is confined to plans whose manifest declares its own team id. ``team``
+    is that declared team for a plan-scoped decision and ``None`` for a
+    host-scoped one, which has no plan to scope. The check fails closed: an
+    agent is refused on a plan that declares no team at all.
+    """
+    if principal.principal_type != "agent":
+        return ""
+    if action_label in AGENT_FORBIDDEN_ACTIONS:
+        return "agent_principal"
+    if team is not None and not _team_scope_covers(principal.team_scope, team):
+        return "agent_team_scope"
+    return ""
 
 
 def authorize(
@@ -173,12 +207,13 @@ def authorize(
     # ADR 0014 decision 3: this refusal sits in ``authorize`` rather than in the
     # policy because it is structural, not a grant an operator can hand out.
     # Consulting the authorizer first would let an allow-everything plugin
-    # hand an agent the approval a human is accountable for, and would record
-    # a denial the policy never actually made.
-    denial_reason = ""
-    if _agent_structural_denial(principal, action_label):
+    # hand an agent the approval a human is accountable for, or another team's
+    # work, and would record a denial the policy never actually made.
+    denial_reason = _agent_structural_denial(
+        principal, action_label, _manifest_team(manifest)
+    )
+    if denial_reason:
         allowed = False
-        denial_reason = "agent_principal"
     else:
         allowed = is_allowed(
             default_authorizer(),
@@ -270,7 +305,7 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
     )
     detail = {"what": what, "principal": principal.subject}
     if agent_refusal:
-        detail["reason"] = "agent_principal"
+        detail["reason"] = agent_refusal
     try:
         append_host_audit(
             action=label,
@@ -286,7 +321,7 @@ def refusal_for_host_config(action: Action | str, what: str) -> dict | None:
         label,
         principal.subject,
         what,
-        "agent_principal" if agent_refusal else "policy",
+        agent_refusal or "policy",
     )
     return {
         "ok": False,

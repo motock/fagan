@@ -134,6 +134,17 @@ def _usable_chain(chain: object) -> str | None:
         return None
     if Path(chain).name != chain:
         return None
+    # ``decisions:<plan>`` is the anchor key for a decisions chain; a bare chain
+    # name is a plan's audit stream. ':' is not a plan-name character
+    # (``pipeline.parsers._validate_key`` allows only [A-Za-z0-9._-]), so a colon
+    # in the plan part means the key aliases the other namespace: plan
+    # ``decisions:other`` and the decisions chain of plan ``other`` would both be
+    # ``decisions:other``, collapsing to one entry here and making _verdict
+    # compare that anchor against the wrong file - a permanent false "truncated"
+    # verdict, or a real cut masked. Such a key is not an anchor.
+    plan = chain.removeprefix("decisions:") if chain.startswith("decisions:") else chain
+    if not plan or ":" in plan:
+        return None
     return chain
 
 
@@ -229,11 +240,36 @@ def _chain_streams() -> Iterator[tuple[str, Path]]:
     probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
     suffix = probe.name
     for path in sorted(probe.parent.glob(f"*{suffix}")):
-        yield path.name.removesuffix(suffix), path
+        plan = path.name.removesuffix(suffix)
+        # A plan name may not contain ':' (pipeline.parsers._validate_key), and
+        # its chain name would otherwise be indistinguishable from a decisions
+        # chain key: plan ``decisions:other`` would anchor as ``decisions:other``,
+        # the same key as the decisions chain of plan ``other``. One of the two
+        # would never be verified and the surviving anchor would be compared
+        # against the wrong file. Skip the unaddressable name rather than alias.
+        if ":" in plan:
+            logger.warning(
+                "skipping an audit stream whose plan name is not addressable plan=%r", plan
+            )
+            continue
+        yield plan, path
+    decisions_suffix = ".decisions.chain.jsonl"
+    for path in sorted(probe.parent.glob(f"*{decisions_suffix}")):
+        plan = path.name.removesuffix(decisions_suffix)
+        if not plan or ":" in plan:
+            logger.warning(
+                "skipping a decisions stream whose plan name is not addressable plan=%r", plan
+            )
+            continue
+        yield f"decisions:{plan}", path
     yield HOST_CHAIN, audit.host_audit_path()
 
 
 def _stream_for(chain: str) -> Path:
+    if chain.startswith("decisions:"):
+        return audit.audit_path(chain).with_name(
+            f"{chain.removeprefix('decisions:')}.decisions.chain.jsonl"
+        )
     return audit.host_audit_path() if chain == HOST_CHAIN else audit.audit_path(chain)
 
 

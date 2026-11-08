@@ -8,9 +8,9 @@ failure to Claude without wiping the worktree (the code is often already
 correct). _auto_escalation_enabled reports whether escalation is enabled -
 PIPELINE_AUTO_ESCALATE if set, else PIPELINE_BACKEND_DISPATCH=="auto".
 
-All read PLAN_DIR via lazy imports from the server (tests patch
-p.<name>; circular-avoidance). _atomic_write_json comes from pipeline_parsers,
-_notify_user from pipeline_persistence.
+All read PLAN_DIR via lazy imports from the server (tests patch p.<name>;
+circular-avoidance). _store is the server's live store binding, resolved at
+call time, and _notify_user comes from pipeline_persistence.
 """
 
 import logging
@@ -22,7 +22,7 @@ from typing import Any
 from app import role_registry
 
 from .branch_names import story_branch
-from .parsers import _atomic_write_json
+from .concurrency import _ServerRef
 from .persistence import _notify_user
 from .rebrief import (
     collect_attempt_facts,
@@ -31,6 +31,12 @@ from .rebrief import (
     compose_rebriefed_instructions,
     diagnose_failure,
 )
+
+# The plan's record store, resolved at CALL time through the live
+# pipeline.server binding (the _ServerRef pattern used by pipeline/advance.py,
+# pipeline/triage.py and pipeline/store.py): a module-load copy would freeze one
+# store (and one plan directory) into every test run.
+_store = _ServerRef("_store")
 
 
 def _escalation_target() -> tuple[str, str | None]:
@@ -191,7 +197,7 @@ def _escalate_to_claude(
                 "step_cap_streak", "step_cap_streak_model",
                 "infra_failure_streak", "infra_failure_streak_model"):
         story.pop(key, None)
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
 
 
 def _escalate_to_local_fallback_model(
@@ -260,7 +266,7 @@ def _escalate_to_local_fallback_model(
     for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
                 "dispatched_model"):
         story.pop(key, None)
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
 
 
 def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name: str, reason: str) -> None:

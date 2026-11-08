@@ -434,7 +434,7 @@ def test_escalation_folds_facts_in_even_without_a_diagnosis(monkeypatch, tmp_pat
     monkeypatch.setattr(escalation, "collect_attempt_facts", lambda *a, **k: "- MEASURED")
     monkeypatch.setattr(escalation, "diagnose_failure", lambda *a, **k: None)
     monkeypatch.setattr(escalation.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(escalation, "_atomic_write_json", lambda *a, **k: None)
+    monkeypatch.setattr("pipeline.server._atomic_write_json", lambda *a, **k: None)
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x",
                                    "worktree": str(tmp_path)}}}
     escalation._escalate_to_claude(manifest, "plan", "S1", tmp_path / "m.json")
@@ -447,7 +447,7 @@ def test_local_fallback_escalation_folds_facts_in(monkeypatch, tmp_path):
     monkeypatch.setattr(escalation, "collect_attempt_facts", lambda *a, **k: "- MEASURED")
     monkeypatch.setattr(escalation, "diagnose_failure", lambda *a, **k: None)
     monkeypatch.setattr(escalation.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(escalation, "_atomic_write_json", lambda *a, **k: None)
+    monkeypatch.setattr("pipeline.server._atomic_write_json", lambda *a, **k: None)
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x",
                                    "worktree": str(tmp_path)}}}
     escalation._escalate_to_local_fallback_model(

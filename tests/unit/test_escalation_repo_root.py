@@ -46,7 +46,6 @@ real configuration and no real git is ever shelled out.
 from __future__ import annotations
 
 import ast
-import json
 import subprocess as real_subprocess
 from pathlib import Path
 
@@ -365,8 +364,15 @@ def test_each_escalation_function_resolves_and_uses_the_plan_repo_root(name):
     assert "journal_path = PLAN_DIR /" in segment, (
         "the journal path must keep using PLAN_DIR"
     )
-    assert "_atomic_write_json(manifest_path, manifest)" in segment, (
-        "the manifest write must survive"
+    # The reset is persisted through the record store (not the module-local
+    # _atomic_write_json binding): exactly one put_manifest, keyed by the
+    # "default" store and the plan name, with the manifest just mutated.
+    assert (
+        '_store.records().put_manifest("default", plan_name, manifest)' in segment
+    ), "the manifest write must go through the record store"
+    assert "_atomic_write_json(manifest_path, manifest)" not in segment, (
+        "the legacy module-local writer binding must be gone: it bypasses the "
+        "store (and the sqlite row) entirely"
     )
 
 
@@ -436,14 +442,19 @@ def test_claude_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_path
     monkeypatch.setattr(server, "REPO_ROOT", SENTINEL)
     manifest = _manifest(str(tmp_path), "S5")
     story = manifest["stories"]["S5"]
-    manifest_path = tmp_path / "plan.S5.manifest.json"
+    # The reset is persisted through the plan's record store, which derives its
+    # target from PLAN_DIR (the autouse fixture pins that at tmp_path). The
+    # caller's manifest_path argument is still threaded, and the store's path
+    # for this plan is exactly that file.
+    manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_claude(manifest, "plan", "S5", manifest_path)
 
     for key in ("pid", "worktree", "dispatch_attempts", "dispatch_error"):
         assert key not in story, f"{key} must still be popped by the teardown"
     assert manifest_path.exists(), "the manifest must still be persisted"
-    written = json.loads(manifest_path.read_text())
+    written = server._store.records().get_manifest("default", "plan")
+    assert written is not None, "the manifest must still be persisted"
     assert written["stories"]["S5"]["status"] == "todo"
     assert written["stories"]["S5"]["escalated"] is True
 
@@ -452,7 +463,7 @@ def test_fallback_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_pa
     monkeypatch.setattr(server, "REPO_ROOT", SENTINEL)
     manifest = _manifest(str(tmp_path), "S6")
     story = manifest["stories"]["S6"]
-    manifest_path = tmp_path / "plan.S6.manifest.json"
+    manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_local_fallback_model(
         manifest, "plan", "S6", manifest_path, "gpt-oss-20b-high:latest"
@@ -461,5 +472,6 @@ def test_fallback_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_pa
     for key in ("pid", "worktree", "dispatch_attempts", "dispatch_error"):
         assert key not in story
     assert manifest_path.exists()
-    written = json.loads(manifest_path.read_text())
+    written = server._store.records().get_manifest("default", "plan")
+    assert written is not None, "the manifest must still be persisted"
     assert written["stories"]["S6"]["tried_fallback_model"] is True

@@ -37,7 +37,6 @@ configuration and no real git is ever shelled out.
 from __future__ import annotations
 
 import ast
-import json
 import subprocess as real_subprocess
 from pathlib import Path
 
@@ -132,7 +131,9 @@ def test_dispatch_escalation_stamps_the_local_tier_before_overwriting_it(
 ):
     manifest = _manifest("S1")
     story = manifest["stories"]["S1"]
-    manifest_path = tmp_path / "plan.json"
+    # The reset is persisted through the plan's record store, which derives its
+    # target from PLAN_DIR (the autouse fixture pins that at tmp_path).
+    manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_claude(manifest, "plan", "S1", manifest_path)
 
@@ -142,7 +143,8 @@ def test_dispatch_escalation_stamps_the_local_tier_before_overwriting_it(
     assert story["backend"] == "claude"
 
     # Persisted, not just set in memory.
-    written = json.loads(manifest_path.read_text(encoding="utf-8"))
+    written = server._store.records().get_manifest("default", "plan")
+    assert written is not None, "the manifest must still be persisted"
     persisted = written["stories"]["S1"]
     assert persisted["pre_escalation_backend"] == "local"
     assert persisted["pre_escalation_model"] == "gpt-oss-20b-high"
@@ -264,7 +266,10 @@ def test_helper_is_module_level_and_keeps_the_repo_root_adjacency():
 def test_survivor_bookkeeping_still_happens(fake_git, tmp_path):
     manifest = _manifest("S8")
     story = manifest["stories"]["S8"]
-    manifest_path = tmp_path / "plan.json"
+    # The reset is persisted through the plan's record store, which derives its
+    # target from PLAN_DIR (the autouse fixture pins that at tmp_path); the
+    # caller's manifest_path argument is still threaded and names that file.
+    manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_claude(manifest, "plan", "S8", manifest_path)
 
@@ -274,3 +279,7 @@ def test_survivor_bookkeeping_still_happens(fake_git, tmp_path):
     assert story["status"] == "todo"
     assert story["escalated"] is True
     assert manifest_path.exists()
+    written = server._store.records().get_manifest("default", "plan")
+    assert written is not None, "the manifest must still be persisted"
+    assert written["stories"]["S8"]["status"] == "todo"
+    assert written["stories"]["S8"]["escalated"] is True

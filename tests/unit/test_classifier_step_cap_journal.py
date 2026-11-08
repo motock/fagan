@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import plan_completion
+from pipeline import persistence, plan_completion
 from pipeline.local_success import classify_story
 from pipeline.plan_summary import format_plan_summary
 
@@ -127,6 +127,12 @@ def test_plan_summary_marks_story_with_loaded_journal_not_clean() -> None:
 
 def _complete_plan(tmp_path, monkeypatch, journal: str | None) -> str:
     monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
+    # The journals are read through the record store now, and the record view
+    # resolves a journal from the *writer's* directory (``pipeline.persistence``
+    # own ``PLAN_DIR`` binding) rather than from the reader module's symbol, so
+    # that binding is the one that has to point at tmp_path for the journal
+    # written below to be the one read back.
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(plan_completion, "_notify_user", lambda *a, **k: None)
     if journal is not None:
         (tmp_path / f"p.{KEY}.journal.json").write_text(journal)

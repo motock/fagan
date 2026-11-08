@@ -171,6 +171,27 @@ def prune_manifest_cache(plan_dir: Path, paths: list[Path]) -> None:
                 del _MANIFEST_WARNED[key]
 
 
+def neighbour_manifests(store, plan_name: str) -> dict[str, dict]:
+    """Return every other plan's manifest, read in bulk through *store*.
+
+    The store's record view is the source of truth (ADR 0012 stage B): one
+    :meth:`get_manifests` call, so a store-backed deployment reads the
+    database's manifests instead of this host's files, and the manifest parse
+    cache plus the skip-and-warn for an unreadable manifest come from
+    :func:`load_manifests`. The values are read-only snapshots: callers only
+    read them. A store with no record view (an in-process stand-in) keeps
+    working through the legacy plan-directory scan.
+    """
+    records = getattr(store, "records", None)
+    if callable(records):
+        return {
+            name: manifest
+            for name, manifest in records().get_manifests("default").items()
+            if name != plan_name
+        }
+    return load_manifests(store.manifest_path(plan_name).parent, exclude_plan=plan_name)
+
+
 def in_flight_stories(manifests: dict[str, dict]) -> list[dict]:
     """List ``{"plan", "key", "files"}`` for every story in an active status."""
     result = []

@@ -719,7 +719,7 @@ class PipelineService(PlanApprovalMixin):
         stories = manifest["stories"]
         done = _completed_dep_ids(stories)
 
-        neighbours = cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
+        neighbours = cross_plan.neighbour_manifests(_store, plan_name)
 
         ready = []
         for key, story in stories.items():

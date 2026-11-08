@@ -152,9 +152,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # push to its branch. Refuse before any worktree or git work.
         collisions = cross_plan.key_conflicts(
             [story_key],
-            cross_plan.load_manifests(
-                _store.manifest_path(plan_name).parent, exclude_plan=plan_name
-            ),
+            cross_plan.neighbour_manifests(_store, plan_name),
             worktree_path.parent,
         )
         if collisions:

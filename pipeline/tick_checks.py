@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 
-from pipeline import outbox_health, paths, persistence
+from pipeline import manifest_source, outbox_health, paths, persistence
 from pipeline.consumer_watchdog import ConsumerWatchdog
 
 logger = logging.getLogger(__name__)
@@ -77,21 +77,48 @@ def _consumer_status(daemon) -> dict:
     return probe()
 
 
+def _first_plan_name() -> str | None:
+    """Name of the first plan, from the record store when there is one.
+
+    Platform-wide notices have no plan of their own, so they are attributed to
+    the first plan as a stopgap (the alert is operator-audience, not that plan's
+    — see enterprise ADR 0001). "First" is the sorted-first name, so the same
+    deployment keeps attributing to the same plan instead of following whatever
+    order the filesystem happens to return.
+
+    The plans are enumerated by :func:`pipeline.manifest_source.read_plan_names`
+    — the one store-first listing, next to the one store-first manifest read —
+    rather than globbed here: the store-selection rule (lazy
+    ``pipeline.server._store`` lookup, legacy :class:`pipeline.store.FileStore`
+    excluded) then lives in exactly one place. This module passes the
+    ``paths.PLAN_DIR`` binding it documents as patchable, so a patched binding
+    is honoured on the file path *and* the tests keep their fixture directory.
+
+    ``fallback_on_error`` is ``True``: attribution is advisory, like the rest of
+    the tick, so a store that cannot list its plans is logged at debug level and
+    degrades to the file. ``None`` means "no plan to attribute to yet" rather
+    than an error - and nothing here raises, because :func:`_notify_transition`
+    calls this outside its own guard.
+    """
+    try:
+        names = manifest_source.read_plan_names(
+            fallback_on_error=True, plans_root=paths.PLAN_DIR
+        )
+    except Exception:  # a notice must never break the tick
+        logger.debug("first-plan attribution failed", exc_info=True)
+        return None
+    return names[0] if names else None
+
+
 def _notify_transition(durable: str, transition: str) -> None:
     """Tell the user about one stall transition, or skip if we cannot route it.
 
-    Attribution mirrors :meth:`SchedulerDaemon._notify_if_checkout_stale`: the
-    notice goes to the first manifest plan. That is a stopgap — the alert is
+    Attribution is :func:`_first_plan_name`: the notice goes to the first plan
+    the record store (or this host) knows. That is a stopgap — the alert is
     operator-audience, not that plan's — so it is flagged for the tenancy work.
     """
     # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
-    plan_name = next(
-        (
-            path.name.removesuffix(".manifest.json")
-            for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
-        ),
-        None,
-    )
+    plan_name = _first_plan_name()
     if plan_name is None:
         return
     if transition == "consumer_stalled":
@@ -119,19 +146,13 @@ def _notify_transition(durable: str, transition: str) -> None:
 def _notify_outbox(event: str, summary: dict) -> None:
     """Tell the user the outbox stalled, or that it is draining again.
 
-    Attribution mirrors :meth:`SchedulerDaemon._notify_if_checkout_stale`: the
-    notice goes to the first manifest plan. The outbox is instance-wide, so that
+    Attribution is :func:`_first_plan_name`: the notice goes to the first plan
+    the record store (or this host) knows. The outbox is instance-wide, so that
     plan owns a platform-wide alert that is not really its own -- which is why
-    the same stopgap is flagged for the tenancy work there.
+    the same stopgap is flagged for the tenancy work.
     """
     # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
-    plan_name = next(
-        (
-            path.name.removesuffix(".manifest.json")
-            for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
-        ),
-        None,
-    )
+    plan_name = _first_plan_name()
     if plan_name is None:
         return
     if event == "outbox_stale":

@@ -15,9 +15,32 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .build_detect import failed_node_ids
-from .parsers import _atomic_write_json
 
 logger = logging.getLogger(__name__)
+
+
+def _put_manifest(manifest_path, manifest) -> None:
+    """Persist one detached-grade state transition through the record store.
+
+    ``_detached_grade_lifecycle`` receives the manifest and its
+    ``manifest_path`` from ``check_story_status``, whose caller already holds
+    the plan lock; the lifecycle acquires no lock of its own, so the write
+    lands in the same lock scope the direct
+    ``_atomic_write_json(manifest_path, ...)`` call used to. The plan name is
+    recovered from the manifest path exactly as ``cross_plan``/``list_plans``
+    recover it (``<plan_name>.manifest.json``), keeping the threaded
+    ``manifest_path`` parameters in place (ADR 0012 stage C removes them).
+
+    A store that rejects the key raises ``InvalidRecordKeyError`` (a
+    ``ValueError``): the transition fails closed rather than falling back to a
+    bare file write, which under ``PIPELINE_STORE=sqlite`` would leave the
+    database row unchanged and re-grade the story on every later tick.
+    """
+    from .server import _store
+
+    plan_name = Path(manifest_path).name.removesuffix(".manifest.json")
+    _store.records().put_manifest("default", plan_name, manifest)
+
 
 # SA-19: how many detached grades one tick may have in flight at once, and
 # optionally how many xdist workers each of them gets. Both live here rather
@@ -343,7 +366,8 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                               _live_count=live_grade_count,
                               _cap=max_concurrent_grades,
                               _workers=xdist_workers,
-                              _apply_xdist=_with_xdist_workers):
+                              _apply_xdist=_with_xdist_workers,
+                              _persist=_put_manifest):
     """Run check_story_status's detached-grade lifecycle with pipeline.server's globals.
 
     Rebound onto pipeline.server.__dict__ in pipeline/story_status.py exactly like
@@ -355,7 +379,8 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
     The SA-19 helpers arrive as default arguments because
     types.FunctionType(...) preserves __defaults__ when story_status rebinds
     this function onto pipeline.server's globals, so a rebound body still
-    reaches them. Bare-name reads of them would NameError there.
+    reaches them. Bare-name reads of them would NameError there. The
+    detached-grade write helper travels the same way.
 
     Returns (early_result, test_result): early_result is the dict
     check_story_status must return immediately, else None; test_result is None
@@ -369,6 +394,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
     _grade_cap = globals().get("max_concurrent_grades") or _cap
     _grade_workers = globals().get("xdist_workers") or _workers
     _xdist_cmd = globals().get("_with_xdist_workers") or _apply_xdist
+    _write_manifest = globals().get("_put_manifest") or _persist
 
     grading_pid = story.get("grading_pid")
     grading_alive = False
@@ -478,7 +504,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     UTC
                 ).isoformat()
                 story["grading_result_path"] = str(result_path)
-                _atomic_write_json(manifest_path, manifest)
+                _write_manifest(manifest_path, manifest)
                 # The tick is free; a LATER tick collects the result.
                 return {"status": "grading", "pid": grade_pid}, None
         # No starter reachable (or the spawn failed): the synchronous grade
@@ -550,6 +576,6 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         story.pop("grading_started_at", None)
         story.pop("grading_result_path", None)
         story["collected_at"] = datetime.now(UTC).isoformat()
-        _atomic_write_json(manifest_path, manifest)
+        _write_manifest(manifest_path, manifest)
 
     return None, test_result

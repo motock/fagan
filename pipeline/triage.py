@@ -19,7 +19,6 @@ from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
 from .parsers import _is_transient_backend_exception
-from .parsers import _atomic_write_json
 from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
 from .build_detect import _lint_acceptance_fixtures, _pytest_acceptance_fixtures
@@ -403,11 +402,10 @@ def run_triage_sweep(plan_name: str) -> dict:
     if not _auto_triage_enabled():
         return {"ok": True, "skipped": "disabled"}
     try:
-        from .server import PLAN_DIR
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except Exception:
+        from .server import _store
+        manifest_path = _store.manifest_path(plan_name)
+        manifest = _store.records().get_manifest("default", plan_name)
+        if manifest is None:
             return {"ok": True, "skipped": "no_manifest"}
         if manifest.get("paused"):
             return {"ok": True, "skipped": "plan_paused"}
@@ -487,9 +485,10 @@ def run_triage_sweep(plan_name: str) -> dict:
             for s in manifest.get("stories", {}).values():
                 if isinstance(s, dict):
                     s.pop("_patch_acceptance_recorded", None)
-            _atomic_write_json(
-                manifest_path,
-                _merge_sweep_changes(json.loads(manifest_path.read_text()), initial, manifest),
+            if (fresh := _store.records().get_manifest("default", plan_name)) is None:
+                raise FileNotFoundError("plan manifest not found")
+            _store.records().put_manifest(
+                "default", plan_name, _merge_sweep_changes(fresh, initial, manifest)
             )
         return {
             "ok": True,

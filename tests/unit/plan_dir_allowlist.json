@@ -47,7 +47,6 @@
  "pipeline/tick_checks.py": 3,
  "pipeline/ticketing.py": 2,
  "pipeline/topology_identity.py": 3,
- "pipeline/triage.py": 2,
  "pipeline/unpark.py": 1,
  "pipeline/usage_transitions.py": 1,
  "pipeline/wake.py": 2,

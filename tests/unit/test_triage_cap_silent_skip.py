@@ -99,14 +99,16 @@ def park_calls(monkeypatch):
 @pytest.fixture
 def manifest_writes(monkeypatch):
     """Record manifest writes while still performing the real write."""
+    import pipeline.server as p
+
     calls = []
-    real = triage_mod._atomic_write_json
+    real = p._atomic_write_json
 
     def fake_write(path, data, *args, **kwargs):
         calls.append({"path": path, "data": data})
         return real(path, data, *args, **kwargs)
 
-    monkeypatch.setattr(triage_mod, "_atomic_write_json", fake_write)
+    monkeypatch.setattr(p, "_atomic_write_json", fake_write)
     return calls
 
 

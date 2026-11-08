@@ -198,6 +198,7 @@ def test_should_persist_an_amended_scope_through_the_record_store(
 def _patch_conflict_seams(monkeypatch, ruling):
     monkeypatch.setattr(pcr, "failed_node_ids", lambda stdout: ["tests/test_x.py::t"])
     monkeypatch.setattr(pcr, "failing_test_files", lambda node_ids: ["tests/test_x.py"])
+    monkeypatch.setattr(pcr, "classify_plan_conflict", lambda *a, **k: ["tests/test_x.py"])
     monkeypatch.setattr(pcr, "_first_review_base", lambda worktree: "base")
     monkeypatch.setattr(pcr, "branch_file_sets", lambda worktree, base: (set(), set()))
     monkeypatch.setattr(pcr, "_production_diff", lambda worktree, base, paths: "")

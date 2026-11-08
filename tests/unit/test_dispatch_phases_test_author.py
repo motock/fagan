@@ -61,7 +61,10 @@ def _setup(tmp_path, story, *, backend="ollama", resuming=False, marker=False):
     """Write a real manifest file holding *story* and return the kwargs for
     _step_detached_test_author plus the manifest path."""
     manifest = {"stories": {_STORY_KEY: story}}
-    manifest_path = tmp_path / "manifest.json"
+    # Seed through the store-owned path: the write under test goes through
+    # records().put_manifest -> FileStore.save_manifest, i.e. PLAN_DIR.
+    manifest_path = p._store.manifest_path("plan-x")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest))
     worktree = tmp_path / "wt"
     worktree.mkdir(exist_ok=True)

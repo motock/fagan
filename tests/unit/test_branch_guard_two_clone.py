@@ -75,7 +75,6 @@ def guard(monkeypatch, clones):
         dispatch, "remote_branch_exists", branch_guard.remote_branch_exists
     )
     monkeypatch.setattr(dispatch, "_scoped_repo_root", scoped_repo_root)
-    monkeypatch.setattr(dispatch, "_atomic_write_json", lambda *_a, **_k: None)
     monkeypatch.setattr(
         dispatch, "_notify_user", lambda *a, **k: notifications.append((a, k))
     )

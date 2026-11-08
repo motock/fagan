@@ -14,10 +14,11 @@ from typing import Any
 from .audit import record_audit
 from .branch_guard import BranchGuardError, refusal
 from .module_ref import _ModuleRef
+from .service import _ServerRef
 
 _scoped_repo_root = _ModuleRef("pipeline.dispatch", "_scoped_repo_root")
 _try_acquire_git_lock = _ModuleRef("pipeline.dispatch", "_try_acquire_git_lock")
-_atomic_write_json = _ModuleRef("pipeline.dispatch", "_atomic_write_json")
+_store = _ServerRef("_store")
 _notify_user = _ModuleRef("pipeline.dispatch", "_notify_user")
 _remote_branch_exists = _ModuleRef("pipeline.dispatch", "remote_branch_exists")
 _default_branch = _ModuleRef("pipeline.dispatch", "_default_branch")
@@ -280,7 +281,7 @@ def _refuse_if_remote_branch_taken(
     except BranchGuardError as exc:
         outcome, reason = refusal(story_key, branch, exc)
     story["dispatch_block_reason"] = reason
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
     logging.getLogger("pipeline").warning(
         "fresh dispatch blocked by remote branch guard",
         extra={"plan": plan_name, "story_key": story_key, "branch": branch,

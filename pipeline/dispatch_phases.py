@@ -23,7 +23,7 @@ from .service import _ServerRef
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. This
 # mirrors the ``_ServerRef`` pattern already used by pipeline/dispatch.py.
 _LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
-_atomic_write_json = _ServerRef("_atomic_write_json")
+_store = _ServerRef("_store")
 _default_branch = _ServerRef("_default_branch")
 _plan_role_config = _ServerRef("_plan_role_config")
 _run_planner = _ServerRef("_run_planner")
@@ -246,13 +246,13 @@ def _step_detached_test_author(
                 story.pop("test_author_phase", None)
                 story["tdd_split"] = True
                 marker_path.write_text("ok\n")
-                _atomic_write_json(manifest_path, manifest)
+                _store.records().put_manifest("default", plan_name, manifest)
                 return "authored"
             # False: the phase fell open (timeout, no commit, dispatch
             # failure). Drop the stale phase so a later dispatch does not
             # re-poll it, then hand back to the blocking path.
             story.pop("test_author_phase", None)
-            _atomic_write_json(manifest_path, manifest)
+            _store.records().put_manifest("default", plan_name, manifest)
             return "fell_open"
 
         from .test_author import start_test_author_phase
@@ -268,7 +268,7 @@ def _step_detached_test_author(
         )
         if isinstance(launched, dict):
             story["test_author_phase"] = launched
-            _atomic_write_json(manifest_path, manifest)
+            _store.records().put_manifest("default", plan_name, manifest)
             return "pending"
         # None: the phase skipped or failed to launch. Nothing was written,
         # so there is nothing to persist.

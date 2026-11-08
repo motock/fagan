@@ -15,7 +15,7 @@ from .parsers import _RATE_LIMIT_PATTERNS
 from .scope_conflict import parse_scope_conflict
 from .service import _ServerRef
 
-_atomic_write_json = _ServerRef("_atomic_write_json")
+_store = _ServerRef("_store")
 _notify_user = _ServerRef("_notify_user")
 
 MAX_TRANSPORT_RETRIES = 5
@@ -66,7 +66,7 @@ def _wait_for_capacity(
         )
     else:
         story["status"] = "changes_requested"
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
     # Latch the cooldown and announce the gate so the scheduler stops
     # redispatching into the same wall. Neither may take the status change
     # down: a cooldown that cannot be recorded is not a reason to crash.
@@ -125,7 +125,7 @@ def _retry_transport(
         )
     else:
         story["status"] = "changes_requested"
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
     if exhausted:
         _notify_user(
             plan_name,
@@ -181,7 +181,7 @@ def classify_no_progress(
     }
     story["status"] = "parked"
     story["parked_reason"] = f"scope conflict: {', '.join(paths)}"
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)
     _notify_user(
         plan_name,
         f"{story_key} parked: agent reported a scope conflict ({', '.join(paths)}) "

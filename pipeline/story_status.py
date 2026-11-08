@@ -57,7 +57,6 @@ from .escalation import (
 from .git_ops import _commit_wip, _untrack_scratchpad
 from .no_progress import classify_no_progress
 from .parsers import (
-    _atomic_write_json,
     _is_give_up_summary,
     _validate_key,
 )
@@ -84,9 +83,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
     manifest_path = _store.manifest_path(plan_name)  # noqa: F821
-    if not manifest_path.exists():
+    manifest = _store.records().get_manifest("default", plan_name)  # noqa: F821
+    if manifest is None:
         return {"ok": False, "error": "Plan not found"}
-    manifest = _store.get_manifest(plan_name)  # noqa: F821
     story = manifest["stories"].get(story_key)
     if not story or "pid" not in story:
         return {"ok": False, "error": "Story not dispatched"}
@@ -222,13 +221,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                                 event="escalated",
                                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                             )
-                            _atomic_write_json(manifest_path, manifest)
+                            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
                             return {
                                 "status": "todo",
                                 "reason": "step_cap_escalated_to_claude",
                                 "pid": pid,
                             }
-                    _atomic_write_json(manifest_path, manifest)
+                    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
                     return {
                         "status": "interrupted",
                         "pid": pid,
@@ -273,10 +272,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} failed to launch {attempts}x; "
                 f"giving up - needs human intervention.",
             )
-            _atomic_write_json(manifest_path, manifest)
+            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
             return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid}
 
     # Step-cap exit routing (regression guard for PR #49 / commit 90a3cf1):
@@ -385,7 +384,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 "reason": "infra_failure_escalated_to_claude",
                 "pid": pid,
             }
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
 
     if last_log_line in STEP_CAP_MARKERS:
@@ -493,7 +492,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     "reason": "step_cap_escalated_to_claude",
                     "pid": pid,
                 }
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     # The read-only oracle is described as read-only in prompt text only;
@@ -509,7 +508,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             f"{story_key} acceptance fixture modified since dispatch: "
             f"{', '.join(tampered)} - refusing tests_passed",
         )
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
         return {
             "status": "changes_requested",
             "reason": "acceptance_tampered",
@@ -755,7 +754,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             f"tests passed but agent branch has no new commits vs {base}; "
             "agent likely parked without writing code."
         )
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
@@ -844,7 +843,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"no new commit after {attempts} rework redispatches",
                     )
                     story["status"] = "changes_requested"
-                    _atomic_write_json(manifest_path, manifest)
+                    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
                     return {
                         "status": "changes_requested",
                         "reason": "no_new_commit_escalated_to_claude",
@@ -854,7 +853,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"no new commit after {attempts} rework redispatches - "
                     "agent keeps parking/crashing without writing code."
                 )
-                _atomic_write_json(manifest_path, manifest)
+                _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
                 _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} parked: no new commit after {attempts} rework "
@@ -877,7 +876,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
                 plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
-            _atomic_write_json(manifest_path, manifest)
+            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
             return {
                 "status": "changes_requested",
                 "reason": "no_new_commit_since_last_review",
@@ -893,7 +892,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     else:
         story.pop("failure_kind", None)
 
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
 
     result = {
         "status": story["status"],

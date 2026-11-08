@@ -10,7 +10,6 @@ tests patch p.PLAN_DIR which the plan_dir fixture also mirrors to
 pipeline_persistence / pipeline_concurrency).
 """
 
-import json
 import os
 import signal
 import subprocess
@@ -207,23 +206,30 @@ def _terminate_and_checkpoint(
 def _plan_manifest(plan_name: str) -> dict[str, Any]:
     """Read one plan's manifest through the store's record view.
 
-    The record view is the source of truth (ADR 0012 stage B), mirroring
-    :func:`pipeline.cross_plan.neighbour_manifests`: under a store-backed
-    deployment this reads the database's manifest instead of this host's file,
-    so a checkpoint taken by another host is visible here. A store with no
-    record view (an in-process stand-in) keeps working through the legacy
-    plan-directory read, which is also where a plan the record view does not
-    know about falls back to. The returned manifest is a read-only snapshot:
-    the caller only reads it.
-    """
-    from .server import PLAN_DIR, _store
+    Delegates to :func:`pipeline.manifest_source.read_plan_manifest`, the one
+    store-first read (ADR 0012 stage B), so this module cannot drift from
+    ``pipeline.worktree_patch`` / ``pipeline.persistence`` again.
 
-    records = getattr(_store, "records", None)
-    if callable(records):
-        manifest = records().get_manifest("default", plan_name)
-        if manifest is not None:
-            return manifest
-    return json.loads((PLAN_DIR / f"{plan_name}.manifest.json").read_text())
+    ``fallback_on_error=False``, stated explicitly because this manifest is
+    about to be *written back*: the checkpoint mutates a story and re-saves the
+    manifest, so a store failure must fail the tool loudly rather than silently
+    resolving from this host's copy of the plan - which would checkpoint a
+    story another host has already moved on. The plans directory is read lazily
+    from the server binding, so a test that patches it is honoured. The
+    returned manifest is a read-only snapshot: the caller only reads it.
+    """
+    from . import server
+    from .manifest_source import read_plan_manifest
+
+    plans_root = server.PLAN_DIR
+    manifest = read_plan_manifest(
+        plan_name, fallback_on_error=False, plans_root=plans_root
+    )
+    if manifest is None:
+        # Neither source yielded a JSON object: report it the way the legacy
+        # path did, so the tool's error surface is unchanged.
+        raise FileNotFoundError(str(Path(plans_root) / f"{plan_name}.manifest.json"))
+    return manifest
 
 
 def _checkpoint_impl(

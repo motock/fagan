@@ -66,43 +66,27 @@ def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
 def _plan_manifest(plan_name: str) -> dict[str, Any] | None:
     """Read one plan's manifest, record store first, plan directory second.
 
-    The store's record view is the source of truth (ADR 0012 stage B),
-    mirroring ``pipeline.checkpoint._plan_manifest`` and
-    ``pipeline.cross_plan.neighbour_manifests``: under a store-backed
-    deployment this reads the database's manifest instead of this host's file,
-    so a role_config written by another host - or by an ingest into the store -
-    decides how roles resolve here. The legacy plan-directory read stays as the
-    fallback, which keeps a store with no record view (an in-process stand-in)
-    working unchanged; a plan the record view does not know about falls back to
-    the file too, and a plan neither source knows returns ``None``.
+    Delegates to :func:`pipeline.manifest_source.read_plan_manifest`, the one
+    store-first read (ADR 0012 stage B), so this module cannot drift from
+    ``pipeline.checkpoint`` / ``pipeline.worktree_patch``.
+
+    ``fallback_on_error=True``, stated explicitly: a role_config read is never a
+    gate, so a broken store or an unreadable file degrades to ``None`` ("no
+    override") instead of raising. A plan neither source knows is ``None`` too.
+
+    ``plans_root`` is this module's own patchable binding (see the module
+    docstring) and is passed in rather than looked up, so patching it - or the
+    server's, which the fixture mirrors - is honoured.
 
     A manifest a source does yield is returned as the answer: a store manifest
     without a role_config block means "no override", never "ask the file".
-    The read is a pure read (the caller only reads the returned snapshot) and
-    is never a gate, so a broken store or an unreadable file degrades to
-    ``None`` instead of raising.
+    The read is a pure read (the caller only reads the returned snapshot).
     """
-    from .server import _store
+    from .manifest_source import read_plan_manifest
 
-    records = getattr(_store, "records", None)
-    if callable(records):
-        try:
-            manifest = records().get_manifest("default", plan_name)
-        except Exception:  # a role_config read is never a gate
-            logger.debug(
-                "record store manifest read failed for plan %s", plan_name,
-                exc_info=True,
-            )
-            manifest = None
-        if isinstance(manifest, dict):
-            return manifest
-
-    path = PLAN_DIR / f"{plan_name}.manifest.json"
-    try:
-        manifest = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError, ValueError):
-        return None
-    return manifest if isinstance(manifest, dict) else None
+    return read_plan_manifest(
+        plan_name, fallback_on_error=True, plans_root=PLAN_DIR
+    )
 
 
 def _plan_role_config(plan_name: str) -> dict:

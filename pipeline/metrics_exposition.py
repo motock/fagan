@@ -12,9 +12,13 @@ same snapshot can be asserted byte-for-byte in a unit test. Two functions:
   already reads -- :func:`pipeline.health_freshness.health_extras`,
   :func:`pipeline.outbox_health.outbox_summary`,
   :func:`pipeline.events_nats_consumer.consumer_status` and
-  :func:`pipeline.service_levels.service_level_percentiles` -- plus the plan
-  manifests' approval status. It NEVER raises: a producer that fails omits its
-  metric and increments ``fagan_metrics_errors_total{source}``.
+  :func:`pipeline.service_levels.service_level_percentiles` -- plus the plans'
+  approval status, counted through the one store-first plan read
+  (:func:`pipeline.manifest_source.read_plan_names` and
+  :func:`pipeline.manifest_source.read_plan_manifest`), so a store-backed
+  deployment counts the record store's plans rather than this host's files. It
+  NEVER raises: a producer that fails omits its metric and increments
+  ``fagan_metrics_errors_total{source}``.
 
 Secure by Design: every label value comes from a closed set (an approval
 status, an error-source name) or from a broker durable name
@@ -24,12 +28,11 @@ anything holding a scrape credential, so it carries aggregates only.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
-from pipeline import parsers
+from pipeline import manifest_source
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.outbox_health import outbox_summary
@@ -184,28 +187,6 @@ def render(snapshot: dict[str, list[tuple[dict[str, Any], Any]]]) -> str:
     return "".join(f"{line}\n" for line in lines)
 
 
-def _manifest_names(plan_dir: str | Path) -> list[str]:
-    """List the plan names under *plan_dir*, skipping unusable keys.
-
-    This is the same listing the dashboard's ``GET /api/plans`` walks
-    (``FileStore.list_manifests``), with the boundary check the plan routes
-    apply (``pipeline.parsers._validate_key``) folded in here because the store
-    helper is bound to the process-wide ``PLAN_DIR`` and cannot be pointed at
-    an arbitrary directory. A name that would not survive that check is
-    skipped rather than read: it could never address a manifest through the
-    dashboard anyway.
-    """
-    names: list[str] = []
-    for path in sorted(Path(plan_dir).glob("*.manifest.json")):
-        name = path.name.removesuffix(".manifest.json")
-        try:
-            parsers._validate_key(name)
-        except ValueError:
-            continue
-        names.append(name)
-    return names
-
-
 def _approval_status(manifest: Any) -> str:
     """Return *manifest*'s approval status, or ``"none"`` when it is not one."""
     if not isinstance(manifest, dict):
@@ -215,22 +196,31 @@ def _approval_status(manifest: Any) -> str:
     return status if status in PLAN_STATUSES else "none"
 
 
-def _read_manifest(plan_dir: str | Path, plan_name: str) -> dict | None:
-    """Read one manifest, or return ``None`` when it cannot be read."""
-    try:
-        payload = json.loads(
-            (Path(plan_dir) / f"{plan_name}.manifest.json").read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _plan_samples(plan_dir: str | Path, counts: dict[str, int]) -> list[tuple[dict, int]]:
-    """Count *plan_dir*'s manifests by approval status, in the fixed order."""
-    for name in _manifest_names(plan_dir):
-        manifest = _read_manifest(plan_dir, name)
-        if manifest is None:
+    """Count the plans this deployment knows by approval status, in the fixed order.
+
+    Both reads are delegated to :mod:`pipeline.manifest_source` -- the one
+    store-first listing (:func:`~pipeline.manifest_source.read_plan_names`) and
+    the one store-first manifest read
+    (:func:`~pipeline.manifest_source.read_plan_manifest`) -- so a store-backed
+    deployment counts the plans its *record store* knows instead of whatever
+    manifests happen to sit on this host's disk. Globbing here would have been a
+    third hand-rolled copy of a read whose store-selection rule then never
+    reached this endpoint.
+
+    ``fallback_on_error`` is ``True``: a scrape is advisory, so a store that
+    raises is logged at debug level by the reader and the file is counted
+    instead, exactly like ``pipeline.tick_checks``' advisory read. A plan
+    neither source knows is simply absent, and a manifest that is missing,
+    corrupt or not a JSON object is skipped rather than counted.
+    """
+    for name in manifest_source.read_plan_names(
+        fallback_on_error=True, plans_root=plan_dir
+    ):
+        manifest = manifest_source.read_plan_manifest(
+            name, fallback_on_error=True, plans_root=plan_dir
+        )
+        if not isinstance(manifest, dict):
             continue
         counts[_approval_status(manifest)] += 1
     return [({"status": status}, counts[status]) for status in PLAN_STATUSES]

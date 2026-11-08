@@ -549,9 +549,14 @@ def apply_patch(
 
     1. plan lock -- the WHOLE body runs inside the ``with`` block, so the
        60s scheduler tick can never redispatch mid-apply;
-    2. manifest read (lazy ``from .server import PLAN_DIR`` inside the
-       function, mirroring ``pipeline/checkpoint.py``, so a test that
-       patches ``pipeline.server.PLAN_DIR`` is honoured);
+    2. manifest read through the store's RECORD VIEW first --
+       ``_store.records().get_manifest("default", plan_name)``, the
+       ``pipeline/checkpoint.py`` / ``pipeline.cross_plan.py`` pattern (ADR
+       0012 stage B) -- with the legacy plan-directory file read (a lazy
+       ``from .server import PLAN_DIR`` inside the function, so a test that
+       patches ``pipeline.server.PLAN_DIR`` is honoured) as the FALLBACK.
+       Neither source yielding a manifest fails closed to a 404
+       ("unknown plan");
     3. stuck-only gate (``in_progress`` / ``running`` are refused);
     4. patch record + HMAC confirmation token + single-use status;
     5. worktree must be a directory;
@@ -570,15 +575,41 @@ def apply_patch(
         if not acquired:
             return {"ok": False, "error": "plan busy", "status_code": 409}
 
-        # 2. Manifest read: lazy import so a patched pipeline.server.PLAN_DIR
-        #    is honoured (the pipeline.checkpoint pattern).
+        # 2. Manifest read through the store's RECORD VIEW first, with the
+        #    legacy plan-directory read as the fallback -- the
+        #    ``pipeline.checkpoint._plan_manifest`` /
+        #    ``pipeline.cross_plan.neighbour_manifests`` pattern (ADR 0012
+        #    stage B).  Under a store-backed deployment
+        #    (``PIPELINE_STORE=sqlite``) a plan's stories live in the
+        #    database, so a patch proposed against that plan must resolve its
+        #    target worktree from the same source of truth instead of this
+        #    host's file: a store-known story was otherwise refused as an
+        #    unknown plan.  A store with no record view (an in-process
+        #    stand-in) -- and a plan the record view does not know about --
+        #    keeps working through the plan-directory read.  Everything is
+        #    looked up lazily on ``pipeline.server`` so a patched
+        #    ``PLAN_DIR`` / ``_store`` is honoured, and a manifest neither
+        #    source can produce fails closed to the same 404 as an unknown
+        #    plan or story (never a write).
         server = importlib.import_module("pipeline.server")
-        manifest_path = server.PLAN_DIR / f"{plan_name}.manifest.json"
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        records = getattr(getattr(server, "_store", None), "records", None)
+        manifest = None
+        if callable(records):
+            #    A store FAILURE propagates, exactly like
+            #    ``pipeline.checkpoint._plan_manifest``: silently falling back
+            #    to this host's plan file when a store-backed deployment's
+            #    database errors would resolve the patch target from the wrong
+            #    copy of the plan (and could apply a diff to a stale worktree).
+            manifest = records().get_manifest("default", plan_name)
+        if not isinstance(manifest, dict):
+            manifest_path = server.PLAN_DIR / f"{plan_name}.manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = None
+        if not isinstance(manifest, dict):
             return {"ok": False, "error": "unknown plan or story", "status_code": 404}
-        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        stories = manifest.get("stories")
         if not isinstance(stories, dict) or story_key not in stories:
             return {"ok": False, "error": "unknown plan or story", "status_code": 404}
         story = stories[story_key]

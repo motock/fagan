@@ -17,9 +17,13 @@ contract):
 1. plan lock (``pipeline.concurrency._plan_lock``) -- the WHOLE body runs
    inside the ``with`` block, so the 60s scheduler tick can never redispatch
    mid-apply;
-2. manifest read (lazy ``from .server import PLAN_DIR`` INSIDE the function,
-   mirroring ``pipeline/checkpoint.py``, so a test that patches
-   ``pipeline.server.PLAN_DIR`` is honoured);
+2. manifest read through the store's RECORD VIEW first --
+   ``_store.records().get_manifest("default", plan_name)``, the
+   ``pipeline/checkpoint.py`` pattern (ADR 0012 stage B) -- with the legacy
+   plan-directory file read (lazy ``from .server import PLAN_DIR`` INSIDE the
+   function, so a test that patches ``pipeline.server.PLAN_DIR`` is honoured)
+   as the FALLBACK, and the same fail-closed 404 ("unknown plan") when
+   neither source yields a manifest;
 3. stuck-only gate (``in_progress`` / ``running`` are refused);
 4. patch record + HMAC confirmation token + single-use status;
 5. worktree must be a directory;

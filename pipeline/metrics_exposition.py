@@ -32,7 +32,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pipeline import manifest_source
+from pipeline import manifest_source, parsers
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.outbox_health import outbox_summary
@@ -213,10 +213,26 @@ def _plan_samples(plan_dir: str | Path, counts: dict[str, int]) -> list[tuple[di
     instead, exactly like ``pipeline.tick_checks``' advisory read. A plan
     neither source knows is simply absent, and a manifest that is missing,
     corrupt or not a JSON object is skipped rather than counted.
+
+    Every name is checked by :func:`pipeline.parsers._validate_key` before it
+    reaches a read, because a plan name flows into a filesystem path
+    (``<plans_root>/<plan_name>.manifest.json``, built by
+    :func:`~pipeline.manifest_source.read_plan_manifest`). A glob stem is safe
+    by construction, but the record store's ``list_plans`` is not
+    separator-checked (note the defensive ``str(name)`` cast in
+    :func:`~pipeline.manifest_source.read_plan_names`), so a store-supplied
+    ``"../x"`` would otherwise become an out-of-tree read. The same guard drops
+    dot-only names such as the ``".."`` a ``...manifest.json`` file yields, so
+    ``fagan_plans`` counts exactly the names the dashboard's plan routes accept.
+    An invalid name is skipped: it is neither read nor counted.
     """
     for name in manifest_source.read_plan_names(
         fallback_on_error=True, plans_root=plan_dir
     ):
+        try:
+            parsers._validate_key(name)
+        except ValueError:
+            continue
         manifest = manifest_source.read_plan_manifest(
             name, fallback_on_error=True, plans_root=plan_dir
         )

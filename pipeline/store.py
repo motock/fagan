@@ -7,9 +7,10 @@ patches ``pipeline.server`` for those names, so ``pipeline/server.py`` re-export
 everything it needs (see PIPELINE_MCP_DECOMPOSITION_PLAN.md).
 
 The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
-``_append_decision``, ``_append_journal``) are resolved at call time through the
-``_ServerRef`` bindings below, which delegate to ``pipeline.server`` so
-``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
+``_append_decision``, ``_append_journal``, ``_atomic_write_json``) are resolved
+at call time through the ``_ServerRef`` bindings below, which delegate to
+``pipeline.server`` so ``monkeypatch.setattr(pipeline.server, "NAME", ...)``
+still lands. They are
 intentionally not imported here (a module-load copy would freeze the real
 ~/.claude/plans path into every test run).
 
@@ -46,6 +47,7 @@ WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 _plan_lock = _ServerRef("_plan_lock")
 _append_decision = _ServerRef("_append_decision")
 _append_journal = _ServerRef("_append_journal")
+_atomic_write_json = _ServerRef("_atomic_write_json")
 
 # Display-only keys the legacy journal reader adds to every entry it returns.
 _JOURNAL_DISPLAY_DEFAULTS = ("step", "summary", "next_hint")
@@ -148,15 +150,7 @@ class FileStore:
         return json.loads(self.manifest_path(plan_name).read_text())
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
-        tmp = self.manifest_path(plan_name).with_suffix(
-            self.manifest_path(plan_name).suffix + f".tmp.{os.getpid()}"
-        )
-        try:
-            tmp.write_text(json.dumps(manifest))
-            os.replace(tmp, self.manifest_path(plan_name))
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+        _atomic_write_json(self.manifest_path(plan_name), manifest)
 
     def transaction(self, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:

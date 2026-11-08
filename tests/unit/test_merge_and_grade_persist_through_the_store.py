@@ -357,6 +357,8 @@ def test_should_persist_grade_start_and_grade_result_through_the_record_store(
     back, consumes the bookkeeping and stamps ``collected_at``. Seeding
     ``attempt`` (a field the lifecycle never touches) pins that each write
     carries the whole manifest from a fresh read rather than a fragment.
+    The two halves are also covered one at a time below; this test pins the
+    hand-off between them.
     """
     plan_name, story_key = "g1", "s1"
     fake_store.seed(
@@ -410,6 +412,96 @@ def test_should_persist_grade_start_and_grade_result_through_the_record_store(
     assert "grading_result_path" not in result
     assert result["collected_at"]
     assert result["attempt"] == 1, "the untouched field written by tick 1 survives"
+    assert fake_store.bulk_reads == 0
+
+
+def test_should_persist_the_grade_start_through_the_record_store(
+    fake_store, monkeypatch
+):
+    """The grade-start transition is one ``put_manifest``, whole manifest.
+
+    One write, at the record store, carrying the manifest read for this tick -
+    including the ``attempt`` field the lifecycle never touches, which the
+    pre-migration path write also preserved.
+    """
+    plan_name, story_key = "g2", "s1"
+    fake_store.seed(
+        plan_name,
+        {
+            "plan": plan_name,
+            "stories": {
+                story_key: {"status": "in_progress", "attempt": 3, "pid": 4321}
+            },
+        },
+    )
+    manifest = fake_store.records().get_manifest("default", plan_name)
+
+    early, test_result = _grade_tick(
+        monkeypatch,
+        story_key=story_key,
+        plan_name=plan_name,
+        manifest_path=fake_store.manifest_path(plan_name),
+        manifest=manifest,
+        alive=False,
+    )
+
+    assert early == {"status": "grading", "pid": 9001}
+    assert test_result is None, "the tick is freed; a later tick grades"
+    assert len(fake_store.writes) == 1
+    namespace, written_plan, written = fake_store.writes[0]
+    assert (namespace, written_plan) == ("default", plan_name)
+    assert written["stories"][story_key]["grading_pid"] == 9001
+    assert written["stories"][story_key]["attempt"] == 3
+    assert fake_store.bulk_reads == 0
+
+
+def test_should_persist_the_grade_result_through_the_record_store(
+    fake_store, monkeypatch
+):
+    """The grade-result transition is one ``put_manifest`` that consumes the
+    bookkeeping the grade-start write landed, leaving the result behind."""
+    plan_name, story_key = "g3", "s1"
+    started_at = "2026-01-01T00:00:00+00:00"
+    fake_store.seed(
+        plan_name,
+        {
+            "plan": plan_name,
+            "stories": {
+                story_key: {
+                    "status": "in_progress",
+                    "attempt": 2,
+                    "grading_pid": 9001,
+                    "grading_started_at": started_at,
+                    "grading_result_path": str(
+                        fake_store.plan_dir / "grading" / story_key / "result.json"
+                    ),
+                }
+            },
+        },
+    )
+    manifest = fake_store.records().get_manifest("default", plan_name)
+
+    early, test_result = _grade_tick(
+        monkeypatch,
+        story_key=story_key,
+        plan_name=plan_name,
+        manifest_path=fake_store.manifest_path(plan_name),
+        manifest=manifest,
+        alive=False,
+        collected={"stdout": "1 passed", "returncode": 0},
+    )
+
+    assert early is None
+    assert test_result.returncode == 0
+    assert len(fake_store.writes) == 1
+    namespace, written_plan, written = fake_store.writes[0]
+    assert (namespace, written_plan) == ("default", plan_name)
+    story_written = written["stories"][story_key]
+    assert "grading_pid" not in story_written
+    assert "grading_started_at" not in story_written
+    assert "grading_result_path" not in story_written
+    assert story_written["collected_at"]
+    assert story_written["attempt"] == 2
     assert fake_store.bulk_reads == 0
 
 

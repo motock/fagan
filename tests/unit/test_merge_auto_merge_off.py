@@ -179,6 +179,13 @@ class _FakeStore:
     def get_manifest(self, plan_name):
         return self._manifest
 
+    def records(self):
+        """The record view the migrated write goes through (ADR 0012)."""
+        return self
+
+    def put_manifest(self, namespace, plan_name, manifest):
+        self._manifest = manifest
+
 
 class _FakeSubprocess:
     """Stands in for the ``subprocess`` module inside ``pipeline.merge``.

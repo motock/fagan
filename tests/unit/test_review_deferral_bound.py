@@ -72,30 +72,33 @@ def test_should_return_zero_and_negative_limits_unchanged(monkeypatch):
 
 
 # ---------- park_rate_limited_review ----------
-def _park(tmp_path, monkeypatch):
+def _park(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     story = {"status": "tests_passed", "review_deferred_count": 7, "rework_attempts": 2}
     manifest = {"stories": {"S1": story}}
-    (tmp_path / "m.json").write_text(json.dumps(manifest))
-    result = rd.park_rate_limited_review(
-        "plan", "S1", story, manifest, tmp_path / "m.json")
+    # The write goes through the record store, which lands on the store's own
+    # <PLAN_DIR>/<plan>.manifest.json, so seed there rather than at an
+    # arbitrary path.
+    path = plan_dir / "plan.manifest.json"
+    path.write_text(json.dumps(manifest))
+    result = rd.park_rate_limited_review("plan", "S1", story, manifest, path)
     return result, story
 
 
-def test_should_set_the_parked_reason_when_parking(tmp_path, monkeypatch):
-    _, story = _park(tmp_path, monkeypatch)
+def test_should_set_the_parked_reason_when_parking(plan_dir, monkeypatch):
+    _, story = _park(plan_dir, monkeypatch)
     assert story["status"] == "parked"
     assert "7" in story["parked_reason"]
     assert _VAR in story["parked_reason"]
 
 
-def test_should_not_touch_rework_attempts_when_parking(tmp_path, monkeypatch):
-    _, story = _park(tmp_path, monkeypatch)
+def test_should_not_touch_rework_attempts_when_parking(plan_dir, monkeypatch):
+    _, story = _park(plan_dir, monkeypatch)
     assert story["rework_attempts"] == 2
 
 
-def test_should_return_a_parked_result_when_parking(tmp_path, monkeypatch):
-    result, _ = _park(tmp_path, monkeypatch)
+def test_should_return_a_parked_result_when_parking(plan_dir, monkeypatch):
+    result, _ = _park(plan_dir, monkeypatch)
     assert result == {"ok": False, "status": "parked", "deferred": "rate_limited"}
 
 

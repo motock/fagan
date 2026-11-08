@@ -122,6 +122,29 @@ class RecordStore(Protocol):
         self, namespace: str, plan_name: str, story_key: str
     ) -> None: ...
 
+    def get_journal_updated_at(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> float | None:
+        """Return when ``story_key``'s journal was last appended to.
+
+        The answer is epoch seconds, monotonic non-decreasing across appends to
+        one journal, and ``None`` when the story has no journal -- never
+        appended to, or cleared since.  Activity is therefore a property of the
+        journal, not of the records inside it: a journal whose records carry no
+        ``ts`` still has activity.  A read, so it creates nothing on disk.
+        """
+        ...
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        """Return the sorted story keys that have a journal in ``plan_name``.
+
+        Only keys valid for ``plan_name`` are listed: a plan name that is a
+        prefix of another plan's name (``p`` of ``p.x``) must not leak the other
+        plan's journals, and a cleared journal is not listed.  An unknown plan
+        is an empty list, not an error.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -133,4 +156,6 @@ RECORD_STORE_METHODS = (
     'get_journal',
     'append_journal',
     'clear_journal',
+    'get_journal_updated_at',
+    'list_journal_keys',
 )

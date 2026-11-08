@@ -560,3 +560,27 @@ class SqliteRecords:
         validate_plan_name(plan_name)
         validate_story_key(story_key)
         self._store._files.records().clear_journal(namespace, plan_name, story_key)
+
+    # -- journal activity ----------------------------------------------
+    def get_journal_updated_at(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> float | None:
+        """Return when the story's journal was last appended to, or ``None``.
+
+        A journal is a file sidecar this store does not own, so both the
+        activity and the listing are read through the record view of the file
+        store the journals are written to -- the same delegate ``get_journal``
+        reads through.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        return self._store._files.records().get_journal_updated_at(
+            namespace, plan_name, story_key
+        )
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        """Return the sorted story keys that have a journal in ``plan_name``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store._files.records().list_journal_keys(namespace, plan_name)

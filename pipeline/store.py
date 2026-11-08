@@ -31,6 +31,7 @@ from typing import Any, Protocol
 from pipeline.live_ref import LiveRef
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
+    InvalidRecordKeyError,
     UnknownNamespaceError,
     validate_namespace,
     validate_plan_name,
@@ -68,6 +69,45 @@ def _persistence():
     from . import persistence
 
     return persistence
+
+
+_JOURNAL_SUFFIX = ".journal.json"
+
+# Only ever used to take the journal *directory* from the writers' path helper.
+_JOURNAL_PROBE_KEY = "story"
+
+
+def _journals_dir(plan_name: str) -> Path:
+    """Return the directory ``plan_name``'s journal files live in, per call.
+
+    Taken from the path helper this view's writers use (see
+    :func:`_persistence`) rather than from a directory binding, so a plans
+    directory patched on that module is the one that is listed.  The probed
+    story key only supplies a parent directory: nothing is read or created.
+    """
+    return _persistence()._journal_path(plan_name, _JOURNAL_PROBE_KEY).parent
+
+
+def _journal_key(filename: str, plan_name: str) -> str | None:
+    """Return the story key a journal filename records for ``plan_name``.
+
+    Journal files are ``<plan>.<story>.journal.json``, and a plan name may
+    itself contain the separator (``p`` is a prefix of ``p.x``), so a glob for
+    ``p`` also matches ``p.x.s1.journal.json`` and would yield the key
+    ``x.s1`` -- another plan's journal.  A story key never carries the plan
+    separator, so a candidate that does is refused rather than misattributed.
+    """
+    prefix = f"{plan_name}."
+    if not filename.startswith(prefix) or not filename.endswith(_JOURNAL_SUFFIX):
+        return None
+    key = filename[len(prefix) : -len(_JOURNAL_SUFFIX)]
+    if "." in key:
+        return None
+    try:
+        validate_story_key(key)
+    except InvalidRecordKeyError:
+        return None
+    return key
 
 
 def _read_json_records(path: Path) -> list[dict]:
@@ -576,6 +616,42 @@ class FileRecords:
         validate_story_key(story_key)
         self._refuse_other_namespace(namespace)
         _persistence()._journal_path(plan_name, story_key).unlink(missing_ok=True)
+
+    # -- journal activity ----------------------------------------------
+    def get_journal_updated_at(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> float | None:
+        """Return when the story's journal was last appended to, or ``None``.
+
+        The answer is the journal file's ``st_mtime`` in the directory this
+        view's writers append to, resolved per call: a ``stat``, never an open,
+        so the read has no side effects.  An absent or unreadable journal is
+        ``None``, which is also why a cleared journal reads as no journal
+        rather than as a stale time.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        self._refuse_other_namespace(namespace)
+        path = _persistence()._journal_path(plan_name, story_key)
+        try:
+            return os.stat(path).st_mtime
+        except OSError:
+            return None
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        """Return the sorted story keys that have a journal in ``plan_name``."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        try:
+            paths = list(
+                _journals_dir(plan_name).glob(f"{plan_name}.*{_JOURNAL_SUFFIX}")
+            )
+        except OSError:
+            return []
+        keys = {_journal_key(path.name, plan_name) for path in paths}
+        return sorted(key for key in keys if key is not None)
 
 
 STORE_INVALID = "invalid"

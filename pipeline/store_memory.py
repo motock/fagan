@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import time
 
 from pipeline.store_records import (
     validate_namespace,
@@ -30,6 +31,10 @@ class InMemoryRecordStore:
         self._manifests: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         self._journals: dict[tuple[str, str, str], list[dict]] = {}
+        # Journal activity: epoch seconds of the last append per journal.  A
+        # high-water mark, so a clock that steps backwards can never report the
+        # journal as older than an append it already reported.
+        self._journal_updated_at: dict[tuple[str, str, str], float] = {}
 
     # -- manifests -----------------------------------------------------
     def get_manifest(self, namespace: str, plan_name: str) -> dict | None:
@@ -119,6 +124,14 @@ class InMemoryRecordStore:
             self._journals.setdefault((namespace, plan_name, story_key), []).append(
                 copy.deepcopy(record)
             )
+            key = (namespace, plan_name, story_key)
+            now = time.time()
+            previous = self._journal_updated_at.get(key)
+            # A journal with no tracked activity yet starts at ``now``; an
+            # existing one only ever moves forwards.
+            self._journal_updated_at[key] = (
+                now if previous is None else max(previous, now)
+            )
 
     def clear_journal(
         self, namespace: str, plan_name: str, story_key: str
@@ -135,3 +148,26 @@ class InMemoryRecordStore:
         validate_story_key(story_key)
         with self._lock:
             self._journals.pop((namespace, plan_name, story_key), None)
+            self._journal_updated_at.pop((namespace, plan_name, story_key), None)
+
+    def get_journal_updated_at(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> float | None:
+        """Return the epoch seconds of the last append, or ``None``."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        with self._lock:
+            return self._journal_updated_at.get((namespace, plan_name, story_key))
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        """Return the sorted story keys holding a journal in ``plan_name``."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            keys = {
+                stored_story_key
+                for (stored_namespace, stored_plan, stored_story_key) in self._journals
+                if stored_namespace == namespace and stored_plan == plan_name
+            }
+            return sorted(keys)

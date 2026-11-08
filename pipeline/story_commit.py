@@ -9,14 +9,15 @@ silently overwritten. ``commit_story`` re-reads the manifest under the plan
 lock and replaces only the named story, so concurrent updates to other stories
 (and plan-level fields) survive.
 
-The write goes through ``pipeline.server._atomic_write_json`` and the caller's
-``manifest_path`` on purpose: both are the surfaces existing review tests patch
-and observe.
+The read and the write go through the record store
+(``_store.records().get_manifest`` / ``put_manifest``), so the file touched is
+always the store's own ``<plan>.manifest.json`` rather than whatever path a
+caller threaded through; the patch surface is
+``pipeline.server._atomic_write_json`` via ``FileStore``.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from pathlib import Path
@@ -35,7 +36,11 @@ def _write_story(
     # package has an import cycle, and tests patch these attributes.
     from . import server
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = server._store.records().get_manifest("default", plan_name)
+    if manifest is None:
+        # Missing or corrupt: never write over it. The message carries no path
+        # so a tool caller cannot echo the operator's filesystem back out.
+        raise FileNotFoundError(f"manifest not found for plan '{plan_name}'")
     stories = manifest.get("stories")
     if not isinstance(stories, dict) or story_key not in stories:
         # A re-ingest dropped the story while the caller was working. Writing
@@ -48,7 +53,7 @@ def _write_story(
         return
     stories[story_key] = story
     manifest["stories"] = stories
-    server._atomic_write_json(manifest_path, manifest)
+    server._store.records().put_manifest("default", plan_name, manifest)
 
 
 def commit_story(

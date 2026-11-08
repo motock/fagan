@@ -545,7 +545,7 @@ def test_gathered_pr_checks_land_in_the_persisted_manifest(plan_dir, monkeypatch
         writes.append(path)
         Path(path).write_text(json.dumps(data, indent=2))
 
-    monkeypatch.setattr(advance_mod, "_atomic_write_json", fake_write)
+    monkeypatch.setattr(server_mod, "_atomic_write_json", fake_write)
     prompts = []
 
     def fake_invoke(prompt, plan_role_config=None):

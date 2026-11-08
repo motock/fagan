@@ -263,8 +263,11 @@ class _FakeStore:
     def manifest_path(self, plan_name):
         return self.plan_dir / f"{plan_name}.manifest.json"
 
-    def get_manifest(self, plan_name):
-        return json.loads(self.manifest_path(plan_name).read_text())
+    def get_manifest(self, *args):
+        return json.loads(self.manifest_path(args[-1]).read_text())
+
+    def put_manifest(self, namespace, plan_name, manifest):
+        self.manifest_path(plan_name).write_text(json.dumps(manifest, indent=2))
 
     def records(self):
         return self

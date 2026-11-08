@@ -30,7 +30,6 @@ only its class name is recorded.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -52,7 +51,9 @@ TIMEOUT_ENV_VAR = "PIPELINE_REVIEW_JOB_TIMEOUT_SECONDS"
 # Resolved through pipeline.advance so ``monkeypatch.setattr(pipeline.advance,
 # "_notify_user", ...)`` keeps landing, the same seam advance_merge uses.
 _notify_user = _ModuleRef("pipeline.advance", "_notify_user")
-_atomic_write_json = _ModuleRef("pipeline.advance", "_atomic_write_json")
+# The manifest read-modify-write goes through the record store, resolved through
+# pipeline.advance the same way so a patched store reaches this module too.
+_store = _ModuleRef("pipeline.advance", "_store")
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def review_or_collect(
         # reviewed, so stop it rather than let it burn a model call.
         review_job.cancel_review_job(job)
         story.pop("review_job", None)
-        _drop_job(manifest_path, story_key)
+        _drop_job(plan_name, manifest_path, story_key)
         log.info(
             "review job cancelled: story moved on",
             extra={"plan": plan_name, "story": story_key},
@@ -132,7 +133,7 @@ def _start(
     def _set(stored: dict[str, Any]) -> None:
         stored["review_job"] = job
 
-    _persist(manifest_path, story_key, _set)
+    _persist(plan_name, manifest_path, story_key, _set)
     summary.setdefault("review_started", []).append(story_key)
 
 
@@ -146,7 +147,7 @@ def _apply(
 ) -> None:
     """Apply a finished job's result: the handle goes, the verdict is reported."""
     story.pop("review_job", None)
-    _drop_job(manifest_path, story_key)
+    _drop_job(plan_name, manifest_path, story_key)
     if result.get("state") != "done":
         # A harness error, never a verdict: the review did not run to a
         # conclusion, so the story keeps whatever status the child left and the
@@ -224,30 +225,40 @@ def _state_root(manifest_path: Path) -> Path:
     return state_root
 
 
-def _drop_job(manifest_path: Path, story_key: str) -> None:
+def _drop_job(plan_name: str, manifest_path: Path, story_key: str) -> None:
     def _unset(stored: dict[str, Any]) -> None:
         stored.pop("review_job", None)
 
-    _persist(manifest_path, story_key, _unset)
+    _persist(plan_name, manifest_path, story_key, _unset)
 
 
 def _persist(
+    plan_name: str,
     manifest_path: Path,
     story_key: str,
     mutate: Callable[[dict[str, Any]], None],
 ) -> None:
-    """Re-read the manifest, apply ``mutate`` to this story, write it atomically.
+    """Re-read the manifest through the store, mutate this story, write it back.
 
     The advance holds the plan lock here, so a read-modify-write cannot race
     another actor. Only the story being handled is touched, and only through
     ``mutate``: the review child writes that story's status on its own, and
     anything else that ran while the lock was released must survive too.
+
+    The read is ``get_manifest``, an independent copy taken now, never a shared
+    ``get_manifests`` snapshot; the returned document is what goes back. A
+    manifest that vanished between the tick's read and now returns ``None`` from
+    the store: that raises rather than writing, because re-creating the plan
+    would resurrect a deleted one. ``manifest_path`` is still threaded through
+    for the host-local job state directory (:func:`_state_root`).
     """
-    manifest = json.loads(Path(manifest_path).read_text())
+    manifest = _store.records().get_manifest("default", plan_name)
+    if manifest is None:
+        raise FileNotFoundError("manifest not found")
     stored = manifest["stories"].get(story_key)
     if stored is None:
         # Re-ingested away between the tick's fresh read and now: nothing to
         # write, and re-creating the story would resurrect a dropped one.
         return
     mutate(stored)
-    _atomic_write_json(Path(manifest_path), manifest)
+    _store.records().put_manifest("default", plan_name, manifest)

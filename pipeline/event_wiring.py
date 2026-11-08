@@ -1,9 +1,7 @@
-import json
 import logging
 import os
 import threading
 from collections.abc import Callable
-from pathlib import Path
 
 from app.plugin_loader import (
     PluginError,
@@ -12,7 +10,7 @@ from app.plugin_loader import (
     plugin_spec,
 )
 
-from . import telemetry
+from . import manifest_source, telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
 from .events_nats import NatsEventBus
@@ -81,6 +79,11 @@ def wake_handler(event: dict) -> dict:
         Must contain ``plan``, ``story_key`` and ``type`` keys.  Missing keys
         raise KeyError as a programming error.
 
+    The manifest comes from :func:`pipeline.manifest_source.read_plan_manifest`:
+    the store's record view first, this host's ``PLAN_DIR`` second (ADR 0012
+    stage B), so a store-backed deployment decides the precondition from the
+    database's record.
+
     Returns
     -------
     dict
@@ -93,15 +96,24 @@ def wake_handler(event: dict) -> dict:
     story_key = event["story_key"]
     event_type = event["type"]
 
-    manifest_path: Path = PLAN_DIR / f"{plan_name}.manifest.json"
-    if not manifest_path.exists():
-        logger.warning("Manifest missing for plan %s", plan_name)
-        return {"ok": False, "skipped": "no_manifest"}
-    try:
-        manifest_text = manifest_path.read_text()
-        manifest = json.loads(manifest_text)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to read or parse manifest %s: %s", manifest_path, exc)
+    # The manifest is read through the one store-first reader (ADR 0012 stage
+    # B), so under ``PIPELINE_STORE=sqlite`` this decides the precondition from
+    # the database's record instead of this host's plan file. With a store that
+    # has no record view -- the file store, or an in-process stand-in -- the
+    # file read is the primary read and nothing changes.
+    #
+    # ``fallback_on_error=True`` keeps this handler's existing contract: an
+    # unreadable manifest is a refusal, returned as ``no_manifest``, never an
+    # exception on the thread delivering events (ADR 0010: a handler refusal is
+    # a normal return). A skip costs one wake, never a wrong advance: the
+    # advance re-reads the manifest before it acts on anything.
+    manifest = manifest_source.read_plan_manifest(
+        plan_name,
+        fallback_on_error=True,
+        plans_root=PLAN_DIR,
+    )
+    if manifest is None:
+        logger.warning("Manifest missing for plan %s", plan_name, extra={"plan": plan_name})
         return {"ok": False, "skipped": "no_manifest"}
 
     precond = check_precondition(manifest, story_key, event_type)

@@ -28,8 +28,6 @@ import threading
 import time
 from contextlib import contextmanager
 
-from .parsers import _atomic_write_json
-
 # Same convention as the rest of the package (pipeline/advance_pool.py,
 # pipeline/service.py, ...): module logger named after the module, structured
 # fields via ``extra=``. Plan-lock records carry ONLY a plan name and timing
@@ -83,6 +81,9 @@ if _pre_reload_server_ref is not None:
 del _pre_reload_server_ref
 
 PLAN_DIR = _ServerRef("PLAN_DIR")
+# Same live-binding rule as above: the record store is read from the server
+# module at call time so monkeypatching the server's store lands.
+_store = _ServerRef("_store")
 
 
 def _has_live_test_author_phase(story: dict) -> bool:
@@ -161,33 +162,49 @@ def _reap_zombie_in_progress_stories() -> int:
     pids held 2 of 3 concurrency slots for ~19h, blocking all e2e dispatch.
     """
     reaped = 0
-    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
-        manifest = json.loads(manifest_path.read_text())
-        changed = False
-        for story in manifest.get("stories", {}).values():
-            if story.get("status") != "in_progress" or "pid" not in story:
+    for plan_name in _store.records().list_plans("default"):
+        with _store.transaction(plan_name) as acquired:
+            if not acquired:
+                # Another writer holds this plan: skip it rather than racing
+                # its read-modify-write (the lost-update race this replaces).
+                # The reaper runs on every scheduler tick, so the plan is
+                # reaped next tick. Log the plan name only — never story
+                # keys, pids, paths or counts.
+                logger.debug(
+                    "zombie reap skipped: plan lock busy",
+                    extra={"plan": plan_name},
+                )
                 continue
-            try:
-                os.kill(story["pid"], 0)
-                # pid is alive — leave the story alone.
-                continue
-            except ProcessLookupError:
-                # Zombie: agent exited but no one updated the manifest. Reap
-                # so the slot frees up and the story becomes dispatchable on
-                # the next tick. Setting status back to todo is the correct
-                # recovery — the work is unfinished and needs another agent
-                # pass; we don't have signal that it's the model's fault
-                # vs a harness crash, so don't penalize it with 'failed'.
-                story["status"] = "todo"
-                story.pop("pid", None)
-                changed = True
-                reaped += 1
-            except PermissionError:
-                # Process exists but we can't signal it (owned by another
-                # user). Trust that it's alive and don't reap.
-                continue
-        if changed:
-            _atomic_write_json(manifest_path, manifest)
+            manifest = _store.records().get_manifest("default", plan_name)
+            if manifest is None:
+                # Missing or corrupt: never write over it.
+                raise FileNotFoundError("manifest not found")
+            changed = False
+            for story in manifest.get("stories", {}).values():
+                if story.get("status") != "in_progress" or "pid" not in story:
+                    continue
+                try:
+                    os.kill(story["pid"], 0)
+                    # pid is alive — leave the story alone.
+                    continue
+                except ProcessLookupError:
+                    # Zombie: agent exited but no one updated the manifest.
+                    # Reap so the slot frees up and the story becomes
+                    # dispatchable on the next tick. Setting status back to
+                    # todo is the correct recovery — the work is unfinished
+                    # and needs another agent pass; we don't have signal that
+                    # it's the model's fault vs a harness crash, so don't
+                    # penalize it with 'failed'.
+                    story["status"] = "todo"
+                    story.pop("pid", None)
+                    changed = True
+                    reaped += 1
+                except PermissionError:
+                    # Process exists but we can't signal it (owned by another
+                    # user). Trust that it's alive and don't reap.
+                    continue
+            if changed:
+                _store.records().put_manifest("default", plan_name, manifest)
     return reaped
 
 

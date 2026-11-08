@@ -36,7 +36,7 @@ import pytest
 # cold-importability (every pipeline module imports cold, see
 # tests/unit/test_triage_cap_silent_skip.py), but the explicit import keeps this
 # file's module graph identical to the rest of the unit suite.
-import pipeline.server  # noqa: F401  (pre-existing import cycle)
+import pipeline.server  # (pre-existing import cycle)
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 from pipeline import advance_review, concurrency, review_job, watchers
@@ -72,8 +72,11 @@ class _FakeStore:
     def manifest_path(self, plan_name):
         return self.path
 
-    def get_manifest(self, plan_name):
+    def get_manifest(self, *args):
         return json.loads(self.path.read_text())
+
+    def put_manifest(self, namespace, plan_name, manifest):
+        self.path.write_text(json.dumps(manifest))
 
     def records(self):
         return self
@@ -100,7 +103,7 @@ def _write_manifest(tmp_path, stories=None):
         "paused": False,
         "stories": stories if stories is not None else {_KEY: _story()},
     }
-    path = tmp_path / "manifest.json"
+    path = tmp_path / f"{_PLAN}.manifest.json"
     path.write_text(json.dumps(manifest))
     return path
 
@@ -111,8 +114,15 @@ def _stories(path):
 
 @pytest.fixture(autouse=True)
 def _isolate_plan_lock(tmp_path, monkeypatch):
-    """Point the real per-plan flock at ``tmp_path`` with a clean held-set."""
+    """Point the real per-plan flock at ``tmp_path`` with a clean held-set.
+
+    The manifest itself lives there too: the persistent read-modify-write now
+    goes through the record store, whose file store resolves ``PLAN_DIR`` at
+    call time, so a patched ``PLAN_DIR`` is what makes ``path`` the plan's own
+    ``<plan>.manifest.json``.
+    """
     monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()

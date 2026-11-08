@@ -7,7 +7,6 @@ The names this module reads that are bound at module level in
 ``monkeypatch.setattr(pipeline.advance, NAME, ...)`` keeps landing.
 """
 
-import json
 import logging
 import math
 import os
@@ -345,7 +344,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
 
     manifest_path = _store.manifest_path(plan_name)
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
-    manifest = json.loads(manifest_path.read_text())
+    manifest = _store.records().get_manifest("default", plan_name)
+    if manifest is None:
+        raise FileNotFoundError("manifest not found")
     stories = manifest["stories"]
     for key, story in stories.items():
         # MERGEPARK-2: a parked high-risk merge hold is re-examined when the
@@ -822,4 +823,4 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             summary["notify"].append(key)
         summary["merged"].append(key)
         record_merge_result("merged")
-    _atomic_write_json(manifest_path, manifest)
+    _store.records().put_manifest("default", plan_name, manifest)

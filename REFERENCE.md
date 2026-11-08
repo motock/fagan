@@ -2791,7 +2791,7 @@ line, and is emitted in a fixed order:
 | `fagan_consumer_subscribed` | gauge (1/0) | `durable` | Whether the durable consumer is subscribed. |
 | `fagan_consumer_dead_lettered` | gauge | `durable` | Messages on the durable's dead-letter subject. |
 | `fagan_consumer_oldest_pending_age_seconds` | gauge | `durable` | Age of the oldest pending message; omitted when unknown. |
-| `fagan_plans` | gauge | `status` | Number of plan manifests by approval status (`approved`, `pending_approval`, `rejected`, `none`). |
+| `fagan_plans` | gauge | `status` | Plans by approval status (`approved`, `pending_approval`, `rejected`, `none`). The plans are the record store's when it answers (a `PIPELINE_STORE=sqlite` deployment counts what the database knows, including a plan with no file on this host); otherwise this host's plan manifests. A plan name that fails the plan-route key check is skipped, and a manifest that is missing or unreadable is not counted. |
 | `fagan_story_dispatch_to_review_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to the start of its first review, at `quantile="0.5"` and `quantile="0.9"`. |
 | `fagan_story_review_to_merge_seconds` | gauge | `quantile` | Seconds from the start of the first review to the merge, rework loops included, at the same two quantiles. |
 | `fagan_story_cycle_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to its merge, at the same two quantiles. |

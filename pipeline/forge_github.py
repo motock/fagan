@@ -22,12 +22,13 @@ local rebase and the force-push that publish the rewritten branch, so
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .forge import (
     CANCELLED,
@@ -54,6 +55,31 @@ _CHECK_RUN_FAIL_CONCLUSIONS = frozenset(
     {"failure", "timed_out", "action_required"}
 )
 _CHECK_RUN_PASS_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
+
+
+# ``gh pr view --json mergeable`` values that are a DEFINITIVE refusal: the
+# branch cannot be merged as it stands. Everything not listed here (UNKNOWN,
+# an unrecognised value) is "not computed yet", never "blocked".
+_MERGEABLE_BLOCKED = frozenset({"CONFLICTING", "DIRTY"})
+
+# ``gh pr view --json mergeStateStatus`` values that refuse the merge for a
+# reason retrying cannot fix on its own: a conflict, a draft PR, branch
+# protection. UNKNOWN/BEHIND/hashes are not refusals.
+_MERGE_STATE_BLOCKED = frozenset({"DIRTY", "DRAFT", "BLOCKED"})
+
+
+class ForgeMergeRefused(subprocess.CalledProcessError):
+    """A ``merge_pr`` refusal that reports gh's own stderr as its message.
+
+    Subclasses :class:`subprocess.CalledProcessError` so every existing
+    ``except``/``pytest.raises`` that names that type keeps working, but
+    ``str()`` returns the formatted cause instead of Python's "returned
+    non-zero exit status" line. ``cmd``/``returncode``/``stderr`` keep their
+    original values.
+    """
+
+    def __str__(self) -> str:
+        return self.output if isinstance(self.output, str) else super().__str__()
 
 
 class GitHubForge(Forge):
@@ -120,6 +146,52 @@ class GitHubForge(Forge):
             cwd=worktree, check=True, capture_output=True, text=True,
         )
 
+    def merge_readiness(
+        self, worktree: str, branch: str
+    ) -> Literal["ready", "pending", "blocked"]:
+        """Has GitHub FINISHED deciding whether this PR can land?
+
+        ``ready``: computed and landable (MERGEABLE + CLEAN).
+        ``blocked``: a definitive refusal - a conflict, a draft PR, or branch
+        protection.
+        ``pending``: everything else, including ``UNKNOWN``. Right after a
+        push GitHub still *computes* mergeability and reports ``UNKNOWN``
+        while ``gh pr merge`` refuses instead of waiting. That refusal is not
+        a failed merge: on 2026-11-08 it burned four merge attempts on PR
+        #1618 (c1bfcfbf) and three on PR #1621 (e0163dbc) - both CLEAN /
+        MERGEABLE with all four required checks SUCCESS, both merged first try
+        by hand. So the caller retries instead of spending an attempt.
+
+        Fails CLOSED on the read: an unreadable answer (non-zero exit, empty
+        or malformed output, missing keys, a raised OSError/timeout) is
+        ``pending``, never ``ready``. This mirrors the CI gate's UNREADABLE
+        state - an answer GitHub has not given is not a green light, and it is
+        not a definitive refusal either.
+        """
+        try:
+            proc = self._run(
+                ["gh", "pr", "view", branch, "--json",
+                 "mergeable,mergeStateStatus"],
+                cwd=worktree, check=False, capture_output=True, text=True,
+                timeout=30,
+            )
+            if proc is None or proc.returncode != 0:
+                return "pending"
+            payload = json.loads(proc.stdout or "")
+        except Exception:  # noqa: BLE001 - this read must never raise
+            return "pending"
+        if not isinstance(payload, dict):
+            return "pending"
+        mergeable = str(payload.get("mergeable") or "").strip().upper()
+        state = str(payload.get("mergeStateStatus") or "").strip().upper()
+        # Precedence: a definitive refusal wins over everything (including a
+        # contradictory pair), then "ready" needs BOTH fields to agree.
+        if mergeable in _MERGEABLE_BLOCKED or state in _MERGE_STATE_BLOCKED:
+            return "blocked"
+        if mergeable == "MERGEABLE" and state == "CLEAN":
+            return "ready"
+        return "pending"
+
     def merge_pr(self, worktree: str, branch: str, subject: str) -> str:
         """Squash-merge the PR, passing ``subject`` as the commit subject.
 
@@ -132,13 +204,35 @@ class GitHubForge(Forge):
         Deliberately does not pass ``--delete-branch``: that asks gh to switch
         the local checkout away from the branch being deleted, which fails
         here because the branch is checked out in its own worktree.
+
+        A refusal is re-raised as :class:`ForgeMergeRefused` so the caller's
+        ``merge_error`` names the CAUSE gh printed on stderr, not just the
+        argv. Both 2026-11-08 incidents (PR #1618 / c1bfcfbf, PR #1621 /
+        e0163dbc) recorded only ``Command '[...]' returned non-zero exit
+        status 1.`` and each needed a manual investigation to diagnose, while
+        the identical command merged both first try by hand.
         """
         merge_cmd = ["gh", "pr", "merge", branch, "--squash"]
         if subject:
             merge_cmd += ["--subject", subject]
-        proc = self._run(
-            merge_cmd, cwd=worktree, check=True, capture_output=True, text=True,
-        )
+        try:
+            proc = self._run(
+                merge_cmd, cwd=worktree, check=True, capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", "replace")
+            stderr_tail = (stderr or "").strip()[-500:]
+            message = (
+                f"gh pr merge failed (exit {e.returncode}): "
+                f"{stderr_tail or '<no stderr>'}\n"
+                f"cmd: {' '.join(str(part) for part in (e.cmd or merge_cmd))}"
+            )
+            raise ForgeMergeRefused(
+                e.returncode, e.cmd or merge_cmd, output=message, stderr=e.stderr
+            ) from e
         return proc.stdout.strip()
 
     def pr_title(self, worktree: str, branch: str) -> str:

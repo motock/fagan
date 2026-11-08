@@ -37,7 +37,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .forge import (
     CANCELLED,
@@ -58,6 +58,33 @@ CLOSED = "CLOSED"
 UNKNOWN = "UNKNOWN"
 
 _MR_STATES = {"merged": MERGED, "opened": OPEN, "closed": CLOSED}
+
+# ``glab mr view --output json`` fields that are a DEFINITIVE refusal: the MR
+# cannot land as it stands. Everything not listed here (``checking``,
+# ``unchecked``, ``cannot_be_merged_recheck``, an unrecognised value) means
+# "GitLab has not finished deciding", never "blocked".
+_GITLAB_BLOCKED_DETAILED = frozenset(
+    {
+        "conflict",
+        "cannot_be_merged",
+        "draft_status",
+        "blocked_status",
+        "not_approved",
+        "discussions_not_resolved",
+    }
+)
+_GITLAB_BLOCKED_LEGACY = frozenset({"cannot_be_merged"})
+
+# ...and these mean GitLab is still COMPUTING mergeability: a retry, not a
+# refusal. Treated as pending even when the other field looks clean.
+_GITLAB_PENDING_STATUSES = frozenset(
+    {"checking", "unchecked", "cannot_be_merged_recheck"}
+)
+
+# ...and these are the computed, LANDABLE answers: GitLab has finished and
+# the MR may be merged as it stands.
+_GITLAB_READY_DETAILED = frozenset({"mergeable"})
+_GITLAB_READY_LEGACY = frozenset({"can_be_merged"})
 
 # The CI configuration file whose presence means "this repo declares CI".
 _CI_CONFIG = ".gitlab-ci.yml"
@@ -208,6 +235,58 @@ class GitLabForge(Forge):
             )
         except OSError:
             return
+
+    def merge_readiness(
+        self, worktree: str, branch: str
+    ) -> Literal["ready", "pending", "blocked"]:
+        """Has GitLab FINISHED deciding whether this MR can land?
+
+        The same three answers, and the same fail-closed READ, as the GitHub
+        adapter: ``ready`` merges, ``blocked`` is a definitive refusal (a
+        conflict, a draft MR, an approval/discussion gate), and ``pending``
+        covers everything GitLab still has to compute - ``checking``,
+        ``unchecked``, ``cannot_be_merged_recheck`` - plus every unreadable
+        answer (non-zero exit, empty/malformed output, a raised
+        ``OSError``/timeout). A state GitLab has not finished computing must
+        never spend a merge attempt, and an unreadable one must never be read
+        as ``ready``.
+
+        Both vocabularies are read: ``detailed_merge_status`` (current) and
+        ``merge_status`` (legacy), plus the ``has_conflicts``/``draft`` flags.
+        """
+        try:
+            proc = self._run(
+                ["glab", "mr", "view", branch, "--output", "json"],
+                cwd=worktree,
+            )
+            if proc is None or proc.returncode != 0:
+                return "pending"
+            payload = json.loads(proc.stdout or "")
+        except Exception:  # noqa: BLE001 - this read must never raise
+            return "pending"
+        if not isinstance(payload, dict):
+            return "pending"
+        detailed = str(
+            payload.get("detailed_merge_status") or ""
+        ).strip().lower()
+        legacy = str(payload.get("merge_status") or "").strip().lower()
+        # Precedence: a definitive refusal first (it wins even when another
+        # field claims otherwise), then "still computing", then ready.
+        if (
+            payload.get("has_conflicts") is True
+            or payload.get("draft") is True
+            or detailed in _GITLAB_BLOCKED_DETAILED
+            or legacy in _GITLAB_BLOCKED_LEGACY
+        ):
+            return "blocked"
+        if (
+            detailed in _GITLAB_PENDING_STATUSES
+            or legacy in _GITLAB_PENDING_STATUSES
+        ):
+            return "pending"
+        if detailed in _GITLAB_READY_DETAILED or legacy in _GITLAB_READY_LEGACY:
+            return "ready"
+        return "pending"
 
     def merge_pr(self, worktree: str, branch: str, subject: str) -> str:
         """Squash-merge the MR, passing ``subject`` as the commit subject.

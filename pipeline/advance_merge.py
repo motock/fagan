@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,93 @@ _REVERIFY_FAIL = "fail"
 # Default wall-clock budget for one detached re-verify, overridable with
 # PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS.
 MERGE_REVERIFY_TIMEOUT_DEFAULT = 1800.0
+
+# Default wall-clock budget for waiting out GitHub's *computation* of a PR's
+# mergeability before falling back to "retry next tick". Overridable with
+# PIPELINE_MERGE_READINESS_TIMEOUT. See _await_merge_readiness.
+MERGE_READINESS_TIMEOUT_DEFAULT = 180.0
+
+
+def _merge_readiness_timeout() -> float:
+    """Wall-clock budget for one merge-readiness poll, in seconds.
+
+    Read from the environment on EVERY call, never cached at import time: a
+    module-level constant would make ``monkeypatch.setenv`` in the tests a
+    no-op and turn a "pending forever" case into a 180-second real sleep. An
+    unparseable value falls back to the default; a negative value means "do
+    not wait" (one non-blocking read, then the caller retries next tick).
+    """
+    try:
+        timeout = float(
+            os.environ.get("PIPELINE_MERGE_READINESS_TIMEOUT", "180")
+        )
+    except (TypeError, ValueError):
+        return MERGE_READINESS_TIMEOUT_DEFAULT
+    return max(0.0, timeout)
+
+
+def _merge_readiness_forge():
+    """The active forge, or None when it cannot be resolved at all.
+
+    Resolved lazily (the repo root is read at call time) so a missing forge
+    degrades to "no readiness verb available" instead of raising inside the
+    merge gate. ``None`` means the host cannot be interrogated here at all -
+    that is NOT the fail-closed case (a resolved forge whose answer cannot be
+    READ is, and that one is ``pending``); it is simply "this deployment has no
+    forge adapter", where the pre-existing exception path remains the only
+    signal there is.
+    """
+    try:
+        from .forge import get_forge
+        from .pr import _repo_root
+
+        return get_forge(_repo_root())
+    except Exception:
+        logging.getLogger("pipeline").debug(
+            "forge unavailable for merge readiness", exc_info=True
+        )
+        return None
+
+
+def _await_merge_readiness(forge, worktree: str, branch: str) -> str:
+    """Poll the host until it has FINISHED computing this PR's mergeability.
+
+    Returns ``"ready"``, ``"blocked"`` or ``"pending"`` (the budget expired
+    while the host was still computing). Bounded backoff: a first 5-second
+    delay doubling to a 30-second cap, every sleep clamped to what is left of
+    the budget, so a 180-second budget reads at t=0,5,15,35,65,95,125,155,180
+    and sleeps exactly 180 seconds in total.
+
+    An unreadable answer (any exception, including ``OSError`` and a timeout)
+    is ``pending``: the host has not finished computing, which is emphatically
+    not the same as a refusal. A forge that predates the verb is ``"ready"`` -
+    that keeps every caller that cannot answer on today's behaviour.
+    """
+    read = getattr(forge, "merge_readiness", None)
+    if read is None:
+        return "ready"
+    if not worktree or not Path(worktree, ".git").exists():
+        # No real checkout to interrogate (the worktree is gone or was never a
+        # git worktree): there is no PR to read a mergeability for, so behave
+        # exactly as before this gate existed and let the merge's own failure
+        # be the signal.
+        return "ready"
+    deadline = time.monotonic() + _merge_readiness_timeout()
+    delay = 5.0
+    while True:
+        try:
+            state = read(worktree, branch)
+        except Exception:  # noqa: BLE001 - unreadable is pending, never ready
+            state = "pending"
+        if state == "ready":
+            return "ready"
+        if state == "blocked":
+            return "blocked"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "pending"
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 30.0)
 
 _atomic_write_json = _ModuleRef("pipeline.advance", "_atomic_write_json")
 _ci_pending_expired = _ModuleRef("pipeline.advance", "_ci_pending_expired")
@@ -744,6 +832,37 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 )
             summary["notify"].append(key)
             continue
+
+        # Mergeability must be COMPUTED before `gh pr merge` will act. Right
+        # after a push GitHub reports ``UNKNOWN`` while it computes, and gh's
+        # merge command REFUSES instead of waiting - a refusal that used to be
+        # counted as a failed merge attempt and, at MERGE_MAX_ATTEMPTS, fail a
+        # PR that was in fact green and landable: PR #1618 (c1bfcfbf) burned
+        # four attempts and PR #1621 (e0163dbc) three on 2026-11-08, both CLEAN
+        # / MERGEABLE with all four required checks SUCCESS, both merged first
+        # try by hand. So wait (bounded) for a computed answer: ``ready``
+        # merges, ``blocked`` takes today's path below, and a budget that
+        # expires while still ``pending`` spends NO attempt - the story stays
+        # pr_open with a merge_pending_reason and the next tick retries.
+        # ``pr_url`` gates the poll because a story with no recorded PR has
+        # nothing to interrogate; it then behaves exactly as before.
+        if story.get("pr_url"):
+            readiness = _await_merge_readiness(
+                _merge_readiness_forge(), worktree, branch
+            )
+            if readiness == "pending":
+                story["merge_pending_reason"] = (
+                    "merge readiness still pending after "
+                    f"{_merge_readiness_timeout():g}s"
+                )
+                # Deliberately NOT an attempt: this is a state the host has
+                # not finished computing, not a refusal. The manifest write at
+                # the end of this function persists the reason.
+                summary.setdefault("merge_pending", []).append(key)
+                continue
+            # Computed (or definitively blocked): a stale reason must not
+            # outlive the wait.
+            story.pop("merge_pending_reason", None)
 
         # _merge_pr removes the worktree and deletes the branch, so the
         # self-source diff must be taken BEFORE the merge, not after.

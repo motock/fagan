@@ -8,7 +8,7 @@
  "pipeline/audit_anchor.py": 6,
  "pipeline/authorization.py": 1,
  "pipeline/checkpoint.py": 7,
- "pipeline/concurrency.py": 10,
+ "pipeline/concurrency.py": 9,
  "pipeline/config.py": 1,
  "pipeline/config_provenance.py": 1,
  "pipeline/context_sources.py": 7,

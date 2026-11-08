@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 
 _LOGGER = logging.getLogger("pipeline")
 
@@ -28,9 +27,7 @@ _LOGGER = logging.getLogger("pipeline")
 _ACQUIRE_RETRY_SECONDS = 0.1
 
 
-def _write_story(
-    plan_name: str, story_key: str, story: dict, manifest_path: Path
-) -> None:
+def _write_story(plan_name: str, story_key: str, story: dict) -> None:
     """Replace one story in the freshly-read manifest and persist it."""
     # Module attributes are resolved at call time, never bound at import: the
     # package has an import cycle, and tests patch these attributes.
@@ -56,9 +53,7 @@ def _write_story(
     server._store.records().put_manifest("default", plan_name, manifest)
 
 
-def commit_story(
-    plan_name: str, story_key: str, story: dict, manifest_path: Path
-) -> None:
+def commit_story(plan_name: str, story_key: str, story: dict) -> None:
     """Persist *story* as ``manifest["stories"][story_key]`` under the plan lock.
 
     Only that one key is replaced: other stories and every plan-level field are
@@ -74,7 +69,7 @@ def commit_story(
     # under that existing hold instead of re-flocking - a second exclusive
     # flock on a new fd would be refused even in this same thread.
     if plan_name in concurrency._held_plan_locks():
-        _write_story(plan_name, story_key, story, manifest_path)
+        _write_story(plan_name, story_key, story)
         return
 
     # Measure elapsed time with monotonic(): a backwards wall-clock step would
@@ -83,7 +78,7 @@ def commit_story(
     while True:
         with concurrency._plan_lock(plan_name) as acquired:
             if acquired:
-                _write_story(plan_name, story_key, story, manifest_path)
+                _write_story(plan_name, story_key, story)
                 return
         if time.monotonic() >= deadline:
             raise concurrency.PlanLockReacquireTimeout(

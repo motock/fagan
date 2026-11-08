@@ -35,7 +35,10 @@ def _setup(tmp_path, monkeypatch, done_text):
         _log(worktree, done_text)
     story = {"summary": "s", "status": "tests_passed", "rework_attempts": 0}
     manifest = {"epics": {}, "stories": {"S1": story}}
-    path = plan_dir / "plan.manifest.json"
+    # Seed through the store-owned path: the write under test goes through
+    # records().put_manifest -> FileStore.save_manifest, i.e. PLAN_DIR.
+    path = p._store.manifest_path("plan")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest))
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: notes.append((a, k)))

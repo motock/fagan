@@ -15,9 +15,30 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .build_detect import failed_node_ids
-from .parsers import _atomic_write_json
 
 logger = logging.getLogger(__name__)
+
+
+def _put_manifest(manifest_path, manifest) -> None:
+    """Persist one detached-grade state transition through the record store.
+
+    ``_detached_grade_lifecycle`` receives ``(plan_name, manifest,
+    manifest_path)`` from ``check_story_status``, which holds the plan lock;
+    it acquires no lock of its own, so the write lands in the same lock scope
+    the direct ``_atomic_write_json(manifest_path, ...)`` call used to. The
+    plan name is recovered from the manifest path exactly as ``list_plans``
+    recovers it (``<plan_name>.manifest.json``), keeping the threaded
+    ``manifest_path`` parameters in place (ADR 0012 stage C removes them).
+
+    A store that rejects the key raises ``InvalidRecordKeyError`` (a
+    ``ValueError``): the transition fails closed rather than falling back to a
+    bare file write, which under ``PIPELINE_STORE=sqlite`` would leave the
+    database row unchanged and re-grade the story on every later tick.
+    """
+    from .server import _store
+
+    plan_name = Path(manifest_path).name.removesuffix(".manifest.json")
+    _store.records().put_manifest("default", plan_name, manifest)
 
 # SA-19: how many detached grades one tick may have in flight at once, and
 # optionally how many xdist workers each of them gets. Both live here rather
@@ -478,7 +499,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     UTC
                 ).isoformat()
                 story["grading_result_path"] = str(result_path)
-                _atomic_write_json(manifest_path, manifest)
+                _put_manifest(manifest_path, manifest)
                 # The tick is free; a LATER tick collects the result.
                 return {"status": "grading", "pid": grade_pid}, None
         # No starter reachable (or the spawn failed): the synchronous grade
@@ -550,6 +571,6 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         story.pop("grading_started_at", None)
         story.pop("grading_result_path", None)
         story["collected_at"] = datetime.now(UTC).isoformat()
-        _atomic_write_json(manifest_path, manifest)
+        _put_manifest(manifest_path, manifest)
 
     return None, test_result

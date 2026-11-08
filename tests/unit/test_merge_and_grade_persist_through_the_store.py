@@ -123,6 +123,15 @@ def fake_store(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+class _Completed:
+    """Stand-in for ``subprocess.run``'s result."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 def _merge_seams(monkeypatch, ci_state="pass"):
     """Patch every outside-the-lock seam ``_approve_merge_impl`` reaches."""
     import pipeline.authorization as auth
@@ -147,6 +156,17 @@ def _merge_seams(monkeypatch, ci_state="pass"):
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(p, "_scoped_repo_root", _null_scoped_root)
+    monkeypatch.setattr(p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: "")
+    monkeypatch.setattr(merge, "record_audit", lambda *a, **k: None)
+    # The gate force-pushes the story branch; ``Path("").is_dir()`` is the cwd,
+    # so even the fixture's empty worktree reaches this call.
+    monkeypatch.setattr(
+        merge.subprocess,
+        "run",
+        lambda *a, **k: _Completed(returncode=0),
+    )
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     if hasattr(p, "_maybe_record_retro"):
         monkeypatch.setattr(p, "_maybe_record_retro", lambda *a, **k: None)
@@ -191,7 +211,7 @@ def test_should_persist_the_merge_result_through_the_record_store(
 
     result = merge._approve_merge_impl(plan_name, story_key)
 
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert fake_store.writes, "the merge must persist through the record store"
     namespaces = {ns for ns, _plan, _m in fake_store.writes}
     plans = {plan for _ns, plan, _m in fake_store.writes}
@@ -241,8 +261,8 @@ def test_should_report_unknown_plan_when_the_store_has_no_manifest(
 
     result = merge._set_plan_paused(plan_name, True)
 
-    assert result["ok"] is False
-    assert "manifest" in result["error"].lower()
+    assert result["ok"] is False, result
+    assert "manifest" in result["error"].lower(), result
     assert fake_store.writes == []
     assert fake_store.stored(plan_name) is None
     assert not fake_store.manifest_path(plan_name).exists()
@@ -329,14 +349,21 @@ def _grade_tick(monkeypatch, *, story_key, plan_name, manifest_path, manifest,
 def test_should_persist_grade_start_and_grade_result_through_the_record_store(
     fake_store, monkeypatch
 ):
-    """``queued/0 -> grading/1 -> graded/1`` all land via ``put_manifest``."""
+    """Both grade state transitions land through ``put_manifest``.
+
+    The lifecycle's persisted transition is the grading bookkeeping it owns:
+    tick 1 records ``grading_pid`` / ``grading_started_at`` /
+    ``grading_result_path`` and frees the scheduler tick; tick 2 reads THAT
+    back, consumes the bookkeeping and stamps ``collected_at``. Seeding
+    ``attempt`` (a field the lifecycle never touches) pins that each write
+    carries the whole manifest from a fresh read rather than a fragment.
+    """
     plan_name, story_key = "g1", "s1"
     fake_store.seed(
         plan_name,
         {
             "plan": plan_name,
-            "stories": {story_key: {"status": "in_progress", "state": "queued",
-                                    "attempt": 0}},
+            "stories": {story_key: {"status": "in_progress", "attempt": 1}},
         },
     )
     manifest_path = fake_store.manifest_path(plan_name)
@@ -351,18 +378,20 @@ def test_should_persist_grade_start_and_grade_result_through_the_record_store(
         manifest=manifest,
         alive=False,
     )
-    assert early["status"] == "grading"
+    assert early == {"status": "grading", "pid": 9001}
     assert len(fake_store.writes) == 1
     start = fake_store.writes[0]
     assert start[0] == "default" and start[1] == plan_name
     written = fake_store.stored(plan_name)["stories"][story_key]
-    assert written["state"] == "grading"
+    assert written["grading_pid"] == 9001
+    assert written["grading_started_at"]
+    assert written["grading_result_path"]
     assert written["attempt"] == 1
 
     # Tick 2: fresh read of WHAT TICK 1 WROTE, grade result collected.
     manifest = fake_store.records().get_manifest("default", plan_name)
-    assert manifest["stories"][story_key]["state"] == "grading"
-    _grade_tick(
+    assert manifest["stories"][story_key]["grading_pid"] == 9001
+    early, test_result = _grade_tick(
         monkeypatch,
         story_key=story_key,
         plan_name=plan_name,
@@ -371,12 +400,16 @@ def test_should_persist_grade_start_and_grade_result_through_the_record_store(
         alive=False,
         collected={"stdout": "1 passed", "returncode": 0},
     )
+    assert early is None
+    assert test_result.returncode == 0
     assert len(fake_store.writes) == 2
     assert fake_store.writes[1][1] == plan_name
     result = fake_store.stored(plan_name)["stories"][story_key]
-    assert result["state"] == "graded"
-    assert result["attempt"] == 1, "the attempt written by tick 1 must survive"
     assert "grading_pid" not in result
+    assert "grading_started_at" not in result
+    assert "grading_result_path" not in result
+    assert result["collected_at"]
+    assert result["attempt"] == 1, "the untouched field written by tick 1 survives"
     assert fake_store.bulk_reads == 0
 
 

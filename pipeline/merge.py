@@ -560,7 +560,6 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         refuse,
     )
     from .server import (
-        _atomic_write_json,
         _ci_rerun,
         _ci_status,
         _default_branch,
@@ -587,8 +586,6 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     refusal = authorize("story:merge", plan_name=plan_name, story_key=story_key)
     if refusal is not None:
         return refusal
-
-    manifest_path = _store.manifest_path(plan_name)
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:
@@ -700,7 +697,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # now because the blocking returns below skip the final write.
                 story["pr_checks"] = ci
                 story.pop("pr_checks_error", None)
-                _atomic_write_json(manifest_path, manifest)
+                _store.records().put_manifest("default", plan_name, manifest)
                 if ci["state"] in ("fail", "cancelled"):
                     return {
                         "ok": False,
@@ -746,7 +743,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "done"
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)
         record_audit(
             plan_name,
             action="story.merge",
@@ -802,7 +799,7 @@ def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
                 "skipped": "locked",
                 "reason": "an advance_pipeline tick is already running for this plan",
             }
-        if not _store.manifest_path(plan_name).exists():
+        if _store.records().get_manifest("default", plan_name) is None:
             return {"ok": False, "error": f"No manifest for {plan_name}"}
         manifest = _store.get_manifest(plan_name)
         manifest["paused"] = paused

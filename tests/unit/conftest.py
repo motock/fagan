@@ -109,12 +109,39 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     reads scheduler_daemon's copy directly and drain_outbox reads its own) -
     without this, any pre-existing test calling run_once() drains the
     operator's real ~/.claude/plans outbox files on every run.
+
+    Finally patches pipeline.server.PLAN_DIR itself - the binding every
+    server-side read actually goes through. pipeline/server.py imports
+    PLAN_DIR from pipeline.paths at module load, and pipeline/concurrency.py,
+    pipeline/service.py and pipeline/store.py resolve it at call time through
+    their LiveRef/_ServerRef indirection, which delegates straight to the
+    live ``pipeline.server`` attribute. Without this the *default* for any
+    test that never asked for the ``plan_dir`` fixture was still the
+    operator's real plans directory: every ``@mcp.tool()`` call reachable
+    from a unit test (list_plans, read_plan, dispatch, _plan_lock, ...)
+    globbed/mkdir'd/locked ~/.claude/plans, so a developer's live plans
+    leaked into assertions and the suite could block on a live MCP server's
+    flock. Patching it here makes "the server sees a throwaway empty plans
+    dir" the invariant for the whole unit package; the ``plan_dir`` fixture
+    (and per-module ``plan_dir`` fixtures) still override it afterward with
+    their own tmp_path, which composes fine (monkeypatch unwinds LIFO).
     """
     from pipeline import notification_outbox, persistence, scheduler_daemon
+    from pipeline import paths as pipeline_paths
+    from pipeline import server as pserver
+
     default_plan_dir = tmp_path_factory.mktemp("default_plan_dir")
+    # pipeline.paths.PLAN_DIR is the load-time source every other module
+    # imported its own copy of; redirecting it keeps "the default plan dir"
+    # a single consistent throwaway path for tests that compare an endpoint's
+    # reported plan_dir against pipeline.paths.PLAN_DIR (see
+    # test_dashboard_health_plan_dir.py) instead of pointing them at two
+    # different directories.
+    monkeypatch.setattr(pipeline_paths, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(persistence, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(scheduler_daemon, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(notification_outbox, "PLAN_DIR", default_plan_dir)
+    monkeypatch.setattr(pserver, "PLAN_DIR", default_plan_dir)
 
 
 @pytest.fixture

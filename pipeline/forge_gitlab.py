@@ -59,7 +59,6 @@ UNKNOWN = "UNKNOWN"
 
 _MR_STATES = {"merged": MERGED, "opened": OPEN, "closed": CLOSED}
 
-# The CI configuration file whose presence means "this repo declares CI".
 # ``glab mr view --output json`` fields that are a DEFINITIVE refusal: the MR
 # cannot land as it stands. Everything not listed here (``checking``,
 # ``unchecked``, ``cannot_be_merged_recheck``, an unrecognised value) means
@@ -82,9 +81,12 @@ _GITLAB_PENDING_STATUSES = frozenset(
     {"checking", "unchecked", "cannot_be_merged_recheck"}
 )
 
+# ...and these are the computed, LANDABLE answers: GitLab has finished and
+# the MR may be merged as it stands.
 _GITLAB_READY_DETAILED = frozenset({"mergeable"})
 _GITLAB_READY_LEGACY = frozenset({"can_be_merged"})
 
+# The CI configuration file whose presence means "this repo declares CI".
 _CI_CONFIG = ".gitlab-ci.yml"
 
 _URL_RE = re.compile(r"https?://\S+")

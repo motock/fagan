@@ -22,6 +22,7 @@ import subprocess
 import pytest
 
 from pipeline.forge_github import GitHubForge
+from pipeline.forge_gitlab import GitLabForge
 
 BRANCH = "agent/s10-2"
 CWD = "/tmp/worktree"
@@ -174,9 +175,6 @@ def test_github_merge_readiness_raised_errors_are_pending(monkeypatch, exc):
 # ---------------------------------------------------------------------------
 # GitLab: same verb, same three answers, same fail-closed READ
 # ---------------------------------------------------------------------------
-from pipeline.forge_gitlab import GitLabForge  # noqa: E402
-
-
 def _stub_glab(monkeypatch, *, stdout=None, returncode=0, raises=None, seen=None):
     """Patch the ONE seam ``merge_pr`` uses on the GitLab adapter."""
 

@@ -81,6 +81,7 @@ in practice.
 
 ### Fixed
 
+- A green, mergeable PR is no longer marked `failed` because GitHub had not finished computing its mergeability yet. The merge gate now polls the forge's new `merge_readiness` verb (`gh pr view --json mergeable,mergeStateStatus`: `MERGEABLE`+`CLEAN` is ready, `DIRTY`/`CONFLICTING`/`BLOCKED`/`DRAFT` is blocked, anything else including `UNKNOWN` is pending) for up to `PIPELINE_MERGE_READINESS_TIMEOUT` seconds (default 180, 5s doubling to a 30s cap) before calling `gh pr merge`. A refusal to merge is not a failed merge: a budget that expires while the host is still computing spends no `merge_attempts` slot, leaves the story `pr_open` with a `merge_pending_reason`, and lets the next tick retry, while a definitive refusal keeps today's attempt-counting path. An unreadable readiness is pending, never ready. `gh pr merge` failures now carry gh's stderr tail in `merge_error` instead of only the argv (2026-11-08: PR #1618 `c1bfcfbf` burned four attempts and PR #1621 `e0163dbc` three, both CLEAN/MERGEABLE with all four required checks SUCCESS and both merged first try by hand).
 - overlord-policy.md and REFERENCE.md no longer say the `full` autonomy level always holds high-risk merges; the overlord adjudicates them and the ruling is recorded.
 - `consumer_status()` now reports `dead_lettered` as the sum of the durable's dead-letter subject counts instead of the whole stream message total, which `subjects_filter` never narrowed.
 - A durable event type is no longer handled twice: `NatsEventBus.publish` used

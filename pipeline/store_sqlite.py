@@ -495,7 +495,10 @@ class SqliteRecords:
         """Return the decision records for ``plan_name``."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._store.get_decisions(plan_name)
+        # Read through the internal file store's record view, which resolves the
+        # directory this store's writers append to on every call -- the legacy
+        # ``get_decisions`` would answer from the reader's binding instead.
+        return self._store._files.records().get_decisions(namespace, plan_name)
 
     def append_decision(self, namespace: str, plan_name: str, record: dict) -> None:
         """Append one decision record to ``plan_name``."""
@@ -518,7 +521,12 @@ class SqliteRecords:
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_story_key(story_key)
-        _available, entries = self._store.get_journal(plan_name, story_key)
+        # Same reason as ``get_decisions``: the internal file store's record view
+        # reads the journal file its own writer appends to, resolved per call,
+        # and already omits the display-only fields the writer never set.
+        entries = self._store._files.records().get_journal(
+            namespace, plan_name, story_key
+        )
         return [
             {
                 key: value

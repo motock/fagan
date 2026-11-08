@@ -53,6 +53,40 @@ _atomic_write_json = _ServerRef("_atomic_write_json")
 _JOURNAL_DISPLAY_DEFAULTS = ("step", "summary", "next_hint")
 
 
+def _persistence():
+    """Return the ``pipeline.persistence`` module, imported at call time.
+
+    Journal and decision *writes* go through ``pipeline.persistence``, which
+    resolves the plans directory from its own module binding. A record view that
+    read back through the legacy ``FileStore`` readers would answer from the
+    server module's binding instead -- identical in production, but a silently
+    different directory wherever the two bindings are patched apart.
+    Imported inside the call (not at module load, and not through
+    ``_ServerRef``: ``pipeline.server`` re-exports only some of these names) so
+    the writer's current directory is what a read sees.
+    """
+    from . import persistence
+
+    return persistence
+
+
+def _read_json_records(path: Path) -> list[dict]:
+    """Return the records in a JSON-list file at ``path``, fail-open.
+
+    Absent, unreadable, malformed and non-list content all read as no records,
+    and a read never creates or truncates anything on disk.
+    """
+    try:
+        if not path.exists():
+            return []
+        raw = json.loads(path.read_text(errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [record for record in raw if isinstance(record, dict)]
+
+
 class Store(Protocol):
     """Storage seam for pipeline state (W1b).
 
@@ -476,7 +510,9 @@ class FileRecords:
         validate_namespace(namespace)
         validate_plan_name(plan_name)
         self._refuse_other_namespace(namespace)
-        return self._store.get_decisions(plan_name)
+        # Read the file the record view's own writer appends to, resolved per
+        # call: see :func:`_persistence`.
+        return _read_json_records(_persistence()._decisions_path(plan_name))
 
     def append_decision(
         self, namespace: str, plan_name: str, record: dict
@@ -496,7 +532,11 @@ class FileRecords:
         validate_plan_name(plan_name)
         validate_story_key(story_key)
         self._refuse_other_namespace(namespace)
-        _available, records = self._store.get_journal(plan_name, story_key)
+        # Read the file the record view's own writer appends to, resolved per
+        # call: see :func:`_persistence`.
+        records = _read_json_records(
+            _persistence()._journal_path(plan_name, story_key)
+        )
         # The legacy reader decorates every entry with display-only defaults
         # for the dashboard.  A record store hands back the records it was
         # given, so drop those defaults when the stored record did not carry

@@ -335,6 +335,61 @@ def _invoke_pr_checks_gather(gather, story, story_key):
         gather(story)
 
 
+def _append_adjudication_decision(
+    plan_name: str, record: dict[str, Any]
+) -> None:
+    """Append one merge-adjudication ruling to the plan's decision record.
+
+    Store-first (ADR 0012 stage B): the write goes through the record store's
+    namespaced record view, so a deployment that selected a store with its own
+    decision storage records the ruling there instead of only in this host's
+    ``<plan>.decisions.json``.
+
+    Three fallbacks keep the pre-existing behaviour exact, because a ruling
+    that is not recorded is a ruling no one can audit:
+
+    * the file store's record view delegates to ``persistence._append_decision``
+      itself, so the file store takes that writer directly (resolved at call
+      time, the one write path, no delegating hop to shadow it);
+    * a store with no ``records()`` view - an in-process stand-in, a double -
+      takes the legacy writer;
+    * a record view that refuses the key (the plan-less ``""`` name a legacy
+      direct caller passes, which the view's name validation rejects) takes the
+      legacy writer too.
+
+    Raises only when the writer it chose raises; the caller swallows that, since
+    an audit write must never break the merge gate.
+    """
+    from . import persistence
+    from .server import _store
+    from .store import FileStore
+    from .store_records import DEFAULT_NAMESPACE
+
+    # The file store's record view and its legacy surface are both exactly
+    # ``persistence._append_decision``; resolve that writer here rather than
+    # hop through a store layer that would shadow it.
+    if not isinstance(_store, FileStore):
+        records = getattr(_store, "records", None)
+        append = getattr(records(), "append_decision", None) if records else None
+        if append is None:
+            # A store that only carries the legacy surface still owns the
+            # record: ``append_decision(plan_name, record)``.
+            legacy = getattr(_store, "append_decision", None)
+            if legacy is not None:
+
+                def append(_namespace, plan, rec, _legacy=legacy):
+                    _legacy(plan, rec)
+        if append is not None:
+            try:
+                append(DEFAULT_NAMESPACE, plan_name, record)
+                return
+            except (TypeError, ValueError):
+                # The store refused the key (an unvalidatable plan name): the
+                # legacy writer still records what the gate ruled on.
+                pass
+    persistence._append_decision(plan_name, record)
+
+
 def _adjudicate_high_risk_merge(
     story: dict[str, Any], plan_name: str | None = None
 ) -> dict[str, str]:
@@ -362,7 +417,7 @@ def _adjudicate_high_risk_merge(
     )
     _invoke_pr_checks_gather(_populate_pr_checks_once, story, story_key)
     from .overlord import _invoke_overlord
-    from .persistence import _append_decision, _plan_role_config
+    from .persistence import _plan_role_config
 
     if plan_name is None:
         # Compat shim for direct callers; production always supplies the
@@ -425,7 +480,7 @@ def _adjudicate_high_risk_merge(
             "decided_at": datetime.now(UTC).isoformat(),
         }
     try:
-        _append_decision(plan_name, record)
+        _append_adjudication_decision(plan_name, record)
     except Exception:  # noqa: BLE001 - audit write must never break the gate
         logging.getLogger("pipeline").warning(
             "failed to append merge adjudication record for %s", story_key

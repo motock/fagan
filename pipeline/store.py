@@ -7,9 +7,10 @@ patches ``pipeline.server`` for those names, so ``pipeline/server.py`` re-export
 everything it needs (see PIPELINE_MCP_DECOMPOSITION_PLAN.md).
 
 The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
-``_append_decision``, ``_append_journal``) are resolved at call time through the
-``_ServerRef`` bindings below, which delegate to ``pipeline.server`` so
-``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
+``_append_decision``, ``_append_journal``, ``_atomic_write_json``) are resolved
+at call time through the ``_ServerRef`` bindings below, which delegate to
+``pipeline.server`` so ``monkeypatch.setattr(pipeline.server, "NAME", ...)``
+still lands. They are
 intentionally not imported here (a module-load copy would freeze the real
 ~/.claude/plans path into every test run).
 

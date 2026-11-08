@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 
-from pipeline import outbox_health, paths, persistence
+from pipeline import manifest_source, outbox_health, paths, persistence
 from pipeline.consumer_watchdog import ConsumerWatchdog
 
 logger = logging.getLogger(__name__)
@@ -86,52 +86,28 @@ def _first_plan_name() -> str | None:
     deployment keeps attributing to the same plan instead of following whatever
     order the filesystem happens to return.
 
-    The plans are enumerated the way a manifest is read (see
-    :mod:`pipeline.manifest_source`): the store's record view first, this host's
-    plan directory second. The legacy :class:`pipeline.store.FileStore`'s record
-    view reads the same JSON files through a binding of its own, so it is not a
-    second source — with it (or any store without a usable record view) the glob
-    over ``paths.PLAN_DIR`` *is* the primary read, which also keeps this read on
-    the binding the tests patch.
+    The plans are enumerated by :func:`pipeline.manifest_source.read_plan_names`
+    — the one store-first listing, next to the one store-first manifest read —
+    rather than globbed here: the store-selection rule (lazy
+    ``pipeline.server._store`` lookup, legacy :class:`pipeline.store.FileStore`
+    excluded) then lives in exactly one place. This module passes the
+    ``paths.PLAN_DIR`` binding it documents as patchable, so a patched binding
+    is honoured on the file path *and* the tests keep their fixture directory.
 
-    Advisory, like the rest of the tick: a store that cannot list its plans is
-    logged at debug level and degrades to the file, and ``None`` means "no plan
-    to attribute to yet" rather than an error.
+    ``fallback_on_error`` is ``True``: attribution is advisory, like the rest of
+    the tick, so a store that cannot list its plans is logged at debug level and
+    degrades to the file. ``None`` means "no plan to attribute to yet" rather
+    than an error - and nothing here raises, because :func:`_notify_transition`
+    calls this outside its own guard.
     """
-    names = _record_plan_names()
-    if names:
-        return min(names)
-    return next(
-        (
-            path.name.removesuffix(".manifest.json")
-            for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
-        ),
-        None,
-    )
-
-
-def _record_plan_names() -> list[str] | None:
-    """Plan names recorded by the store, or ``None`` when it has no record view.
-
-    Looked up lazily so a test that patches ``pipeline.server._store`` is
-    honoured, and never raises: this is an advisory read.
-    """
-    from pipeline import server
-    from pipeline.store import FileStore
-    from pipeline.store_records import DEFAULT_NAMESPACE
-
-    store = getattr(server, "_store", None)
-    if store is None or isinstance(store, FileStore):
-        return None
-    records = getattr(store, "records", None)
-    if not callable(records):
-        return None
     try:
-        lister = records().list_plans
-        return list(lister(DEFAULT_NAMESPACE))
-    except Exception:
-        logger.debug("record store plan listing failed", exc_info=True)
+        names = manifest_source.read_plan_names(
+            fallback_on_error=True, plans_root=paths.PLAN_DIR
+        )
+    except Exception:  # a notice must never break the tick
+        logger.debug("first-plan attribution failed", exc_info=True)
         return None
+    return names[0] if names else None
 
 
 def _notify_transition(durable: str, transition: str) -> None:

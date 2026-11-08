@@ -29,6 +29,7 @@ import pytest
 
 from pipeline import checkpoint, manifest_source, persistence
 from pipeline import server as p
+from pipeline.store import FileStore
 
 
 class _RecordStore:
@@ -197,3 +198,106 @@ def test_worktree_patch_delegates_fail_closed(dirs, monkeypatch):
         "fallback_on_error": False,
         "plans_root": dirs["server"],
     }
+
+
+# --- read_plan_names: the same read, one level up ---------------------------
+#
+# ``pipeline.tick_checks`` attributes its platform-wide notices to the first plan
+# by name, so it needs "which plans exist?" rather than one manifest. That listing
+# is the same store-first read, so it lives in the same module with the same two
+# contracts - pinned here, next to the manifest read it mirrors, rather than in the
+# tick's own module where a fourth hand-rolled copy of the store probe sat.
+
+
+class _ListingStore:
+    """A store whose record view lists plan names - or raises, on demand."""
+
+    def __init__(self, names=(), error=None):
+        self._names = list(names)
+        self._error = error
+        self.namespaces = []
+
+    def records(self):
+        return self
+
+    def list_plans(self, namespace):
+        self.namespaces.append(namespace)
+        if self._error is not None:
+            raise self._error
+        return list(self._names)
+
+
+def _write_plans(plan_dir, *names):
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (plan_dir / f"{name}.manifest.json").write_text("{}", encoding="utf-8")
+
+
+def _advisory_names(plans_root):
+    """The listing contract ``pipeline.tick_checks`` asks for."""
+    return manifest_source.read_plan_names(
+        fallback_on_error=True, plans_root=plans_root
+    )
+
+
+def test_read_plan_names_lists_the_store_records_first(tmp_path, monkeypatch):
+    """A non-empty record listing is the answer; the disk is not consulted."""
+    _write_plans(tmp_path, "only-on-disk")
+    store = _ListingStore(["zeta", "alpha"])
+    monkeypatch.setattr(p, "_store", store)
+
+    assert _advisory_names(tmp_path) == ["alpha", "zeta"]
+    assert store.namespaces == ["default"]
+
+
+def test_read_plan_names_ignores_the_legacy_file_store(tmp_path, monkeypatch):
+    """``FileStore``'s record view re-reads the same files, so it is no source."""
+    _write_plans(tmp_path, "b-local", "a-local")
+    monkeypatch.setattr(p, "_store", FileStore())
+
+    assert _advisory_names(tmp_path) == ["a-local", "b-local"]
+
+
+def test_an_empty_store_listing_is_read_as_no_store_view(tmp_path, monkeypatch):
+    """An empty record listing falls through to the caller's plan directory.
+
+    Deliberate: a store that records no plans yet must not make attribution
+    impossible on a host that does have plans, so "empty listing" means "no store
+    view" rather than "no plans" (documented in the docstring).
+    """
+    _write_plans(tmp_path, "a-local")
+    monkeypatch.setattr(p, "_store", _ListingStore([]))
+
+    assert _advisory_names(tmp_path) == ["a-local"]
+
+
+def test_read_plan_names_without_a_store_lists_the_files(tmp_path, monkeypatch):
+    _write_plans(tmp_path, "b-plan", "a-plan")
+    monkeypatch.setattr(p, "_store", _LegacyStore(tmp_path))
+
+    names = manifest_source.read_plan_names(
+        fallback_on_error=False, plans_root=tmp_path
+    )
+    assert names == ["a-plan", "b-plan"]
+
+
+def test_plan_names_degrade_when_the_store_cannot_list(tmp_path, monkeypatch):
+    """``fallback_on_error=True``: an advisory read degrades to the file."""
+    _write_plans(tmp_path, "a-local")
+    monkeypatch.setattr(p, "_store", _ListingStore(error=RuntimeError("store down")))
+
+    assert _advisory_names(tmp_path) == ["a-local"]
+
+
+def test_plan_names_fail_closed_on_a_store_error(tmp_path, monkeypatch):
+    """``fallback_on_error=False``: a store error propagates, not degraded."""
+    monkeypatch.setattr(p, "_store", _ListingStore(error=RuntimeError("store down")))
+
+    with pytest.raises(RuntimeError, match="store down"):
+        manifest_source.read_plan_names(fallback_on_error=False, plans_root=tmp_path)
+
+
+def test_no_plan_anywhere_lists_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "_store", _ListingStore([]))
+
+    assert _advisory_names(tmp_path) == []

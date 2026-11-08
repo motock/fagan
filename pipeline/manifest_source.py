@@ -2,10 +2,16 @@
 
 Every caller that needs "the plan's manifest, from the database when there is
 one, otherwise from this host's plan directory" goes through
-:func:`read_plan_manifest`. There is exactly one implementation of that read on
-purpose: three hand-rolled copies previously drifted into two *contradictory*
-failure contracts (one let a store error propagate, one swallowed it), so a fix
-to one never reached the others and a reader could not tell which was intended.
+:func:`read_plan_manifest`, and every caller that needs "which plans exist?"
+goes through :func:`read_plan_names` - the same read one level up, from one
+plan's manifest to the set of plans. There is exactly one implementation of
+each on purpose: three hand-rolled copies previously drifted into two
+*contradictory* failure contracts (one let a store error propagate, one
+swallowed it), so a fix to one never reached the others and a reader could not
+tell which was intended. A fourth copy, a plan listing in
+``pipeline.tick_checks``, re-implemented the store probe behind
+``_record_view`` for the same reason - a later fix to the store selection would
+not have reached it - so the listing lives here too.
 
 Two things are explicit rather than inherited:
 
@@ -56,7 +62,7 @@ from .store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["read_plan_manifest"]
+__all__ = ["read_plan_manifest", "read_plan_names"]
 
 
 def _record_view() -> Any | None:
@@ -140,3 +146,55 @@ def read_plan_manifest(
     return _read_manifest_file(
         plan_name, plans_root, fallback_on_error=fallback_on_error
     )
+
+
+def _read_plan_names_file(
+    plans_root: Path | str, *, fallback_on_error: bool
+) -> list[str]:
+    """Plan names present in ``plans_root``, sorted, from ``*.manifest.json``.
+
+    An unreadable directory is a failure, so it propagates unless
+    ``fallback_on_error`` is true, in which case it degrades to "no plans".
+    """
+    try:
+        paths = sorted(Path(plans_root).glob("*.manifest.json"))
+    except OSError:
+        if not fallback_on_error:
+            raise
+        logger.debug("plan directory unreadable at %s", plans_root, exc_info=True)
+        return []
+    return [path.name.removesuffix(".manifest.json") for path in paths]
+
+
+def read_plan_names(*, fallback_on_error: bool, plans_root: Path | str) -> list[str]:
+    """List the plan names this deployment knows, record view first.
+
+    The listing counterpart of :func:`read_plan_manifest`, with the same two
+    explicit contracts (``fallback_on_error``, ``plans_root`` - see the module
+    docstring, including why the legacy file store's record view is not a second
+    source). Every caller that needs "which plans exist?" goes through here, so
+    a change to how the store is selected reaches all of them at once.
+
+    A store that answers with a non-empty listing is the answer: the caller's
+    plan directory is not consulted, so a store-backed deployment never grows
+    phantom names from whatever manifests happen to sit on this host. An
+    *empty* listing is treated as "no store view" rather than as a verdict that
+    no plan exists, and falls through to the file - the alternative would make
+    attribution depend on whether a plan happened to be recorded yet. A store
+    error propagates unless ``fallback_on_error`` is true, in which case it is
+    logged at debug level and the file is tried.
+
+    Returns a sorted list of names, empty when neither source knows a plan.
+    """
+    records = _record_view()
+    if records is not None:
+        try:
+            names = [str(name) for name in records.list_plans(DEFAULT_NAMESPACE)]
+        except Exception:  # re-raised unless explicitly degraded
+            if not fallback_on_error:
+                raise
+            logger.debug("record store plan listing failed", exc_info=True)
+            names = []
+        if names:
+            return sorted(names)
+    return _read_plan_names_file(plans_root, fallback_on_error=fallback_on_error)

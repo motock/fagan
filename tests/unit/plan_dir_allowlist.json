@@ -30,7 +30,7 @@
  "pipeline/parsers.py": 1,
  "pipeline/paths.py": 3,
  "pipeline/persistence.py": 10,
- "pipeline/plan_completion.py": 7,
+ "pipeline/plan_completion.py": 6,
  "pipeline/plan_summary.py": 1,
  "pipeline/preflight.py": 37,
  "pipeline/review.py": 1,

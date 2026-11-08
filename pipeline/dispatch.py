@@ -37,7 +37,10 @@ from .dispatch_routing import (
 )
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
 from .service import _ServerRef
+from .store_records import InvalidRecordKeyError
 from .trace_context import agent_traceparent
+
+logger = logging.getLogger("pipeline")
 
 # Server-sourced members the moved functions reference as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -57,7 +60,6 @@ _exclude_worktree_logs_from_tracking = _ServerRef(
 _persona_requires_claude = _ServerRef("_persona_requires_claude")
 _plan_role_config = _ServerRef("_plan_role_config")
 _provision_worktree_venv = _ServerRef("_provision_worktree_venv")
-_read_journal = _ServerRef("_read_journal")
 _route_dispatch_backend = _ServerRef("_route_dispatch_backend")
 _scoped_repo_root = _ServerRef("_scoped_repo_root")
 _store = _ServerRef("_store")
@@ -191,8 +193,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 _exclude_worktree_logs_from_tracking(
                     _oracle_repo_root, _acceptance_paths
                 )
-        journal = _read_journal(plan_name, story_key) if resuming else []
-
         if not resuming:
             block = _refuse_if_remote_branch_taken(
                 plan_name, story_key, story, branch, manifest_path, manifest
@@ -433,6 +433,15 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             resume_via_transcript, revised_instructions, prior_dispatched
         )
 
+        # The resume journal comes from the record store; the read is
+        # fail-soft: no journal for a malformed file or a rejected key.
+        journal: list[dict] = []
+        if resuming:
+            try:
+                journal = _store.records().get_journal("default", plan_name, story_key)
+            except InvalidRecordKeyError:
+                logger.warning("no resume journal for %s/%s", plan_name, story_key)
+
         spec = _build_dispatch_command(
             story,
             story_key,
@@ -469,11 +478,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # dispatch is stale by then and re-emitting it would misdirect the
         # agent toward failures it may well have already fixed.
         baseline = story.get("baseline_test_check")
-        if (
-            baseline
-            and baseline.get("returncode") not in (None, 0)
-            and not resuming
-        ):
+        if baseline and baseline.get("returncode") not in (None, 0) and not resuming:
             baseline_note = (
                 "NOTE: the test command already fails on a clean, unmodified "
                 "checkout of this worktree (exit code "
@@ -500,9 +505,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             and MAX_CONCURRENT_AGENTS > 1
             and _count_in_progress_agents() > 0
         ):
-            target_model = (
-                story.get("model") or dispatch_model or spec.get("model")
-            )
+            target_model = story.get("model") or dispatch_model or spec.get("model")
             if target_model:
                 # spec["model"]/story["model"] may be an unresolved tier
                 # name (e.g. "sonnet"), which never matches anything in

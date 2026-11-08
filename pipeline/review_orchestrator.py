@@ -190,7 +190,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                             **_cid_kwargs,
                         )
                         story["skip_notified_sha"] = current_sha
-                    commit_story(plan_name, story_key, story, manifest_path)
+                    commit_story(plan_name, story_key, story)
                     return skip_info(story, current_sha)
             except (subprocess.CalledProcessError, OSError):
                 pass
@@ -319,7 +319,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
             if _is_transient_backend_exception(e):
@@ -339,7 +339,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"failure ({type(e).__name__}); will retry next tick.",
                     **_cid_kwargs,
                 )
-                commit_story(plan_name, story_key, story, manifest_path)
+                commit_story(plan_name, story_key, story)
                 return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
             # Defense in depth: a reviewer backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
@@ -410,7 +410,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
     # Transient backend error (HTTP 5xx / connection reset or refused / timed
@@ -461,7 +461,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             f"one retry (transient transport error); will retry next tick.",
             **_cid_kwargs,
         )
-        commit_story(plan_name, story_key, story, manifest_path)
+        commit_story(plan_name, story_key, story)
         return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
 
     # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
@@ -500,7 +500,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
             if _is_transient_backend_exception(e):
@@ -519,7 +519,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"transport failure ({type(e).__name__}); will retry next tick.",
                     **_cid_kwargs,
                 )
-                commit_story(plan_name, story_key, story, manifest_path)
+                commit_story(plan_name, story_key, story)
                 return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
             # Defense in depth: the security backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
@@ -539,7 +539,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{type(e).__name__}; will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "status": story["status"], "deferred": "backend_error"}
         security_verdict = _parse_verdict(security_output)
 
@@ -558,7 +558,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"verdict; will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "status": story["status"], "deferred": deferred_reason}
 
         story["security_review_verdict"] = security_verdict
@@ -614,7 +614,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         else:
             _notify_user(plan_name, f"{story_key} review inconclusive; will retry.", **_cid_kwargs)
-        commit_story(plan_name, story_key, story, manifest_path)
+        commit_story(plan_name, story_key, story)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
     # T11: a REQUEST_CHANGES with no substantive findings text is not a
@@ -666,7 +666,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"REQUEST_CHANGES with no findings text; will retry.",
                 **_cid_kwargs,
             )
-        commit_story(plan_name, story_key, story, manifest_path)
+        commit_story(plan_name, story_key, story)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
     story["review_inconclusive_count"] = 0
@@ -758,7 +758,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"({exc.__class__.__name__}); will retry next tick.",
                 **_cid_kwargs,
             )
-            commit_story(plan_name, story_key, story, manifest_path)
+            commit_story(plan_name, story_key, story)
             return {"ok": True, "verdict": verdict, "status": story["status"]}
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
@@ -910,7 +910,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                                 f"without spending a rework attempt.",
                                 **_rework_kwargs,
                             )
-                            commit_story(plan_name, story_key, story, manifest_path)
+                            commit_story(plan_name, story_key, story)
                             return {
                                 "ok": True,
                                 "verdict": verdict,
@@ -987,7 +987,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
                 except (subprocess.CalledProcessError, OSError) as exc:
                     _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.", **_rework_kwargs)
-    commit_story(plan_name, story_key, story, manifest_path)
+    commit_story(plan_name, story_key, story)
     return {
         "ok": True,
         "verdict": verdict,

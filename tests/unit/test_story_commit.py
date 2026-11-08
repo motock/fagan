@@ -181,7 +181,7 @@ def test_commit_story_replaces_only_the_named_story(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_atomic_write_json", writer)
 
     story = {"status": "reviewed", "branch": "b1"}
-    story_commit.commit_story(PLAN, "S1", story, path)
+    story_commit.commit_story(PLAN, "S1", story)
 
     assert writer.call_count == 1
     written_path, written = writer.call_args[0]
@@ -209,7 +209,7 @@ def test_commit_story_missing_story_warns_and_writes_nothing(
     monkeypatch.setattr(p, "_atomic_write_json", writer)
 
     with caplog.at_level(logging.WARNING):
-        story_commit.commit_story(PLAN, "S9", {"status": "reviewed"}, path)
+        story_commit.commit_story(PLAN, "S9", {"status": "reviewed"})
 
     assert writer.call_count == 0
     assert path.read_bytes() == before
@@ -220,7 +220,7 @@ def test_commit_story_missing_story_warns_and_writes_nothing(
 
     # A later commit of an existing story still works and does not resurrect
     # the dropped one (setdefault would).
-    story_commit.commit_story(PLAN, "S1", {"status": "reviewed"}, path)
+    story_commit.commit_story(PLAN, "S1", {"status": "reviewed"})
     assert writer.call_count == 1
     written = writer.call_args[0][1]
     assert written["stories"]["S2"] == {"status": "todo"}
@@ -238,7 +238,7 @@ def test_commit_story_raises_when_plan_lock_never_acquired(plan_dir, monkeypatch
     holder = _hold_lock_in_subprocess(lock_path, 10)
     try:
         with pytest.raises(pcon.PlanLockReacquireTimeout):
-            story_commit.commit_story(PLAN, "S1", {"status": "reviewed"}, path)
+            story_commit.commit_story(PLAN, "S1", {"status": "reviewed"})
     finally:
         holder.kill()
         holder.wait(timeout=5)
@@ -264,9 +264,9 @@ def test_commit_story_is_reentrant_under_a_held_plan_lock(plan_dir, monkeypatch)
         try:
             with pcon._plan_lock(PLAN) as acquired:
                 assert acquired is True
-                story_commit.commit_story(PLAN, "S1", {"status": "reviewed"}, path)
+                story_commit.commit_story(PLAN, "S1", {"status": "reviewed"})
                 # Reads the file again: must see the first commit's write.
-                story_commit.commit_story(PLAN, "S2", {"status": "reviewed"}, path)
+                story_commit.commit_story(PLAN, "S2", {"status": "reviewed"})
         except BaseException as exc:  # noqa: BLE001 - surfaced to the parent
             errors.append(exc)
 

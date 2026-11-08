@@ -70,5 +70,5 @@ def park_rate_limited_review(
         f"{story_key} parked: {story['parked_reason']}.",
         **cid_kwargs,
     )
-    commit_story(plan_name, story_key, story, manifest_path)
+    commit_story(plan_name, story_key, story)
     return {"ok": False, "status": "parked", "deferred": "rate_limited"}

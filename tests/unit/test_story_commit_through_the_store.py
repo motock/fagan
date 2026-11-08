@@ -94,7 +94,7 @@ def test_should_write_the_story_through_the_record_store_when_the_lock_is_held(
 
     with pcon._plan_lock(PLAN) as acquired:
         assert acquired, "test could not take the plan lock"
-        story_commit.commit_story(PLAN, "s1", _updated(), decoy)
+        story_commit.commit_story(PLAN, "s1", _updated())
 
     assert decoy.read_bytes() == decoy_before, (
         "the write followed the caller's manifest_path instead of the store"
@@ -115,7 +115,7 @@ def test_should_write_the_story_through_the_record_store_after_taking_the_lock(
     decoy_before = decoy.read_bytes()
     store_path = _seed(plan_dir, _stale())
 
-    story_commit.commit_story(PLAN, "s1", _updated(), decoy)
+    story_commit.commit_story(PLAN, "s1", _updated())
 
     assert decoy.read_bytes() == decoy_before, (
         "the write followed the caller's manifest_path instead of the store"
@@ -148,7 +148,7 @@ def test_should_not_write_when_the_lock_is_busy(plan_dir, monkeypatch):
         assert holding.wait(_NO_BLOCK_SECONDS), "holder never took the lock"
         started = time.monotonic()
         with pytest.raises(pcon.PlanLockReacquireTimeout):
-            story_commit.commit_story(PLAN, "s1", _updated(), store_path)
+            story_commit.commit_story(PLAN, "s1", _updated())
         elapsed = time.monotonic() - started
         assert elapsed < _NO_BLOCK_SECONDS, "commit_story blocked on a busy lock"
         assert store_path.read_bytes() == before, "a busy lock must not write"
@@ -160,7 +160,7 @@ def test_should_not_write_when_the_lock_is_busy(plan_dir, monkeypatch):
 
     # The losing caller must have left the lock state intact: the same commit
     # succeeds once the holder is gone.
-    story_commit.commit_story(PLAN, "s1", _updated(), store_path)
+    story_commit.commit_story(PLAN, "s1", _updated())
     written = json.loads(store_path.read_text())
     assert set(written["stories"]) == {"s0", "s1"}
     assert written["stories"]["s1"] == _updated()
@@ -174,7 +174,7 @@ def test_should_raise_and_not_write_when_the_manifest_is_missing(
     assert not store_path.exists()
 
     with pytest.raises(FileNotFoundError) as caught:
-        story_commit.commit_story(PLAN, "s1", _updated(), store_path)
+        story_commit.commit_story(PLAN, "s1", _updated())
 
     message = str(caught.value)
     assert str(tmp_path) not in message, "message leaked a filesystem path"
@@ -192,9 +192,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(plan_dir, tmp_path):
     before = store_path.read_bytes()
 
     with pytest.raises(Exception) as caught:
-        story_commit.commit_story(
-            rejected, "s1", _updated(), plan_dir / f"{rejected}.manifest.json"
-        )
+        story_commit.commit_story(rejected, "s1", _updated())
 
     assert isinstance(caught.value, ValueError), (
         f"expected a ValueError, got {type(caught.value).__name__}"
@@ -208,7 +206,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(plan_dir, tmp_path):
 
     # The plan lock taken for the rejected name must have been released: a
     # later commit of a valid plan still writes.
-    story_commit.commit_story(PLAN, "s1", _updated(), store_path)
+    story_commit.commit_story(PLAN, "s1", _updated())
     written = json.loads(store_path.read_text())
     assert written["stories"]["s1"] == _updated(), (
         "the rejected call left the plan lock held"

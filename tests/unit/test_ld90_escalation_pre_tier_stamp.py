@@ -262,8 +262,13 @@ def test_helper_is_module_level_and_keeps_the_repo_root_adjacency():
 
 # --------------------------------------------------------------------------
 # 8. the survivor bookkeeping still happens
+# --------------------------------------------------------------------------
+def test_survivor_bookkeeping_still_happens(fake_git, tmp_path):
     manifest = _manifest("S8")
     story = manifest["stories"]["S8"]
+    # The reset is persisted through the plan's record store, which derives its
+    # target from PLAN_DIR (the autouse fixture pins that at tmp_path); the
+    # caller's manifest_path argument is still threaded and names that file.
     manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_claude(manifest, "plan", "S8", manifest_path)
@@ -274,4 +279,7 @@ def test_helper_is_module_level_and_keeps_the_repo_root_adjacency():
     assert story["status"] == "todo"
     assert story["escalated"] is True
     assert manifest_path.exists()
-    assert manifest_path.exists()
+    written = server._store.records().get_manifest("default", "plan")
+    assert written is not None, "the manifest must still be persisted"
+    assert written["stories"]["S8"]["status"] == "todo"
+    assert written["stories"]["S8"]["escalated"] is True

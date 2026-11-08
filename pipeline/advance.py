@@ -13,7 +13,6 @@ time - the same circular-avoidance pattern used by pipeline/service.py,
 pipeline/dispatch.py and pipeline/merge.py.
 """
 
-import json
 import logging
 import os
 from typing import Any
@@ -307,6 +306,14 @@ def _warn_file_overlaps(plan_name: str, stories: dict, ready: list[str], neighbo
             )
 
 
+def _fresh_manifest(plan_name: str) -> dict[str, Any]:
+    """Fresh store read (never a get_manifests snapshot); raise if it is gone."""
+    manifest = _store.records().get_manifest("default", plan_name)
+    if manifest is None:
+        raise FileNotFoundError("manifest not found")
+    return manifest
+
+
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     manifest_path = _store.manifest_path(plan_name)
     if not manifest_path.exists():
@@ -534,16 +541,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 if not status.get("ok", True):
                     gated.append(key)
                     continue
-            # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch
-            # lease (LOCKSTARVE-B2) before releasing the plan lock around
-            # dispatch_story below. The check-then-set must run against a
-            # FRESH on-disk read, not the top-of-tick in-memory `story` - an
-            # earlier iteration of this same loop already released and
-            # re-acquired the lock once, so another owner may have claimed
-            # this story's lease or advanced its status during that window.
-            # Claiming against the stale in-memory copy would both miss a
-            # live lease already on disk and clobber it with our own.
-            m = json.loads(manifest_path.read_text())
+            # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch lease
+            # (LOCKSTARVE-B2) before releasing the plan lock around
+            # dispatch_story below. The check-then-set must run against a fresh
+            # read, not the top-of-tick `story`: an earlier iteration already
+            # released the lock, so another owner may hold this story's lease -
+            # claiming stale would miss it and clobber it with our own.
+            m = _fresh_manifest(plan_name)
             fresh_story = m["stories"].get(key)
             if fresh_story is None:
                 # A re-ingest during an earlier release window can drop this
@@ -556,9 +560,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 continue
             if not claim_dispatch_lease(fresh_story):
                 continue
-            # Persist the claim BEFORE releasing the lock - an unpersisted
-            # lease protects nothing.
-            _atomic_write_json(manifest_path, m)
+            # Persist the claim BEFORE releasing the lock: an unpersisted lease
+            # protects nothing.
+            _store.records().put_manifest("default", plan_name, m)
             if capped and on_device and not holds_slot:
                 # Only a dispatch that actually launches on-device consumes
                 # the slot; a cloud dispatch must not touch the counter.
@@ -607,15 +611,12 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # instead; the next tick starts clean.
                 raise
             except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
-                # Re-read: dispatch_story only writes the manifest on a
-                # successful launch, so on a raise the on-disk status is
-                # still todo/interrupted - bump the attempt counter there.
-                # This also clears the dispatch lease from the SAME fresh
-                # read: the lock was released around dispatch_story above,
-                # so the manifest may have changed underneath us and only a
-                # freshly re-read copy may be written back (never the stale
-                # top-of-tick `manifest`/`stories`/`story` references).
-                m = json.loads(manifest_path.read_text())
+                # Re-read: dispatch_story only writes on a successful launch,
+                # so on a raise the recorded status is still todo/interrupted -
+                # bump the attempt counter there, and clear the lease from the
+                # SAME fresh read: the lock was released above, so only a
+                # freshly re-read copy may be written back (never a stale one).
+                m = _fresh_manifest(plan_name)
                 st = m["stories"][key]
                 st.pop("dispatch_lease_expires_at", None)
                 st.pop("dispatch_lease_owner_pid", None)
@@ -653,16 +654,15 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         **_cid_kwargs,
                     )
                 summary["notify"].append(key)
-                _atomic_write_json(manifest_path, m)
+                _store.records().put_manifest("default", plan_name, m)
             else:
-                # Dispatch succeeded (or was skipped due to store-lock
-                # contention): clear the lease from a fresh read too, for the
-                # same stale-reference reason as the except branch above.
-                m = json.loads(manifest_path.read_text())
+                # Dispatch succeeded (or was skipped on store-lock contention):
+                # clear the lease from a fresh read too, as in the except above.
+                m = _fresh_manifest(plan_name)
                 st = m["stories"][key]
                 st.pop("dispatch_lease_expires_at", None)
                 st.pop("dispatch_lease_owner_pid", None)
-                _atomic_write_json(manifest_path, m)
+                _store.records().put_manifest("default", plan_name, m)
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate
@@ -673,7 +673,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # stalling in_progress unpolled — dispatch and interruption are already
         # per-story, so polling must be too. Review below stays gated by the
         # REVIEW backend (review_ok); merge (further below) is unconditional.
-        manifest = json.loads(manifest_path.read_text())
+        manifest = _fresh_manifest(plan_name)
         stories = manifest["stories"]
         for key, story in stories.items():
             if story["status"] != "in_progress" or "pid" not in story:
@@ -722,7 +722,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     and not story.get("escalated")
                     and _escalation_target() != (story.get("backend"), story.get("model"))
                 ):
-                    manifest = json.loads(manifest_path.read_text())
+                    manifest = _fresh_manifest(plan_name)
                     _escalate_to_claude(manifest, plan_name, key, manifest_path)
                     _notify_user(
                         plan_name,
@@ -746,7 +746,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     # never escalates to Claude - just gives one other
                     # local model a shot before the terminal park/fail
                     # path below.
-                    manifest = json.loads(manifest_path.read_text())
+                    manifest = _fresh_manifest(plan_name)
                     failed_model = (
                         story.get("dispatched_model")
                         or story.get("model")
@@ -824,11 +824,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         # writing the tick's stale top-of-loop `manifest` back
                         # would revert it to in_progress. Only the rewritten
                         # brief is carried over.
-                        fresh = json.loads(manifest_path.read_text())
+                        fresh = _fresh_manifest(plan_name)
                         fresh["stories"][key]["agent_instructions"] = story[
                             "agent_instructions"
                         ]
-                        _atomic_write_json(manifest_path, fresh)
+                        _store.records().put_manifest("default", plan_name, fresh)
                         if story["agent_instructions"] != previous_instructions:
                             _notify_user(
                                 plan_name,
@@ -873,7 +873,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # is on Claude and Claude is gated.
         if review_ok:
             clear_review_gate_notice(plan_name)
-            stories = json.loads(manifest_path.read_text())["stories"]
+            stories = _fresh_manifest(plan_name)["stories"]
             # LOCKSTARVE-B4: release the plan lock around review_story, the
             # same synchronous model-call-heavy pattern LOCKSTARVE-B3 applied
             # to dispatch_story. No dispatch lease is needed here -
@@ -899,7 +899,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # consider is safe to snapshot; the status of each must be
             # re-read per iteration.
             for key in list(stories.keys()):
-                fresh_story = json.loads(manifest_path.read_text())["stories"].get(key)
+                fresh_story = _fresh_manifest(plan_name)["stories"].get(key)
                 if fresh_story is None:
                     continue
                 # The detached path also sees a story an operator moved out of

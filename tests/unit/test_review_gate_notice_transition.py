@@ -130,8 +130,11 @@ class _FakeStore:
     def manifest_path(self, plan_name):
         return self.path
 
-    def get_manifest(self, plan_name):
+    def get_manifest(self, *args):
         return json.loads(self.path.read_text())
+
+    def put_manifest(self, namespace, plan_name, manifest):
+        self.path.write_text(json.dumps(manifest))
 
     def records(self):
         return self

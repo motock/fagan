@@ -63,21 +63,61 @@ def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
+def _plan_manifest(plan_name: str) -> dict[str, Any] | None:
+    """Read one plan's manifest, record store first, plan directory second.
+
+    The store's record view is the source of truth (ADR 0012 stage B),
+    mirroring ``pipeline.checkpoint._plan_manifest`` and
+    ``pipeline.cross_plan.neighbour_manifests``: under a store-backed
+    deployment this reads the database's manifest instead of this host's file,
+    so a role_config written by another host - or by an ingest into the store -
+    decides how roles resolve here. The legacy plan-directory read stays as the
+    fallback, which keeps a store with no record view (an in-process stand-in)
+    working unchanged; a plan the record view does not know about falls back to
+    the file too, and a plan neither source knows returns ``None``.
+
+    A manifest a source does yield is returned as the answer: a store manifest
+    without a role_config block means "no override", never "ask the file".
+    The read is a pure read (the caller only reads the returned snapshot) and
+    is never a gate, so a broken store or an unreadable file degrades to
+    ``None`` instead of raising.
+    """
+    from .server import _store
+
+    records = getattr(_store, "records", None)
+    if callable(records):
+        try:
+            manifest = records().get_manifest("default", plan_name)
+        except Exception:  # a role_config read is never a gate
+            logger.debug(
+                "record store manifest read failed for plan %s", plan_name,
+                exc_info=True,
+            )
+            manifest = None
+        if isinstance(manifest, dict):
+            return manifest
+
+    path = PLAN_DIR / f"{plan_name}.manifest.json"
+    try:
+        manifest = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
 def _plan_role_config(plan_name: str) -> dict:
     """A plan's role_config block (per-role provider/model overrides, set at
     save_plan/ingest_plan time - see role_registry.py's resolve_role()),
     or {} if the plan/manifest doesn't exist, doesn't set one, or the
-    manifest is unreadable. Read fresh each call, mirroring the codebase's
-    other small manifest readers (_read_journal above) - never a gate, so
-    any read failure degrades to "no override" rather than raising.
+    manifest is unreadable. Read fresh each call through _plan_manifest
+    above - never a gate, so any read failure degrades to "no override"
+    rather than raising, and anything that is not a mapping is ignored.
     """
-    path = PLAN_DIR / f"{plan_name}.manifest.json"
-    if not path.exists():
+    manifest = _plan_manifest(plan_name)
+    if manifest is None:
         return {}
-    try:
-        return json.loads(path.read_text()).get("role_config", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
+    role_config = manifest.get("role_config")
+    return role_config if isinstance(role_config, dict) else {}
 
 # ---------- Notification JSONL helpers ----------
 

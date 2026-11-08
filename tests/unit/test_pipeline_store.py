@@ -195,9 +195,13 @@ def test_save_manifest_overwrites_existing(plan_dir):
 
 def test_save_manifest_writes_to_manifest_path(plan_dir):
     # save_manifest must write to the same path manifest_path reports.
+    # Serialization format is not this test's concern (the shared atomic JSON
+    # writer's indent=2 output is covered by test_file_store_manifest_writer.py);
+    # the content written to that path must still parse back to the manifest.
     manifest = {"k": "v"}
     p._store.save_manifest("demo", manifest)
-    assert p._store.manifest_path("demo").read_text() == json.dumps(manifest)
+    assert _read_manifest(plan_dir, "demo") == manifest
+    assert json.loads(p._store.manifest_path("demo").read_text()) == manifest
 
 
 # ---------------------------------------------------------------------------

@@ -77,21 +77,72 @@ def _consumer_status(daemon) -> dict:
     return probe()
 
 
-def _notify_transition(durable: str, transition: str) -> None:
-    """Tell the user about one stall transition, or skip if we cannot route it.
+def _first_plan_name() -> str | None:
+    """Name of the first plan, from the record store when there is one.
 
-    Attribution mirrors :meth:`SchedulerDaemon._notify_if_checkout_stale`: the
-    notice goes to the first manifest plan. That is a stopgap — the alert is
-    operator-audience, not that plan's — so it is flagged for the tenancy work.
+    Platform-wide notices have no plan of their own, so they are attributed to
+    the first plan as a stopgap (the alert is operator-audience, not that plan's
+    — see enterprise ADR 0001). "First" is the sorted-first name, so the same
+    deployment keeps attributing to the same plan instead of following whatever
+    order the filesystem happens to return.
+
+    The plans are enumerated the way a manifest is read (see
+    :mod:`pipeline.manifest_source`): the store's record view first, this host's
+    plan directory second. The legacy :class:`pipeline.store.FileStore`'s record
+    view reads the same JSON files through a binding of its own, so it is not a
+    second source — with it (or any store without a usable record view) the glob
+    over ``paths.PLAN_DIR`` *is* the primary read, which also keeps this read on
+    the binding the tests patch.
+
+    Advisory, like the rest of the tick: a store that cannot list its plans is
+    logged at debug level and degrades to the file, and ``None`` means "no plan
+    to attribute to yet" rather than an error.
     """
-    # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
-    plan_name = next(
+    names = _record_plan_names()
+    if names:
+        return min(names)
+    return next(
         (
             path.name.removesuffix(".manifest.json")
             for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
         ),
         None,
     )
+
+
+def _record_plan_names() -> list[str] | None:
+    """Plan names recorded by the store, or ``None`` when it has no record view.
+
+    Looked up lazily so a test that patches ``pipeline.server._store`` is
+    honoured, and never raises: this is an advisory read.
+    """
+    from pipeline import server
+    from pipeline.store import FileStore
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    store = getattr(server, "_store", None)
+    if store is None or isinstance(store, FileStore):
+        return None
+    records = getattr(store, "records", None)
+    if not callable(records):
+        return None
+    try:
+        lister = records().list_plans
+        return list(lister(DEFAULT_NAMESPACE))
+    except Exception:
+        logger.debug("record store plan listing failed", exc_info=True)
+        return None
+
+
+def _notify_transition(durable: str, transition: str) -> None:
+    """Tell the user about one stall transition, or skip if we cannot route it.
+
+    Attribution is :func:`_first_plan_name`: the notice goes to the first plan
+    the record store (or this host) knows. That is a stopgap — the alert is
+    operator-audience, not that plan's — so it is flagged for the tenancy work.
+    """
+    # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
+    plan_name = _first_plan_name()
     if plan_name is None:
         return
     if transition == "consumer_stalled":
@@ -119,19 +170,13 @@ def _notify_transition(durable: str, transition: str) -> None:
 def _notify_outbox(event: str, summary: dict) -> None:
     """Tell the user the outbox stalled, or that it is draining again.
 
-    Attribution mirrors :meth:`SchedulerDaemon._notify_if_checkout_stale`: the
-    notice goes to the first manifest plan. The outbox is instance-wide, so that
+    Attribution is :func:`_first_plan_name`: the notice goes to the first plan
+    the record store (or this host) knows. The outbox is instance-wide, so that
     plan owns a platform-wide alert that is not really its own -- which is why
-    the same stopgap is flagged for the tenancy work there.
+    the same stopgap is flagged for the tenancy work.
     """
     # TENANCY: platform notice attributed to first plan; see enterprise ADR 0001
-    plan_name = next(
-        (
-            path.name.removesuffix(".manifest.json")
-            for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
-        ),
-        None,
-    )
+    plan_name = _first_plan_name()
     if plan_name is None:
         return
     if event == "outbox_stale":

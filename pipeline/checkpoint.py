@@ -204,6 +204,28 @@ def _terminate_and_checkpoint(
     return sha
 
 
+def _plan_manifest(plan_name: str) -> dict[str, Any]:
+    """Read one plan's manifest through the store's record view.
+
+    The record view is the source of truth (ADR 0012 stage B), mirroring
+    :func:`pipeline.cross_plan.neighbour_manifests`: under a store-backed
+    deployment this reads the database's manifest instead of this host's file,
+    so a checkpoint taken by another host is visible here. A store with no
+    record view (an in-process stand-in) keeps working through the legacy
+    plan-directory read, which is also where a plan the record view does not
+    know about falls back to. The returned manifest is a read-only snapshot:
+    the caller only reads it.
+    """
+    from .server import PLAN_DIR, _store
+
+    records = getattr(_store, "records", None)
+    if callable(records):
+        manifest = records().get_manifest("default", plan_name)
+        if manifest is not None:
+            return manifest
+    return json.loads((PLAN_DIR / f"{plan_name}.manifest.json").read_text())
+
+
 def _checkpoint_impl(
     plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
 ) -> dict[str, Any]:
@@ -212,11 +234,10 @@ def _checkpoint_impl(
     calls this in-process for its `checkpoint` tool) without exposing this
     whole server's orchestration toolset (dispatch_story, approve_merge,
     advance_pipeline, ...) to a dispatched agent."""
-    from .server import PLAN_DIR, _validate_key
+    from .server import _validate_key
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = _plan_manifest(plan_name)
     story = manifest["stories"].get(story_key)
     if not story:
         return {"ok": False, "error": f"No such story {story_key}"}

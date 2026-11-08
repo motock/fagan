@@ -176,11 +176,15 @@ def neighbour_manifests(store, plan_name: str) -> dict[str, dict]:
 
     The store's record view is the source of truth (ADR 0012 stage B): one
     :meth:`get_manifests` call, so a store-backed deployment reads the
-    database's manifests instead of this host's files, and the manifest parse
-    cache plus the skip-and-warn for an unreadable manifest come from
-    :func:`load_manifests`. The values are read-only snapshots: callers only
-    read them. A store with no record view (an in-process stand-in) keeps
-    working through the legacy plan-directory scan.
+    database's manifests instead of this host's files. The values are
+    read-only snapshots: callers only read them.
+
+    A store with no record view (an in-process stand-in) keeps working through
+    the legacy plan-directory scan, :func:`load_manifests` - and *only* that
+    fallback branch has the manifest parse cache (size-and-mtime) and the
+    skip-and-warn for an unreadable manifest. The store branch neither reads
+    nor populates ``_MANIFEST_CACHE``: its manifests come fresh from
+    :meth:`get_manifests` each call.
     """
     records = getattr(store, "records", None)
     if callable(records):

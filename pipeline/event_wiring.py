@@ -80,7 +80,7 @@ def wake_handler(event: dict) -> dict:
         raise KeyError as a programming error.
 
     The manifest comes from :func:`pipeline.manifest_source.read_plan_manifest`:
-    the store's record view first, this host's ``PLAN_DIR`` second (ADR 0012
+    the store's record view first, this host's plan directory second (ADR 0012
     stage B), so a store-backed deployment decides the precondition from the
     database's record.
 

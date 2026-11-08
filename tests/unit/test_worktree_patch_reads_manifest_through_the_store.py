@@ -219,15 +219,20 @@ def test_should_fall_back_to_the_plan_dir_when_the_store_has_no_manifest(
     _assert_refusal(result, error="story is active", status_code=409)
 
 
-def test_should_fall_back_to_the_plan_dir_when_the_store_raises(
+def test_should_propagate_a_store_failure_instead_of_reading_the_plan_dir(
     plan_dir, repo, store
 ):
+    """A store ERROR must propagate, not silently fall back to this host's file.
+
+    Same contract as ``pipeline.checkpoint._plan_manifest``: a store-backed
+    deployment whose database errors must not have its patch target resolved
+    from the local plan copy -- that would apply a diff to a stale worktree.
+    """
     store(_FakeRecordStore(raises=RuntimeError("store unavailable")))
     _write_manifest(plan_dir, _manifest("in_progress", str(repo)))
 
-    result = apply_patch(PLAN_NAME, STORY_KEY, "wp-not-a-real-id", "whatever")
-
-    _assert_refusal(result, error="story is active", status_code=409)
+    with pytest.raises(RuntimeError, match="store unavailable"):
+        apply_patch(PLAN_NAME, STORY_KEY, "wp-not-a-real-id", "whatever")
 
 
 def test_should_fall_back_to_the_plan_dir_for_a_store_without_a_record_view(

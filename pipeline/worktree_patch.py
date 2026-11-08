@@ -549,9 +549,14 @@ def apply_patch(
 
     1. plan lock -- the WHOLE body runs inside the ``with`` block, so the
        60s scheduler tick can never redispatch mid-apply;
-    2. manifest read (lazy ``from .server import PLAN_DIR`` inside the
-       function, mirroring ``pipeline/checkpoint.py``, so a test that
-       patches ``pipeline.server.PLAN_DIR`` is honoured);
+    2. manifest read through the store's RECORD VIEW first --
+       ``_store.records().get_manifest("default", plan_name)``, the
+       ``pipeline/checkpoint.py`` / ``pipeline.cross_plan.py`` pattern (ADR
+       0012 stage B) -- with the legacy plan-directory file read (a lazy
+       ``from .server import PLAN_DIR`` inside the function, so a test that
+       patches ``pipeline.server.PLAN_DIR`` is honoured) as the FALLBACK.
+       Neither source yielding a manifest fails closed to a 404
+       ("unknown plan");
     3. stuck-only gate (``in_progress`` / ``running`` are refused);
     4. patch record + HMAC confirmation token + single-use status;
     5. worktree must be a directory;
@@ -590,10 +595,12 @@ def apply_patch(
         records = getattr(getattr(server, "_store", None), "records", None)
         manifest = None
         if callable(records):
-            try:
-                manifest = records().get_manifest("default", plan_name)
-            except Exception:  # noqa: BLE001 - fail closed to the legacy read
-                manifest = None
+            #    A store FAILURE propagates, exactly like
+            #    ``pipeline.checkpoint._plan_manifest``: silently falling back
+            #    to this host's plan file when a store-backed deployment's
+            #    database errors would resolve the patch target from the wrong
+            #    copy of the plan (and could apply a diff to a stale worktree).
+            manifest = records().get_manifest("default", plan_name)
         if not isinstance(manifest, dict):
             manifest_path = server.PLAN_DIR / f"{plan_name}.manifest.json"
             try:

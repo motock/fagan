@@ -39,6 +39,12 @@ class _FakeRecordStore:
         assert namespace == "default"
         return dict(self._manifests)
 
+    def put_manifest(self, namespace, plan_name, manifest):
+        # dispatch_story persists its own claim/brief update through the
+        # record store (ADR 0012); keep the fake's view in step with it.
+        assert namespace == "default"
+        self._manifests[plan_name] = manifest
+
     @contextlib.contextmanager
     def transaction(self, plan_name):
         yield True

@@ -11,6 +11,7 @@ using the exact key spelling it always has.
 """
 
 import contextlib
+import json
 
 import pytest
 
@@ -86,6 +87,20 @@ class _FakeStore:
 
     def get_manifest(self, plan_name):
         return self._manifest
+
+    # dispatch_story persists its own claim/brief update through the record
+    # store (ADR 0012); mirror the file projection the real FileRecords writes.
+    def records(self):
+        return self
+
+    def put_manifest(self, namespace, plan_name, manifest):
+        self._manifest_path.write_text(json.dumps(manifest))
+        self._manifest = manifest
+
+    def get_manifests(self, namespace):
+        # No other plan exists in this stand-in world; the real record view
+        # would return every other plan's manifest.
+        return {}
 
 
 @pytest.fixture

@@ -119,3 +119,19 @@ class InMemoryRecordStore:
             self._journals.setdefault((namespace, plan_name, story_key), []).append(
                 copy.deepcopy(record)
             )
+
+    def clear_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> None:
+        """Forget the journal for exactly this story in this namespace.
+
+        Only the one ``(namespace, plan_name, story_key)`` entry is removed, so
+        other stories and other plans keep their journals.  An absent journal
+        is a silent no-op, which is why the entry is popped rather than
+        deleted.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        with self._lock:
+            self._journals.pop((namespace, plan_name, story_key), None)

@@ -546,3 +546,17 @@ class SqliteRecords:
         if not isinstance(record, dict):
             raise TypeError('record must be a dict')
         self._store.append_journal(plan_name, story_key, record)
+
+    def clear_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> None:
+        """Delete a story's journal through the file store's record view.
+
+        The journal is a file sidecar this store does not own, so the deletion
+        is delegated to the record view whose writer appended it, resolved per
+        call -- the same delegate ``get_journal`` reads through.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        self._store._files.records().clear_journal(namespace, plan_name, story_key)

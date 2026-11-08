@@ -561,6 +561,22 @@ class FileRecords:
             raise TypeError('record must be a dict')
         self._store.append_journal(plan_name, story_key, record)
 
+    def clear_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> None:
+        """Delete a story's journal so a re-dispatch starts clean.
+
+        The keys are validated before any path is built, so an invalid plan
+        name or story key is refused as :class:`InvalidRecordKeyError` rather
+        than turned into a path.  The file removed is the one this view's own
+        writer appends to, resolved per call; an absent journal is a no-op.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_story_key(story_key)
+        self._refuse_other_namespace(namespace)
+        _persistence()._journal_path(plan_name, story_key).unlink(missing_ok=True)
+
 
 STORE_INVALID = "invalid"
 

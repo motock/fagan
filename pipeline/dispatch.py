@@ -73,7 +73,6 @@ validate_acceptance_fixtures = _ServerRef("validate_acceptance_fixtures")
 # still lands. _ServerRef.__call__ delegates to the live attribute, so it is
 # a drop-in for callables too, not just plain values.
 _notify_user = _ServerRef("_notify_user")
-_atomic_write_json = _ServerRef("_atomic_write_json")
 _count_in_progress_agents = _ServerRef("_count_in_progress_agents")
 _default_branch = _ServerRef("_default_branch")
 _rebase_onto_master = _ServerRef("_rebase_onto_master")
@@ -145,7 +144,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             return {"ok": False, "error": str(exc), "story_key": story_key}
         if not story.get("correlation_id"):
             story["correlation_id"] = uuid.uuid4().hex[:12]
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)
         worktree_path = WORKTREE_ROOT / worktree_dir_name(story_key)
         # Branch and worktree derive from the key alone, so a key another plan
         # still holds would adopt that plan's worktree (as a "resume") and
@@ -292,7 +291,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                     f"worktree still behind "
                                     f"origin/{_default_branch()}"
                                 )
-                                _atomic_write_json(manifest_path, manifest)
+                                _store.records().put_manifest("default", plan_name, manifest)
                                 _notify_user(
                                     plan_name,
                                     f"story {story_key} parked: rebase conflict "
@@ -622,7 +621,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} not dispatched: acceptance oracle is "
                     f"unusable ({oracle_check['state']}) - {oracle_check['detail']}",
                 )
-                _atomic_write_json(manifest_path, manifest)
+                _store.records().put_manifest("default", plan_name, manifest)
                 return {
                     "status": "blocked_oracle",
                     "oracle_gate": oracle_check,
@@ -954,7 +953,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # so the baseline is always current regardless of how the next rework
         # is routed.
         story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
-        _atomic_write_json(manifest_path, manifest)
+        _store.records().put_manifest("default", plan_name, manifest)
 
         # W4-logging slice: stamp the success event with the story's
         # correlation ID (plus the role/model context already in scope here)

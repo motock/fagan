@@ -304,7 +304,9 @@ def test_preauthorize_returns_verdict_and_writes_manifest_once(tmp_path, seams):
     }
     assert story["status"] == "changes_requested"
     assert len(seams["writes"]) == 1
-    assert seams["writes"][0] == tmp_path / "pc.manifest.json"
+    # The ruling is persisted through the record store, so the shared atomic
+    # writer sees the store's manifest path, not the caller's handle.
+    assert seams["writes"][0] == p.PLAN_DIR / f"{PLAN}.manifest.json"
     assert story["plan_conflict_ruling"]["files"] == ["tests/test_a.py"]
     assert len(seams["rule_calls"]) == 1
     assert seams["rule_calls"][0][2] == {"overlord": "m"}

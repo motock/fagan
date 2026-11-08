@@ -529,7 +529,9 @@ def _plan_conflict_intercept(
             # The ruling is recorded on the story, but a regression is an
             # ordinary failure: the caller keeps today's path.
             return None
-        _atomic_write_json(manifest_path, manifest)
+        from .server import _store
+
+        _store.records().put_manifest("default", plan_name, manifest)
         return {"status": story["status"], "pid": pid, "plan_conflict": outcome}
     except Exception as exc:  # noqa: BLE001 - fail open: never abort a grade
         logger.warning(

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from pipeline import triage
+from pipeline import server, triage
 from pipeline import triage_scope_actions as tsa
 from pipeline.triage_scope_actions import _execute_amend_scope, check_scope_amendment
 
@@ -113,7 +113,9 @@ def env(monkeypatch, tmp_path):
         tsa, "_record_execution", lambda *a, **k: records.append((a, k)), raising=False
     )
     monkeypatch.setattr(tsa, "_worktree_head", lambda story: HEAD)
-    path = tmp_path / "m.json"
+    # The write goes through the record store, so it lands on the store's
+    # manifest path (<PLAN_DIR>/plan.manifest.json), not on the caller's handle.
+    path = server.PLAN_DIR / "plan.manifest.json"
     return notes, records, path
 
 

@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from .module_ref import _ModuleRef
-from .parsers import _atomic_write_json
 from .persistence import _notify_user
 
 _park = _ModuleRef("pipeline.triage", "_park")
@@ -156,7 +155,11 @@ def _execute_amend_scope(plan_name, story_key, story, ruling, manifest, manifest
     stories = manifest.get("stories") if isinstance(manifest, dict) else None
     if isinstance(stories, dict) and stories.get(story_key) is not story:
         stories[story_key] = story
-    _atomic_write_json(manifest_path, manifest)
+    # Write through the record store at the same position: the caller
+    # (run_triage_sweep, under the advance tick's plan lock) owns the lock.
+    from .server import _store
+
+    _store.records().put_manifest("default", plan_name, manifest)
 
     cid = story.get("correlation_id")
     try:

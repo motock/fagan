@@ -174,7 +174,11 @@ def test_should_not_write_when_there_are_no_candidates(monkeypatch, manifest_pat
     _write(manifest_path, manifest)
     before = manifest_path.stat().st_mtime_ns
     writes = []
-    monkeypatch.setattr(triage_mod, "_atomic_write_json", lambda *a: writes.append(a))
+    import pipeline.server as p
+
+    # The write now goes the record store -> FileStore.save_manifest ->
+    # server._atomic_write_json, so the shared atomic writer is the seam.
+    monkeypatch.setattr(p, "_atomic_write_json", lambda *a: writes.append(a))
 
     result = triage_mod.run_triage_sweep(PLAN_NAME)
 

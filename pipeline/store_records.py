@@ -118,6 +118,10 @@ class RecordStore(Protocol):
         self, namespace: str, plan_name: str, story_key: str, record: dict
     ) -> None: ...
 
+    def clear_journal(
+        self, namespace: str, plan_name: str, story_key: str
+    ) -> None: ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -128,4 +132,5 @@ RECORD_STORE_METHODS = (
     'append_decision',
     'get_journal',
     'append_journal',
+    'clear_journal',
 )

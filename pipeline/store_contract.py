@@ -149,6 +149,35 @@ class RecordStoreContract:
         ]
         assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _OTHER_STORY_KEY) == [{'entry': 2}]
 
+    def test_clear_then_get_journal_returns_empty(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 1})
+        store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY)
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == []
+
+    def test_clear_of_an_absent_journal_is_a_no_op(self):
+        store = self.make_store()
+        store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY)
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == []
+
+    def test_clear_leaves_other_stories_and_other_plans_untouched(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 'cleared'})
+        store.append_journal(
+            DEFAULT_NAMESPACE, _PLAN, _OTHER_STORY_KEY, {'entry': 'other-story'}
+        )
+        store.append_journal(
+            DEFAULT_NAMESPACE, _OTHER_PLAN, _STORY_KEY, {'entry': 'other-plan'}
+        )
+        store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY)
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == []
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _OTHER_STORY_KEY) == [
+            {'entry': 'other-story'}
+        ]
+        assert store.get_journal(DEFAULT_NAMESPACE, _OTHER_PLAN, _STORY_KEY) == [
+            {'entry': 'other-plan'}
+        ]
+
     # -- invalid plan names --------------------------------------------
     def test_get_manifest_rejects_an_invalid_plan_name(self):
         store = self.make_store()
@@ -190,6 +219,17 @@ class RecordStoreContract:
             lambda: store.append_journal(DEFAULT_NAMESPACE, _INVALID_KEY, _STORY_KEY, {'entry': 1}),
         )
 
+    def test_clear_journal_rejects_an_invalid_plan_name(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 1})
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.clear_journal(DEFAULT_NAMESPACE, _INVALID_KEY, _STORY_KEY),
+        )
+        # A rejected call writes nothing: the journal it named is untouched.
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == [{'entry': 1}]
+
     # -- invalid story keys --------------------------------------------
     def test_get_journal_rejects_an_invalid_story_key(self):
         store = self.make_store()
@@ -206,6 +246,17 @@ class RecordStoreContract:
             InvalidRecordKeyError,
             lambda: store.append_journal(DEFAULT_NAMESPACE, _PLAN, _INVALID_KEY, {'entry': 1}),
         )
+
+    def test_clear_journal_rejects_an_invalid_story_key(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 1})
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _INVALID_KEY),
+        )
+        # A rejected call writes nothing: the journal it named is untouched.
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == [{'entry': 1}]
 
     # -- invalid namespaces --------------------------------------------
     def test_get_manifest_rejects_an_invalid_namespace(self):
@@ -306,6 +357,14 @@ class MultiNamespaceContract:
         assert store.get_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY) == []
         assert store.list_plans(_SECOND_NAMESPACE) == []
 
+    def test_clear_in_one_namespace_leaves_the_other_journal(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 'default'})
+        store.append_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 'acme'})
+        store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY)
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == []
+        assert store.get_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY) == [{'entry': 'acme'}]
+
     def test_should_not_return_another_namespaces_manifests(self):
         store = self.make_store()
         store.put_manifest(_SECOND_NAMESPACE, _PLAN, {'version': 'acme'})
@@ -369,6 +428,16 @@ class SingleNamespaceContract:
             UnknownNamespaceError,
             lambda: store.append_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 1}),
         )
+
+    def test_clear_journal_rejects_an_unknown_namespace(self):
+        store = self.make_store()
+        store.append_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY, {'entry': 1})
+        _expect(
+            self,
+            UnknownNamespaceError,
+            lambda: store.clear_journal(_SECOND_NAMESPACE, _PLAN, _STORY_KEY),
+        )
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY_KEY) == [{'entry': 1}]
 
     def test_refused_put_manifest_leaves_the_default_namespace_empty(self):
         store = self.make_store()

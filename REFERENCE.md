@@ -497,15 +497,32 @@ notification has been emitted, so a failed emission is retried by a later
 tick instead of being lost; once the marker exists the plan stays all-done
 but no second notification is ever emitted. The same summary is also written to `<plan>.report.md` in `PLAN_DIR` as a durable per-plan report (best effort: a write failure is logged and never blocks the notification).
 
-**Outbox sink.** `pipeline.notification_outbox.outbox_sink` spools selected
-notifications to a per-plan `<plan>.outbox.jsonl` spool file in `PLAN_DIR`
-(one JSON line per queued record). The sink is disabled by default; set
+**Outbox sink.** `pipeline.notification_outbox.outbox_sink` enqueues selected
+notifications on a per-plan `<plan>.outbox.jsonl` queue in `PLAN_DIR`
+(one JSON line per queued record). It is **not** a bus subscriber: the
+notifier enqueues the outbox entry before it publishes — `_notify_user` calls
+`outbox_sink` itself, on the caller's thread, through the process's shared
+record store (`_store.records().append_outbox(DEFAULT_NAMESPACE, plan,
+channel, record)`), and only then publishes the event on the bus. Because the
+append runs on the caller's thread with the process's shared store, an append
+made while the caller holds `transaction(namespace, plan)` is inside that
+transaction (ADR 0012 decision 9). The practical consequences are: a broker
+outage cannot lose an outbox entry (the queue is written before the publish is
+attempted), and a crash after the enqueue and before the publish loses only
+the transport event — the reconcile sweep recovers the lost wake-up (ADR 0011)
+and never the outbox entry, which is already durable.
+
+The queue is disabled by default; set
 `PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in. An event allowlist decides
 which notifications are spooled at write time:
 `PIPELINE_NOTIFY_OUTBOX_EVENTS` is a comma-separated list of structured
 event names (default `plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`); a notification whose event is not in
-the allowlist — a `story_done` notice, say — is never spooled and therefore
-never e-mailed.
+the allowlist — a `story_done` notice, say — is never spooled on the legacy
+queue and therefore never e-mailed. The allowlist gates the legacy channel
+only: when a notification config file exists, the routing config selects the
+per-instance queues instead, and an event outside the allowlist that a route
+delivers is still enqueued for that instance. One channel's failure is logged
+by error type only and never stops the other channels.
 
 **Delivery happens in the scheduler tick's drain phase, not inline in the
 notification path.** Each scheduler tick runs a drain phase
@@ -924,13 +941,26 @@ Each record has the following keys:
   that adds `count` and `last_ts`.
 
 The notification system uses a single event bus returned by
-`pipeline.event_wiring.get_bus()`.  `_notify_user` publishes a `notification`
-event on that bus; sinks subscribe to it.  Two sinks are built in:
-`pipeline.notification_sinks.file_log_sink`, which reproduces the legacy log
-behaviour, and `pipeline.notification_outbox.outbox_sink`, which spools
+`pipeline.event_wiring.get_bus()`.  `_notify_user` enqueues the durable outbox
+entry itself, and then publishes a `notification` event on that bus as
+transport only.  The outbox is therefore not a subscriber at all: the notifier
+enqueues the outbox entry before it publishes, so the NATS consumer, the JSONL
+bus and the in-process bus never write the outbox a second time.  Only the
+history sink subscribes: `pipeline.notification_sinks.file_log_sink`, which
+reproduces the legacy log behaviour.  `pipeline.notification_outbox.outbox_sink`
+remains the public enqueue entry point `_notify_user` calls, and it enqueues
 selected notifications (`payload["event"]` in an allowlist, default
-`plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
+`plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`) on a
+per‑plan `<plan>.outbox.jsonl` queue. The outbox is
 disabled by default (`PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in).
+
+Failure semantics of that ordering: the outbox entry is written by the notifier
+on the caller's thread, in the caller's store transaction when one is held. A
+broker outage (or any publish failure) cannot lose an outbox entry, and a crash
+after the enqueue and before the publish loses only the transport event — the
+reconcile sweep recovers wake-ups (ADR 0011), never the already-durable outbox
+entry. A failure to enqueue is logged with the error type only and never stops
+the notification history write or the publish.
 
 When writing a new sink, three rules must be obeyed:
 

@@ -357,6 +357,21 @@ def _notify_user(
             payload=payload,
         )
         evt["ts"] = ts
+        # Enqueue the durable outbox record BEFORE publishing: the event is
+        # transport only, so a broker outage (or a crash between the two) must
+        # never lose the outbox entry.  The lazy import keeps the existing
+        # cycle rule (event_wiring -> notification_sinks -> persistence); a
+        # failure here is logged by type only and never stops the history
+        # write or the publish below.
+        try:
+            from . import notification_outbox
+
+            notification_outbox.outbox_sink(evt)
+        except Exception as exc:  # noqa: BLE001 - never break the notification
+            logger.error(
+                "Failed to enqueue notification outbox entry; continuing: %s",
+                type(exc).__name__,
+            )
         bus.publish(evt)
         # InProcessEventBus.publish swallows handler exceptions internally, so a
         # sink that fails to persist never raises here and can't be caught below.

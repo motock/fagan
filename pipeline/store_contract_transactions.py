@@ -1,19 +1,24 @@
-"""Reusable behaviour suite for ``RecordStore.transaction`` (ADR 0012 decision 6).
+"""Reusable behaviour suites for ``RecordStore.transaction`` (ADR 0012 d6/d9).
 
 ADR 0012 decision 6 says a record store's ``transaction(namespace, plan)`` stays
-non-blocking, and this story makes that true for every implementation.  The lock
-contract only is covered here: atomicity of the writes made inside the block is
-a separate story.
+non-blocking; :class:`TransactionContract` pins that lock contract.  ADR 0012
+decision 9 splits the stores into two tiers by what a block means for the writes
+inside it: :class:`AtomicTransactionContract` pins the atomic tier (an exception
+leaving the outermost block rolls its writes back) and
+:class:`OrderedTransactionContract` pins the ordered tier (each write is durable
+when its call returns, and a raising block rolls nothing back).
 
 Like :mod:`pipeline.store_contract`, this module imports no test framework: it
 uses plain ``assert`` statements and the small helpers below, so the same cases
 run under any harness.  None of the classes is named ``Test*`` -- pytest must
 never collect a mixin (it would call the unimplemented ``make_store``).
 
-Inherit :class:`TransactionContract` in a concrete test class alongside the
-behaviour mixins from :mod:`pipeline.store_contract`.  A store that serves every
-namespace (the in-memory reference store) sets
-``serves_other_namespaces = True``; a single-namespace store leaves it alone.
+Inherit :class:`TransactionContract` for the lock contract, and
+:class:`AtomicTransactionContract` or :class:`OrderedTransactionContract` for the
+tier the store declares, in a concrete test class alongside the behaviour mixins
+from :mod:`pipeline.store_contract`.  A store that serves every namespace (the
+in-memory reference store) sets ``serves_other_namespaces = True``; a
+single-namespace store leaves it alone.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from pipeline.store_records import (
 )
 
 _PLAN = 'plan-a'
+_STORY = 'story-a'
 _OTHER_NAMESPACE = 'acme'
 _INVALID_KEY = '../x'
 _INVALID_NAMESPACE = 'Bad NS'
@@ -267,9 +273,6 @@ class AtomicTransactionContract:
         """Return a fresh, empty store under test."""
         raise NotImplementedError
 
-    def plans_dir(self):
-        """Return the directory a file-backed store locks in, or ``None``."""
-
     def test_the_store_declares_the_atomic_tier(self):
         store = self.make_store()
         assert store.atomic_transactions is True, (
@@ -287,6 +290,25 @@ class AtomicTransactionContract:
         except RuntimeError:
             pass
         assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 1}
+
+    def test_a_raising_block_rolls_back_a_journal_append_and_clear(self):
+        store = self.make_store()
+        store.append_journal(
+            DEFAULT_NAMESPACE, _PLAN, _STORY, {'step': 'kept'}
+        )
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.append_journal(
+                    DEFAULT_NAMESPACE, _PLAN, _STORY, {'step': 'dropped'}
+                )
+                store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY)
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY) == [
+            {'step': 'kept'}
+        ]
 
 
 class OrderedTransactionContract:
@@ -307,9 +329,6 @@ class OrderedTransactionContract:
     def make_store(self):
         """Return a fresh, empty store under test."""
         raise NotImplementedError
-
-    def plans_dir(self):
-        """Return the directory a file-backed store locks in, or ``None``."""
 
     def test_the_store_declares_the_ordered_tier(self):
         store = self.make_store()

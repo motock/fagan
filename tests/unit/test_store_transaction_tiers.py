@@ -146,12 +146,6 @@ class TestFileRecordsOrderedTier(OrderedTransactionContract):
     def make_store(self):
         return FileStore().records()
 
-    def plans_dir(self):
-        # The file store locks by creating ``<plan>.lock`` in the plans
-        # directory, so the contract can prove a rejected key never reaches
-        # the lock.
-        return server.PLAN_DIR
-
 
 class TestTransactionTierAttribute:
     """Every record store declares its tier, and declares it as a boolean."""

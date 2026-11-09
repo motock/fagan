@@ -12,14 +12,23 @@ The scope lives in a :class:`contextvars.ContextVar`, the same pattern as
 ``pipeline.actor.bind_correlation_id``, so it is per-thread and per-task and
 nesting restores the enclosing binding exactly.
 
-A usage record is a per-plan JSONL sidecar with the FIXED key set in
-:data:`USAGE_FIELDS`. The field set is closed on purpose: it is an accounting
-artefact, so it carries counts, ids and cost - never prompts, completions or
-any other payload. Values arrive from provider responses and are therefore
-untrusted: token counts are sanitized to non-negative ints, money and duration
-to non-negative numbers or ``None``, and a failure to write is dropped rather
-than propagated, because losing an accounting line must never fail the work it
-was accounting for.
+A usage record is a *record store record* (ADR 0012 decision 3) with the FIXED
+key set in :data:`USAGE_FIELDS`: :func:`record_usage` appends it through the
+store's namespaced record view (``_ServerRef('_store').records()``), the same
+family as the outbox, so the append happens on the calling thread and joins a
+held store transaction. The file store's record view keeps writing the per-plan
+JSONL sidecar (``persistence._write_usage_record``), so the on-disk layout is
+unchanged while the write path is the store's.
+
+The field set is closed on purpose: it is an accounting artefact, so it carries
+counts, ids and cost - never prompts, completions or any other payload. Values
+arrive from provider responses and are therefore untrusted: token counts are
+sanitized to non-negative ints, money and duration to non-negative numbers or
+``None``, and a failure to write is dropped rather than propagated, because
+losing an accounting line must never fail the work it was accounting for. A
+record the store *refuses* (an invalid key, an invalid record) is dropped the
+same way: nothing is stored and nothing is exported to telemetry, so a record
+the store did not take is never reported as if it had been.
 """
 
 from __future__ import annotations
@@ -32,9 +41,10 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from . import persistence, telemetry_usage
+from . import telemetry_usage
 from .actor import current_correlation_id
-from .store_records import USAGE_RECORD_FIELDS
+from .concurrency import _ServerRef
+from .store_records import DEFAULT_NAMESPACE, USAGE_RECORD_FIELDS
 
 #: The complete, closed key set of a usage record. Anything not listed here is
 #: not an accounting fact and must not be written.  This is the *same object* as
@@ -44,8 +54,25 @@ USAGE_FIELDS: tuple[str, ...] = USAGE_RECORD_FIELDS
 
 logger = logging.getLogger(__name__)
 
+#: The live record store, read from ``pipeline.server`` at call time (the
+#: ``_ServerRef`` rule every store caller follows) so
+#: ``monkeypatch.setattr(pipeline.server, "_store", ...)`` lands, and reloads of
+#: either module keep seeing one binding.
+_store = _ServerRef("_store")
+
 #: The scope bound by :func:`usage_scope`: ``{"plan", "story_key", "attempt"}``.
 _SCOPE: ContextVar[dict[str, Any] | None] = ContextVar("pipeline_usage_scope", default=None)
+
+
+def _records() -> Any:
+    """Return the live store's namespaced record view (ADR 0012).
+
+    The file and sqlite stores expose the record contract through
+    :meth:`records`; a store that *is* a record store (the in-memory one) is
+    its own view, so it is used directly.
+    """
+    view = getattr(_store, "records", None)
+    return _store if view is None else view()
 
 
 def _token_count(value: Any) -> int:
@@ -145,7 +172,7 @@ def record_usage(
             "cost_usd": _measure(cost_usd),
             "duration_ms": _measure(duration_ms),
         }
-        persistence._write_usage_record(record["plan"], record)
+        _records().append_usage(DEFAULT_NAMESPACE, record["plan"], record)
         telemetry_usage.record(record)
     except Exception as exc:  # noqa: BLE001 - accounting must never break a call
         logger.warning("usage record dropped", extra={"error_type": type(exc).__name__})

@@ -545,6 +545,25 @@ class FileRecords:
         self._refuse_other_namespace(namespace)
         return sorted(self._store.list_manifests())
 
+    # -- transactions --------------------------------------------------
+    def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
+        """Acquire this plan's write transaction, or report it was refused.
+
+        Validates the keys and refuses any namespace but
+        :data:`DEFAULT_NAMESPACE` *before* a lock is taken, then delegates to
+        :meth:`FileStore.transaction`.  Delegation (rather than importing
+        :mod:`pipeline.concurrency` here) keeps ``store._plan_lock`` the single
+        LiveRef patch point the test suite relies on.
+
+        Yields ``True`` when the lock was acquired and ``False`` when it was
+        not; callers must skip all work on ``False``.  ``wait_seconds`` is
+        opt-in: ``0.0`` is one attempt with no sleeping.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        return self._store.transaction(plan_name, wait_seconds)
+
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:
         validate_namespace(namespace)

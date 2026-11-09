@@ -491,6 +491,22 @@ class SqliteRecords:
         self._namespace(namespace)
         return self._store.list_manifests()
 
+    def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
+        """Acquire this plan's write transaction, or report it was refused.
+
+        Validates the keys and refuses any namespace but
+        :data:`DEFAULT_NAMESPACE` before anything is locked, then delegates to
+        :meth:`SqliteStore.transaction`: ``BEGIN IMMEDIATE``, the store-wide
+        in-process guard and re-entrance all live there.  This method adds no
+        locking of its own.
+
+        Yields ``True`` when the transaction was acquired and ``False`` when it
+        was not; callers must skip all work on ``False``.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store.transaction(plan_name, wait_seconds)
+
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:
         """Return the decision records for ``plan_name``."""
         self._namespace(namespace)

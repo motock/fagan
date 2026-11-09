@@ -98,7 +98,7 @@ class _FakeChannel:
 def _write_config(monkeypatch, plan_dir, owner=None):
     """Write a notification config with one instance and one route."""
     monkeypatch.setattr(nc, "_REGISTRY", {"fake_notify": _FakeChannel})
-    match = {"plan": f"{PLAN}-*"}
+    match = {"plan": f"{PLAN}*"}
     if owner is not None:
         match["owner"] = owner
     config = {

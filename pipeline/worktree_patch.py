@@ -420,15 +420,12 @@ def create_patch_record(
     # stored.  The audit carries the path list and the diff HASH only --
     # never diff_text or any hunk content (Secure by Design: no sensitive
     # payload in logs or events).
-    # Journal: the appender pipeline/checkpoint.py uses
-    # (``from .persistence import _append_journal`` there).  Resolved via
-    # importlib like the other collaborators in this module so the
-    # stdlib-only import purity of pipeline/worktree_patch.py is kept and a
-    # patched ``persistence.PLAN_DIR`` is honoured at call time.
-    _append_journal = importlib.import_module(
-        "pipeline.persistence"
-    )._append_journal
-    _append_journal(
+    # Journal: the record store every other stage-B writer uses (ADR 0012),
+    # resolved via importlib like the other collaborators in this module so
+    # the stdlib-only import purity of pipeline/worktree_patch.py is kept and
+    # a store patched at call time is honoured.
+    importlib.import_module("pipeline.server")._store.records().append_journal(
+        "default",
         plan_name,
         story_key,
         {
@@ -689,15 +686,13 @@ def apply_patch(
         # refused or failed apply returns above and emits nothing new.
         # Same rule as the propose audit: path list + diff hash, never
         # the diff body.
-        # Journal: the appender pipeline/checkpoint.py uses
-        # (``from .persistence import _append_journal`` there), resolved via
-        # importlib like the other collaborators in this module so the
-        # stdlib-only import purity of pipeline/worktree_patch.py is kept
-        # and a patched ``persistence.PLAN_DIR`` is honoured at call time.
-        _append_journal = importlib.import_module(
-            "pipeline.persistence"
-        )._append_journal
-        _append_journal(
+        # Journal: the record store every other stage-B writer uses (ADR
+        # 0012), resolved via importlib like the other collaborators in this
+        # module so the stdlib-only import purity of
+        # pipeline/worktree_patch.py is kept and a store patched at call time
+        # is honoured.
+        importlib.import_module("pipeline.server")._store.records().append_journal(
+            "default",
             plan_name,
             story_key,
             {

@@ -51,7 +51,7 @@
  "pipeline/wake.py": 2,
  "pipeline/watchers.py": 4,
  "pipeline/wedge_io.py": 1,
- "pipeline/worktree_patch.py": 8,
+ "pipeline/worktree_patch.py": 6,
  "scripts/local_agent_tools.py": 1,
  "scripts/local_success_report.py": 13,
  "scripts/reset_false_positive_tests_passed.py": 2,

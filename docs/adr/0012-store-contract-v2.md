@@ -134,6 +134,8 @@ decided 2026-11-04.)
    crash, and it is written in the same transaction as the state change that
    caused it.
 
+   Amended 2026-11-07: 'Same transaction' means atomic on stores that declare atomic transactions (SqliteStore, any database plugin); the file store is ordered, not atomic, and the loss window is a crash between the state write and the outbox append.
+
 10. **Audit chain: an append-only table plus a pluggable anchor sink.** The hash
     chain is unchanged. Records are rows `(namespace, chain, seq, prev_hash,
     record, hash)` with `(namespace, chain, seq)` unique; the application's database

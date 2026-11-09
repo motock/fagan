@@ -1,19 +1,24 @@
-"""Reusable behaviour suite for ``RecordStore.transaction`` (ADR 0012 decision 6).
+"""Reusable behaviour suites for ``RecordStore.transaction`` (ADR 0012 d6/d9).
 
 ADR 0012 decision 6 says a record store's ``transaction(namespace, plan)`` stays
-non-blocking, and this story makes that true for every implementation.  The lock
-contract only is covered here: atomicity of the writes made inside the block is
-a separate story.
+non-blocking; :class:`TransactionContract` pins that lock contract.  ADR 0012
+decision 9 splits the stores into two tiers by what a block means for the writes
+inside it: :class:`AtomicTransactionContract` pins the atomic tier (an exception
+leaving the outermost block rolls its writes back) and
+:class:`OrderedTransactionContract` pins the ordered tier (each write is durable
+when its call returns, and a raising block rolls nothing back).
 
 Like :mod:`pipeline.store_contract`, this module imports no test framework: it
 uses plain ``assert`` statements and the small helpers below, so the same cases
 run under any harness.  None of the classes is named ``Test*`` -- pytest must
 never collect a mixin (it would call the unimplemented ``make_store``).
 
-Inherit :class:`TransactionContract` in a concrete test class alongside the
-behaviour mixins from :mod:`pipeline.store_contract`.  A store that serves every
-namespace (the in-memory reference store) sets
-``serves_other_namespaces = True``; a single-namespace store leaves it alone.
+Inherit :class:`TransactionContract` for the lock contract, and
+:class:`AtomicTransactionContract` or :class:`OrderedTransactionContract` for the
+tier the store declares, in a concrete test class alongside the behaviour mixins
+from :mod:`pipeline.store_contract`.  A store that serves every namespace (the
+in-memory reference store) sets ``serves_other_namespaces = True``; a
+single-namespace store leaves it alone.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from pipeline.store_records import (
 )
 
 _PLAN = 'plan-a'
+_STORY = 'story-a'
 _OTHER_NAMESPACE = 'acme'
 _INVALID_KEY = '../x'
 _INVALID_NAMESPACE = 'Bad NS'
@@ -244,3 +250,100 @@ class TransactionContract:
             assert elapsed < _REFUSAL_BUDGET_SECONDS, elapsed
         finally:
             release.set()
+
+
+class AtomicTransactionContract:
+    """Behaviour of a store that declares ``atomic_transactions = True``.
+
+    ADR 0012 decision 9 splits the record stores into two tiers.  An atomic
+    store makes every write the holding thread performs inside
+    :meth:`transaction` visible together when the *outermost* block exits
+    normally, and leaves none of them behind when that block raises.  Nested
+    blocks commit with the outermost one.
+
+    Inherit this mixin in a concrete test class that supplies ``make_store``;
+    the class is deliberately not named ``Test*``, because pytest must never
+    collect a mixin on its own.
+    """
+
+    #: Set to ``True`` by stores that serve every valid namespace.
+    serves_other_namespaces = False
+
+    def make_store(self):
+        """Return a fresh, empty store under test."""
+        raise NotImplementedError
+
+    def test_the_store_declares_the_atomic_tier(self):
+        store = self.make_store()
+        assert store.atomic_transactions is True, (
+            f'{type(store).__name__} must declare atomic_transactions = True'
+        )
+
+    def test_a_raising_block_rolls_back_the_writes_it_made(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 2})
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 1}
+
+    def test_a_raising_block_rolls_back_a_journal_append_and_clear(self):
+        store = self.make_store()
+        store.append_journal(
+            DEFAULT_NAMESPACE, _PLAN, _STORY, {'step': 'kept'}
+        )
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.append_journal(
+                    DEFAULT_NAMESPACE, _PLAN, _STORY, {'step': 'dropped'}
+                )
+                store.clear_journal(DEFAULT_NAMESPACE, _PLAN, _STORY)
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_journal(DEFAULT_NAMESPACE, _PLAN, _STORY) == [
+            {'step': 'kept'}
+        ]
+
+
+class OrderedTransactionContract:
+    """Behaviour of a store that declares ``atomic_transactions = False``.
+
+    An ordered store makes each write durable when its call returns, in call
+    order, and rolls nothing back when a block raises -- so a process that dies
+    between the state write and the outbox append loses that notification,
+    while a process that dies after both keeps both (ADR 0012 decision 9).
+
+    Inherit this mixin in a concrete test class that supplies ``make_store`` and,
+    for a file-backed store, ``plans_dir``.
+    """
+
+    #: Set to ``True`` by stores that serve every valid namespace.
+    serves_other_namespaces = False
+
+    def make_store(self):
+        """Return a fresh, empty store under test."""
+        raise NotImplementedError
+
+    def test_the_store_declares_the_ordered_tier(self):
+        store = self.make_store()
+        assert store.atomic_transactions is False, (
+            f'{type(store).__name__} must declare atomic_transactions = False'
+        )
+
+    def test_a_raising_block_keeps_the_writes_it_made(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 2})
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 2}

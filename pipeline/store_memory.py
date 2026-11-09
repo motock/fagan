@@ -30,12 +30,29 @@ from pipeline.store_records import (
     validate_usage_record,
 )
 
+#: Sentinel recorded in the undo log for a key that held no value before the
+#: transaction wrote it, so a rollback knows to delete rather than restore.
+_ABSENT = object()
+
 
 class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
-    """A thread-safe, non-durable :class:`pipeline.store_records.RecordStore`."""
+    """A thread-safe, non-durable :class:`pipeline.store_records.RecordStore`.
+
+    Atomic tier (ADR 0012 decision 9): while a thread holds the outermost
+    ``transaction()`` block it records an undo log of every structure it
+    writes, and an exception that leaves that block restores exactly those
+    keys.  Nested blocks commit with the outermost one.
+    """
+
+    #: Every write inside ``transaction()`` commits or rolls back as a whole.
+    atomic_transactions = True
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        # Per-thread transaction state: ``{'depth': int, 'undo': [...]}``.  It
+        # must be thread-local, so one thread's block never rolls back or
+        # commits another thread's writes.
+        self._transactions = threading.local()
         self._manifests: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
@@ -90,6 +107,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # must leave no trace behind.
         json.dumps(manifest)
         with self._lock:
+            self._record_undo(self._manifests, (namespace, plan_name))
             self._manifests[(namespace, plan_name)] = copy.deepcopy(manifest)
 
     def list_plans(self, namespace: str) -> list[str]:
@@ -118,6 +136,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         if not isinstance(record, dict):
             raise TypeError('record must be a dict')
         with self._lock:
+            self._record_undo(self._decisions, (namespace, plan_name))
             self._decisions.setdefault((namespace, plan_name), []).append(
                 copy.deepcopy(record)
             )
@@ -141,6 +160,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         validated = validate_usage_record(plan_name, record)
         with self._lock:
+            self._record_undo(self._usage, (namespace, plan_name))
             self._usage.setdefault((namespace, plan_name), []).append(
                 copy.deepcopy(validated)
             )
@@ -166,6 +186,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         if not isinstance(record, dict):
             raise TypeError('record must be a dict')
         with self._lock:
+            self._record_undo(self._journals, (namespace, plan_name, story_key))
+            self._record_undo(
+                self._journal_updated_at, (namespace, plan_name, story_key)
+            )
             self._journals.setdefault((namespace, plan_name, story_key), []).append(
                 copy.deepcopy(record)
             )
@@ -192,6 +216,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         validate_story_key(story_key)
         with self._lock:
+            self._record_undo(self._journals, (namespace, plan_name, story_key))
+            self._record_undo(
+                self._journal_updated_at, (namespace, plan_name, story_key)
+            )
             self._journals.pop((namespace, plan_name, story_key), None)
             self._journal_updated_at.pop((namespace, plan_name, story_key), None)
 
@@ -236,6 +264,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             raise TypeError('record must be a dict')
         json.dumps(record, default=str)
         with self._lock:
+            self._record_undo(self._outboxes, (namespace, plan_name, channel))
             entry_ids = self._outboxes.setdefault(
                 (namespace, plan_name, channel), []
             )
@@ -273,6 +302,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         validate_channel(channel)
         wanted = [str(acked) for acked in ids]
         with self._lock:
+            self._record_undo(self._outboxes, (namespace, plan_name, channel))
             queue = self._outboxes.get((namespace, plan_name, channel), [])
             retained: list[tuple[str, dict]] = []
             removed = 0
@@ -346,6 +376,14 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         deadline passes, then yields ``False``; a negative or non-finite budget
         is treated as ``0.0``, exactly as
         :func:`pipeline.concurrency._plan_lock` does.
+
+        Atomicity (ADR 0012 decision 9): the outermost block for this thread
+        opens an undo log, and an exception that leaves it restores exactly the
+        keys this thread wrote and re-raises; a normal exit commits.  A nested
+        block never rolls back -- it re-raises so the enclosing block decides --
+        and therefore commits with the outermost one.  The store lock is taken
+        per operation, never around the ``yield``, so another thread writing the
+        same plan is only ever delayed by one operation.
         """
         validate_namespace(namespace)
         validate_plan_name(plan_name)
@@ -359,9 +397,22 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 yield False
                 return
             time.sleep(min(PLAN_LOCK_RETRY_INTERVAL_SECONDS, remaining))
+        state = self._transaction_state()
+        state['depth'] += 1
+        outermost = state['depth'] == 1
         try:
             yield True
+        except BaseException:
+            if outermost:
+                self._rollback(state)
+            raise
+        else:
+            if outermost:
+                state['undo'].clear()
         finally:
+            state['depth'] -= 1
+            if state['depth'] == 0:
+                state['undo'].clear()
             lock.release()
 
     # -- notification history ------------------------------------------
@@ -373,6 +424,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         validate_notification_record(record)
         with self._lock:
+            self._record_undo(self._notifications, (namespace, plan_name))
             self._notifications.setdefault((namespace, plan_name), []).append(
                 copy.deepcopy(record)
             )
@@ -410,3 +462,47 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 lock = threading.RLock()
                 self._plan_locks[(namespace, plan_name)] = lock
             return lock
+
+    # -- transaction undo log ------------------------------------------
+    def _transaction_state(self) -> dict:
+        """Return this thread's transaction state, creating it on first use."""
+        state = getattr(self._transactions, 'state', None)
+        if state is None:
+            state = {'depth': 0, 'undo': []}
+            self._transactions.state = state
+        return state
+
+    def _record_undo(self, structure: dict, key) -> None:
+        """Remember ``key``'s current value before this thread overwrites it.
+
+        Called as the first action of every write, under :attr:`_lock`, while
+        this thread holds a transaction.  The *first* write in a block wins: a
+        key already in the log keeps its original value, so two puts inside one
+        block still roll back to the value the block found.  A write made
+        outside any transaction is its own atomic write and records nothing.
+        """
+        state = getattr(self._transactions, 'state', None)
+        if state is None or state['depth'] <= 0:
+            return
+        for logged_structure, logged_key, _ in state['undo']:
+            if logged_structure is structure and logged_key == key:
+                return
+        previous = structure.get(key, _ABSENT)
+        state['undo'].append(
+            (
+                structure,
+                key,
+                _ABSENT if previous is _ABSENT else copy.deepcopy(previous),
+            )
+        )
+
+    def _rollback(self, state: dict) -> None:
+        """Restore every logged key, deleting the ones recorded absent."""
+        undo = state['undo']
+        state['undo'] = []
+        with self._lock:
+            for structure, key, previous in undo:
+                if previous is _ABSENT:
+                    structure.pop(key, None)
+                else:
+                    structure[key] = previous

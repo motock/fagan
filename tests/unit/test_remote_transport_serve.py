@@ -150,7 +150,14 @@ def test_serve_passes_host_and_port_to_uvicorn(monkeypatch: pytest.MonkeyPatch) 
     _, uvicorn_calls = _serve_with_fakes(
         monkeypatch, {**REMOTE_ENV, HOST_ENV: "0.0.0.0", PORT_ENV: "9000"}
     )
-    assert uvicorn_calls[0][1] == {"host": "0.0.0.0", "port": 9000, "log_level": "info"}
+    assert uvicorn_calls[0][1] == {
+        "host": "0.0.0.0",
+        "port": 9000,
+        "log_level": "info",
+        # serve() now goes through the bounded run_http helper: the graceful
+        # window is part of what it hands uvicorn.
+        "timeout_graceful_shutdown": rt.GRACEFUL_SHUTDOWN_SECONDS,
+    }
 
 
 def test_serve_fails_closed_before_building_app(monkeypatch: pytest.MonkeyPatch) -> None:

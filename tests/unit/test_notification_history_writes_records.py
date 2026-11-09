@@ -10,10 +10,10 @@ The store used here is an in-memory stand-in patched in as
 ``pipeline.server._store``: it records every append it is given, so a test can
 see exactly what a writer handed to the store -- and nothing else.
 
-Written FIRST: the routing does not exist yet, so the tests that pin it are
-RED until a later dispatch moves the writers onto the store.  The tests that
-pin what must NOT change (the JSONL sidecar and the free-text log) are green
-today and must stay green.
+Written FIRST, before the writers moved onto the store: the routing tests were
+RED until the same branch made them green.  The tests that pin what must NOT
+change (the JSONL sidecar and the free-text log) were green all along and must
+stay green.
 """
 
 from __future__ import annotations
@@ -396,6 +396,14 @@ def test_the_jsonl_sidecar_keeps_a_null_message_for_an_event_without_payload(tmp
     record = json.loads(jsonl[0])
     assert record["message"] is None
     assert record["severity"] == "info"
+
+    # The free-text representation keeps the legacy "<ts> " line: an absent
+    # message is empty, never the literal "None" (the old sink built its line
+    # from payload.get("message", "")).
+    log = (tmp_path / "cap1.notifications.log").read_text().splitlines()
+    assert log == ["2026-01-02T03:04:05+00:00 "], (
+        "a message-less notification must keep the legacy '<ts> ' log line"
+    )
 
 
 def test_the_store_accepts_a_record_without_a_message(tmp_path, monkeypatch):

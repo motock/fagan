@@ -566,10 +566,13 @@ class FileRecords(OutboxContract, OutboxSummaryContract):
         The write goes through :func:`pipeline.persistence._write_notification`
         so it lands in the plans directory the bus sink writes to.
 
-        A record that is not a dict carrying a string ``ts`` and a string
-        ``message`` is refused with :class:`TypeError` *before* anything is
-        written: a record with no timestamp or no message has no line to
-        write, and must not leave a half-written history behind.
+        A record that is not a dict carrying a string ``ts`` and a ``message``
+        that is a string or ``None`` is refused with :class:`TypeError`
+        *before* anything is written: a record with no timestamp has no line
+        to write, and must not leave a half-written history behind.  ``None``
+        is accepted because a notification that carries no message is still a
+        notification; it renders as an empty free-text message and as
+        ``"message": null`` in the JSONL sidecar.
         """
         validate_namespace(namespace)
         validate_plan_name(plan_name)

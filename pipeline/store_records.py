@@ -322,8 +322,9 @@ class RecordStore(Protocol):
     def append_notification(self, namespace: str, plan_name: str, record: dict) -> None:
         """Append one notification ``record`` to ``plan_name``'s history.
 
-        The record is a dict carrying a string ``ts`` and a string ``message``;
-        anything else raises :class:`TypeError` before storage is touched.  The
+        The record is a dict carrying a string ``ts`` and a ``message`` that is
+        a string or ``None``; anything else raises :class:`TypeError` before
+        storage is touched.  The
         append is durable for the store's own lifetime: the next read of the
         history serves it.  Keys are validated and an unknown namespace is
         refused before storage is touched.

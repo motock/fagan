@@ -258,10 +258,16 @@ def _write_notification(plan_name: str, record: dict) -> None:
     written through the bus sink are byte-identical.
     """
     log_path = _notifications_log_path(plan_name)
+    # An absent message renders as nothing, never as the literal "None": the
+    # legacy sink built its line from ``payload.get("message", "")``, and real
+    # producers publish message-less notification events (worktree_patch), so
+    # the free-text log must keep the legacy "<ts> " line for them. The JSONL
+    # sidecar keeps ``message: null`` -- that is the structured truth.
+    message = record.get("message") or ""
     try:
         _rotate_if_needed(log_path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
         with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(f"{record['ts']} {record['message']}\n")
+            handle.write(f"{record['ts']} {message}\n")
     except OSError as exc:  # pragma: no cover - defensive
         logger.error(
             "Failed to write notification log for plan %s: %s", plan_name, exc

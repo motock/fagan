@@ -19,8 +19,8 @@ The three operations
 
 ``append_notification(namespace, plan_name, record)``
     Append one notification record (a dict carrying a string ``ts`` and a
-    string ``message``) to the plan's history.  Anything else is a
-    :class:`TypeError` raised before anything is written.
+    ``message`` that is a string or ``None``) to the plan's history.  Anything
+    else is a :class:`TypeError` raised before anything is written.
 
 ``get_notification_history(namespace, plan_name)``
     Return ``(records, malformed)``: the plan's history in append order

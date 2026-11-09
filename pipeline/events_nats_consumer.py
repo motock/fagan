@@ -570,10 +570,19 @@ def _write_dead_letter_record(
 
 
 def _record_exists(plan: str, event_id) -> bool:
-    """Whether the dead-letter record for *event_id* is already in the history."""
-    records, _malformed = persistence._notification_records().get_notification_history(
-        DEFAULT_NAMESPACE, plan
+    """Whether the dead-letter record for *event_id* is already in the history.
+
+    A store that cannot answer the history read (a stand-in that models no
+    record view) degrades to "not seen", the pre-store behaviour: the
+    dead-letter write must stay unraiseable, and proceeding can only duplicate
+    a record whose dedup key is the event id.
+    """
+    read = getattr(
+        persistence._notification_records(), "get_notification_history", None
     )
+    if read is None:
+        return False
+    records, _malformed = read(DEFAULT_NAMESPACE, plan)
     return any(
         isinstance(record, dict)
         and record.get("event") == DEAD_LETTER_RECORD_EVENT

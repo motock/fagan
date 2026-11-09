@@ -19,8 +19,9 @@ import threading
 import time
 
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
-from pipeline.store_contract_outbox import OutboxContract
+from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
+    InvalidRecordKeyError,
     validate_channel,
     validate_namespace,
     validate_notification_record,
@@ -30,7 +31,7 @@ from pipeline.store_records import (
 )
 
 
-class InMemoryRecordStore(OutboxContract):
+class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
     """A thread-safe, non-durable :class:`pipeline.store_records.RecordStore`."""
 
     def __init__(self) -> None:
@@ -283,6 +284,39 @@ class InMemoryRecordStore(OutboxContract):
                 retained.append((entry_id, record))
             self._outboxes[(namespace, plan_name, channel)] = retained
             return removed
+
+    def outbox_summary(self, namespace: str, plan_name=None) -> dict:
+        """Summarise the outbox queues this store holds."""
+        from datetime import UTC, datetime
+
+        from .outbox_health import _age_seconds
+
+        validate_namespace(namespace)
+        if plan_name is not None:
+            try:
+                validate_plan_name(plan_name)
+            except InvalidRecordKeyError:
+                return {"files": 0, "records": 0, "oldest_age_s": None}
+        now = datetime.now(UTC)
+        files = 0
+        records = 0
+        oldest = None
+        with self._lock:
+            queues = list(self._outboxes.items())
+        for (ns, plan, _channel), entries in queues:
+            if ns != namespace:
+                continue
+            if plan_name is not None and plan != plan_name:
+                continue
+            if not entries:
+                continue
+            files += 1
+            records += len(entries)
+            for _entry_id, record in entries:
+                age = _age_seconds(record.get("ts") if isinstance(record, dict) else None, now)
+                if age is not None and (oldest is None or age > oldest):
+                    oldest = age
+        return {"files": files, "records": records, "oldest_age_s": oldest}
 
     def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
         """Return the sorted ``(plan, channel)`` pairs that hold at least one entry."""

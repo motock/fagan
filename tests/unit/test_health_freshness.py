@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pipeline import health_freshness
+from pipeline import health_freshness, paths
 from tests.unit._dashboard_helpers import client, plan_dir
 
 STALE_ENV = "PIPELINE_HEALTH_STALE_SECONDS"
@@ -254,6 +254,9 @@ def test_health_extras_reports_both_scheduler_stale_and_outbox_stale(
 ):
     monkeypatch.setenv(STALE_ENV, "60")
     monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    # The outbox now comes from the record store, which reads the spools
+    # under the plans directory: point that binding at the seeded files.
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write_health(tmp_path, {"heartbeat_ts": _recent(300)})
     _write_outbox(tmp_path / "alpha.outbox.jsonl", [1200])
 
@@ -270,6 +273,7 @@ def test_health_extras_keeps_both_verdicts_even_when_only_the_outbox_is_stale(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv(STALE_ENV, "60")
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write_health(tmp_path, {"heartbeat_ts": _recent(5)})
     _write_outbox(tmp_path / "alpha.outbox.jsonl", [1200])
 
@@ -298,6 +302,9 @@ def test_api_health_reports_freshness_without_changing_ok(
 ):
     monkeypatch.setenv(STALE_ENV, "60")
     monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    # The outbox now comes from the record store, which reads the spools
+    # under the plans directory: point that binding at the seeded files.
+    monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
     _write_health(plan_dir, {"heartbeat_ts": _at(300)})
     _write_outbox(plan_dir / "alpha.outbox.jsonl", [1200])
 

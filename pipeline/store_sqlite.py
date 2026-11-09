@@ -26,7 +26,7 @@ from typing import Any
 
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
-from pipeline.store_contract_outbox import OutboxContract
+from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     UnknownNamespaceError,
@@ -442,7 +442,7 @@ class SqliteStore:
         self._files.set_active_workspace(path)
 
 
-class SqliteRecords(OutboxContract):
+class SqliteRecords(OutboxContract, OutboxSummaryContract):
     """The namespaced record view of a :class:`SqliteStore` (ADR 0012 stage A).
 
     Every operation is a view of a legacy ``SqliteStore`` call, so the record
@@ -705,6 +705,11 @@ class SqliteRecords(OutboxContract):
         return self._store._files.records().ack_outbox(
             namespace, plan_name, channel, ids
         )
+
+    def outbox_summary(self, namespace: str, plan_name=None) -> dict:
+        """Summarise the outbox through the file view."""
+        self._namespace(namespace)
+        return self._store._files.records().outbox_summary(namespace, plan_name)
 
     def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
         """Return the sorted ``(plan, channel)`` pairs that hold entries."""

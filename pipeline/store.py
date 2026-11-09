@@ -6,11 +6,9 @@
 patches ``pipeline.server`` for those names, so ``pipeline/server.py`` re-exports
 everything it needs (see PIPELINE_MCP_DECOMPOSITION_PLAN.md).
 
-The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
-``_append_decision``, ``_append_journal``, ``_atomic_write_json``) are resolved
-at call time through the ``_ServerRef`` bindings below, which delegate to
-``pipeline.server`` so ``monkeypatch.setattr(pipeline.server, "NAME", ...)``
-still lands. They are
+Those free-variable names are resolved at call time through the
+``_ServerRef`` bindings below, which delegate to ``pipeline.server`` so
+``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
 intentionally not imported here (a module-load copy would freeze the real
 ~/.claude/plans path into every test run).
 
@@ -30,7 +28,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
-from pipeline.store_contract_outbox import OutboxContract
+from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
@@ -534,7 +532,7 @@ class FileStore:
         return FileRecords(self)
 
 
-class FileRecords(OutboxContract):
+class FileRecords(OutboxContract, OutboxSummaryContract):
     """The namespaced record view over one :class:`FileStore` (ADR 0012).
 
     Every operation delegates to the legacy ``FileStore`` methods, so the
@@ -882,6 +880,33 @@ class FileRecords(OutboxContract):
         validate_channel(channel)
         self._refuse_other_namespace(namespace)
         return _persistence()._outbox_ack(plan_name, channel, ids)
+
+    def outbox_summary(self, namespace: str, plan_name=None) -> dict:
+        """Summarise the outbox queues of the file representation.
+
+        The file store *is* the spool reader, so this delegates to
+        :mod:`pipeline.outbox_health` and keeps its exact semantics: an empty
+        spool file still counts in ``files``, and a corrupt line is a record
+        with an unknown age. Both the spool directory and the
+        ``outbox_health`` reader are resolved at call time, so a test that
+        patches either is honoured.
+        """
+        from . import outbox_health, paths
+
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        # Resolved through the package attribute, exactly like the writer
+        # (``pipeline.persistence._outbox_dirs``) resolves the spool
+        # directory, so the summary always reads the queues the file
+        # representation writes.
+        spool_dir = paths.PLAN_DIR
+        if plan_name is not None:
+            try:
+                validate_plan_name(plan_name)
+            except InvalidRecordKeyError:
+                return {"files": 0, "records": 0, "oldest_age_s": None}
+            return outbox_health.outbox_summary_for_plan(spool_dir, plan_name)
+        return outbox_health.outbox_summary(spool_dir)
 
     def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
         """Return the sorted ``(plan, channel)`` pairs that hold entries."""

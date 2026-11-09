@@ -15,9 +15,9 @@ The shape is deliberately a small dict, computed per call:
   wrote to ``<plan_dir>/.scheduler_health.json`` -- ``heartbeat_ts``,
   ``last_reconcile_ts`` or ``last_scan_ts``, whichever is newest -- or ``None``
   when the daemon has not reported (yet).
-* ``outbox`` is the aggregate depth/age of the notification outbox spool, from
-  :func:`pipeline.outbox_health.outbox_summary` -- counts and one age, never a
-  plan name, path or message body.
+* ``outbox`` is the aggregate depth/age of the notification outbox queues, as
+  the record store reports it -- counts and one age, never a plan name, path or
+  message body.
 * ``degraded`` collects verdict strings (``"scheduler_unreported"``,
   ``"scheduler_stale"``, ``"outbox_stale"``); each contributor clears
   ``healthy`` without dropping verdicts contributed by the others.
@@ -195,7 +195,12 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
         stale_seconds_from_env(),
         os.environ.get(REQUIRE_SCHEDULER_ENV) == "1",
     )
-    outbox_health.apply_outbox_health(result, plan_dir)
+    from pipeline.store import _ServerRef
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    _store = _ServerRef("_store")
+    summary = _store.records().outbox_summary(DEFAULT_NAMESPACE)
+    outbox_health.apply_outbox_health(result, plan_dir, summary=summary)
     return result
 
 

@@ -55,3 +55,11 @@ class OutboxContract:
     def list_outboxes(self, namespace):
         """Return the sorted ``(plan, channel)`` pairs holding entries."""
         raise NotImplementedError
+
+
+class OutboxSummaryContract:
+    """Mixin declaring the outbox summary API of a record store."""
+
+    def outbox_summary(self, namespace, plan_name=None):
+        """Summarise the outbox queues, for one plan or for all of them."""
+        raise NotImplementedError

@@ -392,9 +392,12 @@ def test_fractional_threshold_rounds_up(monkeypatch, raw, expected):
 
 
 def test_health_extras_reports_the_endpoint_visible_literals(tmp_path, monkeypatch):
-    from pipeline import health_freshness
+    from pipeline import health_freshness, paths
 
     monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    # The outbox now comes from the record store, which reads the spools
+    # under the plans directory: point that binding at the seeded files.
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "plan.outbox.jsonl", [_record(1200)])
 
     extras = health_freshness.health_extras(tmp_path)
@@ -407,9 +410,10 @@ def test_health_extras_reports_the_endpoint_visible_literals(tmp_path, monkeypat
 
 
 def test_health_extras_stays_healthy_for_a_fresh_outbox(tmp_path, monkeypatch):
-    from pipeline import health_freshness
+    from pipeline import health_freshness, paths
 
     monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "plan.outbox.jsonl", [_record(100)])
 
     extras = health_freshness.health_extras(tmp_path)
@@ -420,9 +424,10 @@ def test_health_extras_stays_healthy_for_a_fresh_outbox(tmp_path, monkeypatch):
 
 
 def test_health_extras_missing_dir_stays_healthy(tmp_path, monkeypatch):
-    from pipeline import health_freshness
+    from pipeline import health_freshness, paths
 
     monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path / "does-not-exist")
 
     extras = health_freshness.health_extras(tmp_path / "does-not-exist")
 
@@ -432,9 +437,10 @@ def test_health_extras_missing_dir_stays_healthy(tmp_path, monkeypatch):
 
 
 def test_health_extras_carries_no_names_paths_or_payloads(tmp_path, monkeypatch):
-    from pipeline import health_freshness
+    from pipeline import health_freshness, paths
 
     monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
+    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "tenant-name.outbox.jsonl", [_record(1200, "SECRET-PAYLOAD-XYZ")])
 
     dumped = json.dumps(health_freshness.health_extras(tmp_path))

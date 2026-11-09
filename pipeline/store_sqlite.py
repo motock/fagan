@@ -452,6 +452,10 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
     anything is written.
     """
 
+    #: Ordered for now: its outbox still delegates to the file store, so the
+    #: next story flips this to ``True`` (ADR 0012 decision 9).
+    atomic_transactions = False
+
     def __init__(self, store: SqliteStore):
         self._store = store
 

@@ -542,6 +542,10 @@ class FileRecords(OutboxContract, OutboxSummaryContract):
     touching storage.
     """
 
+    #: Ordered, not atomic: each write is durable when its call returns and a
+    #: block that raises rolls nothing back (ADR 0012 decision 9).
+    atomic_transactions = False
+
     def __init__(self, store: FileStore) -> None:
         self._store = store
 

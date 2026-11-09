@@ -244,3 +244,87 @@ class TransactionContract:
             assert elapsed < _REFUSAL_BUDGET_SECONDS, elapsed
         finally:
             release.set()
+
+
+class AtomicTransactionContract:
+    """Behaviour of a store that declares ``atomic_transactions = True``.
+
+    ADR 0012 decision 9 splits the record stores into two tiers.  An atomic
+    store makes every write the holding thread performs inside
+    :meth:`transaction` visible together when the *outermost* block exits
+    normally, and leaves none of them behind when that block raises.  Nested
+    blocks commit with the outermost one.
+
+    Inherit this mixin in a concrete test class that supplies ``make_store``;
+    the class is deliberately not named ``Test*``, because pytest must never
+    collect a mixin on its own.
+    """
+
+    #: Set to ``True`` by stores that serve every valid namespace.
+    serves_other_namespaces = False
+
+    def make_store(self):
+        """Return a fresh, empty store under test."""
+        raise NotImplementedError
+
+    def plans_dir(self):
+        """Return the directory a file-backed store locks in, or ``None``."""
+
+    def test_the_store_declares_the_atomic_tier(self):
+        store = self.make_store()
+        assert store.atomic_transactions is True, (
+            f'{type(store).__name__} must declare atomic_transactions = True'
+        )
+
+    def test_a_raising_block_rolls_back_the_writes_it_made(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 2})
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 1}
+
+
+class OrderedTransactionContract:
+    """Behaviour of a store that declares ``atomic_transactions = False``.
+
+    An ordered store makes each write durable when its call returns, in call
+    order, and rolls nothing back when a block raises -- so a process that dies
+    between the state write and the outbox append loses that notification,
+    while a process that dies after both keeps both (ADR 0012 decision 9).
+
+    Inherit this mixin in a concrete test class that supplies ``make_store`` and,
+    for a file-backed store, ``plans_dir``.
+    """
+
+    #: Set to ``True`` by stores that serve every valid namespace.
+    serves_other_namespaces = False
+
+    def make_store(self):
+        """Return a fresh, empty store under test."""
+        raise NotImplementedError
+
+    def plans_dir(self):
+        """Return the directory a file-backed store locks in, or ``None``."""
+
+    def test_the_store_declares_the_ordered_tier(self):
+        store = self.make_store()
+        assert store.atomic_transactions is False, (
+            f'{type(store).__name__} must declare atomic_transactions = False'
+        )
+
+    def test_a_raising_block_keeps_the_writes_it_made(self):
+        store = self.make_store()
+        store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 1})
+        try:
+            with store.transaction(DEFAULT_NAMESPACE, _PLAN) as acquired:
+                assert acquired is True
+                store.put_manifest(DEFAULT_NAMESPACE, _PLAN, {'version': 2})
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert store.get_manifest(DEFAULT_NAMESPACE, _PLAN) == {'version': 2}

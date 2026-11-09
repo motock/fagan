@@ -42,13 +42,15 @@ from pathlib import Path
 
 import pytest
 
-import pipeline.server as server
 from pipeline import (
     event_wiring,
-    notification_channels as nc,
     notification_outbox,
     paths,
     persistence,
+    server,
+)
+from pipeline import (
+    notification_channels as nc,
 )
 from pipeline.events import EventBus, InProcessEventBus
 from pipeline.notification_outbox import outbox_sink

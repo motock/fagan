@@ -426,8 +426,8 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
         # Lazy import to avoid a circular dependency: pipeline_mcp_server
         # imports this module at top level, so importing it at module load
         # here would cycle. _notify_user lives in the server module because
-        # it reads PLAN_DIR (a pipeline_paths constant re-exported by the
-        # server, patched by tests via p.PLAN_DIR).
+        # it hands the notification to the shared record store (a store
+        # resolved by the server, patched by tests via p.server._store).
         from .server import _notify_user
         _notify_user(plan_name, msg)
     else:

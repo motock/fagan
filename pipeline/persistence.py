@@ -22,6 +22,7 @@ from .events import EventBus
 from .parsers import _atomic_write_json
 from .paths import PLAN_DIR
 from .store_records import (
+    DEFAULT_NAMESPACE,
     LEGACY_OUTBOX_CHANNEL,
     InvalidRecordKeyError,
     validate_channel,
@@ -232,12 +233,18 @@ def _write_notification_record(plan_name: str, record: dict) -> None:
 def _notifications_log_path(plan_name: str) -> Path:
     """Return the path to the notifications.log file for a plan.
 
-    Derived from the JSONL sidecar's path so this module keeps a single
-    plans-directory binding (the same free variable every other plan-file
-    writer here reads), and the two notification sidecars can never be looked
-    up in different directories.
+    Derived from another plan-file path of this module (the decisions log's) so
+    this module keeps a single plans-directory binding (the same free variable
+    every other plan-file writer here reads), and the two notification sidecars
+    can never be looked up in different directories.
+
+    Deliberately NOT derived from ``_notifications_jsonl_path``: the two
+    representations are written independently, so a failure resolving one (a
+    caller patching that helper, an unreadable path) must not take the other
+    down with it -- the free-text line is still written when the JSONL side is
+    unwritable.
     """
-    return _notifications_jsonl_path(plan_name).with_suffix(".log")
+    return _decisions_path(plan_name).with_name(f"{plan_name}.notifications.log")
 
 
 def _write_notification(plan_name: str, record: dict) -> None:
@@ -260,6 +267,47 @@ def _write_notification(plan_name: str, record: dict) -> None:
             "Failed to write notification log for plan %s: %s", plan_name, exc
         )
     _write_notification_record(plan_name, record)
+
+
+def _notification_records(store=None):
+    """Return the namespaced record view of the shared store.
+
+    The store is resolved lazily, inside the call, because ``pipeline.server``
+    imports the notification writers at load time -- a module-level import here
+    would be circular. Resolving the attribute on the module (rather than
+    binding the object) also means a store patched onto
+    ``pipeline.server._store`` is the one a write uses.
+
+    A stand-in store that models no record view (the merge-gate tests patch
+    ``server._store`` with a double that only answers ``get_manifest``) is used
+    as the record view itself, so a write still goes through that store and is
+    never silently routed around it.
+    """
+    if store is None:
+        from . import server
+
+        store = server._store
+    records = getattr(store, "records", None)
+    return records() if callable(records) else store
+
+
+def _append_notification(plan_name: str, record: dict) -> None:
+    """Append one notification record to *plan_name*'s history.
+
+    The single entry point every writer in this family uses, so a notification
+    has exactly one route to durable storage: the record store owns both of its
+    on-disk representations, and no writer composes a notifications path.
+    """
+    store = _notification_records()
+    append = getattr(store, "append_notification", None)
+    if callable(append):
+        append(DEFAULT_NAMESPACE, plan_name, record)
+        return
+    # A stand-in store that models no record view at all (the merge-gate tests
+    # patch ``server._store`` with a double that only answers ``get_manifest``):
+    # the write still happens, through the legacy writer the store itself uses,
+    # rather than being dropped.
+    _write_notification(plan_name, record)
 
 
 def _usage_jsonl_path(plan_name: str) -> Path:
@@ -320,11 +368,9 @@ def _notify_user(
     )
 
     def _write_directly() -> None:
-        path = PLAN_DIR / f"{plan_name}.notifications.log"
-        _rotate_if_needed(path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{ts} {message}\n")
-        _write_notification_record(plan_name, record)
+        # The store owns both on-disk representations, so the fallback hands it
+        # the one record and composes no notifications path of its own.
+        _append_notification(plan_name, record)
 
     try:
         # Lazy import to avoid cycle: event_wiring imports notification_sinks, which imports persistence

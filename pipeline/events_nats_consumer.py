@@ -61,6 +61,7 @@ from typing import Any
 from . import persistence
 from .events import JsonlEventBus
 from .events_nats import NatsEventBus
+from .store_records import DEFAULT_NAMESPACE
 
 __all__ = [
     "consumer_status",
@@ -546,11 +547,12 @@ def _write_dead_letter_record(
     event_id,
     attempts: int,
 ) -> None:
-    """Append the ``event_dead_lettered`` record to the plan's sidecar.
+    """Append the ``event_dead_lettered`` record to the plan's history.
 
-    Written through :mod:`pipeline.persistence`'s direct writer, never through
-    ``_notify_user``: that path publishes on the event bus, and the bus is the
-    component whose delivery failed.
+    Written through the record store, never through ``_notify_user``: that path
+    publishes on the event bus, and the bus is the component whose delivery
+    failed. The idempotency check reads the same history back, so a redelivered
+    message is recorded once.
     """
     if event_id is not None and _record_exists(plan, event_id):
         return
@@ -564,30 +566,20 @@ def _write_dead_letter_record(
         datetime.datetime.now(datetime.UTC).isoformat(),
         attempt=attempts,
     )
-    persistence._write_notification_record(plan, record)
+    persistence._append_notification(plan, record)
 
 
 def _record_exists(plan: str, event_id) -> bool:
-    """Whether the dead-letter record for *event_id* is already on disk."""
-    path = persistence._notifications_jsonl_path(plan)
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if (
-            isinstance(record, dict)
-            and record.get("event") == DEAD_LETTER_RECORD_EVENT
-            and record.get("dedup_key") == event_id
-        ):
-            return True
-    return False
+    """Whether the dead-letter record for *event_id* is already in the history."""
+    records, _malformed = persistence._notification_records().get_notification_history(
+        DEFAULT_NAMESPACE, plan
+    )
+    return any(
+        isinstance(record, dict)
+        and record.get("event") == DEAD_LETTER_RECORD_EVENT
+        and record.get("dedup_key") == event_id
+        for record in records
+    )
 
 
 def _num_delivered(message) -> int:

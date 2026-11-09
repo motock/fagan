@@ -550,6 +550,44 @@ class SqliteRecords(OutboxContract):
         validate_plan_name(plan_name)
         self._store._files.records().append_usage(namespace, plan_name, record)
 
+    # -- notification history ------------------------------------------
+    def append_notification(
+        self, namespace: str, plan_name: str, record: dict
+    ) -> None:
+        """Append one notification to ``plan_name``'s history.
+
+        Delegates to the file view: a notification's two on-disk
+        representations are the plan's sidecars, and the record API is a view
+        of the legacy API on this store (``get_notifications`` /
+        ``get_notification_records`` read the same files), so a notification
+        written here must be the one those readers serve.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        self._store._files.records().append_notification(
+            namespace, plan_name, record
+        )
+
+    def get_notification_history(
+        self, namespace: str, plan_name: str
+    ) -> tuple[list[dict], int]:
+        """Return ``plan_name``'s notification records and a malformed count."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store._files.records().get_notification_history(
+            namespace, plan_name
+        )
+
+    def get_notification_lines(
+        self, namespace: str, plan_name: str, limit: int = 100
+    ) -> list[str]:
+        """Return the last ``limit`` notification lines, each ``f'{ts} {message}'``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store._files.records().get_notification_lines(
+            namespace, plan_name, limit
+        )
+
     def get_journal(
         self, namespace: str, plan_name: str, story_key: str
     ) -> list[dict]:

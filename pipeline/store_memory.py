@@ -23,6 +23,7 @@ from pipeline.store_contract_outbox import OutboxContract
 from pipeline.store_records import (
     validate_channel,
     validate_namespace,
+    validate_notification_record,
     validate_plan_name,
     validate_story_key,
     validate_usage_record,
@@ -39,6 +40,10 @@ class InMemoryRecordStore(OutboxContract):
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
         self._journals: dict[tuple[str, str, str], list[dict]] = {}
+        # The notification history, per (namespace, plan).  An instance
+        # attribute created here, never a class attribute and never a
+        # mutable default, so two stores never share one plan's history.
+        self._notifications: dict[tuple[str, str], list[dict]] = {}
         # Journal activity: epoch seconds of the last append per journal.  A
         # high-water mark, so a clock that steps backwards can never report the
         # journal as older than an append it already reported.
@@ -324,6 +329,44 @@ class InMemoryRecordStore(OutboxContract):
             yield True
         finally:
             lock.release()
+
+    # -- notification history ------------------------------------------
+    def append_notification(
+        self, namespace: str, plan_name: str, record: dict
+    ) -> None:
+        """Append one notification record to ``plan_name``'s history."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_notification_record(record)
+        with self._lock:
+            self._notifications.setdefault((namespace, plan_name), []).append(
+                copy.deepcopy(record)
+            )
+
+    def get_notification_history(
+        self, namespace: str, plan_name: str
+    ) -> tuple[list[dict], int]:
+        """Return ``plan_name``'s notification records and a malformed count.
+
+        A memory store writes records, never a JSONL sidecar, so there is
+        never a malformed line to report: the count is always ``0``.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            records = self._notifications.get((namespace, plan_name), ())
+            return [copy.deepcopy(record) for record in records], 0
+
+    def get_notification_lines(
+        self, namespace: str, plan_name: str, limit: int = 100
+    ) -> list[str]:
+        """Return the last ``limit`` notification lines, each ``f'{ts} {message}'``."""
+        records, _ = self.get_notification_history(namespace, plan_name)
+        if limit <= 0:
+            limit = 100
+        return [
+            f"{record['ts']} {record['message']}" for record in records[-limit:]
+        ]
 
     def _plan_lock_for(self, namespace: str, plan_name: str) -> threading.RLock:
         """Return this pair's lock, creating it on first use."""

@@ -37,6 +37,7 @@ from pipeline.store_records import (
     UnknownNamespaceError,
     validate_channel,
     validate_namespace,
+    validate_notification_record,
     validate_plan_name,
     validate_story_key,
     validate_usage_record,
@@ -78,6 +79,7 @@ def _persistence():
 
 
 _JOURNAL_SUFFIX = ".journal.json"
+
 
 # Only ever used to take the journal *directory* from the writers' path helper.
 _JOURNAL_PROBE_KEY = "story"
@@ -548,6 +550,93 @@ class FileRecords(OutboxContract):
     def _refuse_other_namespace(self, namespace: str) -> None:
         if namespace != DEFAULT_NAMESPACE:
             raise UnknownNamespaceError('unknown namespace')
+
+    # -- notification history ------------------------------------------
+    def append_notification(
+        self, namespace: str, plan_name: str, record: dict[str, Any]
+    ) -> None:
+        """Append one notification to ``plan_name``'s history.
+
+        One record, both of the representations the pipeline already writes:
+        the free-text ``<plan>.notifications.log`` line and the structured
+        ``<plan>.notifications.jsonl`` line, byte-identical to what
+        ``notification_sinks.file_log_sink`` writes for the same notification.
+        The write goes through :func:`pipeline.persistence._write_notification`
+        so it lands in the plans directory the bus sink writes to.
+
+        A record that is not a dict carrying a string ``ts`` and a string
+        ``message`` is refused with :class:`TypeError` *before* anything is
+        written: a record with no timestamp or no message has no line to
+        write, and must not leave a half-written history behind.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        validate_notification_record(record)
+        # The writer resolves the plans directory as its own free variable,
+        # exactly as the bus sink does, so a directory patched on that module
+        # is the one the two representations land in.
+        _persistence()._write_notification(plan_name, record)
+
+    def get_notification_history(
+        self, namespace: str, plan_name: str
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return ``plan_name``'s notification records and a malformed count.
+
+        The records come back in written order (oldest first) parsed out of
+        ``<plan>.notifications.jsonl`` by
+        :func:`pipeline.story_metrics.load_notification_records`, the one
+        JSONL parser in the tree; lines that parser cannot read are counted
+        in the second element instead of raising. A missing sidecar is
+        ``([], 0)`` and creates nothing.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        return self._load_notification_records(plan_name)
+
+    def get_notification_lines(
+        self, namespace: str, plan_name: str, limit: int = 100
+    ) -> list[str]:
+        """Return the last ``limit`` free-text notification lines.
+
+        Each line is ``f'{ts} {message}'``, exactly the shape the sidecar
+        holds after :meth:`append_notification` wrote it. A ``limit`` of zero
+        or less means the last 100 lines, the same rule
+        :meth:`FileStore.get_notifications` already applies; a missing log is
+        ``[]`` and creates nothing.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        if limit <= 0:
+            limit = 100
+        path = self._notification_path(plan_name, ".log")
+        if not path.exists():
+            return []
+        return path.read_text(errors="replace").splitlines()[-limit:]
+
+    # -- notification helpers ------------------------------------------
+    def _notification_path(self, plan_name: str, suffix: str) -> Path:
+        """Return one of the plan's notification sidecars.
+
+        The path is derived from the plan manifest's own directory, so the file
+        store keeps a single plans-directory binding for its notification
+        files -- the one its manifest, log and journal readers already use.
+        """
+        return self._store.manifest_path(plan_name).parent / (
+            f"{plan_name}.notifications{suffix}"
+        )
+
+    def _load_notification_records(
+        self, plan_name: str
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Parse the plan's JSONL sidecar through the shared parser."""
+        from pipeline.story_metrics import load_notification_records
+
+        return load_notification_records(
+            self._notification_path(plan_name, ".jsonl")
+        )
 
     # -- manifests -----------------------------------------------------
     def get_manifest(self, namespace: str, plan_name: str) -> dict | None:

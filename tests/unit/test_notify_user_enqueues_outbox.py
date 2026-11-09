@@ -314,6 +314,58 @@ def test_the_notifier_enqueues_the_outbox_entry_itself(plan_dir, file_store, mon
     assert lines == [json.dumps(published[0], default=str)]
 
 
+def test_the_notifier_enqueues_through_the_outbox_sink_entry_point(
+    plan_dir, spy_store, monkeypatch
+):
+    """The notifier enqueues through ``notification_outbox.outbox_sink``."""
+    monkeypatch.setenv(ENABLED_ENV, "1")
+    monkeypatch.setenv(EVENTS_ENV, ALLOWLISTED)
+    calls: list[dict] = []
+    real_sink = notification_outbox.outbox_sink
+
+    def _spy(event):
+        calls.append(event)
+        real_sink(event)
+
+    monkeypatch.setattr(notification_outbox, "outbox_sink", _spy)
+    if hasattr(persistence, "outbox_sink"):
+        monkeypatch.setattr(persistence, "outbox_sink", _spy, raising=False)
+    bus = _RecordingBus()
+    monkeypatch.setattr(event_wiring, "_BUS", bus)
+
+    persistence._notify_user(PLAN, "plan finished", event=ALLOWLISTED)
+
+    assert len(calls) == 1, "the notifier must enqueue through the outbox sink"
+    assert calls[0] == bus.published[0], (
+        "the enqueued record must be the event that is published"
+    )
+
+
+def test_the_outbox_sink_writes_through_the_record_store(
+    plan_dir, spy_store, monkeypatch
+):
+    """``outbox_sink`` is the enqueue entry point: it appends to the store."""
+    monkeypatch.setenv(ENABLED_ENV, "1")
+    monkeypatch.setenv(EVENTS_ENV, ALLOWLISTED)
+    event = {
+        "type": "notification",
+        "plan": PLAN,
+        "story_key": "S-1",
+        "payload": {"message": "hello", "event": ALLOWLISTED},
+        "ts": "2026-01-01T00:00:00+00:00",
+    }
+
+    outbox_sink(event)
+
+    appends = spy_store.records_view.appends
+    assert len(appends) == 1, "the sink must enqueue exactly one outbox entry"
+    append = appends[0]
+    assert append["namespace"] == DEFAULT_NAMESPACE
+    assert append["plan"] == PLAN
+    assert append["channel"] == LEGACY_OUTBOX_CHANNEL
+    assert append["record"] == event
+
+
 def test_the_wired_bus_does_not_write_the_outbox_entry_twice(plan_dir, file_store, monkeypatch):
     """The wired bus writes the outbox once, not once per subscriber."""
     monkeypatch.setenv(ENABLED_ENV, "1")

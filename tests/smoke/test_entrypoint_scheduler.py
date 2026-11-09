@@ -16,7 +16,10 @@ greps.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,11 +30,13 @@ TIMEOUT_SECONDS = 60
 
 # A stand-in for `python`: it appends its argv to $STUB_ARGV_LOG and then
 # behaves like the process the entrypoint asked for. The scheduler daemon exits
-# 3 after a second; everything else outlives the supervision loop's first
-# checks, so only the daemon's own exit can end the run.
+# 3 after a second; everything else outlives the supervisor's first checks. The
+# supervisor itself (pipeline/supervise.py) is handed back to the real
+# interpreter: the behaviour under test is its supervision, not the stub's.
 STUB_PYTHON = """#!/bin/bash
 printf '%s\\n' "$*" >> "$STUB_ARGV_LOG"
 case "$*" in
+    *pipeline/supervise.py*) exec "$STUB_REAL_PYTHON" "$@" ;;
     *pipeline.scheduler_daemon*) sleep 1; exit 3 ;;
     *) sleep "${STUB_OTHER_SLEEP:-30}"; exit 0 ;;
 esac
@@ -64,6 +69,12 @@ def _stub_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         "HOME": str(tmp_path),
         "STUB_ARGV_LOG": str(argv_log),
         "STUB_OTHER_SLEEP": "30",
+        "STUB_REAL_PYTHON": sys.executable,
+        # A short restart delay keeps the tests quick; the production default
+        # (2s doubling to 30s) is covered by tests/unit/test_supervise.py.
+        "SUPERVISE_BACKOFF_SECONDS": "0.2",
+        "SUPERVISE_BACKOFF_MAX_SECONDS": "0.5",
+        "SHUTDOWN_GRACE_SECONDS": "5",
         # `shared` skips the OIDC client-secret mount assertion, which is not
         # what this test is about.
         "PIPELINE_IDENTITY_PROVIDER": "shared",
@@ -108,21 +119,46 @@ def test_entrypoint_starts_and_supervises_the_daemon() -> None:
     )
 
 
-def test_dead_daemon_takes_the_container_down(tmp_path: Path) -> None:
+def test_dead_daemon_is_restarted_and_keeps_the_container_up(tmp_path: Path) -> None:
     env, argv_log = _stub_environment(tmp_path)
-    # The sibling stubs only need to outlive the daemon's 1s death. The
-    # entrypoint exits in ~2s; any longer sleep just keeps orphaned stubs
-    # holding the capture pipes open until subprocess.run gives up waiting.
+    # The sibling stubs only need to outlive the daemon's 1s death and the
+    # restart delay that follows it.
     env["STUB_OTHER_SLEEP"] = "10"
-    result = _run_entrypoint(env, tmp_path)
-
-    assert result.returncode != 0, (
-        "the entrypoint exited 0 after its scheduler daemon died; a container "
-        f"whose daemon is gone must not report success (stderr: {result.stderr!r})"
+    proc = subprocess.Popen(
+        ["bash", str(ENTRYPOINT)],
+        env=env,
+        cwd=str(tmp_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
-    assert "scheduler daemon exited" in result.stderr, (
-        "the entrypoint did not report the daemon's death "
-        f"(stderr: {result.stderr!r})"
+    try:
+        # The daemon stub exits 3 one second in. Under supervision that is a
+        # restart, not a container exit: wait past the death and the backoff,
+        # then check the supervisor is still in charge.
+        time.sleep(3.5)
+        assert proc.poll() is None, (
+            "the entrypoint exited when its scheduler daemon died; under "
+            "supervision the container stays up and the daemon is restarted"
+        )
+        proc.send_signal(signal.SIGTERM)
+        _, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
+    finally:
+        if proc.poll() is None:  # pragma: no cover - defensive
+            proc.kill()
+            proc.communicate()
+
+    assert "scheduler daemon exited" in stderr, (
+        "the supervisor did not report the daemon's death "
+        f"(stderr: {stderr!r})"
+    )
+    assert "restarting" in stderr, (
+        f"the dead daemon was not restarted (stderr: {stderr!r})"
+    )
+    assert proc.returncode == 0, (
+        "a SIGTERM'd supervisor must exit 0, got "
+        f"{proc.returncode!r} (stderr: {stderr!r})"
     )
     assert "pipeline.scheduler_daemon" in argv_log.read_text(encoding="utf-8"), (
         "the stub python was never asked to run the scheduler daemon"
@@ -133,15 +169,45 @@ def test_daemon_can_be_switched_off(tmp_path: Path) -> None:
     env, argv_log = _stub_environment(tmp_path)
     env["PIPELINE_SCHEDULER_DAEMON"] = "0"
     env["STUB_OTHER_SLEEP"] = "2"
-    result = _run_entrypoint(env, tmp_path)
+    proc = subprocess.Popen(
+        ["bash", str(ENTRYPOINT)],
+        env=env,
+        cwd=str(tmp_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        # Wait for a *child* to be started before asking for a stop: only then
+        # has the entrypoint's `exec` landed on the supervisor, and the
+        # assertion below observes what the entrypoint started rather than a
+        # half-written argv log. The supervisor's own argv is the only line that
+        # names deploy/supervise.py.
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            recorded = argv_log.read_text(encoding="utf-8").splitlines()
+            if any("pipeline/supervise.py" not in line for line in recorded):
+                break
+            time.sleep(0.05)
+        recorded = argv_log.read_text(encoding="utf-8")
+        assert "pipeline_mcp_server.py" in recorded, (
+            f"the entrypoint never started the MCP transport (argv seen: {recorded!r})"
+        )
+        proc.send_signal(signal.SIGTERM)
+        _, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
+    finally:
+        if proc.poll() is None:  # pragma: no cover - defensive
+            proc.kill()
+            proc.communicate()
 
     assert "pipeline.scheduler_daemon" not in argv_log.read_text(encoding="utf-8"), (
         "PIPELINE_SCHEDULER_DAEMON=0 must start nothing; the daemon runs outside "
         "the container instead (one daemon per PLAN_DIR)"
     )
-    assert result.returncode == 0, (
+    assert proc.returncode == 0, (
         "with the daemon switched off the entrypoint must still supervise the "
-        f"dashboard and the MCP transport (stderr: {result.stderr!r})"
+        f"dashboard and the MCP transport (stderr: {stderr!r})"
     )
 
 

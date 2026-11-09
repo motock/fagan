@@ -2,9 +2,11 @@
 # Container entrypoint: dashboard, remote MCP transport and scheduler daemon in
 # one process tree.
 #
-# All processes are children of this script, and the script runs until one of
-# them exits. That matters for orchestration: a container whose entrypoint has
-# returned looks healthy to a supervisor while a half of the service is gone.
+# This script does not own those processes: it runs its start-up assertions and
+# then `exec`s pipeline.supervise, which becomes PID 1 and supervises the three
+# children (restart with backoff, bounded shutdown). That matters for
+# orchestration: a container whose entrypoint has returned looks healthy to a
+# supervisor while half of the service is gone.
 #
 # The dashboard is launched exactly the way scripts/dashboard.sh launches it -
 # `python -m uvicorn app.dashboard:app` bound to DASHBOARD_HOST/DASHBOARD_PORT -
@@ -98,62 +100,45 @@ for dir in "${PLAN_DIR:-/var/lib/pipeline/plans}" "${WORKTREE_ROOT:-/var/lib/pip
     [ -w "$dir" ] || die "state directory is not writable by this user; check volume ownership"
 done
 
+# From here on this script owns nothing: it hands the process tree to
+# `pipeline.supervise` with `exec`, so the supervisor *is* PID 1. That is what
+# makes a stop signal reliable - the orchestrator's SIGTERM reaches the process
+# that holds the children, not a shell that is busy reaping them.
+#
+# The supervisor starts the dashboard exactly the way scripts/dashboard.sh does
+# (`python -m uvicorn app.dashboard:app` on DASHBOARD_HOST/DASHBOARD_PORT), the
+# MCP transport through its own module entrypoint - which refuses to open a
+# socket unless the transport has an OIDC identity provider and policy
+# enforcement is on, so a misconfigured deployment still dies here instead of
+# exposing an unauthenticated endpoint - and the scheduler daemon, the only
+# durable event-bus consumer (ADR 0010), when PIPELINE_SCHEDULER_DAEMON=1.
+#
+# A child that exits is logged and restarted after a bounded backoff instead of
+# taking the container down half-dead: the line to look for is
+# "<name> exited with status <status> after <uptime>s; restarting in <delay>s",
+# so a dead daemon reads "scheduler daemon exited with status 3 ...". On
+# SIGTERM/SIGINT the supervisor forwards the signal, gives the children
+# SHUTDOWN_GRACE_SECONDS to exit, SIGKILLs any straggler, reaps everything and
+# exits 0.
+# The supervisor lives in the shipped pipeline package (the image copies
+# ./pipeline wholesale), so it needs no separate COPY in the Dockerfile. Run it
+# by path, not as a module: an absolute path needs no importable cwd.
+_exec_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd) \
+    || die "cannot resolve this script's directory"
+supervise="$_exec_dir/../pipeline/supervise.py"
+[ -r "$supervise" ] \
+    || die "$supervise is missing; the image must ship pipeline/supervise.py"
+unset _exec_dir
+
 log "starting dashboard on ${DASHBOARD_HOST}:${DASHBOARD_PORT}"
-python -m uvicorn app.dashboard:app \
-    --host "$DASHBOARD_HOST" --port "$DASHBOARD_PORT" &
-dashboard_pid=$!
-
 log "starting MCP transport ${PIPELINE_MCP_TRANSPORT} on ${PIPELINE_MCP_HOST}:${PIPELINE_MCP_PORT}"
-python app/pipeline_mcp_server.py &
-mcp_pid=$!
 
-# The scheduler daemon is the only durable event-bus consumer (ADR 0010), so it
-# runs here rather than in an orchestration shim: a container supervisor sees
-# one process tree, and a daemon that dies takes the container down with it.
-# PIPELINE_SCHEDULER_DAEMON=0 runs it outside the image instead.
-scheduler_pid=
+set -- \
+    --child "dashboard=python -m uvicorn app.dashboard:app --host $DASHBOARD_HOST --port $DASHBOARD_PORT" \
+    --child "MCP transport=python app/pipeline_mcp_server.py"
 if [ "$PIPELINE_SCHEDULER_DAEMON" = "1" ]; then
     log "starting scheduler daemon"
-    python -m pipeline.scheduler_daemon &
-    scheduler_pid=$!
+    set -- "$@" --child "scheduler daemon=python -m pipeline.scheduler_daemon"
 fi
 
-shutdown() {
-    log "shutting down"
-    # shellcheck disable=SC2086  # unquoted on purpose: an empty pid must vanish
-    kill -TERM "$dashboard_pid" "$mcp_pid" $scheduler_pid 2>/dev/null || true
-}
-trap shutdown INT TERM
-
-# Wait for either child; propagate its status so the container exits non-zero
-# when a half of the service dies. `wait -n` is bash-only, and this image runs
-# under /bin/sh, so poll the two pids instead.
-status=0
-while :; do
-    if ! kill -0 "$dashboard_pid" 2>/dev/null; then
-        log "dashboard exited"
-        wait "$dashboard_pid" || status=$?
-        break
-    fi
-    if ! kill -0 "$mcp_pid" 2>/dev/null; then
-        log "MCP transport exited"
-        wait "$mcp_pid" || status=$?
-        break
-    fi
-    if [ -n "$scheduler_pid" ] && ! kill -0 "$scheduler_pid" 2>/dev/null; then
-        log "scheduler daemon exited"
-        wait "$scheduler_pid" || status=$?
-        break
-    fi
-    sleep 1
-done
-
-# Reap the siblings so no orphan keeps the port or the daemon lock.
-# shellcheck disable=SC2086  # unquoted on purpose: an empty pid must vanish
-kill -TERM "$dashboard_pid" "$mcp_pid" $scheduler_pid 2>/dev/null || true
-wait "$dashboard_pid" 2>/dev/null || true
-wait "$mcp_pid" 2>/dev/null || true
-if [ -n "$scheduler_pid" ]; then
-    wait "$scheduler_pid" 2>/dev/null || true
-fi
-exit "$status"
+exec python "$supervise" "$@"

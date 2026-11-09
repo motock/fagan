@@ -8,9 +8,10 @@ failure to Claude without wiping the worktree (the code is often already
 correct). _auto_escalation_enabled reports whether escalation is enabled -
 PIPELINE_AUTO_ESCALATE if set, else PIPELINE_BACKEND_DISPATCH=="auto".
 
-All read PLAN_DIR via lazy imports from the server (tests patch p.<name>;
+Server paths are read via lazy imports from the server (tests patch p.<name>;
 circular-avoidance). _store is the server's live store binding, resolved at
-call time, and _notify_user comes from pipeline_persistence.
+call time: the manifest reset and the journal clear both go through it, and
+_notify_user comes from pipeline_persistence.
 """
 
 import logging

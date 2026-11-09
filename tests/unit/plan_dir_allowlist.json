@@ -15,7 +15,7 @@
  "pipeline/cross_plan.py": 5,
  "pipeline/dispatch_baseline.py": 2,
  "pipeline/dispatch_context.py": 1,
- "pipeline/escalation.py": 6,
+ "pipeline/escalation.py": 1,
  "pipeline/event_wiring.py": 5,
  "pipeline/forge_github.py": 2,
  "pipeline/health_freshness.py": 10,

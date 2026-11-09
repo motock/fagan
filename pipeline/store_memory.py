@@ -23,6 +23,7 @@ from pipeline.store_records import (
     validate_namespace,
     validate_plan_name,
     validate_story_key,
+    validate_usage_record,
 )
 
 
@@ -33,6 +34,8 @@ class InMemoryRecordStore:
         self._lock = threading.RLock()
         self._manifests: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
+        # Append-only usage records, in the order they were appended.
+        self._usage: dict[tuple[str, str], list[dict]] = {}
         self._journals: dict[tuple[str, str, str], list[dict]] = {}
         # Journal activity: epoch seconds of the last append per journal.  A
         # high-water mark, so a clock that steps backwards can never report the
@@ -104,6 +107,29 @@ class InMemoryRecordStore:
         with self._lock:
             self._decisions.setdefault((namespace, plan_name), []).append(
                 copy.deepcopy(record)
+            )
+
+    # -- usage records -------------------------------------------------
+    def get_usage(self, namespace: str, plan_name: str) -> list[dict]:
+        """Return copies of ``plan_name``'s usage records, in written order."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            records = self._usage.get((namespace, plan_name), ())
+            return copy.deepcopy(list(records))
+
+    def append_usage(self, namespace: str, plan_name: str, record: dict) -> None:
+        """Append one usage record; usage is append-only, there is no update.
+
+        The record is validated before the lock is taken, so an invalid record
+        is refused and the stored history is unchanged.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validated = validate_usage_record(plan_name, record)
+        with self._lock:
+            self._usage.setdefault((namespace, plan_name), []).append(
+                copy.deepcopy(validated)
             )
 
     # -- journals ------------------------------------------------------

@@ -34,14 +34,13 @@ from typing import Any
 
 from . import persistence, telemetry_usage
 from .actor import current_correlation_id
+from .store_records import USAGE_RECORD_FIELDS
 
 #: The complete, closed key set of a usage record. Anything not listed here is
-#: not an accounting fact and must not be written.
-USAGE_FIELDS: tuple[str, ...] = (
-    "ts", "plan", "story_key", "attempt", "correlation_id", "role", "backend",
-    "model", "served_model", "input_tokens", "output_tokens",
-    "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd", "duration_ms",
-)
+#: not an accounting fact and must not be written.  This is the *same object* as
+#: the store contract's :data:`pipeline.store_records.USAGE_RECORD_FIELDS`: the
+#: artefact a caller writes and the field set a store validates cannot drift.
+USAGE_FIELDS: tuple[str, ...] = USAGE_RECORD_FIELDS
 
 logger = logging.getLogger(__name__)
 

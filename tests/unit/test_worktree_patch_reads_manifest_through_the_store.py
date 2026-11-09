@@ -86,12 +86,13 @@ def _assert_refusal(result: dict, *, error: str, status_code: int) -> None:
 
 
 class _FakeRecordStore:
-    """A store whose only useful surface is the single-manifest record read."""
+    """A store whose useful surface is the manifest read plus the audit write."""
 
     def __init__(self, manifests=None, *, raises: Exception | None = None):
         self._manifests = manifests or {}
         self._raises = raises
         self.requested: list[tuple[str, str]] = []
+        self.journaled: list[tuple[str, str, str, dict]] = []
 
     def records(self):
         return self
@@ -101,6 +102,10 @@ class _FakeRecordStore:
         if self._raises is not None:
             raise self._raises
         return self._manifests.get(plan_name)
+
+    def append_journal(self, namespace, plan_name, story_key, record):
+        """The WAP-8 audit write: recorded, never asserted-away."""
+        self.journaled.append((namespace, plan_name, story_key, record))
 
 
 class _LegacyStore:
@@ -163,7 +168,7 @@ def test_should_apply_a_patch_when_the_manifest_lives_only_in_the_store(
     plan_dir, repo, store
 ):
     """No manifest on disk at all: the record store alone must satisfy apply."""
-    store(_FakeRecordStore({PLAN_NAME: _manifest("failed", str(repo))}))
+    fake = store(_FakeRecordStore({PLAN_NAME: _manifest("failed", str(repo))}))
     rec = _pending_record(repo)
 
     result = apply_patch(
@@ -172,6 +177,13 @@ def test_should_apply_a_patch_when_the_manifest_lives_only_in_the_store(
 
     assert result["ok"] is True, result
     assert (repo / "app.py").read_text(encoding="utf-8") == PATCHED_TEXT
+    # The audit trail also goes through the store, not a local file.  The
+    # propose entry precedes it; the apply path appends the success entry.
+    applied = [entry for entry in fake.journaled if entry[3]["action"] == "patch_applied"]
+    assert [(ns, plan, story) for ns, plan, story, _ in applied] == [
+        ("default", PLAN_NAME, STORY_KEY)
+    ], fake.journaled
+    assert applied[0][3]["patch_id"] == rec["patch_id"], applied[0][3]
 
 
 def test_should_prefer_the_store_manifest_over_the_plan_dir(

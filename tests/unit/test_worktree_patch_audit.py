@@ -283,15 +283,39 @@ def test_this_story_adds_no_new_module_level_function():
     assert defined <= _BASELINE_MODULE_FUNCTIONS, defined - _BASELINE_MODULE_FUNCTIONS
 
 
-def test_journal_appender_is_imported_from_persistence():
-    """The journal appender is the EXISTING ``persistence._append_journal``.
+def test_journal_appender_writes_through_the_record_store(plan_dir, bus, monkeypatch):
+    """The audit journal goes through the record store, once per outcome.
 
-    The brief pins the import to the ``pipeline/checkpoint.py`` pattern:
-    ``from .persistence import _append_journal``.
+    Behavioural replacement (operator-approved on the plan, 2026-11-08) for
+    the pin that asserted the ``from .persistence import _append_journal``
+    source text.  What the audit contract requires is that the journal record
+    reaches the namespaced record store -- exactly one record per audited
+    outcome, under the ``default`` namespace with this plan and story -- not
+    how the writer is imported.  The fake store is installed where the module
+    resolves it at call time, so this measures the call.
     """
-    source = _module_source()
-    assert "from .persistence import _append_journal" in source, source
-    assert "_append_journal(" in source
+    import importlib
+
+    entries: list[tuple[str, str, str, dict]] = []
+
+    class _Records:
+        def append_journal(self, namespace, plan_name, story_key, record):
+            entries.append((namespace, plan_name, story_key, record))
+
+    class _Store:
+        def records(self):
+            return _Records()
+
+    server = importlib.import_module("pipeline.server")
+    monkeypatch.setattr(server, "_store", _Store())
+
+    diff = _unified("app.py", "alpha\nbeta\ngamma\n", f"alpha\n{MARKER}\ngamma\n")
+    create_patch_record(PLAN_NAME, STORY_KEY, diff, ["app.py"], 1)
+
+    assert len(entries) == 1, entries
+    namespace, plan_name, story_key, record = entries[0]
+    assert (namespace, plan_name, story_key) == ("default", PLAN_NAME, STORY_KEY)
+    assert record["action"] == "patch_proposed"
 
 
 def test_event_publish_uses_the_lazy_dispatch_pattern():

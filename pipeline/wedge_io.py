@@ -17,17 +17,20 @@ signals:
   with Z distinguishes them, so both collapse into False), or None (story
   has no int pid / liveness unknown). A string pid like "12345" is not
   trusted; liveness is never consulted for it.
-- ``activity_age_seconds``: time.time() minus the NEWEST (max) mtime across
-  the story's journal and its worktree's agent.log -- the most recent
+- ``activity_age_seconds``: time.time() minus the NEWEST (max) activity time
+  across the story's journal and its worktree's agent.log -- the most recent
   activity wins, so a fresh agent.log outranks an old journal -- or None
   when no source is readable (fail open, same convention as
   pipeline/usage.py's staleness helper). Negative ages (future mtime /
-  clock skew) are reported as-is, never clamped.
+  clock skew) are reported as-is, never clamped. The journal's time comes
+  from the record store's ``get_journal_updated_at`` (ADR 0012 stage B), so
+  this module no longer knows where a journal lives; the agent.log half
+  stays because that is a worktree artifact, not a store record.
 
 Bounded cost per story: one ``ps -p`` subprocess (only for int pids) and at
-most two stat calls. Stories with no pid and no readable activity files
-short-circuit cheaply to ``{"pid_alive": None, "activity_age_seconds":
-None}``.
+most two activity reads (one store read of the journal, one agent.log stat).
+Stories with no pid and no readable activity files short-circuit cheaply to
+``{"pid_alive": None, "activity_age_seconds": None}``.
 
 NOTE: added by the dashboard-decoration story (8b11b51c) because its
 committed contract imports ``collect_story_wedge_signals`` from
@@ -85,32 +88,65 @@ def _pid_is_alive(pid: int) -> bool | None:
     return bool(stat) and not stat.startswith("Z")
 
 
-def _journal_path_for(plan_name: str, story_key: str, story: dict) -> Path | None:
-    """Resolve the story's journal path, or None when it cannot be determined.
+def _journal_key_for(plan_name: str, story_key: str, story: dict) -> str | None:
+    """Resolve the story's journal key, or None when it cannot be determined.
 
-    The exact pattern is pipeline/store.py's journal helper:
-    ``PLAN_DIR / f"{plan_name}.{story_key}.journal.json"``. Callers normally
-    pass the manifest key; bare story dicts without one fall back to
-    ``story["key"]``, then to the plan's single unambiguous journal, and only
-    for dispatched (int-pid) stories -- a journal mtime says nothing about an
-    agent that was never dispatched, and with several journals in the plan
-    none can be attributed to a key-less story.
+    The journal itself is owned by the record store (ADR 0012 stage B), so this
+    returns a KEY, not a path: the store's ``get_journal_updated_at`` and
+    ``list_journal_keys`` are the only way the activity time is read. The
+    on-disk layout (``<plan>.<story>.journal.json``) is unchanged -- it is just
+    no longer spelled out here.
+
+    Fallback order: the manifest key the caller passes, then ``story["key"]``,
+    then -- only for dispatched (int-pid) stories -- the plan's single
+    unambiguous journal. A journal's activity time says nothing about an agent
+    that was never dispatched, and with several journals in the plan none can
+    be attributed to a key-less story. ``type(pid) is int`` rather than
+    ``isinstance`` because ``isinstance(True, int)`` is True and a bool is not
+    a pid.
     """
     if isinstance(story_key, str) and story_key:
-        return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        return story_key
     key = story.get("key")
     if isinstance(key, str) and key:
-        return PLAN_DIR / f"{plan_name}.{key}.journal.json"
+        return key
     pid = story.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool):
+    if type(pid) is not int:
         return None
-    try:
-        matches = sorted(PLAN_DIR.glob(f"{plan_name}.*.journal.json"))
-    except OSError:
-        return None
-    if len(matches) == 1:
-        return matches[0]
+    keys = _list_journal_keys(plan_name)
+    if len(keys) == 1:
+        return keys[0]
     return None
+
+
+def _list_journal_keys(plan_name: str) -> list[str]:
+    """The story keys with a journal in ``plan_name``, or [] when unanswerable.
+
+    Fail open: the record store validates its keys and refuses an invalid plan
+    name, while this module's contract is read-only-and-never-raises, so a
+    store that cannot answer reads as "no journals" (the same convention as the
+    OSError branch this replaces).
+    """
+    try:
+        return list(_store.records().list_journal_keys("default", plan_name))
+    except Exception:  # noqa: BLE001 - fail open, this module never raises
+        return []
+
+
+def _journal_updated_at(plan_name: str, journal_key: str) -> float | None:
+    """When the story's journal was last appended to, or None.
+
+    A stat-like read through the store: it never opens, writes or bumps the
+    journal, so repeated calls keep reporting the same time and a stalled
+    story stays flagged. Unanswerable reads are None (fail open), which seeds
+    "no activity signal yet" exactly like the OSError branch this replaces.
+    """
+    try:
+        return _store.records().get_journal_updated_at(
+            "default", plan_name, journal_key
+        )
+    except Exception:  # noqa: BLE001 - fail open, this module never raises
+        return None
 
 
 _LOG_TAIL_BYTES = 8192
@@ -148,12 +184,11 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
     now = time.time()
     newest_mtime: float | None = None
 
-    journal = _journal_path_for(plan_name, story_key, story)
-    if journal is not None:
-        try:
-            newest_mtime = journal.stat().st_mtime
-        except OSError:
-            pass  # missing / broken symlink -> treat as absent (fail open)
+    journal_key = _journal_key_for(plan_name, story_key, story)
+    if journal_key is not None:
+        # Missing journal -> None, exactly like the OSError branch this
+        # replaces: no activity signal yet (fail open).
+        newest_mtime = _journal_updated_at(plan_name, journal_key)
 
     worktree = story.get("worktree")
     if isinstance(worktree, str) and worktree:

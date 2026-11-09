@@ -98,11 +98,19 @@ def _patch_config(monkeypatch, enabled=1, stale=1800, cooldown=600):
 
 
 class _StubStore:
-    """Minimal store stand-in exposing ONLY get_manifest_or_none.
+    """Minimal store stand-in exposing ONLY the manifest read and the journal.
 
     If the implementation reaches for ``get_manifest`` (or anything else) it
     gets an AttributeError and the test fails - which grades the documented
     ``get_manifest_or_none`` access path.
+
+    The journal half of ``collect_story_wedge_signals`` asks the record store
+    for the journal's activity time (ADR 0012 stage B), so the stub carries
+    ``records()`` returning itself plus the journal reads. They delegate to a
+    real records view, which resolves the plans directory ``plan_dir`` patched:
+    this file's ``_age_journal`` helper writes real journal files there, and
+    without the seam the scan would hit an AttributeError, fail open to "no
+    signal", and the stale-activity tests would pass vacuously.
     """
 
     def __init__(self, manifest=None):
@@ -112,6 +120,21 @@ class _StubStore:
     def get_manifest_or_none(self, plan_name):
         self.calls.append(plan_name)
         return self.manifest
+
+    def records(self):
+        return self
+
+    def get_journal_updated_at(self, namespace, plan_name, story_key):
+        from pipeline.store import FileStore
+
+        return FileStore().records().get_journal_updated_at(
+            namespace, plan_name, story_key
+        )
+
+    def list_journal_keys(self, namespace, plan_name):
+        from pipeline.store import FileStore
+
+        return FileStore().records().list_journal_keys(namespace, plan_name)
 
 
 def _install_store(monkeypatch, manifest):

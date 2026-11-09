@@ -39,6 +39,16 @@ def _setup(tmp_path, monkeypatch, plan, story_key, journal_age_seconds):
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
+    # ADR 0012 stage B: the record store owns journal discovery, and its records
+    # view resolves the directory from the *writer's* binding
+    # (pipeline.persistence) rather than from the server module's. Patch the same
+    # directory there too -- the shared ``plan_dir`` fixture in tests/unit/
+    # conftest.py patches exactly this pair -- so the store can see the journal
+    # below; without it the store answers "no journal" and the fresh-activity
+    # case would pass vacuously instead of grading the watchdog decision.
+    from pipeline import persistence as ppers
+
+    monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
 
     story = {
         "summary": "oracle",

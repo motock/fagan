@@ -21,10 +21,13 @@ Contract under test (see REFERENCE.md, "When writing a new sink"):
 * The sink never raises: every failure is logged at ERROR with ``exc_info``
   and swallowed, and a failing outbox sink never prevents ``file_log_sink``
   from writing its own record.
-* ``build_bus()`` registers ``outbox_sink`` on ``notification``, after
-  ``file_log_sink`` (whose ordering must not change).  Assertions on the
-  handler list are membership/order based, never exact list equality: the
-  list is cumulative and later stories may register further sinks.
+* ``build_bus()`` does NOT register ``outbox_sink`` on ``notification``: the
+  notifier enqueues the outbox entry itself, before it publishes the event
+  (ADR 0012 decision 9), so a bus subscriber would write every record twice.
+  ``file_log_sink`` stays subscribed: it is the notification history sink.
+  Assertions on the handler list are membership based, never exact list
+  equality: the list is cumulative and later stories may register further
+  sinks.
 """
 
 from __future__ import annotations
@@ -213,42 +216,38 @@ def test_outbox_appends_to_existing_file_instead_of_overwriting(
     assert len(lines) == 2, f"expected the seed line plus one append, got {len(lines)}"
     assert json.loads(lines[0]) == {"seed": True}
     assert "appended" in lines[1]
-
-
 # ---------------------------------------------------------------------------
-# Wiring: build_bus / get_bus register the outbox sink
+# Wiring: the outbox sink is NOT a bus subscriber any more
 # ---------------------------------------------------------------------------
 
-def test_build_bus_registers_outbox_sink_on_notification():
-    """``build_bus`` must register ``outbox_sink`` on ``notification``.
+def test_build_bus_does_not_subscribe_outbox_sink_on_notification():
+    """``build_bus`` must NOT register ``outbox_sink`` on ``notification``.
 
-    Membership, not list equality: the handler list is cumulative and a later
-    story may register further sinks on the same topic.
+    The notifier now enqueues the outbox entry itself, before it publishes the
+    event (ADR 0012 decision 9).  A subscriber would write every record a
+    second time, so the outbox sink must not be on the bus.
     """
     event_wiring._BUS = None
     bus = build_bus()
-    handlers = bus._handlers["notification"]
-    assert outbox_sink in handlers
-    assert handlers.count(outbox_sink) == 1
+    handlers = bus._handlers.get("notification", [])
+    assert outbox_sink not in handlers
 
 
-def test_build_bus_keeps_file_log_sink_subscribed_before_outbox_sink():
-    """``file_log_sink`` must stay subscribed before ``outbox_sink``."""
+def test_build_bus_keeps_file_log_sink_subscribed_on_notification():
+    """``file_log_sink`` stays subscribed: it is the history sink."""
     event_wiring._BUS = None
     bus = build_bus()
-    handlers = bus._handlers["notification"]
+    handlers = bus._handlers.get("notification", [])
     assert file_log_sink in handlers
-    assert outbox_sink in handlers
-    assert handlers.index(file_log_sink) < handlers.index(outbox_sink)
 
 
-def test_get_bus_does_not_duplicate_outbox_sink():
-    """Repeated ``get_bus`` calls must not subscribe ``outbox_sink`` twice."""
+def test_get_bus_does_not_subscribe_outbox_sink():
+    """Repeated ``get_bus`` calls must not subscribe ``outbox_sink`` at all."""
     event_wiring._BUS = None
     get_bus()
     get_bus()
     bus = get_bus()
-    assert bus._handlers["notification"].count(outbox_sink) == 1
+    assert outbox_sink not in bus._handlers.get("notification", [])
 
 
 # ---------------------------------------------------------------------------

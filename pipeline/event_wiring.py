@@ -14,7 +14,7 @@ from . import manifest_source, telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
 from .events_nats import NatsEventBus
-from .notification_outbox import outbox_sink
+from .notification_outbox import outbox_sink  # noqa: F401 - importable here, never subscribed
 from .notification_sinks import file_log_sink
 from .paths import PLAN_DIR
 
@@ -224,8 +224,11 @@ def reported_event_bus_name() -> str:
 def _subscribe_handlers(bus: EventBus) -> EventBus:
     """Subscribe the pipeline's handlers to *bus* and return it."""
     bus.subscribe("agent_done", wake_handler)
+    # Only the notification HISTORY sink is a subscriber.  The outbox is not:
+    # ``persistence._notify_user`` enqueues the outbox entry itself, on the
+    # caller's thread and before it publishes, so a subscriber here would
+    # write every record a second time (ADR 0012 decision 9).
     bus.subscribe("notification", file_log_sink)
-    bus.subscribe("notification", outbox_sink)
     # Lifecycle telemetry is opt-in: with no OTLP endpoint configured this adds
     # no handler at all, so an uninstrumented process pays nothing per tick.
     # The same sink feeds the duration histograms, so a metrics-only deployment

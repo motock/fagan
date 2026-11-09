@@ -151,8 +151,13 @@ def test_jsonl_dispatches_agent_done_to_wake_handler(monkeypatch, tmp_path):
     assert [event["type"] for event in seen] == ["agent_done"]
 
 
-def test_jsonl_dispatches_notification_to_both_sinks(monkeypatch, tmp_path):
-    """Both notification sinks run, so persistence must not fall back."""
+def test_jsonl_dispatches_notification_to_the_file_log_sink_only(monkeypatch, tmp_path):
+    """Only the history sink runs on the bus: the outbox sink is not one.
+
+    The notifier enqueues the outbox entry itself, before it publishes the
+    event (ADR 0012 decision 9), so a bus subscriber would write every record
+    a second time.
+    """
     monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
     seen: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -166,7 +171,7 @@ def test_jsonl_dispatches_notification_to_both_sinks(monkeypatch, tmp_path):
     bus = build_bus()
     bus.publish(make_event("notification", "plan-a", "S-1"))
 
-    assert seen == [("file", "notification"), ("outbox", "notification")]
+    assert seen == [("file", "notification")]
     # pipeline.persistence._notify_user only skips its direct-write fallback
     # when it sees a subscriber registered for "notification".
     assert bus._handlers.get("notification")

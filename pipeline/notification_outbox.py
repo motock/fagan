@@ -1,6 +1,12 @@
 """
-Notification sink that spools *selected* ``notification`` bus events to a
-per-plan outbox file for a later out-of-band send.
+Outbox enqueue entry point that spools *selected* ``notification`` events to a
+per-plan outbox queue for a later out-of-band send.
+
+This module is NOT a bus subscriber.  :func:`pipeline.persistence._notify_user`
+calls :func:`outbox_sink` itself, on the caller's thread, BEFORE it publishes
+the event: the notifier enqueues the outbox entry before it publishes
+(ADR 0012 decision 9 -- "events are transport; the outbox is the durable
+record").  A bus subscription would therefore write every record twice.
 
 The outbox is a queue per ``(plan, channel)`` held by the process's record
 store -- with the file store, one JSONL sidecar per queue:
@@ -61,7 +67,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths, persistence, store
+from . import paths, persistence
 from .live_ref import LiveRef as _ServerRef
 from .notification_channels import as_sender
 from .notification_routing import safe_load_notification_config
@@ -98,22 +104,45 @@ ALL_PLANS = "*"
 OUTBOX_MAX_AGE_S = 7 * 24 * 3600
 
 
-def _queue_path(plan: str, channel: str) -> Path:
-    """Return the file the file store keeps ``(plan, channel)``'s queue in."""
-    return persistence._outbox_path(plan, channel)
+def _queue_identity(path: Path) -> tuple[str, str]:
+    """Return ``(plan, channel)`` for a queue file name.
+
+    The names are fixed by :func:`pipeline.persistence._outbox_path`:
+    ``<plan>.outbox.jsonl`` for the legacy queue and
+    ``<plan>.outbox.<channel>.jsonl`` for an instance queue.
+    """
+    stem = path.name.removesuffix(".jsonl")
+    plan, _, channel = stem.partition(".outbox")
+    return plan, channel.lstrip(".") or LEGACY_OUTBOX_CHANNEL
 
 
 def _append_rotating(path: Path, line: str) -> None:
-    persistence._rotate_if_needed(
-        path,
-        persistence.NOTIFICATIONS_MAX_BYTES,
-        persistence.NOTIFICATIONS_KEEP_N,
+    """Append one JSON ``line`` to the queue whose file is ``path``.
+
+    Every queue write funnels through here -- tests patch this name to
+    simulate a failing channel -- and delegates to the shared store's
+    ``append_outbox`` so the record is durable, goes through the store's own
+    retention/rotation policy, and lands in the caller's transaction when one
+    is held.
+    """
+    plan, channel = _queue_identity(path)
+    _store.records().append_outbox(
+        DEFAULT_NAMESPACE, plan, channel, json.loads(line)
     )
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(line)
 
 
-def _spool_legacy(plan: str, evt_name: str | None, line: str) -> None:
+def _enqueue(plan: str, channel: str, record: dict[str, Any]) -> None:
+    """Enqueue ``record`` on ``channel``'s queue for ``plan``.
+
+    The line is exactly ``json.dumps(record, default=str)`` -- the record the
+    bus subscriber always wrote -- so the queue file is byte-identical to what
+    it used to be.
+    """
+    path = persistence._outbox_path(plan, channel)
+    _append_rotating(path, json.dumps(record, default=str))
+
+
+def _spool_legacy(plan: str, evt_name: str | None, record: dict[str, Any]) -> None:
     if os.environ.get(OUTBOX_ENABLED_ENV, "0") != "1":
         # Secure default: outbound sinks ship disabled.  Read per call so
         # tests (and operators) can flip it without a process restart.
@@ -121,9 +150,11 @@ def _spool_legacy(plan: str, evt_name: str | None, line: str) -> None:
     raw = os.environ.get(OUTBOX_EVENTS_ENV, DEFAULT_OUTBOX_EVENTS)
     allowed = {s.strip() for s in raw.split(",") if s.strip()}
     if evt_name not in allowed:
-        # Not allowlisted (or no structured event name): silently skip.
+        # Not allowlisted (or no structured event name): silently skip.  This
+        # gate selects the LEGACY channel only: the instance queues are
+        # selected by the routing config, so a miss here must still route.
         return
-    _append_rotating(_queue_path(plan, LEGACY_OUTBOX_CHANNEL), line)
+    _enqueue(plan, LEGACY_OUTBOX_CHANNEL, record)
 
 
 def _plan_owner(plan: str) -> str:
@@ -136,7 +167,10 @@ def _plan_owner(plan: str) -> str:
     hold paths, so nothing from the failure or the manifest leaks into the log.
     """
     try:
-        manifest = store.build_store().get_manifest(plan)
+        # Read through the process's SHARED store: a second store connection
+        # (``store.build_store()``) would contend for the write lock the caller
+        # may be holding while it enqueues its outbox entry.
+        manifest = _store.records().get_manifest(DEFAULT_NAMESPACE, plan)
     except Exception as exc:  # noqa: BLE001 - an unreadable manifest means "no owner"
         logger.warning(
             "Could not read plan owner for notification routing: error_type=%s",
@@ -147,8 +181,8 @@ def _plan_owner(plan: str) -> str:
     return owner if isinstance(owner, str) else ""
 
 
-def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
-    """Append ``line`` to the queue of each instance the config routes it to.
+def _spool_instances(plan: str, evt_name: str | None, record: dict[str, Any]) -> None:
+    """Append ``record`` to the queue of each instance the config routes it to.
 
     A config file's routes are the allowlist for these queues (the legacy
     ``PIPELINE_NOTIFY_OUTBOX_EVENTS`` is not consulted), and the file's
@@ -170,7 +204,7 @@ def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
         owner = _plan_owner(plan)
         for name in config.resolve(plan, evt_name, owner):
             try:
-                _append_rotating(_queue_path(plan, name), line)
+                _enqueue(plan, name, record)
             except Exception as exc:  # noqa: BLE001 - isolate one instance's failure
                 logger.error(
                     "Failed to spool notification to instance outbox: instance=%s error_type=%s",
@@ -185,20 +219,29 @@ def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
 
 
 def outbox_sink(event: dict[str, Any]) -> None:
-    """Spool a ``notification`` bus event to the plan's outbox file.
+    """Enqueue a ``notification`` event on the outboxes that select it.
+
+    This is the public enqueue entry point.  :func:`pipeline.persistence.
+    _notify_user` calls it directly, on the caller's thread, BEFORE it
+    publishes the event; the function is NOT a bus subscriber (a subscriber
+    would enqueue every record a second time).
 
     Parameters
     ----------
     event:
-        The bus-level notification event.  It must contain a truthy ``plan``
-        key and may include a ``payload`` dict whose optional ``event`` key
-        carries the structured notification name used for allowlist matching.
+        The notification event.  It must contain a truthy ``plan`` key and may
+        include a ``payload`` dict whose optional ``event`` key carries the
+        structured notification name used for allowlist matching.  The record
+        queued is exactly ``dict(event)``, so the spooled line is
+        ``json.dumps(event, default=str)`` -- identical to what the bus
+        subscriber used to write.
 
     Returns
     -------
     None
-        The function always returns ``None``; any error is logged at ERROR
-        with ``exc_info=True`` but never raised.
+        The function always returns ``None``; every failure is logged at ERROR
+        (error TYPE only) and never raised.  One channel's failure never stops
+        another channel's write.
     """
     try:
         plan = event.get("plan")
@@ -212,16 +255,23 @@ def outbox_sink(event: dict[str, Any]) -> None:
 
         payload = event.get("payload")
         evt_name = payload.get("event") if isinstance(payload, dict) else None
-        line = json.dumps(dict(event), default=str) + "\n"
+        record = dict(event)
 
+        # Each channel is isolated separately: one failing queue must never
+        # stop the others.  The legacy gate and the routing config select
+        # DISJOINT channel sets, so both writes are attempted on every call.
         try:
-            _spool_legacy(plan, evt_name, line)
-        finally:
-            # A legacy write failure must not stop the instance queues.
-            _spool_instances(plan, evt_name, line)
-    except Exception:  # pragma: no cover - defensive
+            _spool_legacy(plan, evt_name, record)
+        except Exception as exc:  # isolate the legacy channel
+            logger.exception(
+                "Failed to spool notification to the legacy outbox: error_type=%s",
+                type(exc).__name__,
+            )
+        _spool_instances(plan, evt_name, record)
+    except Exception as exc:  # the entry point never raises
         logger.exception(
-            "Failed to spool notification to outbox for event %s", event
+            "Failed to spool notification to outbox: error_type=%s",
+            type(exc).__name__,
         )
         return
 

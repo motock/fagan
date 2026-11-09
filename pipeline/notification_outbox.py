@@ -2,9 +2,10 @@
 Notification sink that spools *selected* ``notification`` bus events to a
 per-plan outbox file for a later out-of-band send.
 
-The outbox is a plain JSONL sidecar inside :data:`pipeline.persistence.PLAN_DIR`:
+The outbox is a queue per ``(plan, channel)`` held by the process's record
+store -- with the file store, one JSONL sidecar per queue:
 
-* ``<plan>.outbox.jsonl`` – one JSON line per spooled notification.
+* the legacy e-mail queue – ``<plan>.outbox.jsonl``, one JSON line per record.
 
 The sink itself performs NO network I/O.  :func:`drain_outbox` (below) reads
 the queued records and hands each to an injected ``sender`` — in production
@@ -61,14 +62,20 @@ from pathlib import Path
 from typing import Any
 
 from . import paths, persistence, store
-from .notification_channels import as_sender, channel_outbox_path
+from .live_ref import LiveRef as _ServerRef
+from .notification_channels import as_sender
 from .notification_routing import safe_load_notification_config
+from .store_records import DEFAULT_NAMESPACE, LEGACY_OUTBOX_CHANNEL
 
 logger = logging.getLogger(__name__)
 
-# Re-bound from ``.paths`` at import time, exactly like ``persistence`` does;
-# tests patch this name (and ``paths.PLAN_DIR``) to point the sink at a
-# temporary plan directory.  Read at call time, never cached.
+# The process's shared record store, resolved lazily through
+# ``pipeline.server``: every outbox read and acknowledgement goes through
+# ``_store.records()`` so the drain can never see a second copy of a queue.
+_store = _ServerRef("_store")
+
+# The outbox module keeps this binding because the file store's legacy-channel
+# path resolves through it; read at call time, never cached.
 PLAN_DIR = paths.PLAN_DIR
 
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"
@@ -91,6 +98,11 @@ ALL_PLANS = "*"
 OUTBOX_MAX_AGE_S = 7 * 24 * 3600
 
 
+def _queue_path(plan: str, channel: str) -> Path:
+    """Return the file the file store keeps ``(plan, channel)``'s queue in."""
+    return persistence._outbox_path(plan, channel)
+
+
 def _append_rotating(path: Path, line: str) -> None:
     persistence._rotate_if_needed(
         path,
@@ -111,7 +123,7 @@ def _spool_legacy(plan: str, evt_name: str | None, line: str) -> None:
     if evt_name not in allowed:
         # Not allowlisted (or no structured event name): silently skip.
         return
-    _append_rotating(PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}", line)
+    _append_rotating(_queue_path(plan, LEGACY_OUTBOX_CHANNEL), line)
 
 
 def _plan_owner(plan: str) -> str:
@@ -158,7 +170,7 @@ def _spool_instances(plan: str, evt_name: str | None, line: str) -> None:
         owner = _plan_owner(plan)
         for name in config.resolve(plan, evt_name, owner):
             try:
-                _append_rotating(channel_outbox_path(plan, config.instances[name]), line)
+                _append_rotating(_queue_path(plan, name), line)
             except Exception as exc:  # noqa: BLE001 - isolate one instance's failure
                 logger.error(
                     "Failed to spool notification to instance outbox: instance=%s error_type=%s",
@@ -350,6 +362,70 @@ def _drain_one_outbox(path: Path, sender) -> int:
         return sent
 
 
+def _queues_by_channel() -> dict[str, list[str]]:
+    """Return the plans holding an entry, keyed by channel.
+
+    Enumerated through the store so the drain sees exactly the queues the
+    sink wrote, in the order the store reports them.  A queue that is empty
+    (or was never created) is not listed: there is nothing to drain.
+    """
+    queues: dict[str, list[str]] = {}
+    for plan, channel in _store.records().list_outboxes(DEFAULT_NAMESPACE):
+        plans = queues.setdefault(channel, [])
+        if plan not in plans:
+            plans.append(plan)
+    return queues
+
+
+def _drain_queue(plan_name: str, channel: str, sender) -> int:
+    """Drain one ``(plan_name, channel)`` queue; return the accepted count.
+
+    Records the ``sender`` accepted (returned ``True``) are acknowledged and
+    removed; records it rejected (``False``) or that made it RAISE are
+    retained verbatim for the next drain.  A record older than
+    :data:`OUTBOX_MAX_AGE_S` is dropped UNSENT and reported at ``WARNING``
+    naming only the plan and the channel -- a record can hold a recipient, a
+    subject or a URL, so its content is never logged.
+
+    The queue is acknowledged exactly once, with every id collected, even
+    when nothing was collected: the file store uses that call to drop
+    malformed lines, and acknowledging only the ids this drain actually saw
+    keeps a record appended between the read and the ack.
+    """
+    entries = _store.records().read_outbox(DEFAULT_NAMESPACE, plan_name, channel)
+    now = datetime.now(UTC)
+    acked: list[str] = []
+    delivered = 0
+    for entry in entries:
+        entry_id = entry.get("id")
+        record = entry.get("record") or {}
+        if _is_expired(record, now):
+            logger.warning(
+                "Dropping expired outbox record: plan=%s channel=%s",
+                plan_name,
+                channel,
+            )
+            if entry_id is not None:
+                acked.append(entry_id)
+            continue
+        try:
+            accepted = bool(sender(record))
+        except Exception as exc:  # noqa: BLE001 - a raising sender means "retain"
+            logger.error(
+                "Failed to deliver outbox record: plan=%s channel=%s error_type=%s",
+                plan_name,
+                channel,
+                type(exc).__name__,
+            )
+            continue
+        if accepted:
+            delivered += 1
+            if entry_id is not None:
+                acked.append(entry_id)
+    _store.records().ack_outbox(DEFAULT_NAMESPACE, plan_name, channel, acked)
+    return delivered
+
+
 def drain_outbox(plan_name: str, sender) -> int:
     """Drain spooled outbox records for ``plan_name`` through ``sender``.
 
@@ -361,10 +437,9 @@ def drain_outbox(plan_name: str, sender) -> int:
     Parameters
     ----------
     plan_name:
-        The plan whose ``<plan>.outbox.jsonl`` file should be drained, or
-        :data:`ALL_PLANS` (``"*"``) to drain every plan's outbox file in one
-        call — the shape the scheduler tick uses, since a tick is
-        plan-agnostic.
+        The plan whose legacy queue should be drained, or :data:`ALL_PLANS`
+        (``"*"``) to drain every plan's legacy queue in one call — the shape
+        the scheduler tick uses, since a tick is plan-agnostic.
     sender:
         Callable taking one parsed record dict and returning ``True`` when the
         record was delivered (remove it) or ``False`` when it was not (retain
@@ -374,45 +449,64 @@ def drain_outbox(plan_name: str, sender) -> int:
     Returns
     -------
     int
-        The count of records the sender accepted.  Never raises: a missing
-        file, a malformed line, a raising sender, or a failed rewrite is
-        logged and the drain moves on.
+        The count of records the sender accepted.  Never raises: a failing
+        store, a raising sender or an expired record is logged and the drain
+        moves on.
     """
-    if plan_name == ALL_PLANS:
-        total = 0
-        for outbox_path in sorted(PLAN_DIR.glob(f"*{OUTBOX_SUFFIX}")):
-            total += _drain_one_outbox(outbox_path, sender)
-        return total
-    return _drain_one_outbox(PLAN_DIR / f"{plan_name}{OUTBOX_SUFFIX}", sender)
+    total = 0
+    try:
+        if plan_name == ALL_PLANS:
+            plans = _queues_by_channel().get(LEGACY_OUTBOX_CHANNEL, [])
+        else:
+            plans = [plan_name]
+        for plan in plans:
+            try:
+                total += _drain_queue(plan, LEGACY_OUTBOX_CHANNEL, sender)
+            except Exception as exc:  # noqa: BLE001 - one plan must not block another
+                logger.error(
+                    "Failed to drain outbox: plan=%s error_type=%s",
+                    plan,
+                    type(exc).__name__,
+                )
+    except Exception as exc:  # noqa: BLE001 - the drain never raises into the tick
+        logger.error("Failed to drain outbox: error_type=%s", type(exc).__name__)
+        return 0
+    return total
 
 
 def drain_channel_outboxes(plan_name: str = ALL_PLANS) -> dict[str, int]:
-    """Drain every configured instance's outbox through that instance.
+    """Drain every configured instance's queue through that instance.
 
-    Returns delivered counts keyed by instance name.  Files belonging to an
-    instance no longer in the config are left untouched (not drained, not
-    deleted).  No config file means no instances, so nothing happens.  Never
-    raises.
+    Returns delivered counts keyed by instance name.  A queue belonging to an
+    instance no longer in the config is left untouched (not drained, not
+    acknowledged, not deleted).  No config file means no instances, so nothing
+    happens.  Never raises.
     """
     delivered: dict[str, int] = {}
     try:
         config = safe_load_notification_config()
         if config is None:
             return delivered
+        if plan_name == ALL_PLANS:
+            plans_by_channel = _queues_by_channel()
+        else:
+            plans_by_channel = {name: [plan_name] for name in config.instances}
         for name, channel in config.instances.items():
+            count = 0
             try:
-                if plan_name == ALL_PLANS:
-                    files = sorted(PLAN_DIR.glob(f"*{channel.outbox_suffix}"))
-                else:
-                    files = [channel_outbox_path(plan_name, channel)]
                 sender = as_sender(channel)
-                delivered[name] = sum(_drain_one_outbox(f, sender) for f in files)
+                for plan in plans_by_channel.get(name, []):
+                    count += _drain_queue(plan, name, sender)
             except Exception as exc:  # noqa: BLE001 - one instance must not block another
                 logger.error(
                     "Failed to drain instance outbox: instance=%s error_type=%s",
                     name,
                     type(exc).__name__,
                 )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to drain channel outboxes: error_type=%s", type(exc).__name__)
+            delivered[name] = count
+    except Exception as exc:  # noqa: BLE001 - the drain never raises into the tick
+        logger.error(
+            "Failed to drain channel outboxes: error_type=%s", type(exc).__name__
+        )
+        return {}
     return delivered

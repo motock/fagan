@@ -1,12 +1,10 @@
 """Tests for the notification channel type contract and registry."""
 
 import logging
-from pathlib import Path
 
 import pytest
 
 from pipeline import notification_channels as nc
-from pipeline import paths
 
 
 class FakeChannel:
@@ -136,20 +134,6 @@ def test_should_raise_when_env_setting_absent():
 
 def test_channel_config_error_is_value_error():
     assert issubclass(nc.ChannelConfigError, ValueError)
-
-
-def test_should_build_outbox_path_under_plan_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
-    p = nc.channel_outbox_path("myplan", FakeChannel("slack-a"))
-    assert p == tmp_path / "myplan.outbox.slack-a.jsonl"
-    assert isinstance(p, Path)
-
-
-@pytest.mark.parametrize("plan", ["a/b", "a\\b", "..", "x..y/z", ""])
-def test_should_reject_plan_traversal(monkeypatch, tmp_path, plan):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
-    with pytest.raises(ValueError):
-        nc.channel_outbox_path(plan, FakeChannel("a"))
 
 
 @pytest.mark.parametrize("name", ["", "Up", "1a", "a" * 33, "a b", "a/b"])

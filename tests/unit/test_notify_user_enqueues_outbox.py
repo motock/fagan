@@ -264,11 +264,24 @@ def plan_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _install_store(monkeypatch, store):
+    """Install *store* as the process's shared store on every seam.
+
+    The shared store is the process-wide one (``pipeline.server._store``);
+    the modules that use it read it through a live reference, so patching the
+    server binding is enough.  The module-level names are patched as well so
+    the test does not depend on which module holds the reference.
+    """
+    monkeypatch.setattr(server, "_store", store)
+    monkeypatch.setattr(persistence, "_store", store, raising=False)
+    monkeypatch.setattr(notification_outbox, "_store", store, raising=False)
+
+
 @pytest.fixture
 def file_store(plan_dir, monkeypatch):
     """The process's shared store: a real file store over the temp directory."""
     store = FileStore()
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     return store
 
 
@@ -276,7 +289,7 @@ def file_store(plan_dir, monkeypatch):
 def spy_store(plan_dir, monkeypatch):
     """The process's shared store: an in-memory one that records appends."""
     store = _SpyStore()
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     return store
 
 

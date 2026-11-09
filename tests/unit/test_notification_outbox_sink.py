@@ -21,10 +21,13 @@ Contract under test (see REFERENCE.md, "When writing a new sink"):
 * The sink never raises: every failure is logged at ERROR with ``exc_info``
   and swallowed, and a failing outbox sink never prevents ``file_log_sink``
   from writing its own record.
-* ``build_bus()`` registers ``outbox_sink`` on ``notification``, after
-  ``file_log_sink`` (whose ordering must not change).  Assertions on the
-  handler list are membership/order based, never exact list equality: the
-  list is cumulative and later stories may register further sinks.
+* ``build_bus()`` does NOT register ``outbox_sink`` on ``notification``: the
+  notifier enqueues the outbox entry itself, before it publishes the event
+  (ADR 0012 decision 9), so a bus subscriber would write every record twice.
+  ``file_log_sink`` stays subscribed: it is the notification history sink.
+  Assertions on the handler list are membership based, never exact list
+  equality: the list is cumulative and later stories may register further
+  sinks.
 """
 
 from __future__ import annotations

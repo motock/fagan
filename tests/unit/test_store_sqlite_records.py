@@ -13,15 +13,18 @@ from pathlib import Path
 
 import pytest
 
+import pipeline as pipeline_package
 import pipeline.persistence
 
 # Must precede every other ``pipeline`` import: a pre-existing import cycle
 # requires ``pipeline.server`` to be imported first.
 import pipeline.server
+from pipeline import notification_outbox, paths
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
 from pipeline.store_contract_transactions import TransactionContract
 from pipeline.store_records import DEFAULT_NAMESPACE, UnknownNamespaceError
 from pipeline.store_sqlite import SqliteStore
+from tests.unit._store_outbox_helpers import SingleNamespaceOutboxBehaviour
 
 PLAN = 'plan-a'
 
@@ -115,3 +118,36 @@ class TestSqliteRecords(RecordStoreContract, SingleNamespaceContract):
         self._store.put_manifest(DEFAULT_NAMESPACE, PLAN, {'v': 3})
         assert _row_count(self._db_path) == 1
         assert self._legacy_store.get_manifest(PLAN) == {'v': 3}
+
+
+class TestSqliteRecordsOutbox(SingleNamespaceOutboxBehaviour):
+    """The outbox contract, run against the sqlite-backed store.
+
+    The outbox queues are delegated to the file store view for now, so the
+    queues live in the plan directory; the plan directory is pointed at a
+    throwaway one so nothing lands in the operator's real plans directory.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _outbox_dirs(self, plan_dir, monkeypatch):
+        """Point the two outbox path bindings at the throwaway plan dir."""
+        monkeypatch.setattr(paths, 'PLAN_DIR', plan_dir)
+        monkeypatch.setattr(notification_outbox, 'PLAN_DIR', plan_dir)
+        # See tests/unit/test_store_file_records.py: the outbox path
+        # resolution reads ``paths`` as a package attribute.
+        monkeypatch.setattr(pipeline_package, 'paths', paths)
+
+    @pytest.fixture(autouse=True)
+    def _store(self, db_path, plan_dir):
+        """A ``records()`` view on a fresh database, closed after the test."""
+        store = SqliteStore(db_path)
+        self._store = store.records()
+        try:
+            yield self._store
+        finally:
+            close = getattr(store, 'close', None)
+            if close is not None:
+                close()
+
+    def make_store(self):
+        return self._store

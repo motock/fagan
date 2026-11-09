@@ -7,6 +7,10 @@ import inspect
 import pytest
 
 import pipeline.store_records as store_records  # noqa: PLR0402
+from pipeline.notification_channels import (
+    ChannelConfigError,
+    validate_instance_name,
+)
 
 
 def _attr(name):
@@ -106,3 +110,55 @@ def test_default_namespace_is_valid():
     default_namespace = _attr('DEFAULT_NAMESPACE')
     assert default_namespace == 'default'
     assert validate_namespace(default_namespace) == default_namespace
+
+
+# -- channels (ADR 0012 decision 3) ---------------------------------
+LEGACY_OUTBOX_CHANNEL = '_legacy'
+
+
+def test_the_legacy_outbox_channel_is_the_underscore_prefixed_key():
+    assert _attr('LEGACY_OUTBOX_CHANNEL') == LEGACY_OUTBOX_CHANNEL
+
+
+def test_validate_channel_accepts_the_legacy_channel_and_instance_names():
+    validate_channel = _attr('validate_channel')
+    for value in (LEGACY_OUTBOX_CHANNEL, 'email-a', 'legacy', 'a', 'a' * 32):
+        assert validate_channel(value) == value
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['Bad', '', '.x', 'a' * 33, 'a/b', '_legacy-2', 'a b'],
+)
+def test_validate_channel_rejects_invalid_channel_names(value):
+    validate_channel = _attr('validate_channel')
+    error = _attr('InvalidRecordKeyError')
+    with pytest.raises(error):
+        validate_channel(value)
+
+
+def test_validate_channel_error_text_never_echoes_the_offending_value():
+    validate_channel = _attr('validate_channel')
+    error = _attr('InvalidRecordKeyError')
+    offending = '../secret-channel'
+    with pytest.raises(error) as excinfo:
+        validate_channel(offending)
+    assert offending not in str(excinfo.value)
+    assert 'invalid channel' in str(excinfo.value)
+
+
+def test_the_legacy_channel_cannot_be_an_instance_name():
+    """The legacy key starts with ``_``, so an instance can never be it."""
+    legacy = _attr('LEGACY_OUTBOX_CHANNEL')
+    with pytest.raises(ChannelConfigError):
+        validate_instance_name(legacy)
+    # An operator instance called 'legacy' is fine and never collides with it.
+    validate_instance_name('legacy')
+
+
+def test_the_outbox_contract_module_exposes_the_outbox_mixin():
+    """``pipeline.store_contract_outbox`` carries the shared ``OutboxContract``."""
+    import pipeline.store_contract_outbox as contract
+
+    assert hasattr(contract, 'OutboxContract')
+    assert isinstance(contract.OutboxContract, type)

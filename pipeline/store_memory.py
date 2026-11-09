@@ -19,7 +19,9 @@ import threading
 import time
 
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
+from pipeline.store_contract_outbox import OutboxContract
 from pipeline.store_records import (
+    validate_channel,
     validate_namespace,
     validate_plan_name,
     validate_story_key,
@@ -27,7 +29,7 @@ from pipeline.store_records import (
 )
 
 
-class InMemoryRecordStore:
+class InMemoryRecordStore(OutboxContract):
     """A thread-safe, non-durable :class:`pipeline.store_records.RecordStore`."""
 
     def __init__(self) -> None:
@@ -41,6 +43,11 @@ class InMemoryRecordStore:
         # high-water mark, so a clock that steps backwards can never report the
         # journal as older than an append it already reported.
         self._journal_updated_at: dict[tuple[str, str, str], float] = {}
+        # Per-channel outbox queues: (namespace, plan, channel) -> [(id, record)]
+        # in append order, oldest first.  Ids come from a per-store counter, so
+        # they are opaque and never reused inside one store's lifetime.
+        self._outboxes: dict[tuple[str, str, str], list[tuple[str, dict]]] = {}
+        self._outbox_id_counter = 0
         # One re-entrant lock per (namespace, plan_name), created on first use
         # so an unused pair costs nothing.
         self._plan_locks: dict[tuple[str, str], threading.RLock] = {}
@@ -203,6 +210,85 @@ class InMemoryRecordStore:
                 if stored_namespace == namespace and stored_plan == plan_name
             }
             return sorted(keys)
+
+    # -- per-channel outbox queues (ADR 0012 decision 3) ----------------
+    def append_outbox(
+        self, namespace: str, plan_name: str, channel: str, record: dict
+    ) -> None:
+        """Queue a deep copy of ``record`` on the ``(plan, channel)`` queue.
+
+        The record is copied on the way in, so a caller that keeps mutating its
+        dict cannot change a queue it already appended to.  A record that is
+        not a dict is a ``TypeError``; one that no JSON encoder can serialise
+        is refused BEFORE anything is stored, so a refused append leaves no
+        entry behind.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        json.dumps(record, default=str)
+        with self._lock:
+            entry_ids = self._outboxes.setdefault(
+                (namespace, plan_name, channel), []
+            )
+            self._outbox_id_counter += 1
+            entry_ids.append((f'outbox-{self._outbox_id_counter}', copy.deepcopy(record)))
+
+    def read_outbox(
+        self,
+        namespace: str,
+        plan_name: str,
+        channel: str,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Return copies of the queue's entries oldest first, without removing."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        with self._lock:
+            entries = [
+                {'id': entry_id, 'record': copy.deepcopy(record)}
+                for entry_id, record in self._outboxes.get(
+                    (namespace, plan_name, channel), []
+                )
+            ]
+        if limit is not None:
+            entries = entries[: max(0, limit)]
+        return entries
+
+    def ack_outbox(
+        self, namespace: str, plan_name: str, channel: str, ids
+    ) -> int:
+        """Remove one entry per acked id; return how many were removed."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        wanted = [str(acked) for acked in ids]
+        with self._lock:
+            queue = self._outboxes.get((namespace, plan_name, channel), [])
+            retained: list[tuple[str, dict]] = []
+            removed = 0
+            for entry_id, record in queue:
+                if entry_id in wanted:
+                    wanted.remove(entry_id)
+                    removed += 1
+                    continue
+                retained.append((entry_id, record))
+            self._outboxes[(namespace, plan_name, channel)] = retained
+            return removed
+
+    def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
+        """Return the sorted ``(plan, channel)`` pairs that hold at least one entry."""
+        validate_namespace(namespace)
+        with self._lock:
+            pairs = {
+                (plan_name, channel)
+                for (stored_namespace, plan_name, channel), queue in self._outboxes.items()
+                if stored_namespace == namespace and queue
+            }
+        return sorted(pairs)
 
     # -- transactions --------------------------------------------------
     @contextlib.contextmanager

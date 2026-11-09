@@ -54,12 +54,29 @@ def _load_script():
 
 @contextmanager
 def _pipeline_import_guard():
-    """Restore pipeline.* sys.modules entries after a scratch-env call."""
+    """Restore pipeline.* module state after a scratch-env call.
+
+    ``import pipeline.paths`` caches the module in ``sys.modules`` *and* binds
+    it as an attribute on the ``pipeline`` package, so restoring only the
+    ``sys.modules`` entries leaves ``pipeline.paths`` pointing at the discarded
+    copy. A later ``from . import paths`` (which resolves the package
+    attribute - see ``pipeline.persistence._outbox_dirs``) and a later
+    ``import pipeline.paths`` (which resolves ``sys.modules``) would then see
+    two different module objects, each with its own ``PLAN_DIR``: a test that
+    patches one binding silently leaves the other reading the default plans
+    directory. Restore the package attributes too.
+    """
     prefix = "pipeline"
     before = {
         k: v
         for k, v in sys.modules.items()
         if k == prefix or k.startswith(prefix + ".")
+    }
+    package = before[prefix]
+    before_attrs = {
+        name: value
+        for name, value in vars(package).items()
+        if getattr(value, "__name__", None) == f"{prefix}.{name}"
     }
     try:
         yield
@@ -70,6 +87,13 @@ def _pipeline_import_guard():
                 sys.modules.pop(name, None)
         for name, mod in before.items():
             sys.modules[name] = mod
+        for name, value in list(vars(package).items()):
+            if getattr(value, "__name__", None) != f"{prefix}.{name}":
+                continue
+            if name in before_attrs:
+                setattr(package, name, before_attrs[name])
+            else:
+                delattr(package, name)
 
 
 def _git(cwd, *args):
@@ -320,3 +344,22 @@ def test_module_docstring_exit_code_table_and_local_origin_note():
         "the docstring must state what this smoke DOES validate "
         "(save_plan -> ingest -> dispatch -> implement -> test gate)"
     )
+
+
+def test_import_guard_restores_the_pipeline_package_attributes():
+    """A reloaded ``pipeline.paths`` must not outlive the guard as the package
+    attribute: ``from . import paths`` resolves the attribute while
+    ``import pipeline.paths`` resolves ``sys.modules``, so a test that patches
+    only one of two diverged copies would silently miss the code under test.
+    """
+    import pipeline
+
+    module_before = sys.modules["pipeline.paths"]
+    attribute_before = pipeline.paths
+    with _pipeline_import_guard():
+        sys.modules.pop("pipeline.paths", None)
+        imported = importlib.import_module("pipeline.paths")
+        assert imported is not module_before
+        assert sys.modules["pipeline"].paths is imported
+    assert sys.modules["pipeline.paths"] is module_before
+    assert pipeline.paths is attribute_before

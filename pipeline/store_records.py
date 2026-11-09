@@ -55,6 +55,15 @@ _NAMESPACE_RE = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 # Plan names and story keys are flat names, never path fragments.
 _KEY_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 
+# The outbox channel key of the legacy e-mail spool (``<plan>.outbox.jsonl``).
+# The leading underscore is forbidden by the instance-name rule below, so this
+# key can never collide with an operator's notification channel instance.
+LEGACY_OUTBOX_CHANNEL = '_legacy'
+
+# Outbox channel keys reuse notification_channels' instance-name rule, so a
+# channel is directly addressable as an instance name.
+_CHANNEL_RE = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
+
 
 class RecordStoreError(Exception):
     """Base class for record store contract violations."""
@@ -165,6 +174,24 @@ def validate_usage_record(plan_name: str, record: dict) -> dict:
         if value is not None and not isinstance(value, str):
             raise _reject(field, 'not a string or None')
     return dict(record)
+
+def validate_channel(value: str) -> str:
+    """Return ``value`` when it is a valid outbox channel key, else raise.
+
+    A channel key is either the legacy e-mail spool key
+    (:data:`LEGACY_OUTBOX_CHANNEL`) or a notification channel instance name.
+    The legacy key starts with an underscore, which the instance-name rule
+    forbids, so an operator instance called ``default`` or ``legacy`` can never
+    collide with it.
+
+    The error message is deliberately generic: the offending value is never
+    echoed back.
+    """
+    if value == LEGACY_OUTBOX_CHANNEL:
+        return value
+    if not isinstance(value, str) or _CHANNEL_RE.fullmatch(value) is None:
+        raise InvalidRecordKeyError('invalid channel')
+    return value
 
 
 class RecordStore(Protocol):

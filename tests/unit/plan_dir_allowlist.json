@@ -42,7 +42,6 @@
  "pipeline/store.py": 24,
  "pipeline/store_sqlite.py": 1,
  "pipeline/tick_checks.py": 2,
- "pipeline/ticketing.py": 2,
  "pipeline/topology_identity.py": 3,
  "pipeline/unpark.py": 1,
  "pipeline/wake.py": 2,

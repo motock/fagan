@@ -488,8 +488,13 @@ def test_the_outbox_is_not_written_when_the_gate_is_disabled(
 
     assert spy_store.records_view.appends == [], "a disabled gate must enqueue nothing"
     assert not _legacy_outbox(plan_dir).exists()
-    # the fallback still covers the notification history
-    assert _history_log(plan_dir).exists()
+    # the fallback still covers the notification history -- through the store
+    # now, so the record is in the spy store rather than a sidecar file
+    history, malformed = spy_store.records_view.get_notification_history(
+        DEFAULT_NAMESPACE, PLAN
+    )
+    assert len(history) == 1, "a disabled gate must not stop the history"
+    assert malformed == 0
 
 
 def test_an_event_outside_the_allowlist_reaches_the_routed_instance_only(
@@ -557,7 +562,12 @@ def test_a_failing_enqueue_is_logged_with_the_error_type_only(
         "the failure must be logged with the error type only"
     )
     assert len(bus.published) == 1, "a failed enqueue must not stop the publish"
-    assert _history_log(plan_dir).exists(), "a failed enqueue must not stop the history"
+    # The history write goes through the same store now; the failing spy only
+    # raises on the outbox append, so the notification record still lands.
+    history, _malformed = store.records_view.get_notification_history(
+        DEFAULT_NAMESPACE, PLAN
+    )
+    assert len(history) == 1, "a failed enqueue must not stop the history"
 
 
 # ---------------------------------------------------------------------------

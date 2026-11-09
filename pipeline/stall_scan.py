@@ -41,7 +41,6 @@ from pathlib import Path
 # every test run.
 from .concurrency import _ServerRef
 
-PLAN_DIR = _ServerRef("PLAN_DIR")
 _notify_user = _ServerRef("_notify_user")
 _store = _ServerRef("_store")
 backend = _ServerRef("backend")
@@ -94,12 +93,13 @@ def _parse_timestamp(value: object) -> float | None:
 
 def _newest_activity_mtime(plan_name: str, story_key: str, story: dict) -> float | None:
     """Newest mtime across the story's journal and its worktree's agent.log."""
-    newest: float | None = None
-    journal = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
-    try:
-        newest = journal.stat().st_mtime
-    except OSError:
-        pass  # missing / broken symlink -> treat as absent (fail open)
+    # The journal half asks the record store (ADR 0012 stage B): the store owns
+    # where a journal lives, so no plans-directory path is spelled out here. A
+    # missing journal is None, which seeds "no signal yet" exactly like the
+    # OSError branch it replaces (fail open).
+    newest: float | None = _store.records().get_journal_updated_at(
+        "default", plan_name, story_key
+    )
 
     worktree = story.get("worktree")
     if isinstance(worktree, str) and worktree:

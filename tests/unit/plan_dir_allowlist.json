@@ -41,7 +41,6 @@
  "pipeline/service_levels.py": 9,
  "pipeline/setup/schema.py": 1,
  "pipeline/setup/wizard.py": 5,
- "pipeline/stall_scan.py": 2,
  "pipeline/store.py": 24,
  "pipeline/store_sqlite.py": 1,
  "pipeline/tick_checks.py": 3,

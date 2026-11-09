@@ -24,6 +24,7 @@ which is pinned by ``tests/unit/test_live_ref.py``.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,7 +37,10 @@ from pipeline.store_records import (
     validate_namespace,
     validate_plan_name,
     validate_story_key,
+    validate_usage_record,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["FileStore", "Store", "_TransactionLock"]
 
@@ -125,6 +129,42 @@ def _read_json_records(path: Path) -> list[dict]:
     if not isinstance(raw, list):
         return []
     return [record for record in raw if isinstance(record, dict)]
+
+
+def _read_usage_records(path: Path) -> list[dict]:
+    """Return the usage records in the JSONL file at ``path``, in file order.
+
+    One record per line.  A line that is not a JSON object is a malformed line
+    -- a truncated append, a hand-edited file -- and is skipped with a single
+    warning for the file.  That warning names the file and the count of skipped
+    lines only: a usage record's values are counts, ids and cost, and a log line
+    is not a second place to publish them.  An absent or unreadable file is an
+    empty list, and a read never creates or truncates anything.
+    """
+    try:
+        if not path.exists():
+            return []
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    records: list[dict] = []
+    skipped = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            record = None
+        if not isinstance(record, dict):
+            skipped += 1
+            continue
+        records.append(record)
+    if skipped:
+        logger.warning(
+            'skipped %d malformed usage record line(s) in %s', skipped, path.name
+        )
+    return records
 
 
 class Store(Protocol):
@@ -582,6 +622,35 @@ class FileRecords:
         if not isinstance(record, dict):
             raise TypeError('record must be a dict')
         self._store.append_decision(plan_name, record)
+
+    # -- usage records -------------------------------------------------
+    def get_usage(self, namespace: str, plan_name: str) -> list[dict]:
+        """Return the plan's usage records, in the order they were written.
+
+        Reads the JSONL file this view's own writer appends to, resolved per
+        call (see :func:`_persistence`), so a plans directory patched on the
+        writers' module is the one that is read.  A malformed line -- a line
+        that is not a JSON object -- is skipped with one warning that carries no
+        content, because the line may hold any of the record's values.  An
+        absent file is an empty list: a read never creates anything.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        return _read_usage_records(_persistence()._usage_jsonl_path(plan_name))
+
+    def append_usage(self, namespace: str, plan_name: str, record: dict) -> None:
+        """Append one usage record; usage is append-only, there is no update.
+
+        The record is validated first (exactly the contract's field set, each
+        value of a type that field may hold), so an invalid record is refused
+        before the file is opened and the plan's usage history is unchanged.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        validated = validate_usage_record(plan_name, record)
+        _persistence()._write_usage_record(plan_name, validated)
 
     # -- journals ------------------------------------------------------
     def get_journal(

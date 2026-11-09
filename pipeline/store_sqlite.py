@@ -524,6 +524,30 @@ class SqliteRecords:
             raise TypeError('record must be a dict')
         self._store.append_decision(plan_name, record)
 
+    # -- usage records -------------------------------------------------
+    def get_usage(self, namespace: str, plan_name: str) -> list[dict]:
+        """Return the plan's usage records, in the order they were written.
+
+        Usage is a JSONL sidecar this store does not own, so the read is
+        delegated to the record view of the internal file store -- the same
+        delegate ``get_journal`` reads through -- which resolves the directory
+        its own writer appended to on every call.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._store._files.records().get_usage(namespace, plan_name)
+
+    def append_usage(self, namespace: str, plan_name: str, record: dict) -> None:
+        """Append one usage record through the file store's record view.
+
+        Delegated exactly like :meth:`get_usage` so the append lands in the same
+        sidecar the read parses; the delegate validates the record before it
+        writes anything, so an invalid record changes nothing.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        self._store._files.records().append_usage(namespace, plan_name, record)
+
     def get_journal(
         self, namespace: str, plan_name: str, story_key: str
     ) -> list[dict]:

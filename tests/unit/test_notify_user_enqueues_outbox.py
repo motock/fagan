@@ -178,23 +178,26 @@ class _SpyStore:
         return self._records.transaction(namespace, plan_name, wait_seconds)
 
 
-class _FailingStore(_SpyStore):
-    """A shared store whose outbox append always raises."""
+class _FailingRecords(_SpyRecords):
+    """A record view whose outbox append always raises."""
 
     def __init__(self, error, order=None):
         super().__init__(order)
         self.error = error
 
+    def append_outbox(self, namespace, plan_name, channel, record):
+        self.order.append("append")
+        raise self.error
+
+
+class _FailingStore(_SpyStore):
+    """The process's shared store: its outbox append always raises."""
+
+    def __init__(self, error, order=None):
+        super().__init__(order)
+        self._records = _FailingRecords(error, order)
+
     def records(self) -> _SpyRecords:
-        failing = self
-
-        class _Failing(_SpyRecords):
-            def append_outbox(self, namespace, plan_name, channel, record):
-                failing.order.append("append")
-                raise failing.error
-
-        if not isinstance(self._records, _Failing):
-            self._records = _Failing(failing.order)
         return self._records
 
 

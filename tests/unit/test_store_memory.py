@@ -8,6 +8,7 @@ from pipeline import store_contract
 from pipeline.store_contract import MultiNamespaceContract, RecordStoreContract
 from pipeline.store_contract_transactions import TransactionContract
 from pipeline.store_memory import InMemoryRecordStore
+from tests.unit._store_outbox_helpers import MultiNamespaceOutboxBehaviour
 
 THREADS = 8
 RECORDS_PER_THREAD_PER_RUN = 25
@@ -26,6 +27,13 @@ class TestInMemoryRecordStoreTransaction(TransactionContract):
     # The in-memory store serves every valid namespace, so its lock is taken
     # per (namespace, plan) pair.
     serves_other_namespaces = True
+
+    def make_store(self):
+        return InMemoryRecordStore()
+
+
+class TestInMemoryRecordStoreOutbox(MultiNamespaceOutboxBehaviour):
+    """The per-channel outbox contract, run against the reference store."""
 
     def make_store(self):
         return InMemoryRecordStore()

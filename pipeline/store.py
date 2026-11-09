@@ -30,10 +30,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
+from pipeline.store_contract_outbox import OutboxContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     UnknownNamespaceError,
+    validate_channel,
     validate_namespace,
     validate_plan_name,
     validate_story_key,
@@ -530,7 +532,7 @@ class FileStore:
         return FileRecords(self)
 
 
-class FileRecords:
+class FileRecords(OutboxContract):
     """The namespaced record view over one :class:`FileStore` (ADR 0012).
 
     Every operation delegates to the legacy ``FileStore`` methods, so the
@@ -740,6 +742,63 @@ class FileRecords:
             return []
         keys = {_journal_key(path.name, plan_name) for path in paths}
         return sorted(key for key in keys if key is not None)
+
+    # -- per-channel outbox queues (ADR 0012 decision 3) ----------------
+    def append_outbox(
+        self, namespace: str, plan_name: str, channel: str, record: dict
+    ) -> None:
+        """Queue ``record`` on the ``(plan_name, channel)`` outbox spool.
+
+        The keys are validated before a path is built, and a record that is not
+        a dict -- or that cannot be serialised -- is refused before the file is
+        opened, so a refused append writes nothing.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        _persistence()._outbox_append(plan_name, channel, record)
+
+    def read_outbox(
+        self,
+        namespace: str,
+        plan_name: str,
+        channel: str,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Return the queue's entries oldest first, without removing them.
+
+        A queue that was never written is empty and creates no file; malformed
+        spool lines are skipped.  The entries are freshly parsed from disk, so
+        mutating a returned record cannot change the stored queue.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        self._refuse_other_namespace(namespace)
+        return _persistence()._outbox_read(plan_name, channel, limit)
+
+    def ack_outbox(
+        self, namespace: str, plan_name: str, channel: str, ids
+    ) -> int:
+        """Acknowledge ``ids``: remove one pending entry per id, return the count.
+
+        An id removes exactly one entry carrying it, an unknown id is ignored,
+        and every raw line that is not acked is kept byte-for-byte.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        self._refuse_other_namespace(namespace)
+        return _persistence()._outbox_ack(plan_name, channel, ids)
+
+    def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
+        """Return the sorted ``(plan, channel)`` pairs that hold entries."""
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        return _persistence()._outbox_queues()
 
 
 STORE_INVALID = "invalid"

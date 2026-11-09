@@ -26,9 +26,11 @@ from typing import Any
 
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
+from pipeline.store_contract_outbox import OutboxContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     UnknownNamespaceError,
+    validate_channel,
     validate_namespace,
     validate_plan_name,
     validate_story_key,
@@ -440,7 +442,7 @@ class SqliteStore:
         self._files.set_active_workspace(path)
 
 
-class SqliteRecords:
+class SqliteRecords(OutboxContract):
     """The namespaced record view of a :class:`SqliteStore` (ADR 0012 stage A).
 
     Every operation is a view of a legacy ``SqliteStore`` call, so the record
@@ -624,3 +626,49 @@ class SqliteRecords:
         self._namespace(namespace)
         validate_plan_name(plan_name)
         return self._store._files.records().list_journal_keys(namespace, plan_name)
+
+    # -- per-channel outbox queues (ADR 0012 decision 3) ----------------
+    # The queues are delegated to the record view of the file store this store
+    # keeps for its manifest projections; the tables that will hold them arrive
+    # with the story that commits an outbox row with the state change.
+    def append_outbox(
+        self, namespace: str, plan_name: str, channel: str, record: dict
+    ) -> None:
+        """Queue ``record`` on the ``(plan_name, channel)`` outbox spool."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        self._store._files.records().append_outbox(
+            namespace, plan_name, channel, record
+        )
+
+    def read_outbox(
+        self,
+        namespace: str,
+        plan_name: str,
+        channel: str,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Return the queue's entries oldest first, without removing them."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        return self._store._files.records().read_outbox(
+            namespace, plan_name, channel, limit
+        )
+
+    def ack_outbox(
+        self, namespace: str, plan_name: str, channel: str, ids
+    ) -> int:
+        """Acknowledge ``ids``: remove one pending entry per id, return the count."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        validate_channel(channel)
+        return self._store._files.records().ack_outbox(
+            namespace, plan_name, channel, ids
+        )
+
+    def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
+        """Return the sorted ``(plan, channel)`` pairs that hold entries."""
+        self._namespace(namespace)
+        return self._store._files.records().list_outboxes(namespace)

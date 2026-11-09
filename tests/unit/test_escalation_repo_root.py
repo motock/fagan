@@ -351,9 +351,6 @@ def test_each_escalation_function_resolves_and_uses_the_plan_repo_root(name):
         "REPO_ROOT now comes from the helper; importing it here is an "
         "unused-import lint error"
     )
-    assert "from .server import PLAN_DIR" in segment, (
-        "PLAN_DIR is still needed for the journal path"
-    )
     assert "_escalation_repo_root(manifest)" in segment, (
         "the function must resolve repo_root from the manifest via the helper"
     )
@@ -361,9 +358,9 @@ def test_each_escalation_function_resolves_and_uses_the_plan_repo_root(name):
         f"{name} makes three git calls; all three must use cwd=repo_root"
     )
     assert "cwd=REPO_ROOT" not in segment
-    assert "journal_path = PLAN_DIR /" in segment, (
-        "the journal path must keep using PLAN_DIR"
-    )
+    assert '_store.records().clear_journal("default", plan_name, story_key)' in (
+        segment
+    ), "the journal must be cleared through the record store"
     # The reset is persisted through the record store (not the module-local
     # _atomic_write_json binding): exactly one put_manifest, keyed by the
     # "default" store and the plan name, with the manifest just mutated.

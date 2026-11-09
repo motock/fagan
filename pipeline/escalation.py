@@ -8,9 +8,10 @@ failure to Claude without wiping the worktree (the code is often already
 correct). _auto_escalation_enabled reports whether escalation is enabled -
 PIPELINE_AUTO_ESCALATE if set, else PIPELINE_BACKEND_DISPATCH=="auto".
 
-All read PLAN_DIR via lazy imports from the server (tests patch p.<name>;
+Server paths are read via lazy imports from the server (tests patch p.<name>;
 circular-avoidance). _store is the server's live store binding, resolved at
-call time, and _notify_user comes from pipeline_persistence.
+call time: the manifest reset and the journal clear both go through it, and
+_notify_user comes from pipeline_persistence.
 """
 
 import logging
@@ -140,7 +141,6 @@ def _escalate_to_claude(
     clean-slate teardown applies since a repeated step-cap streak isn't a
     trustworthy foundation for Claude to build on either.
     """
-    from .server import PLAN_DIR
     story = manifest["stories"][story_key]
     repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
@@ -178,9 +178,7 @@ def _escalate_to_claude(
         subprocess.run(["git", "branch", "-D", resolved],
                         check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so Claude starts fresh (not from a broken local checkpoint).
-    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
-    if journal_path.exists():
-        journal_path.unlink()
+    _store.records().clear_journal("default", plan_name, story_key)
     # Reset the story: escalation-target dispatch on next tick. The target is
     # Claude by default; PIPELINE_ESCALATION_BACKEND/MODEL retarget it (e.g. to
     # a non-Claude provider while Claude usage is capped). Only set the model
@@ -217,7 +215,6 @@ def _escalate_to_local_fallback_model(
     since the prior run may have left broken/half-written state a different
     model shouldn't inherit.
     """
-    from .server import PLAN_DIR
     story = manifest["stories"][story_key]
     repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
@@ -255,9 +252,7 @@ def _escalate_to_local_fallback_model(
                         check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so the fallback model starts fresh, not from a broken
     # checkpoint left by the model that just failed.
-    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
-    if journal_path.exists():
-        journal_path.unlink()
+    _store.records().clear_journal("default", plan_name, story_key)
     # Reset the story: fallback-model dispatch on next tick. backend is left
     # untouched (stays "local") - only the model changes.
     story["model"] = fallback_model

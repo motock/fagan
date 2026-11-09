@@ -7,9 +7,12 @@ the `checkpoint` MCP tool and the local dispatch agent loop.
 
 Both read PLAN_DIR via a lazy import from the server (circular-avoidance;
 tests patch p.PLAN_DIR which the plan_dir fixture also mirrors to
-pipeline_persistence / pipeline_concurrency).
+pipeline_persistence / pipeline_concurrency). Both journal their entry
+through the record store (``_append_journal`` here -> ``server._store``), so
+a checkpoint is visible to the same readers a resumed dispatch consults.
 """
 
+import logging
 import os
 import signal
 import subprocess
@@ -19,7 +22,31 @@ from typing import Any
 
 from .git_ops import _commit_wip
 from .parsers import _atomic_write_json
-from .persistence import _append_journal
+from .store_records import InvalidRecordKeyError
+
+logger = logging.getLogger(__name__)
+
+
+def _append_journal(plan_name: str, story_key: str, record: dict) -> None:
+    """Append one journal entry through the record store (ADR 0012 stage B).
+
+    A checkpoint's journal entry is what the next dispatch resumes *from*, so
+    it has to be the same record every reader now consults: writing it to
+    ``<plan>.<story>.journal.json`` directly (the old
+    ``persistence._append_journal`` route) left a ``PIPELINE_STORE=sqlite``
+    deployment's journal row empty, and a resumed agent then saw no prior step.
+
+    ``FileStore``'s record view projects the entry back to the same
+    ``<plan>.<story>.journal.json`` file, so the on-disk layout is unchanged.
+
+    The module-level name is deliberately preserved: it is the seam
+    ``tests/unit/test_watchdog_timeout_evidence.py`` and
+    ``tests/unit/test_checkpoint_reads_manifest_through_the_store.py`` spy on.
+    """
+    from .server import _store
+
+    _store.records().append_journal("default", plan_name, story_key, record)
+
 
 # last_log_line is truncated to this many characters before it is journalled.
 _MAX_LOG_LINE = 300
@@ -194,7 +221,17 @@ def _terminate_and_checkpoint(
         snapshot = _snapshot_agent_log(plan_name, story_key, story.get("worktree"))
         if snapshot is not None:
             record["log_snapshot"] = snapshot
-    _append_journal(plan_name, story_key, record)
+    # The journal entry is the resume seed for the next dispatch, but a
+    # rejected story key must never keep a hung agent alive: log the failure
+    # and carry on to the termination below. Neither key is echoed - the
+    # rejected value may be a path fragment.
+    try:
+        _append_journal(plan_name, story_key, record)
+    except InvalidRecordKeyError:
+        logger.warning(
+            "checkpoint journal entry rejected: the story key is not a valid "
+            "record key; terminating without a journal entry"
+        )
 
     story["status"] = "interrupted"
     story["last_commit"] = sha
@@ -256,7 +293,16 @@ def _checkpoint_impl(
         "commit": sha,
         "ts": datetime.now(UTC).isoformat(),
     }
-    _append_journal(plan_name, story_key, record)
+    try:
+        _append_journal(plan_name, story_key, record)
+    except InvalidRecordKeyError:
+        # ``_validate_key`` above is the path-safety check and accepts keys
+        # such as "_S1" or "a..b" that the record store's ``validate_story_key``
+        # rejects. A checkpoint with no journal entry is not a checkpoint: the
+        # next dispatch would resume with no prior step. Fail closed with a
+        # generic message - the rejected value may be a path fragment, so it is
+        # never echoed back.
+        return {"ok": False, "error": "invalid story key"}
     return {"ok": True, **record}
 
 

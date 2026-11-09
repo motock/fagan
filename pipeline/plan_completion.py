@@ -18,34 +18,52 @@ The summary is also written to ``<plan>.report.md`` in ``PLAN_DIR``; this is
 best effort: a write failure is logged and does not block the notification.
 """
 
-import json
 import logging
 
 from .paths import PLAN_DIR
 from .persistence import _notify_user
 from .plan_summary import format_plan_summary
+from .store import build_store
+from .store_records import InvalidRecordKeyError
 from .story_metrics import load_notification_records
 
 logger = logging.getLogger(__name__)
+
+_NAMESPACE = "default"
 
 
 def _with_journals(plan_name: str, manifest: dict) -> dict:
     """Shallow copy of ``manifest`` whose stories carry their journal entries.
 
-    Fail open: an unreadable or malformed journal sidecar means no journal for
-    that story. The caller's manifest is not mutated; it is returned as-is when
-    no story has a journal.
+    Journals are read from the record store (the same view the writers write
+    through), one lookup per story against a store built once per call.
+
+    Fail open: an unreachable store, a rejected story key or a journal that is
+    absent/empty means no journal for that story - the store cannot tell an
+    empty journal from an absent one, and both classify the same way. The
+    caller's manifest is not mutated; it is returned as-is when no story has a
+    journal.
     """
+    try:
+        records = build_store().records()
+    except Exception:
+        logger.warning(
+            "journal read skipped for %s: record store unavailable",
+            plan_name,
+            exc_info=True,
+        )
+        return manifest
     stories = {}
     for key, story in manifest["stories"].items():
         story = dict(story)
         try:
-            entries = json.loads(
-                (PLAN_DIR / f"{plan_name}.{key}.journal.json").read_text(encoding="utf-8")
+            entries = records.get_journal(_NAMESPACE, plan_name, key)
+        except InvalidRecordKeyError:
+            logger.warning(
+                "journal read skipped for %s: rejected story key %r", plan_name, key
             )
-        except (OSError, ValueError):
             entries = None
-        if isinstance(entries, list):
+        if isinstance(entries, list) and entries:
             story["journal"] = [e for e in entries if isinstance(e, dict)]
         stories[key] = story
     if not any("journal" in story for story in stories.values()):

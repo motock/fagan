@@ -194,6 +194,24 @@ def validate_channel(value: str) -> str:
     return value
 
 
+def validate_notification_record(record: object) -> None:
+    """Refuse anything that is not a notification record, before any write.
+
+    A notification record is a dict carrying a string ``ts`` and a string
+    ``message``.  Together they are the free-text line (``f'{ts} {message}'``)
+    both on-disk representations of a notification are keyed on, so a record
+    without them has nothing to write.  Every other shape -- a non-dict, a
+    missing or non-string timestamp, a missing or non-string message -- raises
+    :class:`TypeError` here, before any storage is touched.
+    """
+    if not isinstance(record, dict):
+        raise TypeError('notification record must be a dict')
+    if not isinstance(record.get('ts'), str):
+        raise TypeError('notification record must have a string ts')
+    if not isinstance(record.get('message'), str):
+        raise TypeError('notification record must have a string message')
+
+
 class RecordStore(Protocol):
     """The namespaced record store contract.
 
@@ -294,6 +312,44 @@ class RecordStore(Protocol):
         """
         ...
 
+    def append_notification(self, namespace: str, plan_name: str, record: dict) -> None:
+        """Append one notification ``record`` to ``plan_name``'s history.
+
+        The record is a dict carrying a string ``ts`` and a string ``message``;
+        anything else raises :class:`TypeError` before storage is touched.  The
+        append is durable for the store's own lifetime: the next read of the
+        history serves it.  Keys are validated and an unknown namespace is
+        refused before storage is touched.
+        """
+        ...
+
+    def get_notification_history(
+        self, namespace: str, plan_name: str
+    ) -> tuple[list[dict], int]:
+        """Return ``plan_name``'s notification records and a malformed count.
+
+        The records are in written order, oldest first.  The second element
+        counts the lines of the plan's notification sidecar that could not be
+        read as a record; a row store that keeps the history itself has no such
+        sidecar and always reports ``0``.  (The transitional ``SqliteRecords``
+        view delegates to the file store until its own table lands, so it
+        reports the sidecar's count.)  A plan with no notifications yields
+        ``([], 0)``.  A read never mutates the history: it does not clear it,
+        consume it or reorder it.
+        """
+        ...
+
+    def get_notification_lines(
+        self, namespace: str, plan_name: str, limit: int = 100
+    ) -> list[str]:
+        """Return ``plan_name``'s notification history as free-text lines.
+
+        Oldest first, at most ``limit`` of them -- the most recent ones, each
+        ``f'{ts} {message}'``.  A ``limit`` of zero or less means the last 100,
+        like the legacy reader.  A read never mutates the history.
+        """
+        ...
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one ``(namespace, plan_name)`` pair.
 
@@ -325,5 +381,8 @@ RECORD_STORE_METHODS = (
     'clear_journal',
     'get_journal_updated_at',
     'list_journal_keys',
+    'append_notification',
+    'get_notification_history',
+    'get_notification_lines',
     'transaction',
 )

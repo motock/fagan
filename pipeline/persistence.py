@@ -229,6 +229,39 @@ def _write_notification_record(plan_name: str, record: dict) -> None:
     except OSError as exc:  # pragma: no cover - exercised by tests
         logger.error("Failed to write notification record for plan %s: %s", plan_name, exc)
 
+def _notifications_log_path(plan_name: str) -> Path:
+    """Return the path to the notifications.log file for a plan.
+
+    Derived from the JSONL sidecar's path so this module keeps a single
+    plans-directory binding (the same free variable every other plan-file
+    writer here reads), and the two notification sidecars can never be looked
+    up in different directories.
+    """
+    return _notifications_jsonl_path(plan_name).with_suffix(".log")
+
+
+def _write_notification(plan_name: str, record: dict) -> None:
+    """Write both of a notification's on-disk representations.
+
+    One record, two representations: the free-text ``<plan>.notifications.log``
+    line first, then the structured ``<plan>.notifications.jsonl`` line. The
+    bytes and the rotation are the ones
+    ``notification_sinks.file_log_sink`` and ``_notify_user._write_directly``
+    already produce, so a notification written through the record store and one
+    written through the bus sink are byte-identical.
+    """
+    log_path = _notifications_log_path(plan_name)
+    try:
+        _rotate_if_needed(log_path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(f"{record['ts']} {record['message']}\n")
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.error(
+            "Failed to write notification log for plan %s: %s", plan_name, exc
+        )
+    _write_notification_record(plan_name, record)
+
+
 def _usage_jsonl_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.usage.jsonl"
 

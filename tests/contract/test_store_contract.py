@@ -25,6 +25,9 @@ import pipeline.persistence
 # tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 from pipeline.store import FileStore
+from pipeline.store_contract_notifications import NotificationHistoryContract
+from pipeline.store_memory import InMemoryRecordStore
+from pipeline.store_records import DEFAULT_NAMESPACE
 from pipeline.store_sqlite import SqliteStore
 
 PLAN = "contract-plan"
@@ -462,3 +465,204 @@ def test_get_story_log_rejects_absolute_path(store_factory, tmp_path):
         "available": False,
         "lines": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# The notification-history contract.
+#
+# The notification history is state that survives every call: an appended
+# notification is still there on the next read, a read never clears or
+# consumes it, and the entries keep their append order.
+#
+# The behaviour lives in the production contract module
+# ``pipeline.store_contract_notifications`` (the same pattern the sibling
+# ``pipeline.store_contract_transactions`` uses): one copy of the contract, run
+# against all three record store implementations through the classes below.
+# The cases only the file-backed store can show -- the two on-disk
+# representations, their bytes and the malformed-line count -- follow the
+# classes.
+# ---------------------------------------------------------------------------
+
+NOTIFICATION_PLAN = "notification-plan"
+FILE_PLAN = "file-notification-plan"
+
+FILE_NOTIFICATION = {
+    "plan": FILE_PLAN,
+    "ts": "2026-01-01T00:00:00+00:00",
+    "message": "a notification",
+    "story_key": "story-a",
+    "severity": "warning",
+    "event": "story_parked",
+    "dedup_key": "story-a:story_parked",
+}
+
+
+class TestFileRecordsNotificationHistory(NotificationHistoryContract):
+    """The notification-history contract, run against the file store."""
+
+    @pytest.fixture(autouse=True)
+    def _plans_dir(self, tmp_path, monkeypatch):
+        """An empty plans directory: the file store's history is on disk."""
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        monkeypatch.setattr(pipeline.server, "PLAN_DIR", plan_dir)
+        monkeypatch.setattr(pipeline.persistence, "PLAN_DIR", plan_dir)
+
+    def make_store(self):
+        return FileStore().records()
+
+
+class TestSqliteRecordsNotificationHistory(NotificationHistoryContract):
+    """The notification-history contract, run against the sqlite store.
+
+    The sqlite store's record API is a view of the file store's, so it needs
+    the same isolated plans directory.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _store(self, tmp_path, monkeypatch):
+        """A ``records()`` view on a fresh database, closed after the test."""
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        monkeypatch.setattr(pipeline.server, "PLAN_DIR", plan_dir)
+        monkeypatch.setattr(pipeline.persistence, "PLAN_DIR", plan_dir)
+        store = SqliteStore(str(tmp_path / "notifications.db"))
+        self._store = store.records()
+        try:
+            yield self._store
+        finally:
+            close = getattr(store, "close", None)
+            if close is not None:
+                close()
+
+    def make_store(self):
+        return self._store
+
+
+class TestInMemoryRecordStoreNotificationHistory(NotificationHistoryContract):
+    """The notification-history contract, run against the in-memory store."""
+
+    serves_other_namespaces = True
+
+    def make_store(self):
+        return InMemoryRecordStore()
+
+
+@pytest.fixture
+def notification_plan_dir(tmp_path, monkeypatch):
+    """Point every notification path at an empty plans directory."""
+    plan_dir = tmp_path / "plans"
+    plan_dir.mkdir()
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(pipeline.persistence, "PLAN_DIR", plan_dir)
+    return plan_dir
+
+
+def _expected_notification(event_record):
+    """Build a record exactly as the bus sink does for the same fields."""
+    return pipeline.persistence._notification_record(
+        plan_name=event_record["plan"],
+        message=event_record["message"],
+        story_key=event_record["story_key"],
+        severity=event_record["severity"],
+        event=event_record["event"],
+        dedup_key=event_record["dedup_key"],
+        ts=event_record["ts"],
+    )
+
+
+def test_file_store_writes_both_representations(
+    tmp_path, notification_plan_dir
+):
+    """One record becomes the ``.log`` line and the ``.jsonl`` line."""
+    record = _expected_notification(FILE_NOTIFICATION)
+
+    FileStore().records().append_notification(
+        DEFAULT_NAMESPACE, FILE_PLAN, record
+    )
+
+    log = notification_plan_dir / f"{FILE_PLAN}.notifications.log"
+    sidecar = notification_plan_dir / f"{FILE_PLAN}.notifications.jsonl"
+    assert log.read_text() == f"{record['ts']} {record['message']}\n"
+    assert sidecar.read_text() == json.dumps(record) + "\n"
+
+
+def test_file_store_bytes_match_the_bus_sink(tmp_path, notification_plan_dir):
+    """A store append is byte-identical to what ``file_log_sink`` writes."""
+    from pipeline import notification_sinks
+
+    record = _expected_notification(FILE_NOTIFICATION)
+    sink_dir = tmp_path / "sink-plans"
+    sink_dir.mkdir()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pipeline.persistence, "PLAN_DIR", sink_dir)
+        notification_sinks.file_log_sink(
+            {
+                "plan": record["plan"],
+                "ts": record["ts"],
+                "payload": {
+                    "message": record["message"],
+                    "story_key": record["story_key"],
+                    "severity": record["severity"],
+                    "event": record["event"],
+                    "dedup_key": record["dedup_key"],
+                },
+            }
+        )
+
+    FileStore().records().append_notification(
+        DEFAULT_NAMESPACE, FILE_PLAN, record
+    )
+
+    for suffix in (".notifications.log", ".notifications.jsonl"):
+        written = (notification_plan_dir / f"{FILE_PLAN}{suffix}").read_bytes()
+        sunk = (sink_dir / f"{FILE_PLAN}{suffix}").read_bytes()
+        assert written == sunk, suffix
+
+
+def test_file_store_counts_and_skips_a_malformed_line(notification_plan_dir):
+    """An unreadable JSONL line is counted, and skipped, not served."""
+    record = _expected_notification(FILE_NOTIFICATION)
+    records = FileStore().records()
+    records.append_notification(DEFAULT_NAMESPACE, FILE_PLAN, record)
+    sidecar = notification_plan_dir / f"{FILE_PLAN}.notifications.jsonl"
+    with open(sidecar, "a", encoding="utf-8") as handle:
+        handle.write("{not json\n")
+
+    history, malformed = records.get_notification_history(
+        DEFAULT_NAMESPACE, FILE_PLAN
+    )
+
+    assert malformed == 1
+    assert history == [record]
+
+
+def test_file_store_creates_nothing_for_a_plan_never_written(
+    notification_plan_dir,
+):
+    """A read of a plan nobody notified is ``([], 0)`` and creates no file."""
+    records = FileStore().records()
+
+    assert records.get_notification_history(
+        DEFAULT_NAMESPACE, "never-written"
+    ) == ([], 0)
+    assert (
+        records.get_notification_lines(DEFAULT_NAMESPACE, "never-written") == []
+    )
+    assert list(notification_plan_dir.iterdir()) == []
+
+
+def test_file_store_refused_record_writes_neither_file(notification_plan_dir):
+    """A record with no ``ts``/``message`` is refused before anything is written."""
+    records = FileStore().records()
+
+    with pytest.raises(TypeError):
+        records.append_notification(
+            DEFAULT_NAMESPACE, FILE_PLAN, {"message": "no timestamp"}
+        )
+    with pytest.raises(TypeError):
+        records.append_notification(
+            DEFAULT_NAMESPACE, FILE_PLAN, {"ts": "2026-01-01T00:00:00+00:00"}
+        )
+
+    assert list(notification_plan_dir.iterdir()) == []

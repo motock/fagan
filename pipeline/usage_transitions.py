@@ -153,7 +153,8 @@ def announce(paused: bool, state: dict, *, reason: str = "") -> str | None:
         # Notify before persisting so a failed notification is retried on the
         # next poll instead of being recorded as already announced.
         # "usage_gate" is a pseudo plan name (no real plan is called that): it
-        # only names the notification log file, PLAN_DIR/usage_gate.notifications.log.
+        # only names the notification history the record store keeps for the
+        # "usage_gate" pseudo plan (one entry per usage transition).
         _notify_user("usage_gate", message, event=event, severity="warning")
         _atomic_write_json(
             _announced_path(),

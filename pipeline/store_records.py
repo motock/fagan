@@ -197,19 +197,26 @@ def validate_channel(value: str) -> str:
 def validate_notification_record(record: object) -> None:
     """Refuse anything that is not a notification record, before any write.
 
-    A notification record is a dict carrying a string ``ts`` and a string
-    ``message``.  Together they are the free-text line (``f'{ts} {message}'``)
-    both on-disk representations of a notification are keyed on, so a record
-    without them has nothing to write.  Every other shape -- a non-dict, a
-    missing or non-string timestamp, a missing or non-string message -- raises
-    :class:`TypeError` here, before any storage is touched.
+    A notification record is a dict carrying a string ``ts`` and a
+    ``message`` that is a string or ``None``.  The timestamp and the message
+    are what the free-text line (``f'{ts} {message}'``) both on-disk
+    representations of a notification are keyed on, so a record without them
+    has nothing to write.  ``None`` stays allowed because the writers in this
+    family build the record with :func:`pipeline.persistence._notification_record`,
+    which leaves ``message`` as ``None`` for a notification that carries no
+    message -- refusing it here would drop a notification the pipeline has
+    always recorded.  Every other shape -- a non-dict, a missing or non-string
+    timestamp, a missing message or a message that is neither a string nor
+    ``None`` -- raises :class:`TypeError` here, before any storage is touched.
     """
     if not isinstance(record, dict):
         raise TypeError('notification record must be a dict')
     if not isinstance(record.get('ts'), str):
         raise TypeError('notification record must have a string ts')
-    if not isinstance(record.get('message'), str):
-        raise TypeError('notification record must have a string message')
+    if 'message' not in record:
+        raise TypeError('notification record must have a message')
+    if record['message'] is not None and not isinstance(record['message'], str):
+        raise TypeError('notification record message must be a string or None')
 
 
 class RecordStore(Protocol):
@@ -315,8 +322,9 @@ class RecordStore(Protocol):
     def append_notification(self, namespace: str, plan_name: str, record: dict) -> None:
         """Append one notification ``record`` to ``plan_name``'s history.
 
-        The record is a dict carrying a string ``ts`` and a string ``message``;
-        anything else raises :class:`TypeError` before storage is touched.  The
+        The record is a dict carrying a string ``ts`` and a ``message`` that is
+        a string or ``None``; anything else raises :class:`TypeError` before
+        storage is touched.  The
         append is durable for the store's own lifetime: the next read of the
         history serves it.  Keys are validated and an unknown namespace is
         refused before storage is touched.

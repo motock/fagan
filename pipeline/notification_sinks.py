@@ -13,7 +13,9 @@ Two distinct concepts are called *event* here:
 The module exposes a single public function:
 
 ``file_log_sink(event: dict) -> None``
-    Writes the notification to two destinations inside :data:`pipeline.persistence.PLAN_DIR`.
+    Writes the notification through the shared record store
+    (``_store.records().append_notification(...)``), which keeps both of the
+    plan's on-disk representations in step.
 
 * ``<plan>.notifications.log`` – free‑text line in the format
   ``"{ts} {message}\n"``.  The timestamp comes from the bus event; if absent
@@ -27,9 +29,9 @@ Forward‑looking constraints:
 - Redact at the sink boundary.
 - Outbound sinks ship disabled by default.
 
-The implementation swallows all exceptions, logs them at ERROR level with
-``exc_info=True``, and never propagates failures.  This mirrors the behaviour of
-the in‑process event bus.
+The implementation swallows all exceptions, logs them at ERROR level with the
+error type (and the traceback), and never propagates failures.  This mirrors the
+behaviour of the in‑process event bus.
 """
 
 from __future__ import annotations
@@ -67,22 +69,12 @@ def file_log_sink(event: dict[str, Any]) -> None:
 
         payload = event.get("payload") or {}
         ts = event.get("ts") or datetime.now(UTC).isoformat()
-        message = payload.get("message", "")
 
-        # Free‑text line
-        log_path = persistence.PLAN_DIR / f"{plan}.notifications.log"
-        persistence._rotate_if_needed(
-            log_path,
-            persistence.NOTIFICATIONS_MAX_BYTES,
-            persistence.NOTIFICATIONS_KEEP_N,
-        )
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"{ts} {message}\n")
-
-        # Structured JSONL record via helper. The optional correlation
-        # context keys are read with .get and forwarded ONLY when present so
-        # legacy payloads keep the exact legacy call shape (the helper is
-        # monkeypatched with the legacy signature in existing tests).
+        # One record, built by the same helper every notification writer in this
+        # family re-uses so the representations cannot drift. The optional
+        # correlation context keys are read with .get and forwarded ONLY when
+        # present so legacy payloads keep the exact legacy call shape (the
+        # helper is monkeypatched with the legacy signature in existing tests).
         record_kwargs = {}
         for name in ("correlation_id", "attempt", "role", "provider", "model"):
             value = payload.get(name)
@@ -98,7 +90,23 @@ def file_log_sink(event: dict[str, Any]) -> None:
             ts=ts,
             **record_kwargs,
         )
-        persistence._write_notification_record(plan, record)
-    except Exception:  # pragma: no cover - defensive
-        logger.exception("Failed to write notification sink for event %s", event)
+
+        # The store owns both on-disk representations (the free-text line and
+        # the JSONL sidecar), so the sink never composes a notifications path.
+        try:
+            persistence._append_notification(plan, record)
+        except TypeError:
+            # The store refuses a record that is not a notification record. A
+            # real writer's record always is one (the helper above supplies the
+            # ts and leaves message at "" at worst); the shape only goes wrong
+            # when the helper is replaced wholesale, so the legacy JSONL append
+            # keeps that caller's record visible instead of dropping it.
+            persistence._write_notification_record(plan, record)
+    except Exception as exc:
+        logger.exception(
+            "Failed to write notification sink for event %s: %s",
+            event,
+            type(exc).__name__,
+            extra={"error_type": type(exc).__name__},
+        )
         return

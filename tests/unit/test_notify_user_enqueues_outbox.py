@@ -456,7 +456,7 @@ def test_the_outbox_entry_is_enqueued_before_the_event_is_published(
     monkeypatch.setenv(EVENTS_ENV, ALLOWLISTED)
     order: list[str] = []
     store = _SpyStore(order)
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     bus = _RecordingBus(order)
     monkeypatch.setattr(event_wiring, "_BUS", bus)
 
@@ -518,7 +518,7 @@ def test_the_plan_owner_is_read_through_the_shared_store(plan_dir, monkeypatch):
     _write_config(monkeypatch, plan_dir, owner=OWNER)
     store = _SpyStore()
     store.records_view.manifest = {"owner": OWNER}
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     bus = _RecordingBus()
     monkeypatch.setattr(event_wiring, "_BUS", bus)
 
@@ -541,7 +541,7 @@ def test_a_failing_enqueue_is_logged_with_the_error_type_only(
     monkeypatch.setenv(ENABLED_ENV, "1")
     monkeypatch.setenv(EVENTS_ENV, ALLOWLISTED)
     store = _FailingStore(RuntimeError("secret-detail"))
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     bus = _RecordingBus()
     monkeypatch.setattr(event_wiring, "_BUS", bus)
 
@@ -571,7 +571,7 @@ def test_the_enqueue_happens_on_the_calling_thread_in_the_callers_transaction(
     monkeypatch.setenv(ENABLED_ENV, "1")
     monkeypatch.setenv(EVENTS_ENV, ALLOWLISTED)
     store = _SpyStore()
-    monkeypatch.setattr(server, "_store", store)
+    _install_store(monkeypatch, store)
     bus = _RecordingBus()
     monkeypatch.setattr(event_wiring, "_BUS", bus)
 

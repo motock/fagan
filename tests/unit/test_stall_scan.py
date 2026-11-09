@@ -56,15 +56,31 @@ def _manifest_with(*stories):
 
 
 class _StubStore:
-    """Minimal store stand-in exposing ONLY get_manifest_or_none."""
+    """Minimal store stand-in: a manifest plus the journal-activity read.
 
-    def __init__(self, manifest=None):
+    ``records()`` returns the stub itself, mirroring the real store's
+    ``FileStore.records()`` handing back a namespaced view, so seeding
+    ``journal_updated_at`` is what drives the journal half of "newest activity
+    wins". Without it the scan would hit an AttributeError and fail open to
+    "no signal", which would make the journal tests pass vacuously.
+    """
+
+    def __init__(self, manifest=None, journal_updated_at=None):
         self.manifest = manifest
+        self.journal_updated_at = journal_updated_at
         self.calls = []
+        self.journal_calls = []
 
     def get_manifest_or_none(self, plan_name):
         self.calls.append(plan_name)
         return self.manifest
+
+    def records(self):
+        return self
+
+    def get_journal_updated_at(self, namespace, plan_name, story_key):
+        self.journal_calls.append((namespace, plan_name, story_key))
+        return self.journal_updated_at
 
 
 class _StubBackend:
@@ -98,15 +114,24 @@ def _install_notify_spy(monkeypatch):
     return emitted
 
 
-def _setup(monkeypatch, manifest, threshold=1800, enabled=1, backend=None):
+def _setup(
+    monkeypatch,
+    manifest,
+    threshold=1800,
+    enabled=1,
+    backend=None,
+    journal_updated_at=None,
+):
     """Common rig: stub store, notify spy, backend, env knobs.
 
     The threshold and the kill switch are read from the environment at CALL
     time, so stubbing the environment is enough -- no module reload.
+    ``journal_updated_at`` seeds the store's journal-activity read; it is None
+    by default, i.e. "the store has no journal for this story".
     """
     monkeypatch.setenv("PIPELINE_STALL_SECONDS", str(threshold))
     monkeypatch.setenv("PIPELINE_STALL_SCAN_ENABLED", str(enabled))
-    monkeypatch.setattr(p, "_store", _StubStore(manifest))
+    monkeypatch.setattr(p, "_store", _StubStore(manifest, journal_updated_at))
     monkeypatch.setattr(p, "backend", backend if backend is not None else _StubBackend())
     return _install_notify_spy(monkeypatch)
 
@@ -209,31 +234,44 @@ def test_story_with_done_dependency_is_eligible(plan_dir, monkeypatch):
 
 
 def test_story_without_any_timestamp_signal_is_skipped(plan_dir, monkeypatch):
-    """No interrupted_at and no readable journal/agent.log -> fail open, skip."""
+    """No interrupted_at and no readable journal/agent.log -> fail open, skip.
+
+    The store reports "no journal" (None) rather than raising, so the skip is
+    real fail-open behaviour and not a swallowed AttributeError.
+    """
     story = _story(status="todo")
     emitted = _setup(monkeypatch, _manifest_with((KEY, story)), threshold=1800)
+    store = p._store
 
     assert stall_scan.run_stall_scan(PLAN) == 0
     assert emitted == []
+    assert store.journal_calls == [("default", PLAN, KEY)]
 
 
 def test_fresh_agent_log_outranks_an_old_journal(plan_dir, monkeypatch):
     """The newest of journal / agent.log mtime wins, so a live worktree is not
-    reported as stalled."""
-    journal = plan_dir / f"{PLAN}.{KEY}.journal.json"
-    journal.write_text("[]")
-    old = time.time() - 5000
-    import os
+    reported as stalled.
 
-    os.utime(journal, (old, old))
+    The journal time comes from the record store, which owns where a journal
+    lives (ADR 0012); ``agent.log`` stays a worktree artifact read directly.
+    """
+    old = time.time() - 5000
     worktree = plan_dir / "wt"
     worktree.mkdir()
     (worktree / "agent.log").write_text("working\n")
     story = _story(status="interrupted", worktree=str(worktree))
-    emitted = _setup(monkeypatch, _manifest_with((KEY, story)), threshold=1800)
+    emitted = _setup(
+        monkeypatch,
+        _manifest_with((KEY, story)),
+        threshold=1800,
+        journal_updated_at=old,
+    )
+    store = p._store
 
     assert stall_scan.run_stall_scan(PLAN) == 0
     assert emitted == []
+    # The old journal really was consulted, so this is not a vacuous pass.
+    assert store.journal_calls == [("default", PLAN, KEY)]
 
 
 def test_interrupted_at_takes_precedence_over_an_old_journal(plan_dir, monkeypatch):

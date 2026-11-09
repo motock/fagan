@@ -510,7 +510,8 @@ never e-mailed.
 **Delivery happens in the scheduler tick's drain phase, not inline in the
 notification path.** Each scheduler tick runs a drain phase
 (`pipeline.notification_outbox.drain_outbox`, wired from
-`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox file and
+`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox queue from the store
+(with the file store, the `<plan>.outbox.jsonl` file) and
 hands each queued record to
 `pipeline.notification_email.send_notification_email`, an SMTP sender. The
 drain is bounded: the scheduler joins its drain worker for at most 120s
@@ -950,7 +951,8 @@ The dashboard API (`GET /api/plans/{plan}`) now returns two fields:
 
 One outbound sink exists: email. Each scheduler tick runs a drain phase
 (`pipeline.notification_outbox.drain_outbox`, wired from
-`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox file and
+`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox queue from the store
+(with the file store, the `<plan>.outbox.jsonl` file) and
 hands each queued record to
 `pipeline.notification_email.send_notification_email` (an SMTP sender gated
 by its own credential/config env vars). A record the sender accepts is

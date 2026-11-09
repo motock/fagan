@@ -22,10 +22,7 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
-
-from pipeline import paths
 
 logger = logging.getLogger(__name__)
 
@@ -218,9 +215,3 @@ def as_sender(
         return False
 
     return sender
-
-
-def channel_outbox_path(plan: str, channel: Channel) -> Path:
-    if not plan or "/" in plan or "\\" in plan or ".." in plan:
-        raise ValueError("invalid plan name")
-    return paths.PLAN_DIR / f"{plan}{channel.outbox_suffix}"

@@ -187,7 +187,11 @@ def _check_outbox() -> None:
     """
     global _OUTBOX_STALE
 
-    summary = outbox_health.outbox_summary(paths.PLAN_DIR)
+    from pipeline.store import _ServerRef
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    _store = _ServerRef("_store")
+    summary = _store.records().outbox_summary(DEFAULT_NAMESPACE)
     event, stale = outbox_health.stale_transition(
         _OUTBOX_STALE,
         summary["oldest_age_s"],

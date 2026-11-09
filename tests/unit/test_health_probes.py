@@ -36,7 +36,7 @@ import pytest
 from app import dashboard as d
 from app.identity import IdentityError
 from app.oidc import OidcProvider
-from pipeline import events_nats_consumer, health_freshness
+from pipeline import events_nats_consumer, health_freshness, paths
 from tests.unit._dashboard_helpers import client, plan_dir
 
 __all__ = ["client", "plan_dir"]
@@ -287,6 +287,9 @@ def test_liveness_survives_an_exploding_broker_probe(client, plan_dir, monkeypat
 
 def test_outbox_staleness_degrades_readiness_only(client, plan_dir, monkeypatch):
     monkeypatch.setenv(REQUIRE_ENV, "1")
+    # The outbox now comes from the record store, which reads the spools
+    # under the plans directory: point that binding at the seeded files.
+    monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
     _write_heartbeat(plan_dir, 5)
     _write_stale_outbox(plan_dir)
 

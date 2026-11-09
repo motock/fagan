@@ -10,7 +10,7 @@ same snapshot can be asserted byte-for-byte in a unit test. Two functions:
   exposition must never invent a ``NaN`` for "we could not tell".
 * :func:`collect` gathers the snapshot from the producers the dashboard
   already reads -- :func:`pipeline.health_freshness.health_extras`,
-  :func:`pipeline.outbox_health.outbox_summary`,
+  the record store's ``outbox_summary`` (via :func:`outbox_summary` here),
   :func:`pipeline.events_nats_consumer.consumer_status` and
   :func:`pipeline.service_levels.service_level_percentiles` -- plus the plans'
   approval status, counted through the one store-first plan read
@@ -35,7 +35,6 @@ from typing import Any
 from pipeline import manifest_source, parsers
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
-from pipeline.outbox_health import outbox_summary
 from pipeline.service_levels import MEASURES as SERVICE_LEVEL_MEASURES
 from pipeline.service_levels import service_level_percentiles
 
@@ -314,6 +313,22 @@ def _service_level_samples(snapshot: dict, percentiles: Any) -> None:
     snapshot["fagan_story_service_level_samples"] = counts
 
 
+def outbox_summary() -> dict:
+    """Return the notification outbox aggregate, from the record store.
+
+    The store owns the outbox queues now, so the scrape asks it for the
+    aggregate rather than walking a plans directory that may not be the
+    store's. Resolved lazily through ``pipeline.server._store`` at call time,
+    like every other store read, so a test that patches that binding is
+    honoured. Kept as this module's own producer seam, so ``collect`` calls it
+    through the module attribute and a test can replace it.
+    """
+    from pipeline.store import _ServerRef
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    return _ServerRef("_store").records().outbox_summary(DEFAULT_NAMESPACE)
+
+
 def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, Any]]]:
     """Return the metrics snapshot, never raising.
 
@@ -341,7 +356,7 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
         logger.warning("metrics producer failed", extra={"metrics_source": "health_extras"})
 
     try:
-        _outbox_samples(snapshot, outbox_summary(plan_dir))
+        _outbox_samples(snapshot, outbox_summary())
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["outbox_summary"] += 1
         logger.warning("metrics producer failed", extra={"metrics_source": "outbox_summary"})

@@ -268,7 +268,7 @@ def stale_transition(
     return None, prev_stale
 
 
-def apply_outbox_health(result: dict, plan_dir, threshold: int | None = None) -> dict:
+def apply_outbox_health(result: dict, plan_dir, threshold: int | None = None, summary=None) -> dict:
     """Add the aggregate ``outbox`` block to a health payload, in place.
 
     This is the whole ``/api/health`` contribution: ``result["outbox"]`` is the
@@ -277,11 +277,18 @@ def apply_outbox_health(result: dict, plan_dir, threshold: int | None = None) ->
     there. *threshold* defaults to :func:`outbox_stale_seconds`, re-read per
     call.
 
+    *summary* lets a caller that already asked the record store for the
+    aggregate hand it in, so the health payload grades the store's outbox
+    rather than re-walking a directory; when it is ``None`` the summary is
+    computed from the second positional argument, which keeps this function's
+    own tests working unchanged.
+
     The block is aggregate only -- counts and one age -- so no plan name, file
     path or message body reaches a response body. Scoped, per-plan views are a
     later tenancy concern.
     """
-    summary = outbox_summary(plan_dir)
+    if summary is None:
+        summary = outbox_summary(plan_dir)
     if threshold is None:
         threshold = outbox_stale_seconds()
     result["outbox"] = summary

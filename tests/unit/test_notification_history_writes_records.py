@@ -448,8 +448,14 @@ def test_the_notification_writers_left_the_plan_directory_allowlist():
 
 def test_the_persistence_allowlist_ceiling_was_lowered():
     """persistence.py composes one path less than before, so its ceiling is
-    lower than the one it had."""
-    assert _allowlist()["pipeline/persistence.py"] < 10
+    lower than the one it had -- and the ceiling still covers the file."""
+    ceiling = _allowlist()["pipeline/persistence.py"]
+    assert ceiling < 10, "the persistence ceiling must be lowered"
+
+    source = (SOURCE_DIR / "persistence.py").read_text(encoding="utf-8")
+    actual = sum(1 for line in source.splitlines() if PLAN_DIR_PATTERN.search(line))
+    assert actual < 10, "persistence.py must compose fewer plan-directory paths"
+    assert actual <= ceiling, "the ceiling must still cover the file"
 
 
 def test_the_notification_writers_no_longer_name_the_plan_directory():
@@ -459,6 +465,21 @@ def test_the_notification_writers_no_longer_name_the_plan_directory():
         assert not PLAN_DIR_PATTERN.search(source), (
             f"{name} must not reference the plan directory any more"
         )
+
+
+def test_the_rewritten_comments_name_the_record_store():
+    """The two comments that used to name the plan directory now name the
+    record store, which is where the notification history really lives."""
+    for name in ("ticketing.py", "usage_transitions.py"):
+        source = (SOURCE_DIR / name).read_text(encoding="utf-8").lower()
+        assert "store" in source, f"{name} must name the record store"
+
+
+def test_the_reference_still_documents_the_notification_sink():
+    """The reference keeps documenting the sink that reproduces the legacy log
+    behaviour."""
+    reference = (SOURCE_DIR.parent / "REFERENCE.md").read_text(encoding="utf-8")
+    assert "file_log_sink" in reference
 
 
 def test_the_dead_letter_docstring_points_at_the_record_store():

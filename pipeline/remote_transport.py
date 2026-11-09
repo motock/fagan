@@ -578,6 +578,68 @@ def _transport_security(env: dict[str, str]) -> TransportSecuritySettings | None
     )
 
 
+#: How long uvicorn may wait for in-flight requests during a graceful shutdown.
+GRACEFUL_SHUTDOWN_SECONDS = 10
+
+
+def run_http(app: Any, host: str, port: int, **uvicorn_kwargs: Any) -> None:
+    """Serve ``app`` over HTTP, bounded: SIGTERM always ends the process.
+
+    ``uvicorn.run`` waits ``timeout_graceful_shutdown`` for open connections, so
+    a streamable-HTTP session that never finishes cannot hold the process past
+    that window. The graceful path can still wedge (a lifespan shutdown that
+    never returns, a stuck event loop), so the first SIGTERM arms a daemon timer
+    that calls ``os._exit`` after ``GRACEFUL_SHUTDOWN_SECONDS`` + 5. Arming is
+    idempotent: a repeated signal never pushes the deadline out. A clean exit
+    cancels the timer so a later run cannot be killed by a stale deadline.
+    """
+    import threading
+
+    import uvicorn
+
+    backstop_timer = None
+    backstop_armed = False
+    backstop_lock = threading.Lock()
+
+    def _hard_exit() -> None:
+        os._exit(1)
+
+    def _arm_backstop() -> None:
+        nonlocal backstop_timer, backstop_armed
+        with backstop_lock:
+            if backstop_armed:
+                return
+            backstop_armed = True
+            backstop_timer = threading.Timer(
+                GRACEFUL_SHUTDOWN_SECONDS + 5, _hard_exit
+            )
+            backstop_timer.daemon = True
+            backstop_timer.start()
+
+    server_class = getattr(uvicorn, "Server", None)
+    original_handle_exit = (
+        None if server_class is None else getattr(server_class, "handle_exit", None)
+    )
+
+    def _handle_exit(self: Any, sig: int, frame: Any) -> Any:
+        _arm_backstop()
+        if original_handle_exit is None:
+            return None
+        return original_handle_exit(self, sig, frame)
+
+    if server_class is not None and original_handle_exit is not None:
+        server_class.handle_exit = _handle_exit
+    try:
+        uvicorn_kwargs["timeout_graceful_shutdown"] = GRACEFUL_SHUTDOWN_SECONDS
+        uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)
+    finally:
+        if server_class is not None and original_handle_exit is not None:
+            server_class.handle_exit = original_handle_exit
+        with backstop_lock:
+            if backstop_timer is not None:
+                backstop_timer.cancel()
+
+
 def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     """Serve ``mcp`` over the configured HTTP transport, or refuse to start.
 
@@ -609,12 +671,10 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     )
     gated = BearerAuthMiddleware(app, provider, environ=env)
 
-    import uvicorn  # imported here so stdio users never need it
-
     logger.warning(
         "serving MCP over %s on %s:%s behind OIDC bearer authentication",
         transport,
         host,
         port,
     )
-    uvicorn.run(gated, host=host, port=port, log_level="info")
+    run_http(gated, host=host, port=port, log_level="info")

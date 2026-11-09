@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -159,6 +159,28 @@ def freshness(
     return result
 
 
+def scheduler_health_path(
+    directory: str | Path | None = None, environ: Mapping[str, str] | None = None
+) -> Path:
+    """Return the scheduler's health file for *directory*.
+
+    *directory* wins; then the plan-directory entry of *environ* (the mapping a
+    caller such as the metrics probe was handed); then the configured default,
+    imported lazily so this module stays importable without the full runtime
+    configuration. The resolver lives here because this module owns the file's
+    name and is its reader, so the plans-directory knowledge ADR 0012 keeps on a
+    shrink-only allowlist stays in one place instead of spreading into every
+    caller that wants to know whether the scheduler is alive.
+    """
+    if directory is None and environ is not None:
+        directory = environ.get("PLAN_DIR")
+    if directory is None:
+        from pipeline import paths
+
+        directory = paths.PLAN_DIR
+    return Path(directory) / HEALTH_FILENAME
+
+
 def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     """Return the freshness extras for ``/api/health``.
 
@@ -177,13 +199,9 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     leaves ``healthy`` alone -- an outbox we cannot read is a reason to look,
     not a reason to page.
     """
-    if plan_dir is None:
-        from pipeline import paths
-
-        plan_dir = paths.PLAN_DIR
     payload: object = None
     try:
-        with open(Path(plan_dir) / HEALTH_FILENAME, "r", encoding="utf-8") as handle:
+        with open(scheduler_health_path(plan_dir), "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except Exception:  # noqa: BLE001 (read-only probe: any failure means "absent")
         # Absent, unreadable (including a directory at that path), empty,

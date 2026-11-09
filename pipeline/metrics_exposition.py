@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import manifest_source, parsers
+from pipeline.component_health import component_status
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.service_levels import MEASURES as SERVICE_LEVEL_MEASURES
@@ -135,6 +136,16 @@ METRICS: tuple[tuple[str, str, str], ...] = (
         "fagan_metrics_errors_total",
         "counter",
         "Producer failures while collecting the metrics snapshot.",
+    ),
+    (
+        "fagan_component_up",
+        "gauge",
+        "Whether a pipeline component is up (1) or down (0).",
+    ),
+    (
+        "fagan_component_health_age_seconds",
+        "gauge",
+        "Age in seconds of a component's last health report, when it is known.",
     ),
 )
 
@@ -329,6 +340,37 @@ def outbox_summary() -> dict:
     return _ServerRef("_store").records().outbox_summary(DEFAULT_NAMESPACE)
 
 
+def _component_samples(snapshot: dict, rows: Any) -> None:
+    """Add the per-component gauges for a :func:`component_status` report.
+
+    Every row becomes a ``fagan_component_up`` sample (1 up, 0 down). A row whose
+    age is unknown (``None``) gets no ``fagan_component_health_age_seconds``
+    sample: an unknown age must be absent, never a fabricated zero.
+    """
+    if not isinstance(rows, (list, tuple)):
+        return
+    up_samples: list[tuple[dict[str, Any], int]] = []
+    age_samples: list[tuple[dict[str, Any], float]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        component = row.get("component")
+        if not isinstance(component, str) or not component:
+            continue
+        up_samples.append(({"component": component}, 1 if row.get("up") else 0))
+        age = row.get("age_s")
+        if age is None:
+            continue
+        try:
+            age_samples.append(({"component": component}, float(age)))
+        except (TypeError, ValueError):
+            continue
+    if up_samples:
+        snapshot["fagan_component_up"] = up_samples
+    if age_samples:
+        snapshot["fagan_component_health_age_seconds"] = age_samples
+
+
 def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, Any]]]:
     """Return the metrics snapshot, never raising.
 
@@ -381,6 +423,13 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
         errors["service_levels"] += 1
         logger.warning(
             "metrics producer failed", extra={"metrics_source": "service_levels"}
+        )
+
+    try:
+        _component_samples(snapshot, component_status())
+    except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
+        logger.warning(
+            "metrics producer failed", extra={"metrics_source": "component_status"}
         )
 
     snapshot["fagan_metrics_errors_total"] = [

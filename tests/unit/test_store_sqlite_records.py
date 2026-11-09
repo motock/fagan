@@ -19,6 +19,7 @@ import pipeline.persistence
 # requires ``pipeline.server`` to be imported first.
 import pipeline.server
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
+from pipeline.store_contract_transactions import TransactionContract
 from pipeline.store_records import DEFAULT_NAMESPACE, UnknownNamespaceError
 from pipeline.store_sqlite import SqliteStore
 
@@ -52,6 +53,25 @@ def _row_count(db_path: str) -> int:
         return conn.execute('SELECT count(*) FROM story_manifests').fetchone()[0]
     finally:
         conn.close()
+
+
+class TestSqliteRecordsTransaction(TransactionContract):
+    """The transaction lock contract, run against the sqlite-backed store."""
+
+    @pytest.fixture(autouse=True)
+    def _store(self, db_path, plan_dir):
+        """A ``records()`` view on a fresh database, closed after the test."""
+        store = SqliteStore(db_path)
+        self._store = store.records()
+        try:
+            yield self._store
+        finally:
+            close = getattr(store, 'close', None)
+            if close is not None:
+                close()
+
+    def make_store(self):
+        return self._store
 
 
 class TestSqliteRecords(RecordStoreContract, SingleNamespaceContract):

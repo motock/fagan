@@ -145,6 +145,23 @@ class RecordStore(Protocol):
         """
         ...
 
+    def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
+        """Serialise mutations of one ``(namespace, plan_name)`` pair.
+
+        A context manager that yields whether the lock was acquired, and never
+        blocks longer than ``wait_seconds``.  Callers MUST check the yielded
+        bool and skip all work when it is ``False``: this is the scheduler's
+        "skip this tick" path, and it must stay cheap.  ``wait_seconds`` is
+        opt-in -- the default ``0.0`` is a single attempt with no sleeping.
+
+        Re-entrant on the holding thread, so nested call sites compose instead
+        of deadlocking against themselves.  ``namespace`` and ``plan_name`` are
+        validated first and an unknown namespace is refused, both *before* any
+        lock is taken.  This story defines the lock only: atomicity of the
+        writes made inside the block is a later decision.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -158,4 +175,5 @@ RECORD_STORE_METHODS = (
     'clear_journal',
     'get_journal_updated_at',
     'list_journal_keys',
+    'transaction',
 )

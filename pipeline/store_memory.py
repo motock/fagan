@@ -11,11 +11,14 @@ namespaces.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
+import math
 import threading
 import time
 
+from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store_records import (
     validate_namespace,
     validate_plan_name,
@@ -35,6 +38,9 @@ class InMemoryRecordStore:
         # high-water mark, so a clock that steps backwards can never report the
         # journal as older than an append it already reported.
         self._journal_updated_at: dict[tuple[str, str, str], float] = {}
+        # One re-entrant lock per (namespace, plan_name), created on first use
+        # so an unused pair costs nothing.
+        self._plan_locks: dict[tuple[str, str], threading.RLock] = {}
 
     # -- manifests -----------------------------------------------------
     def get_manifest(self, namespace: str, plan_name: str) -> dict | None:
@@ -171,3 +177,47 @@ class InMemoryRecordStore:
                 if stored_namespace == namespace and stored_plan == plan_name
             }
             return sorted(keys)
+
+    # -- transactions --------------------------------------------------
+    @contextlib.contextmanager
+    def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
+        """Acquire this plan's lock, or report it was refused.
+
+        One :class:`threading.RLock` per ``(namespace, plan_name)`` pair,
+        created lazily under :attr:`_lock`.  Yields ``True`` when the lock was
+        acquired and ``False`` when it was not; callers must skip all work on
+        ``False``.  The lock is re-entrant, so a thread that already holds it
+        acquires it again instead of deadlocking against itself.
+
+        ``wait_seconds`` is opt-in: the default ``0.0`` is a single
+        non-blocking attempt with no sleeping.  A positive budget retries every
+        :data:`pipeline.concurrency.PLAN_LOCK_RETRY_INTERVAL_SECONDS` until the
+        deadline passes, then yields ``False``; a negative or non-finite budget
+        is treated as ``0.0``, exactly as
+        :func:`pipeline.concurrency._plan_lock` does.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        if wait_seconds < 0 or not math.isfinite(wait_seconds):
+            wait_seconds = 0.0
+        lock = self._plan_lock_for(namespace, plan_name)
+        deadline = time.monotonic() + wait_seconds
+        while not lock.acquire(blocking=False):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                yield False
+                return
+            time.sleep(min(PLAN_LOCK_RETRY_INTERVAL_SECONDS, remaining))
+        try:
+            yield True
+        finally:
+            lock.release()
+
+    def _plan_lock_for(self, namespace: str, plan_name: str) -> threading.RLock:
+        """Return this pair's lock, creating it on first use."""
+        with self._lock:
+            lock = self._plan_locks.get((namespace, plan_name))
+            if lock is None:
+                lock = threading.RLock()
+                self._plan_locks[(namespace, plan_name)] = lock
+            return lock

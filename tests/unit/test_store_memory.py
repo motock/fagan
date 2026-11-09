@@ -6,6 +6,7 @@ import threading
 
 from pipeline import store_contract
 from pipeline.store_contract import MultiNamespaceContract, RecordStoreContract
+from pipeline.store_contract_transactions import TransactionContract
 from pipeline.store_memory import InMemoryRecordStore
 
 THREADS = 8
@@ -14,6 +15,17 @@ RECORDS_PER_THREAD_PER_RUN = 25
 
 class TestInMemoryRecordStore(RecordStoreContract, MultiNamespaceContract):
     """The shared behaviour contract, run against the reference store."""
+
+    def make_store(self):
+        return InMemoryRecordStore()
+
+
+class TestInMemoryRecordStoreTransaction(TransactionContract):
+    """The transaction lock contract, run against the reference store."""
+
+    # The in-memory store serves every valid namespace, so its lock is taken
+    # per (namespace, plan) pair.
+    serves_other_namespaces = True
 
     def make_store(self):
         return InMemoryRecordStore()

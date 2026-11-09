@@ -7,6 +7,7 @@ import pytest
 from pipeline import persistence, server
 from pipeline.store import FileRecords, FileStore
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
+from pipeline.store_contract_transactions import TransactionContract
 from pipeline.store_records import DEFAULT_NAMESPACE
 
 
@@ -17,6 +18,18 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'PLAN_DIR', d)
     monkeypatch.setattr(persistence, 'PLAN_DIR', d)
     return d
+
+
+class TestFileRecordsTransaction(TransactionContract):
+    """The transaction lock contract, run against the file-backed store."""
+
+    def make_store(self):
+        return FileStore().records()
+
+    def plans_dir(self):
+        # The file store locks by creating ``<plan>.lock`` in PLAN_DIR, so the
+        # contract can prove a rejected key never reaches the lock.
+        return server.PLAN_DIR
 
 
 class TestFileRecords(RecordStoreContract, SingleNamespaceContract):

@@ -164,7 +164,7 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import plan_names, remote_scope, review_audit
+from . import plan_names, remote_scope, review_audit, service_plan_export
 from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -195,7 +195,7 @@ def _decompose_context_root(workspace: str | None) -> str | None:
     return path
 
 
-class PipelineService(PlanApprovalMixin):
+class PipelineService(PlanApprovalMixin, service_plan_export.PlanExportMixin):
     """Transport-agnostic pipeline operations.
 
     The ``@mcp.tool()`` functions below are one-line delegations to these
@@ -294,33 +294,6 @@ class PipelineService(PlanApprovalMixin):
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)
-
-    def export_plan(self, plan_name: str) -> dict:
-        """Render *plan_name*'s plan document from its ingested manifest.
-
-        The document is rendered on demand (ADR 0012 decision 5): the manifest
-        is the plan record, and the ``save_plan``-shaped document is derived
-        from it rather than stored a second time and left to drift. Runtime
-        state never reaches the export - see ``pipeline.plan_export`` for what
-        is kept and what is dropped, and why the round trip matters for plan
-        approval (ADR 0007).
-
-        Args:
-            plan_name: the plan's name, as passed to ``save_plan``/``ingest_plan``.
-
-        Returns:
-            ``{'ok': True, 'plan': <document>}``, or ``{'ok': False, 'error':
-            ...}`` for a plan that was never ingested. The plan name is
-            validated before the manifest is read, so an invalid name is a
-            validation refusal and never a store lookup.
-        """
-        from .plan_export import render_plan_document
-
-        _validate_key(plan_name)
-        manifest = _store.records().get_manifest("default", plan_name)
-        if manifest is None:
-            return {"ok": False, "error": "Plan not found"}
-        return {"ok": True, "plan": render_plan_document(manifest)}
 
     def get_notification_history(self, plan_name: str) -> tuple[list[dict], int]:
         """Return ``(records, malformed)`` for a plan's notification history.

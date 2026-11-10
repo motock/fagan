@@ -1014,6 +1014,8 @@ Slack or generic webhook sink is implemented yet.
 
 ### Audit stream (PIPELINE_PLAN_DIR/<plan>.audit.jsonl)
 
+The threat model is in docs/AUDIT_CHAIN_THREAT_MODEL.md.
+
 `pipeline/audit.py` keeps one append-only JSON Lines stream per plan, written next
 to the plan's other files: `<plan>.audit.jsonl` in the plan directory (`PLAN_DIR`,
 default `~/.claude/plans`; `pipeline.audit.audit_path` resolves it through

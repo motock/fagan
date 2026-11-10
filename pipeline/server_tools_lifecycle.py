@@ -338,7 +338,6 @@ def verify_audit() -> dict[str, Any]:
 # re-export it under the same name, so adding a tool here is the only edit
 # needed on the server side.
 TOOLS = (
-    export_plan,
     request_decision,
     list_decisions,
     review_story,
@@ -352,4 +351,5 @@ TOOLS = (
     reject_plan,
     verify_audit,
     record_decision,
+    export_plan,
 )

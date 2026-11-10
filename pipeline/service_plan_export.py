@@ -14,11 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .module_ref import _ModuleRef
 from .plan_export import render_plan_document
-
-_store = _ModuleRef("pipeline.server", "_store")
-_validate_key = _ModuleRef("pipeline.server", "_validate_key")
 
 
 class PlanExportMixin:
@@ -50,3 +46,10 @@ class PlanExportMixin:
         if manifest is None:
             return {"ok": False, "error": "Plan not found"}
         return {"ok": True, "plan": render_plan_document(manifest)}
+
+
+# must follow the class: service.py back-imports PlanExportMixin, so defining it first keeps both import directions cycle-free
+from .service import _ServerRef
+
+_store = _ServerRef("_store")
+_validate_key = _ServerRef("_validate_key")

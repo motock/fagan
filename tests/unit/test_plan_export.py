@@ -544,17 +544,14 @@ def _is_refusal(reply: Any) -> bool:
 # The documentation pins
 # --------------------------------------------------------------------------- #
 def test_reference_documents_export_plan_as_a_tool():
+    # The "MCP tools reference" section is byte-pinned against the pre-split
+    # README (tests/unit/test_readme_reference_split.py), so the tool is
+    # documented beside the remote read allowlist instead.
     text = REFERENCE.read_text(encoding="utf-8")
-    start = text.index("## MCP tools reference")
-    end = text.find("\n## ", start + 1)
-    section = text[start:end if end != -1 else None]
+    blocks = [block for block in text.split("\n\n") if block.startswith("`export_plan(plan_name)`")]
 
-    listed = [
-        line
-        for line in section.splitlines()
-        if line.lstrip().startswith("- ") and "`export_plan" in line
-    ]
-    assert listed, "REFERENCE.md's MCP tools reference must list export_plan"
+    assert blocks, "REFERENCE.md must describe export_plan in its own paragraph"
+    assert "never exported" in blocks[0], "the paragraph must say runtime state is not exported"
 
 
 def test_reference_documents_export_plan_in_the_remote_read_scoping_list():

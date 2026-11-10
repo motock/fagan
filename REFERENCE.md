@@ -28,17 +28,6 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   (see below). Also reports each cataloged env var's resolved value and which
   config files were consulted. Pure read — check what a plan will actually run
   on *before* executing it.
-- `export_plan(plan_name)` — render a plan's document from its ingested
-  manifest and return it as `{"ok": true, "plan": {...}}`, in the same shape
-  `save_plan` accepts: `repo_root`, `role_config`, `team`, optional `repo_url`
-  and `preflight_override`, and the plan's `epics`/`stories` with their keys,
-  descriptions, instructions, dependencies, persona, model, acceptance, risk,
-  backend and TDD split. The document is rendered on demand (ADR 0012
-  decision 5), never a stored second copy, and runtime state — status,
-  attempts, `pr_url`, worktree, review verdicts, logs, approvals, owner,
-  delegates — is never exported. Only `origin: plan` context sources are
-  included: `repo` and `org` sources are re-merged at ingest. A plan with no
-  manifest, or one the caller may not see, is refused.
 
 ### Dispatch & status
 - `list_ready_stories(plan_name)` — stories whose dependencies are all `done`.
@@ -3390,9 +3379,6 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   the plans the caller may see (`app.policy.can_view`): the plan-scoped tools
   (`check_story_status`, `export_plan`, `get_effective_config`, `get_story_diff`,
   `list_decisions`, `list_ready_stories`) refuse before their handler runs
-  caller may see (`app.policy.can_view`): the plan-scoped tools
-  (`check_story_status`, `get_effective_config`, `get_story_diff`,
-  `list_decisions`, `list_ready_stories`) refuse before their handler runs
   unless the caller owns or is a delegate of the plan, and return one fixed
   refusal that is identical for a plan that does not exist and one the caller
   may not see, so the reply is no existence oracle; `list_plans` and
@@ -3400,6 +3386,17 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `host` entry for every remote caller because that chain records other
   principals' authentication attempts. `check_usage` stays host-level and
   unfiltered: it reports deployment-wide counters that belong to no plan.
+
+`export_plan(plan_name)` renders a plan's document from its ingested manifest and returns
+it as `{"ok": true, "plan": {...}}`, in the shape `save_plan` accepts: `repo_root`,
+`role_config`, `team`, optional `repo_url` and `preflight_override`, and the plan's
+`epics`/`stories` with their keys, descriptions, instructions, dependencies, persona,
+model, acceptance, risk, backend and TDD split. The document is rendered on demand
+(ADR 0012 decision 5), never stored as a second copy, and runtime state (status,
+attempts, `pr_url`, worktree, review verdicts, logs, approvals, owner, delegates) is
+never exported. Only `origin: plan` context sources are included: `repo` and `org`
+sources are re-merged at ingest. A plan with no manifest, or one the caller may not
+see, is refused.
 
 Every registered tool except `decompose_plan` is on the allowlist, so every
 one of them is remotely callable and decides through the policy.

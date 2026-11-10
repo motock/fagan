@@ -72,6 +72,7 @@ def _approved(manifest):
         "plan": "p",
         "status": "approved",
         "digest": canonical_digest(manifest),
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
         "decided_by": "local-operator",
         "at": "2026-01-01T00:00:00+00:00",
         "correlation_id": "",

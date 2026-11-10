@@ -84,11 +84,19 @@ def _manifest(approval=_UNSET, status="todo"):
 
 def _approved(manifest):
     """An approval record made against exactly this manifest's content."""
-    return {"status": "approved", "digest": pa.canonical_digest(manifest)}
+    return {
+        "status": "approved",
+        "digest": pa.canonical_digest(manifest),
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
+    }
 
 
 def _pending(manifest):
-    return {"status": "pending_approval", "digest": pa.canonical_digest(manifest)}
+    return {
+        "status": "pending_approval",
+        "digest": pa.canonical_digest(manifest),
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +257,11 @@ def _run_tick():
 def test_tick_advances_a_pending_manifest_when_approval_is_disabled(tick):
     dispatched, install = tick
     manifest = _manifest()
-    manifest["approval"] = {"status": "pending_approval", "digest": "stale"}
+    manifest["approval"] = {
+        "status": "pending_approval",
+        "digest": "stale",
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
+    }
     install(manifest)
 
     result = _run_tick()
@@ -368,7 +380,11 @@ def test_dispatch_proceeds_for_a_pending_manifest_when_approval_is_disabled(
     plan_dir, worktree_root, launcher
 ):
     manifest = _manifest()
-    manifest["approval"] = {"status": "pending_approval", "digest": "stale"}
+    manifest["approval"] = {
+        "status": "pending_approval",
+        "digest": "stale",
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
+    }
     _write(plan_dir, manifest)
 
     result = p.dispatch_story(PLAN, STORY)

@@ -32,6 +32,7 @@ from .concurrency import (
 )
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
+from .dispatch_fence import blocks_reclaim
 from .dispatch_lease import claim_dispatch_lease
 from .rebrief import (
     collect_failure_evidence,
@@ -557,6 +558,16 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # Another process already advanced this story during a
                 # release window; re-dispatching it would be the same
                 # double-dispatch by a different route.
+                continue
+            if blocks_reclaim(fresh_story, fresh_story.get("worktree") or ""):
+                _notify_user(
+                    plan_name,
+                    f"{key}: the previous dispatch's scheduler is gone but its "
+                    "worktree shows work in progress; waiting for the lease "
+                    "to expire.",
+                    event="dispatch_in_progress",
+                    story_key=key,
+                )
                 continue
             if not claim_dispatch_lease(fresh_story):
                 continue

@@ -28,6 +28,7 @@ from .dispatch_baseline import (
 # Context resolution and the remote-branch guard live in their own modules to
 # keep this file under the 1000-line limit.
 from .dispatch_context import _step_resolve_context
+from .dispatch_fence import executor_fence
 from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
 from .dispatch_revised_note import _revised_instructions_note
 from .dispatch_routing import (
@@ -905,6 +906,15 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # staged in os.environ for exactly this synchronous launch call and
         # restored afterwards; dispatches are serialized per plan by the
         # _store transaction, so no concurrent launch observes a torn value.
+        # Pre-spawn fence: every slow phase above is done, so re-check for
+        # positive evidence that this dispatch must not launch an agent - the
+        # worker was abandoned by the scheduler's watchdog, another live
+        # process now owns the lease, or the story already reached a terminal
+        # status. Two agents in one worktree is the documented cause of
+        # zero-output deaths; missing evidence never withholds the spawn.
+        fence_error = executor_fence(plan_name, story_key, _store)
+        if fence_error is not None:
+            return fence_error
         prev_correlation_env = os.environ.get("PIPELINE_CORRELATION_ID")
         if story.get("correlation_id"):
             os.environ["PIPELINE_CORRELATION_ID"] = story["correlation_id"]

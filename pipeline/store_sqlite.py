@@ -30,7 +30,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pipeline import store_sqlite_notifications, store_sqlite_outbox, store_sqlite_usage
+from pipeline import (
+    store_sqlite_audit,
+    store_sqlite_notifications,
+    store_sqlite_outbox,
+    store_sqlite_usage,
+)
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
@@ -106,8 +111,11 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
     workspace records, and the manifest's on-disk projection
     (``manifest_path``, refreshed when a save commits).
 
-    The notification, audit and journal sidecar files remain on disk under
-    ``PLAN_DIR`` and are not represented in the database. ``SqliteStore``
+    The notification and journal sidecar files remain on disk under ``PLAN_DIR``
+    and are not represented in the database. The audit chain is a table in it
+    (``audit_records``, served by :meth:`audit_log`), but nothing writes the
+    pipeline's audit history through it yet: the facade still appends to the
+    audit sidecar files, and this store imports nothing. ``SqliteStore``
     performs no migration from file-store data: plans that are already on disk
     are adopted as they are read, and nothing else is imported.
     """
@@ -153,6 +161,11 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
             # first transaction of a brand-new file writes must not be created
             # by that transaction, where a rollback would take it away.
             store_sqlite_notifications.ensure_schema(self._conn)
+            # The audit trail is a table too (ADR 0012 decision 10), created
+            # here for the same reason and with its append-only guards, so a
+            # history that is written from the first transaction on cannot be
+            # rewritten through this database.
+            store_sqlite_audit.ensure_schema(self._conn)
         # The filesystem half is always the file store, whatever PIPELINE_STORE
         # selects for this process.
         self._files = build_store({"PIPELINE_STORE": "file"})
@@ -175,6 +188,15 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
     def records(self) -> SqliteRecords:
         """ADR 0012 namespaced record view"""
         return SqliteRecords(self)
+
+    def audit_log(self) -> store_sqlite_audit.SqliteAuditLog:
+        """Return the audit log held in this store's database.
+
+        The log is a view over the store's own connection, so an append made
+        inside :meth:`transaction` joins the transaction the store holds; a
+        log keeps no state of its own, so a fresh one per call is the same log.
+        """
+        return store_sqlite_audit.SqliteAuditLog(self)
 
     # -- manifests: the database is the record -----------------------------
     def manifest_path(self, plan_name: str) -> Path:

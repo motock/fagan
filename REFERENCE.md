@@ -1447,6 +1447,34 @@ The plan name `host` is reserved: `save_plan`, `ingest_plan` and the record stor
 
 ---
 
+## Manifest descriptive fields (`ingest_plan`)
+
+`ingest_plan` copies the plan's authored, *descriptive* content onto
+`<plan>.manifest.json` so the manifest stands alone as the plan record
+(ADR 0012 decision 5) and the plan document can be rendered from it without
+re-reading the plan JSON:
+
+- per story: `description` (the authored description; `""` when the plan gives
+  none), `epic` (the summary of the epic the story was authored under) and
+  `plan_key` (the plan story's own `key`, recorded only when the plan story had
+  one — it stays visible even when a ticketing provider issues a different story
+  id, and it equals `key` when no provider issues one);
+- per plan: `plan_epics` (every epic summary in authored order, including epics
+  with no stories; `[]` for a plan without epics) and, only when the plan names
+  them, `preflight_override` and `repo_url` (an absent value is never written as
+  `null`).
+
+A non-string `description` is rejected before any provider call with
+`{"ok": false, "error": ...}` naming the story summary, and no manifest is
+written. Re-ingest refreshes every one of these fields from the plan and keeps
+the manifest's runtime state (`status`, `pr_url`, attempts, ...).
+
+`epic`, `plan_key`, `plan_epics`, `preflight_override` and `repo_url` are not
+plan-defining: they are outside `canonical_digest`, so recording them cannot
+reset an approval (see `docs/specs/PLAN_APPROVAL.md` §3).
+
+---
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

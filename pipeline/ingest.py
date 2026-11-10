@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import re
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,12 @@ from .ecosystem_detect import (
     detect_test_command,
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
+)
+from .ingest_manifest import (
+    build_manifest,
+    merge_descriptive_story_fields,
+    plan_level_fields,
+    validate_story_descriptions,
 )
 from .ownership import resolve_ownership
 from .plan_approval import approval_enabled, on_ingest
@@ -529,6 +534,17 @@ def _merged_context(plan: dict, repo_root: Path) -> tuple[dict | None, str | Non
     }, None
 
 
+def _story_extra_fields(story: dict) -> dict:
+    """Per-story manifest defaults that stay at the ingest call site.
+
+    TDD_SPLIT_PRODUCTION_PLAN.md §2.4: explicit per-story opt-in for the
+    test-author pre-executor phase. Defaults False - inferring eligibility
+    from agent_instructions prose is a worse failure mode than an operator
+    forgetting to opt in.
+    """
+    return {"tdd_split": bool(story.get("tdd_split", False))}
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:
@@ -727,6 +743,14 @@ def _ingest_plan_impl(
             event="context_resolved",
         )
 
+    # ADR 0012 decision 5: the manifest records each story's authored
+    # description, so it must be a string. Validated here - before the
+    # transaction and any provider call - so a refusal writes nothing and
+    # leaves the previously ingested manifest on disk untouched.
+    description_refusal = validate_story_descriptions(plan, only_epics)
+    if description_refusal is not None:
+        return description_refusal
+
     manifest_path = _store.manifest_path(plan_name)
     keyless_error = _keyless_reingest_error(
         plan, only_epics, manifest_path.exists(), overwrite
@@ -756,72 +780,18 @@ def _ingest_plan_impl(
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
 
-        manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
-
-        # When no ticketing backend is configured (NullTicketProvider) the
-        # manifest is the sole source of truth: create_epic/create_story are
-        # no-ops returning None, and we synthesize story keys locally instead
-        # of taking them from a backend-issued id.
-        provider = get_ticket_provider()
-
-        # Maps the plan's local story keys (e.g. "S1") to the manifest story keys
-        # generated below (backend ids, or local keys when no backend is
-        # configured), so dependencies can be translated to manifest keys.
-        key_to_issue_id: dict[str, str] = {}
-
-        for epic in plan["epics"]:
-            if only_epics and epic["summary"] not in only_epics:
-                continue
-
-            epic_id = provider.create_epic(epic["summary"])
-            if epic_id is not None:
-                manifest["epics"][epic["summary"]] = epic_id
-
-            for story in epic.get("stories", []):
-                issue_id = provider.create_story(
-                    story["summary"],
-                    story.get("description", ""),
-                    epic_id,
-                    "agent-pipeline",
-                )
-                if issue_id is None:
-                    # No backend id to key on: prefer the plan's own story key
-                    # (keeps the manifest readable and lets key-based dependencies
-                    # resolve to themselves), else mint a unique synthetic key.
-                    issue_id = story.get("key") or str(uuid.uuid4())
-                if "key" in story:
-                    key_to_issue_id[story["key"]] = issue_id
-                manifest["stories"][issue_id] = {
-                    "summary": story["summary"],
-                    "agent_instructions": story.get("agent_instructions", ""),
-                    "dependencies": story.get("dependencies", []),
-                    "persona": story.get("persona"),
-                    "model": story.get("model"),
-                    "acceptance": story.get("acceptance", []),
-                    "risk": story.get("risk", "low"),
-                    "backend": story.get("backend"),
-                    # TDD_SPLIT_PRODUCTION_PLAN.md §2.4: explicit per-story
-                    # opt-in for the test-author pre-executor phase. Defaults
-                    # False - inferring eligibility from agent_instructions
-                    # prose is a worse failure mode than an operator
-                    # forgetting to opt in.
-                    "tdd_split": bool(story.get("tdd_split", False)),
-                    "status": "todo",
-                }
-                if "files" in story and story["files"] is not None:
-                    manifest["stories"][issue_id]["files"] = list(story["files"])
-                if story.get("blocked_by") is not None:
-                    manifest["stories"][issue_id]["blocked_by"] = list(
-                        story["blocked_by"]
-                    )
-
-        # Translate dependencies expressed as local plan keys into the issue IDs
-        # just created. Dependencies that don't match a known local key (e.g.
-        # already an issue ID, or a typo) are left as-is.
-        for story in manifest["stories"].values():
-            story["dependencies"] = [
-                key_to_issue_id.get(dep, dep) for dep in story["dependencies"]
-            ]
+        # Epic/story construction (including the authored descriptive fields
+        # and the local-key -> issue-id dependency translation) lives in
+        # pipeline.ingest_manifest; when no ticketing backend is configured
+        # (NullTicketProvider) create_epic/create_story are no-ops returning
+        # None and that module synthesizes story keys locally instead of
+        # taking them from a backend-issued id.
+        manifest = build_manifest(
+            plan,
+            provider=get_ticket_provider(),
+            only_epics=only_epics,
+            story_extra_fields=_story_extra_fields,
+        )
 
         # Merge into the existing manifest rather than replacing it (T1):
         # anything only_epics excluded this round - and, with overwrite=False,
@@ -851,6 +821,10 @@ def _ingest_plan_impl(
                             combined.pop(field, None)
                         continue
                     combined[field] = new_story[field]
+                # The descriptive fields (description/epic/plan_key) follow the
+                # same rule for merging only; they stay out of
+                # _INGEST_AUTHORED_STORY_FIELDS.
+                merge_descriptive_story_fields(combined, new_story)
                 merged_stories[key] = combined
             else:
                 merged_stories[key] = new_story
@@ -859,6 +833,11 @@ def _ingest_plan_impl(
         final_manifest["epics"] = merged_epics
         final_manifest["stories"] = merged_stories
         final_manifest["repo_root"] = repo_root
+        # Descriptive, non-plan-defining plan fields (ADR 0012 decision 5):
+        # plan_epics always, preflight_override/repo_url only when authored.
+        # None of them is a canonical_digest member, so recording them cannot
+        # reset an approval.
+        final_manifest.update(plan_level_fields(plan))
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )

@@ -1682,7 +1682,14 @@ the story records a `sizing_auto_routed` object (`from_backend`, `from_model`,
 event instead of the plain advisory warning. When the default is not a
 `:cloud` tag the story is left as authored and the advisory warning carries an
 `; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag`
-suffix.
+suffix. Ingest also warns when the brief's `Docs` section edits a doc that
+`files` omits: when the brief carries a `Docs` section (`Docs:` or e.g. `Docs
+(pin each with an assertion):`), the doc paths named in its next 800 characters
+(`docs/...md` and `REFERENCE.md`-style root docs, test paths excepted) are
+compared with `files`, and any undeclared one produces a `scope_headroom`
+notice (joined by a semicolon with the headroom advice when both fire) saying
+the brief's Docs section edits files not declared in `files`, so add them or
+the scope gate will park the story.
 
 ---
 

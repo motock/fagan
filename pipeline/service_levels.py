@@ -23,14 +23,13 @@ caller - :func:`service_level_percentiles` returns counts and percentiles only.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from pipeline import audit
+from pipeline.audit_log import HOST_CHAIN_ID
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +44,17 @@ ACTION_MERGE = "story.merge"
 #: ``(plan, story) -> the three marks, each ``None`` until it is recorded``.
 Timeline = dict[tuple[str, str], dict[str, datetime | None]]
 
-#: The audit stream's file suffix; the plan name is the rest of the file name.
-SUFFIX = ".audit.jsonl"
+
+class AuditLogLike(Protocol):
+    """The read-only slice of :class:`pipeline.audit_log.AuditLog` used here."""
+
+    def list_chains(self, namespace: str) -> list[str]:
+        """Return the chain names in *namespace*, plan chains first."""
+        ...
+
+    def read_chain(self, namespace: str, chain: str) -> list[dict | None]:
+        """Return *chain* in storage order (``[]`` when it is absent)."""
+        ...
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -64,51 +72,29 @@ def _parse_ts(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
-def _stream_paths(plan_dir: str | Path) -> list[Path]:
-    """Return *plan_dir*'s plan audit streams, excluding the host-scoped one.
+def _chain_names(log: AuditLogLike) -> list[str]:
+    """Return *log*'s plan chains, the host chain excluded.
 
-    The host stream (``audit.host_audit_path()``) belongs to no plan, so it is
-    excluded by resolved path rather than by name: a redirected host stream can
-    otherwise sit in the plan directory under any file name the glob matches.
+    The host chain (``audit_log.HOST_CHAIN_ID``) belongs to no plan, so a
+    record stored there is never a story mark; it is dropped here rather than
+    trusted to be last in the enumeration.
     """
-    directory = Path(plan_dir)
     try:
-        host = audit.host_audit_path().resolve()
-    except OSError:  # pragma: no cover - a path that cannot be resolved
-        host = None
-    try:
-        candidates = sorted(directory.glob(f"*{SUFFIX}"))
-    except OSError:  # pragma: no cover - a directory that cannot be listed
+        chains = log.list_chains(DEFAULT_NAMESPACE)
+    except Exception:
+        logger.warning("listing the audit chains failed", exc_info=True)
         return []
-    streams: list[Path] = []
-    for path in candidates:
-        try:
-            resolved = path.resolve()
-        except OSError:  # pragma: no cover - a path that cannot be resolved
-            continue
-        if host is not None and resolved == host:
-            continue
-        streams.append(path)
-    return streams
+    return [chain for chain in chains if chain != HOST_CHAIN_ID]
 
 
-def _records(path: Path) -> list[dict[str, Any]]:
-    """Return *path*'s well-formed records in file order, skipping bad lines."""
+def _records(log: AuditLogLike, chain: str) -> list[dict[str, Any]]:
+    """Return *chain*'s well-formed records in storage order, skipping bad ones."""
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        entries = log.read_chain(DEFAULT_NAMESPACE, chain)
+    except Exception:
+        logger.warning("reading an audit chain failed", exc_info=True)
         return []
-    records: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
+    return [entry for entry in entries if isinstance(entry, dict)]
 
 
 def _story_key(record: dict[str, Any]) -> str | None:
@@ -148,11 +134,12 @@ def _apply(
         marks["merged"] = _first(marks["merged"], _parse_ts(record.get("ts")))
 
 
-def read_story_timeline(plan_dir: str | Path) -> Timeline:
-    """Read every plan audit stream directly under *plan_dir* into a timeline.
+def read_story_timeline(log: AuditLogLike) -> Timeline:
+    """Read every plan chain of *log* into a ``(plan, story) -> marks`` timeline.
 
-    Streams are read in sorted path order and their lines in file order, never
-    recursively. Per ``(plan, story)``:
+    Chains are enumerated by the log and read in storage order, never across
+    namespaces; a mark's plan is the chain it was stored under. Per
+    ``(plan, story)``:
 
     * ``dispatched`` - the ``ts`` of the FIRST ``story.dispatch`` record with
       ``outcome == "allowed"`` (a later dispatch never replaces it);
@@ -162,26 +149,24 @@ def read_story_timeline(plan_dir: str | Path) -> Timeline:
     * ``merged`` - the ``ts`` of the FIRST ``story.merge`` record with
       ``outcome == "allowed"``.
 
-    Unparseable lines and timestamps are skipped, naive timestamps are UTC, a
-    missing or unreadable *plan_dir* yields ``{}``, and this function never
-    raises. It reads only: the hash chain is neither verified nor extended.
+    A record the log reports as broken and a record whose timestamp cannot be
+    parsed are skipped, naive timestamps are read as UTC, and an absent or
+    unreadable log yields ``{}`` - this function never raises. It reads only:
+    the hash chain is neither verified nor extended, and the host chain is not
+    a plan, so nothing stored there ever becomes a story mark.
     """
     timeline: Timeline = {}
-    try:
-        for path in _stream_paths(plan_dir):
-            plan = path.name.removesuffix(SUFFIX)
-            for record in _records(path):
-                story = _story_key(record)
-                if story is None:
-                    continue
-                key = (plan, story)
-                timeline.setdefault(
-                    key,
-                    {"dispatched": None, "review_started": None, "merged": None},
-                )
-                _apply(timeline, key, record)
-    except Exception:
-        logger.warning("reading the story timeline failed", exc_info=True)
+    for plan in _chain_names(log):
+        for record in _records(log, plan):
+            story = _story_key(record)
+            if story is None:
+                continue
+            key = (plan, story)
+            timeline.setdefault(
+                key,
+                {"dispatched": None, "review_started": None, "merged": None},
+            )
+            _apply(timeline, key, record)
     return timeline
 
 
@@ -226,7 +211,7 @@ def _durations(timeline: Timeline, cutoff: datetime, now: datetime) -> dict[str,
 
 
 def service_level_percentiles(
-    plan_dir: str | Path,
+    log: AuditLogLike,
     now: datetime | None = None,
     window_days: int = 30,
 ) -> dict[str, dict[str, float]]:
@@ -250,7 +235,7 @@ def service_level_percentiles(
     """
     cutoff, end = _window(now, window_days)
     try:
-        durations = _durations(read_story_timeline(plan_dir), cutoff, end)
+        durations = _durations(read_story_timeline(log), cutoff, end)
     except Exception:
         logger.warning("computing service-level percentiles failed", exc_info=True)
         durations = {measure: [] for measure in MEASURES}

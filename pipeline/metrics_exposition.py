@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import manifest_source, parsers
+from pipeline.audit_file import FileAuditLog
 from pipeline.component_health import component_status
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
@@ -418,7 +419,9 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
         logger.warning("metrics producer failed", extra={"metrics_source": "plans"})
 
     try:
-        _service_level_samples(snapshot, service_level_percentiles(plan_dir))
+        _service_level_samples(
+            snapshot, service_level_percentiles(FileAuditLog(plan_dir))
+        )
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["service_levels"] += 1
         logger.warning(

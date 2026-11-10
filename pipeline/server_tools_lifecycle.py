@@ -283,8 +283,8 @@ def verify_audit() -> dict[str, Any]:
 
     Read-only: nothing is appended, rewritten or repaired. The answer is
     ``{"ok": True, "plans": {<plan>: None | <bad seq>}, "host": None | <bad
-    seq>}``. A plan appears only when it has an audit file; the value is the
-    ``seq`` of its first altered record, or ``None`` when the chain is intact.
+    seq>}``. A plan appears only when the audit log knows the chain; the value
+    is the ``seq`` of its first altered record, or ``None`` when it is intact.
     The host-scoped chain — events with no plan to belong to, such as a host
     config write — is verified the same way and reported under ``host``.
 
@@ -297,17 +297,8 @@ def verify_audit() -> dict[str, Any]:
     unreadable`` verdict: the anchors are unknown, so no chain is reported
     clean.
     """
-    probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
-    suffix = probe.name
-    plans: dict[str, int | None] = {}
-    for path in sorted(probe.parent.glob(f"*{suffix}")):
-        plan_name = path.name.removesuffix(suffix)
-        plans[plan_name] = audit.verify_audit_chain(plan_name)
-    result: dict[str, Any] = {
-        "ok": True,
-        "plans": plans,
-        "host": audit.verify_host_audit_chain(),
-    }
+    plans, host = audit.verify_audit_log()
+    result: dict[str, Any] = {"ok": True, "plans": plans, "host": host}
     if os.environ.get(audit_anchor.PIPELINE_AUDIT_ANCHOR, "").strip():
         result["anchor"] = audit_anchor.anchor_report()
     return result

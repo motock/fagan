@@ -850,7 +850,8 @@ notification event; a park reuses the existing `story_parked` event.
 
 ## Notification records
 
-The pipeline writes two notification artifacts per plan: a legacy free‑text log
+With the file store (the default) the pipeline writes two notification
+artifacts per plan: a legacy free‑text log
 `<plan>.notifications.log` and a structured JSON Lines file
 `<plan>.notifications.jsonl`.  Both are bounded by a shared size‑cap rotation
 policy: when a write would push the active file past
@@ -867,6 +868,22 @@ expects — it is additive only up to the cap, then rotated into numbered
 generation files.  The JSONL file is likewise additive, appended each time
 `_notify_user` is called, and contains one JSON object per line terminated by
 a newline; past the cap it rotates under the same policy.
+
+Under `PIPELINE_STORE=sqlite` the same history is a `notifications` table in
+the store's database instead of those two sidecars: one row per notification
+(`id`, `namespace`, `plan`, `ts`, `record`), indexed on
+`(namespace, plan, id)`.  The free-text line and the structured record are both
+rendered from the row, and a notification appended inside
+`transaction(namespace, plan)` commits or rolls back with the plan's state
+(ADR 0012 decision 9).  There is no retention cap on the table yet: the
+rotation policy above is a file concept, and bounding the table by row count or
+age is an open question.
+
+A sqlite deployment's notification history is never imported from the sidecars
+the file store leaves behind -- exactly as with the outbox queue, the operator
+archives or replays them before switching.  `scripts/local_success_report.py`
+reads a directory you pass it offline, so under the sqlite store it sees no
+notification history at all.
 
 Each record has the following keys:
 

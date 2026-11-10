@@ -1227,6 +1227,12 @@ tick appends nothing. A sink failure is logged at `WARNING` with the error type 
 never stops the plan sweep, because tamper evidence must not be able to halt
 dispatch.
 
+The sink is an `AnchorSink` — an object offering `publish` and `read_heads` — and
+`file:` is the built-in one, so an object-lock bucket, a syslog relay or a SIEM can
+be plugged in without touching the anchoring pass. A sink stores heads raw: the
+ratchet and the chain-name validation stay in `pipeline/audit_anchor.py`, where a
+plugin cannot weaken them.
+
 Anchoring only ratchets upwards. The anchor read back for a chain is the highest
 `seq` ever recorded for it and, at equal `seq`, the hash recorded first: a later
 tick can raise it but never lower it, and never replace the hash it already

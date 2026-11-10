@@ -9,10 +9,19 @@ rewrite.
 
 The sink only buys anything where the pipeline cannot reach: a WORM mount, an
 object-lock bucket exported by another host, or a separate host's NFS export
-with append-only permissions. A plain file on the same host as ``PLAN_DIR``
-raises the bar - a forger has to edit or delete anchor lines as well as chain
-lines - but the same principal who can rewrite the chain can rewrite the file,
-so it is not tamper-proof evidence. An HTTP or S3 sink is a later story.
+with append-only permissions. A plain file on the same host as the plan
+directory raises the bar - a forger has to edit or delete anchor lines as well
+as chain lines - but the same principal who can rewrite the chain can rewrite
+the file, so it is not tamper-proof evidence.
+
+The sink is an :class:`AnchorSink`: an object offering ``publish`` and
+``read_heads``, so an object-lock bucket, a syslog relay or a SIEM can be
+plugged in without this module knowing. ``file:<absolute path>`` is the
+built-in one (:class:`FileAnchorSink`); an HTTP or S3 sink is a later story.
+A sink is deliberately dumb: it stores a head and returns stored heads raw. The
+ratchet and the chain-name validation stay in this module (``_anchors`` and
+``_usable_chain``), so a plugin cannot weaken them by publishing a cleaned-up
+view of what it holds.
 
 Anchoring only ever ratchets upwards. A chain's anchor is the highest ``seq``
 ever recorded for it, and at equal ``seq`` the hash recorded first: a later pass
@@ -55,12 +64,19 @@ import fcntl
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from . import audit, persistence
+from . import audit, decision_records
+from .audit_log import HOST_CHAIN_ID
+from .store_records import (
+    DEFAULT_NAMESPACE,
+    InvalidRecordKeyError,
+    UnknownNamespaceError,
+)
 
 logger = logging.getLogger("pipeline.audit_anchor")
 
@@ -77,15 +93,111 @@ HOST_CHAIN = "host"
 SINK_VERDICT = "*"
 
 
-def _anchor_path() -> Path | None:
-    """Resolve the configured sink, or ``None`` when anchoring is off.
+@dataclass(frozen=True)
+class AnchorHead:
+    """One anchored head, exactly as a sink stored it.
+
+    Raw on purpose: a sink reports what it holds and nothing more. The ratchet
+    and the chain-name validation live in this module, so a plugin cannot
+    launder a tampered head by returning a "cleaned" view of its log.
+    """
+
+    namespace: str
+    chain: str
+    seq: int
+    hash: str
+
+
+class AnchorSink(Protocol):
+    """Where anchor heads are shipped: append-only from the pipeline's side.
+
+    There is no method that rewrites, reorders or deletes an anchor, and no
+    attribute that exposes the storage for mutation. A sink may be an
+    object-lock bucket, a syslog relay or a SIEM; the built-in one is
+    :class:`FileAnchorSink`.
+    """
+
+    def publish(self, namespace: str, chain: str, seq: int, head_hash: str) -> None:
+        """Append one ``(chain, seq, head_hash)`` anchor, never rewriting one."""
+        ...
+
+    def read_heads(self) -> Iterator[AnchorHead]:
+        """Yield every stored head, in publication order."""
+        ...
+
+
+class FileAnchorSink:
+    """The built-in sink: one append-only JSONL file.
+
+    The file is part of the tamper-evidence boundary, so it is opened
+    ``O_NOFOLLOW`` and its mode is re-imposed to ``0o600`` on the open
+    descriptor (see :func:`_append`), and a log that exists but cannot be read
+    raises :class:`AnchorUnreadable` rather than reading as empty.
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+
+    def publish(self, namespace: str, chain: str, seq: int, head_hash: str) -> None:
+        """Append one anchor line for ``(chain, seq, head_hash)``.
+
+        The timestamp is stamped here exactly as :func:`anchor_heads` always
+        stamped it, so the line stays byte-identical to the one an older
+        pipeline wrote for the same head.
+
+        Raises:
+            UnknownNamespaceError: This sink stores the default namespace only.
+                Nothing is written.
+            OSError: The sink refused the append - a symlinked or unwritable
+                path. The anchor is not recorded.
+        """
+        if namespace != DEFAULT_NAMESPACE:
+            raise UnknownNamespaceError("unknown namespace")
+        _append(
+            self.path,
+            {
+                "chain": chain,
+                "seq": seq,
+                "hash": head_hash,
+                "at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    def read_heads(self) -> Iterator[AnchorHead]:
+        """Yield the stored heads in publication order.
+
+        Raises:
+            AnchorUnreadable: The log could not be read, including when the
+                failure lands part-way through it.
+        """
+        for record in _anchor_records(self.path):
+            chain = record.get("chain")
+            seq = record.get("seq")
+            digest = record.get("hash")
+            if not isinstance(chain, str) or not chain:
+                continue
+            if not isinstance(seq, int) or isinstance(seq, bool):
+                continue
+            if not isinstance(digest, str) or not digest:
+                continue
+            yield AnchorHead(DEFAULT_NAMESPACE, chain, seq, digest)
+
+
+def build_anchor_sink(environ: Mapping[str, str] | None = None) -> AnchorSink | None:
+    """Build the configured sink, or ``None`` when anchoring is off.
+
+    Args:
+        environ: The environment to read; defaults to :data:`os.environ`. Read
+            on every call, never captured at import, so a fixture that
+            redirects it redirects the next pass.
 
     Raises:
         ValueError: The variable holds anything but ``file:<absolute path>``
-            outside ``PLAN_DIR``. The message names the variable, never the
-            configured value.
+            outside the plan directory. The message names the variable, never
+            the configured value, because a sink URI may carry a credential.
     """
-    raw = os.environ.get(PIPELINE_AUDIT_ANCHOR, "").strip()
+    env = os.environ if environ is None else environ
+    raw = env.get(PIPELINE_AUDIT_ANCHOR, "").strip()
     if not raw:
         return None
     scheme, separator, target = raw.partition(":")
@@ -100,12 +212,15 @@ def _anchor_path() -> Path | None:
             f"{PIPELINE_AUDIT_ANCHOR} 'file:' path must be absolute; "
             "audit-head anchoring is off until it is corrected"
         )
-    if path.resolve().is_relative_to(persistence.PLAN_DIR.expanduser().resolve()):
+    # The plan directory is resolved through the audit facade at call time, so
+    # a redirected plan directory redirects this refusal with it.
+    plan_directory = audit.audit_path("").parent
+    if path.resolve().is_relative_to(plan_directory.expanduser().resolve()):
         raise ValueError(
             f"{PIPELINE_AUDIT_ANCHOR} 'file:' path must be outside the plan directory; "
             "an anchor the pipeline can rewrite proves nothing"
         )
-    return path
+    return FileAnchorSink(path)
 
 
 class AnchorUnreadable(RuntimeError):
@@ -121,12 +236,12 @@ class AnchorUnreadable(RuntimeError):
 
 
 def _usable_chain(chain: object) -> str | None:
-    """*chain* when it names a stream directly inside ``PLAN_DIR``, else ``None``.
+    """*chain* when it names a stream directly inside the plan directory.
 
     An anchor line is input from outside the pipeline, so its ``chain`` value is
     validated like any other boundary value: only a bare name resolves to
-    ``PLAN_DIR/<chain>.audit.jsonl``. A ``../`` or absolute name would steer the
-    read somewhere else entirely, so it is not an anchor at all.
+    ``<chain>.audit.jsonl`` in the plan directory. A ``../`` or absolute name
+    would steer the read somewhere else entirely, so it is not an anchor at all.
     """
     if not isinstance(chain, str) or not chain:
         return None
@@ -201,7 +316,7 @@ def _anchor_records(path: Path) -> Iterator[dict[str, Any]]:
         raise AnchorUnreadable(type(exc).__name__) from None
 
 
-def _anchors(path: Path) -> dict[str, tuple[int, str]]:
+def _anchors(sink: AnchorSink) -> dict[str, tuple[int, str]]:
     """The strongest ``(seq, hash)`` anchor recorded per chain.
 
     The strongest is the highest ``seq`` ever anchored and, at equal ``seq``, the
@@ -212,77 +327,104 @@ def _anchors(path: Path) -> dict[str, tuple[int, str]]:
     not a bare stream name, or without an integer ``seq`` and a non-empty
     ``hash``, is not an anchor and is ignored.
 
+    The chain-name validation and the ratchet stay here rather than in the
+    sink, so a plugin cannot weaken either: a head whose ``chain`` is not a bare
+    stream name is not an anchor, and a lower ``seq`` never lowers the anchor.
+
     Raises:
         AnchorUnreadable: The log could not be read. The anchor set is unknown,
             never empty.
     """
     strongest: dict[str, tuple[int, str]] = {}
-    for record in _anchor_records(path):
-        chain = _usable_chain(record.get("chain"))
-        seq = record.get("seq")
-        digest = record.get("hash")
-        if (
-            chain is None
-            or not isinstance(seq, int)
-            or isinstance(seq, bool)
-            or not isinstance(digest, str)
-            or not digest
-        ):
+    for head in sink.read_heads():
+        chain = _usable_chain(head.chain)
+        if chain is None:
             continue
         prior = strongest.get(chain)
-        if prior is None or seq > prior[0]:
-            strongest[chain] = (seq, digest)
+        if prior is None or head.seq > prior[0]:
+            strongest[chain] = (head.seq, head.hash)
     return strongest
 
 
+def _stream_for(chain: str) -> Path:
+    """The stream a chain's anchor key names.
+
+    The anchor key is the plan name for a plan chain, ``"host"`` for the host
+    chain and ``decisions:<plan>`` for a decisions chain, so a plan actually
+    named ``decisions`` is still read as its own audit stream rather than as the
+    decisions namespace. The path is resolved by the store, not built here.
+    """
+    if chain.startswith("decisions:"):
+        return decision_records.decision_stream_path(chain.removeprefix("decisions:"))
+    log = audit._file_log()
+    return log.stream_path(HOST_CHAIN_ID if chain == HOST_CHAIN else chain)
+
+
 def _chain_streams() -> Iterator[tuple[str, Path]]:
-    """Yield ``(chain name, audit-stream path)`` for every plan and the host."""
-    probe = audit.audit_path("")  # <PLAN_DIR>/<plan>.audit.jsonl
-    suffix = probe.name
-    for path in sorted(probe.parent.glob(f"*{suffix}")):
-        plan = path.name.removesuffix(suffix)
+    """Yield ``(anchor key, stream path)`` for every chain the log holds.
+
+    The plan and host chains are enumerated through the audit log rather than by
+    globbing the plan directory, so a chain kept anywhere else is anchored the
+    same way; the decisions chains come from their own helper. The anchor key is
+    the plan name for a plan chain, ``"host"`` for the host chain and
+    ``decisions:<plan>`` for a decisions chain - byte-compatible with the anchor
+    log this module has always written.
+    """
+    log = audit._file_log()
+    try:
+        chains = log.list_chains(DEFAULT_NAMESPACE)
+    except OSError as exc:  # pragma: no cover - a store that cannot be listed
+        logger.warning("could not list the audit chains: %s", type(exc).__name__)
+        chains = []
+    for chain in chains:
+        if chain == HOST_CHAIN_ID:
+            continue
         # A plan name may not contain ':' (pipeline.parsers._validate_key), and
-        # its chain name would otherwise be indistinguishable from a decisions
+        # its anchor key would otherwise be indistinguishable from a decisions
         # chain key: plan ``decisions:other`` would anchor as ``decisions:other``,
         # the same key as the decisions chain of plan ``other``. One of the two
         # would never be verified and the surviving anchor would be compared
         # against the wrong file. Skip the unaddressable name rather than alias.
-        if ":" in plan:
+        if ":" in chain:
             logger.warning(
-                "skipping an audit stream whose plan name is not addressable plan=%r", plan
+                "skipping an audit stream whose plan name is not addressable plan=%r", chain
             )
             continue
-        yield plan, path
-    decisions_suffix = ".decisions.chain.jsonl"
-    for path in sorted(probe.parent.glob(f"*{decisions_suffix}")):
-        plan = path.name.removesuffix(decisions_suffix)
-        if not plan or ":" in plan:
+        yield chain, log.stream_path(chain)
+    for plan in decision_records.list_decision_chains():
+        if ":" in plan:
             logger.warning(
                 "skipping a decisions stream whose plan name is not addressable plan=%r", plan
             )
             continue
-        yield f"decisions:{plan}", path
-    yield HOST_CHAIN, audit.host_audit_path()
+        yield f"decisions:{plan}", decision_records.decision_stream_path(plan)
+    yield HOST_CHAIN, log.stream_path(HOST_CHAIN_ID)
 
 
-def _stream_for(chain: str) -> Path:
-    if chain.startswith("decisions:"):
-        return audit.audit_path(chain).with_name(
-            f"{chain.removeprefix('decisions:')}.decisions.chain.jsonl"
-        )
-    return audit.host_audit_path() if chain == HOST_CHAIN else audit.audit_path(chain)
+def _chain_heads() -> Iterator[tuple[str, tuple[int, str]]]:
+    """Yield ``(anchor key, (seq, hash))`` for every chain with a usable head."""
+    log = audit._file_log()
+    for chain, path in _chain_streams():
+        if chain == HOST_CHAIN:
+            head = _head(lambda: log.head(DEFAULT_NAMESPACE, HOST_CHAIN_ID), chain)
+        elif chain.startswith("decisions:"):
+            head = _head(lambda path=path: audit._tail(path), chain)
+        else:
+            head = _head(lambda chain=chain: log.head(DEFAULT_NAMESPACE, chain), chain)
+        if head is not None:
+            yield chain, head
 
 
-def _head(path: Path, chain: str) -> tuple[int, str] | None:
-    """The ``(seq, hash)`` of the chain's last usable record, or ``None``.
+def _head(read: Callable[[], dict[str, Any] | None], chain: str) -> tuple[int, str] | None:
+    """The ``(seq, hash)`` the chain's newest record carries, or ``None``.
 
-    Only the tail is read, so anchoring costs one seek per chain however long
-    the stream has grown. An unreadable stream is reported by chain name and
-    error type only, and treated as having no head.
+    The head is read through the audit log, so the log decides where the chain
+    lives. An unreadable stream is reported by chain name and error type only,
+    and treated as having no head, so one damaged stream cannot abort a pass.
     """
     try:
-        record = audit._tail(path)
-    except OSError as exc:
+        record = read()
+    except (OSError, InvalidRecordKeyError) as exc:
         logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
         return None
     if record is None:
@@ -320,21 +462,26 @@ def anchor_heads() -> int:
     """Anchor every chain head, never lowering an anchor already recorded.
 
     Appends ``{"chain": <plan|"host">, "seq": <head seq>, "hash": <head hash>,
-    "at": <utc iso>}`` for each plan chain and the host chain whose head moved
-    forward. An unchanged head adds nothing, so a quiet stream does not grow the
-    log. A head that went backwards - the tail was cut - or that changed hash at
-    an already anchored ``seq`` - that record was rewritten - is *not* anchored:
-    the strongest anchor stands, a WARNING names the chain and the two seq
-    values, and the tamper stays reported until an operator resolves it.
+    "at": <utc iso>}`` for each plan chain, the host chain and each decisions
+    chain whose head moved forward. An unchanged head adds nothing, so a quiet
+    stream does not grow the log. A head that went backwards - the tail was cut
+    - or that changed hash at an already anchored ``seq`` - that record was
+    rewritten - is *not* anchored: the strongest anchor stands, a WARNING names
+    the chain and the two seq values, and the tamper stays reported until an
+    operator resolves it.
+
+    A sink that refuses an append raises ``OSError`` out of this function after
+    the anchors already published on this pass stand; the caller logs the error
+    type, and the next tick retries the chains that did not make it.
 
     Returns:
         How many anchor records were appended; ``0`` when anchoring is off.
     """
-    path = _anchor_path()
-    if path is None:
+    sink = build_anchor_sink()
+    if sink is None:
         return 0
     try:
-        known = _anchors(path)
+        known = _anchors(sink)
     except AnchorUnreadable as exc:
         # The anchors cannot be read, so the current head cannot be compared with
         # them: appending would treat the anchor set as empty and record a head
@@ -344,11 +491,7 @@ def anchor_heads() -> int:
         )
         return 0
     appended = 0
-    for chain, stream in _chain_streams():
-        head = _head(stream, chain)
-        if head is None:
-            continue
-        seq, digest = head
+    for chain, (seq, digest) in _chain_heads():
         prior = known.get(chain)
         if prior is not None:
             prior_seq, prior_digest = prior
@@ -368,14 +511,42 @@ def anchor_heads() -> int:
                         seq,
                     )
                 continue
-        _append(path, {"chain": chain, "seq": seq, "hash": digest, "at": datetime.now(UTC).isoformat()})
+        sink.publish(DEFAULT_NAMESPACE, chain, seq, digest)
         appended += 1
     return appended
+
+def _chain_records(chain: str) -> Iterator[dict[str, Any] | None]:
+    """The records of *chain* in storage order, or nothing when unreadable.
+
+    The chain is read through the audit log - or, for a decisions chain,
+    through the decision-record reader - so the store decides where it lives.
+    A stream the pipeline cannot read is reported by chain name and error type
+    only and read as empty, so verification calls it truncated instead of
+    raising out of a report: one damaged stream must not hide the rest.
+    """
+    if chain.startswith("decisions:"):
+        plan = chain.removeprefix("decisions:")
+        try:
+            path = decision_records.decision_stream_path(plan)
+        except InvalidRecordKeyError as exc:
+            logger.warning(
+                "could not read the audit stream for %s: %s", chain, type(exc).__name__
+            )
+            return
+        yield from _read_records(path, context=chain)
+        return
+    stored = HOST_CHAIN_ID if chain == HOST_CHAIN else chain
+    try:
+        yield from audit._file_log().read_chain(DEFAULT_NAMESPACE, stored)
+    except (OSError, InvalidRecordKeyError) as exc:
+        logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
 
 
 def _verdict(chain: str, seq: int, digest: str) -> str | None:
     """Compare *chain* with one anchored ``(seq, hash)``."""
-    for record in _read_records(_stream_for(chain), context=chain):
+    for record in _chain_records(chain):
+        if record is None:
+            continue
         if record.get("seq") == seq:
             if record.get("hash") == digest:
                 return None
@@ -396,11 +567,11 @@ def verify_against_anchor(chain: str) -> str | None:
         read: the anchors are unknown, so the chain cannot be cleared.
         Anchors never lower, so a verdict does not clear itself on a later pass.
     """
-    path = _anchor_path()
-    if path is None:
+    sink = build_anchor_sink()
+    if sink is None:
         return None
     try:
-        anchored = _anchors(path).get(chain)
+        anchored = _anchors(sink).get(chain)
     except AnchorUnreadable as exc:
         return f"anchor log unreadable: {exc.error_type}"
     if anchored is None:
@@ -418,11 +589,11 @@ def anchor_report() -> dict[str, str | None] | None:
     is a single :data:`SINK_VERDICT` entry rather than an empty mapping, because
     an empty mapping reads as "nothing was anchored" - a clean verdict.
     """
-    path = _anchor_path()
-    if path is None:
+    sink = build_anchor_sink()
+    if sink is None:
         return None
     try:
-        anchored = _anchors(path)
+        anchored = _anchors(sink)
     except AnchorUnreadable as exc:
         return {SINK_VERDICT: f"anchor log unreadable: {exc.error_type}"}
     return {chain: _verdict(chain, seq, digest) for chain, (seq, digest) in anchored.items()}

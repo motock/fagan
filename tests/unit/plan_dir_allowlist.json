@@ -5,7 +5,6 @@
  "pipeline/__init__.py": 1,
  "pipeline/advance.py": 3,
  "pipeline/audit.py": 2,
- "pipeline/audit_anchor.py": 6,
  "pipeline/authorization.py": 1,
  "pipeline/checkpoint.py": 6,
  "pipeline/concurrency.py": 9,

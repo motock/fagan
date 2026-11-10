@@ -46,6 +46,12 @@ services:
       # the nats service) and binds to 127.0.0.1 there, so the broker needs no
       # credential.
       PIPELINE_EVENT_BUS: nats
+      # The pipeline starts before NATS can be listening (the nats service
+      # shares this container's network namespace, so a reverse depends_on or a
+      # healthcheck cannot express the ordering). Opt in to a short connection
+      # retry so the first reconcile ticks ride out that startup window instead
+      # of failing fast (ADR 0010; the default is 0 = disabled).
+      PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS: "30"
       PIPELINE_NATS_URL: nats://127.0.0.1:4222
       PIPELINE_NATS_MANAGE_STREAM: "1"
       PIPELINE_SCHEDULER_DAEMON: "1"

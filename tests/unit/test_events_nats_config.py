@@ -516,9 +516,14 @@ def test_a_broker_that_is_not_up_yet_defers_to_the_first_publish(
     failure is reported by ``publish`` as EventPublishError, the same typed
     error a publish timeout raises, so a call site that tolerates a failed
     publish tolerates an unreachable broker too instead of dying at
-    construction.
+    construction. The connect-retry window defaults to 0 (disabled), so a
+    publish makes exactly one connection attempt and reports the failure at
+    once; the explicit ``"0"`` below pins that intent even if the default ever
+    changes, keeping the case about the error shape rather than the window
+    (``tests/unit/test_events_nats_connect_retry.py`` covers the window).
     """
     clean_env.setenv("PIPELINE_NATS_URL", LOCAL_URL)
+    clean_env.setenv("PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS", "0")
     fake_nats.connect_error = OSError("connection refused")
 
     bus = NatsEventBus()

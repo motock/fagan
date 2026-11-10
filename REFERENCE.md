@@ -2214,6 +2214,7 @@ and — only when it is `nats` — the broker's delivery state under
 | `PIPELINE_NATS_TLS_CA_FILE` | unset | CA bundle used to verify a `nats://` connection to a non-loopback host. |
 | `PIPELINE_NATS_DURABLE_TYPES` | `notification,agent_done` | Comma-separated event types that get one durable consumer each. Unset means the default set; set-but-blank means no durable types. A listed type is handled only by its durable consumer, never also inline by the publishing process. |
 | `PIPELINE_EVENT_PUBLISH_TIMEOUT_S` | `5` | Upper bound on one publish, and on the connection dial. |
+| `PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS` | `0` | How long a publish keeps retrying a *refused* connection before it reports the broker unreachable; `0` (the default) disables the retry, so one publish is bounded by its publish timeout exactly as before. Only the connection is retried, always before anything is sent, so a publish timeout or a JetStream refusal is never retried. The `deploy/standalone/compose.yaml` stack sets `30` so the pipeline rides out the window in which it must start before NATS can listen. Read at call time; an unusable value falls back to the default with a warning. |
 | `PIPELINE_EVENT_MAX_DELIVER` | `5` | Delivery attempts before an event is dead-lettered. |
 
 `runtime.broker` maps each durable consumer (named `pipeline-<type>`) to

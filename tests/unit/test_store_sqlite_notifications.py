@@ -14,7 +14,7 @@ to pin the storage the story names: the table, its columns and its index.
 
 A notification history is a *record*, not a file: a sidecar left behind by an
 earlier file-store deployment is neither imported nor served, so the operator
-must drain or archive it before switching stores.
+must archive it before switching stores.
 """
 
 from __future__ import annotations
@@ -40,6 +40,8 @@ from pipeline.store_sqlite import SqliteStore
 
 PLAN = 'plan-a'
 OTHER_PLAN = 'plan-b'
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture()
@@ -145,17 +147,12 @@ def test_the_notifications_table_is_indexed_by_namespace_plan_and_id(db_path, re
         indexed.append(
             [
                 row['name']
-                for row in _rows(
-                    db_path, f"PRAGMA index_info('{index['name']}')"
-                )
+                for row in _rows(db_path, f"PRAGMA index_info('{index['name']}')")
             ]
         )
     assert any(
         columns[:3] == ['namespace', 'plan', 'id'] for columns in indexed
     ), f'no index on (namespace, plan, id): {indexed}'
-
-
-# -- the record view's history -------------------------------------------
 
 
 def test_an_appended_notification_is_a_row_in_the_table(db_path, records):
@@ -173,6 +170,9 @@ def test_an_appended_notification_is_a_row_in_the_table(db_path, records):
     assert json.loads(row['record']) == record
 
 
+# -- the record view's history -------------------------------------------
+
+
 def test_the_history_returns_the_records_that_were_written(records):
     """``get_notification_history`` serves the records, oldest first."""
     first = _record('first', ts='2026-01-01T00:00:00+00:00')
@@ -184,6 +184,11 @@ def test_the_history_returns_the_records_that_were_written(records):
     history, malformed = records.get_notification_history(DEFAULT_NAMESPACE, PLAN)
     assert history == [first, second]
     assert malformed == 0
+
+
+def test_the_history_of_a_plan_that_was_never_written_is_empty(records):
+    """A plan nobody notified answers ``([], 0)``."""
+    assert records.get_notification_history(DEFAULT_NAMESPACE, PLAN) == ([], 0)
 
 
 def test_the_history_of_one_plan_does_not_leak_into_another(records):
@@ -272,13 +277,12 @@ def test_the_legacy_readers_are_served_from_the_table(db_path, plan_dir):
             ),
         )
 
-        assert store.get_notifications(PLAN) == [
-            '2026-01-01T00:00:00+00:00 a notification'
-        ]
+        lines = store.get_notifications(PLAN)
         records_read = store.get_notification_records(PLAN)
     finally:
         store.close()
 
+    assert lines == ['2026-01-01T00:00:00+00:00 a notification']
     assert len(records_read) == 1
     assert records_read[0]['message'] == 'a notification'
     assert records_read[0]['severity'] == 'warning'
@@ -298,7 +302,7 @@ def test_the_legacy_readers_see_nothing_when_the_table_is_empty(db_path, plan_di
 
 
 def test_the_legacy_readers_normalize_exactly_like_the_file_store(
-    db_path, plan_dir, tmp_path
+    db_path, plan_dir, monkeypatch
 ):
     """The sqlite readers apply the file store's exact normalization."""
     fixture = [
@@ -318,26 +322,29 @@ def test_the_legacy_readers_normalize_exactly_like_the_file_store(
             event='story_parked',
             dedup_key='story-b:story_parked',
         ),
+        _record(
+            'third',
+            ts='2026-01-01T00:02:00+00:00',
+            severity='error',
+            story_key='story-c',
+            event='story_failed',
+            dedup_key='story-c:story_failed',
+        ),
     ]
 
     # The same records, read through the file store's own reader.
-    file_dir = tmp_path / 'file-plans'
+    file_dir = plan_dir / 'file-store'
     file_dir.mkdir()
-    file_store = FileStore()
-    original = pipeline.persistence.PLAN_DIR
-    pipeline.persistence.PLAN_DIR = file_dir
-    try:
-        sidecar = file_dir / f'{PLAN}.notifications.jsonl'
-        sidecar.write_text(
-            ''.join(json.dumps(record) + '\n' for record in fixture),
-            encoding='utf-8',
-        )
-        expected = {
-            limit: file_store.get_notification_records(PLAN, limit)
-            for limit in (0, 1, 101)
-        }
-    finally:
-        pipeline.persistence.PLAN_DIR = original
+    monkeypatch.setattr(pipeline.server, 'PLAN_DIR', file_dir)
+    (file_dir / f'{PLAN}.notifications.jsonl').write_text(
+        ''.join(json.dumps(record) + '\n' for record in fixture),
+        encoding='utf-8',
+    )
+    expected = {
+        limit: FileStore().get_notification_records(PLAN, limit)
+        for limit in (0, 1, 101)
+    }
+    monkeypatch.setattr(pipeline.server, 'PLAN_DIR', plan_dir)
 
     store = SqliteStore(db_path)
     try:
@@ -444,11 +451,12 @@ def test_a_record_carrying_sql_is_stored_as_data(db_path, records):
 
 def test_a_notification_appended_in_a_transaction_is_rolled_back(db_path, records):
     """A raising transaction leaves no notification row behind."""
-    with pytest.raises(RuntimeError):
-        with records.transaction(DEFAULT_NAMESPACE, PLAN) as acquired:
-            assert acquired is True
-            records.append_notification(DEFAULT_NAMESPACE, PLAN, _record('dropped'))
-            raise RuntimeError('boom')
+    with pytest.raises(RuntimeError), records.transaction(
+        DEFAULT_NAMESPACE, PLAN
+    ) as acquired:
+        assert acquired is True
+        records.append_notification(DEFAULT_NAMESPACE, PLAN, _record('dropped'))
+        raise RuntimeError('boom')
 
     assert _notification_rows(db_path) == []
     assert records.get_notification_history(DEFAULT_NAMESPACE, PLAN) == ([], 0)
@@ -462,6 +470,25 @@ def test_a_notification_appended_in_a_committed_transaction_is_served(db_path, r
 
     history, _ = records.get_notification_history(DEFAULT_NAMESPACE, PLAN)
     assert [record['message'] for record in history] == ['kept']
+
+
+def test_a_notification_is_only_visible_after_the_transaction_commits(
+    db_path, records
+):
+    """The append joins the open transaction instead of committing on its own."""
+    other = SqliteStore(db_path)
+    try:
+        with records.transaction(DEFAULT_NAMESPACE, PLAN) as acquired:
+            assert acquired is True
+            records.append_notification(DEFAULT_NAMESPACE, PLAN, _record('pending'))
+            assert (
+                other.records().get_notification_history(DEFAULT_NAMESPACE, PLAN)
+                == ([], 0)
+            )
+        history, _ = other.records().get_notification_history(DEFAULT_NAMESPACE, PLAN)
+        assert len(history) == 1
+    finally:
+        other.close()
 
 
 _CHILD = """
@@ -487,14 +514,14 @@ os._exit(1)
 """
 
 
-def _run_child(repo_root: str, db_path: str) -> int:
+def _run_child(db_path: str) -> int:
     """Run the crash child against ``db_path`` and return its exit code."""
     env = dict(os.environ)
-    env['PYTHONPATH'] = repo_root
-    script = _CHILD.format(repo=repo_root)
+    env['PYTHONPATH'] = str(REPO_ROOT)
+    script = _CHILD.format(repo=str(REPO_ROOT))
     result = subprocess.run(
         [sys.executable, '-c', script, db_path],
-        cwd=repo_root,
+        cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
@@ -506,8 +533,7 @@ def _run_child(repo_root: str, db_path: str) -> int:
 
 def test_a_crash_before_the_commit_leaves_no_notification_row(db_path, plan_dir):
     """A process that dies inside the transaction commits no notification."""
-    repo_root = str(Path(__file__).resolve().parents[2])
-    assert _run_child(repo_root, db_path) == 1
+    assert _run_child(db_path) == 1
 
     store = SqliteStore(db_path)
     try:
@@ -525,9 +551,7 @@ def test_a_crash_before_the_commit_leaves_no_notification_row(db_path, plan_dir)
 
 def _reference_text() -> str:
     """The whole of ``REFERENCE.md``."""
-    return (Path(__file__).resolve().parents[2] / 'REFERENCE.md').read_text(
-        encoding='utf-8'
-    )
+    return (REPO_ROOT / 'REFERENCE.md').read_text(encoding='utf-8')
 
 
 def test_the_reference_names_the_file_store_as_the_default_for_notifications():
@@ -542,20 +566,27 @@ def test_the_reference_names_the_file_store_as_the_default_for_notifications():
     assert 'default' in first_sentence.lower(), first_sentence
 
 
-def test_the_reference_says_the_sqlite_store_keeps_the_history_in_the_database():
+def test_the_reference_documents_the_sqlite_notification_table():
     """The sqlite store's notification history is documented as a table."""
-    text = _reference_text().lower()
-    assert 'notifications' in text
-    assert re.search(r'sqlite[^.]{0,400}notification', text, re.DOTALL), (
+    blocks = [
+        chunk for chunk in _reference_text().split('\n\n') if chunk.strip()
+    ]
+    documented = any(
+        'notification' in block.lower()
+        and 'table' in block.lower()
+        and ('sqlite' in block.lower() or 'database' in block.lower())
+        for block in blocks
+    )
+    assert documented, (
         'REFERENCE.md must document the sqlite store notification history'
     )
 
 
 def test_the_reference_says_the_legacy_sidecars_are_not_imported():
-    """The docs state that the file-store sidecars are not imported."""
+    """The docs state that the file-store notification sidecars are not imported."""
     text = _reference_text()
     assert re.search(
-        r'notifications[^.]{0,400}?(not|never|no|nothing)\b[^.]{0,200}?'
+        r'notification[^.]{0,400}?(not|never|no|nothing)\b[^.]{0,200}?'
         r'(import|migrat)',
         text,
         re.IGNORECASE | re.DOTALL,
@@ -565,21 +596,23 @@ def test_the_reference_says_the_legacy_sidecars_are_not_imported():
 def test_the_local_success_report_documents_that_sqlite_has_no_history():
     """The offline report says it cannot see a sqlite deployment's history."""
     env = dict(os.environ)
-    env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
+    env['PYTHONPATH'] = str(REPO_ROOT)
     result = subprocess.run(
         [sys.executable, 'scripts/local_success_report.py', '--help'],
-        cwd=str(Path(__file__).resolve().parents[2]),
+        cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
     )
-    help_text = result.stdout + result.stderr
+    help_text = (result.stdout + result.stderr).lower()
     reference = _reference_text().lower()
 
-    documented_in_help = 'sqlite' in help_text.lower()
-    documented_in_reference = 'sqlite' in reference and 'local_success_report' in reference
+    documented_in_help = 'sqlite' in help_text
+    documented_in_reference = 'sqlite' in reference and (
+        'local_success_report' in reference or 'local success report' in reference
+    )
 
     assert documented_in_help or documented_in_reference, (
         'the offline report must document that it sees no sqlite history'

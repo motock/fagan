@@ -80,6 +80,44 @@ computed by `canonical_digest(manifest)`:
 - The payload is JSON-serialised with sorted keys and no whitespace, then
   hashed with SHA-256. The manifest is not mutated.
 
+### 3.1 Digest version
+
+The digest binds an approval to content, but *what the digest covers* can
+change between releases. So every approval record also carries a
+`digest_version`: the value of `APPROVAL_DIGEST_VERSION` this build writes,
+and the version the record's `digest` was computed under.
+
+- A record **without** the field reads as the legacy version `1`: records
+  written before the field existed were made under version 1, so while the
+  current version is still 1 no live plan changes state.
+- **Any non-current value fails closed** — a bool (`True` is an `int`
+  subclass), a string, a float, `None`, a lower version and, importantly, a
+  *higher* version: a rolled-back build must not honour a record written by a
+  newer one.
+- `on_ingest`, `reset_if_changed` and `_decide_plan` write the current version
+  on every record they write, the decisions-log entry included.
+- `on_ingest` keeps `approved` only when the digest matches **and** the
+  previous record's version is current; `reset_if_changed` resets when the
+  digest differs **or** the version is not current.
+- `is_activatable` requires `approved` **and** a current version, so an
+  out-of-version approval never dispatches. `advance` and `dispatch` add
+  `reason: approval_digest_outdated` to their existing refusal dicts
+  (`skipped: plan_not_approved` and `error: plan is not approved`
+  respectively) so the operator learns *why* the plan stopped; a
+  current-version record keeps exactly the dicts it returned before.
+- `approve_plan` / `reject_plan` refuse an out-of-version record instead of
+  upgrading it — approving in the same call would approve content the caller
+  may never have been shown. The refusal writes no manifest, no decisions-log
+  entry and no notification; it records exactly one `refused` audit event with
+  `detail.reason` = `outdated_digest_version` and answers exactly:
+
+  ```
+  plan approval was recorded under an older digest version; run `python -m pipeline.tools.reset_outdated_approvals`, review the plan, then decide
+  ```
+
+  Recovering means resetting the record (a re-ingest or the reset tool), not
+  deciding in place.
+
 ## 4. Reset rules
 
 An approval must not outlive the content it approved. Two paths enforce that:
@@ -238,6 +276,7 @@ validated, so a refusal never reports whether a plan exists.
 | `409` | `plan is busy; retry` — the store could not acquire the plan. Retryable: no decision record was written. |
 | `409` | `plan changed since it was displayed; reload before deciding` — `digest` is stale against the plan as it is on disk now. Nothing is written, and repeating the same stale digest stays a `409`: the route never substitutes the current digest, because that would approve content the operator never saw. |
 | `409` | `plan content changed; re-ingest before approving` — the stored approval digest no longer matches the content. |
+| `409` | `plan approval was recorded under an older digest version; run python -m pipeline.tools.reset_outdated_approvals, review the plan, then decide` — the stored record's `digest_version` is not the current one (see §3.1). The refusal flag is `outdated_digest_version`; nothing is written, and this refusal never falls through to the `404 plan not found`. |
 | `409` | `plan approval is not enabled` — `PIPELINE_PLAN_APPROVAL` is off. |
 | `422` | The body is invalid: missing or malformed `digest`, an extra field, or a missing, blank or over-long `reason`. |
 

@@ -3,16 +3,17 @@
 Story: remove the last direct on-disk-layout composition from
 app/dashboard.py. ``get_plan_metrics`` must stop building the notifications
 sidecar path itself (``PLAN_DIR / f"{plan_name}.notifications.jsonl"``) and
-obtain it from the same ``_service`` seam every other dashboard route uses.
+obtain the notification history from the same ``_service`` seam every other
+dashboard route uses.
 
 The seam contract pinned here: ``PipelineService`` (pipeline/service.py)
 exposes ONE narrow accessor
 
-    get_notification_sidecar_path(plan_name: str) -> Path
+    get_notification_history(plan_name: str) -> tuple[list[dict], int]
 
-returning ``<PLAN_DIR>/<plan_name>.notifications.jsonl``, and the dashboard
-endpoint calls it and feeds the result to
-``story_metrics.load_notification_records`` unchanged.
+returning the plan's notification records and the malformed-line count, read
+from the record store, and the dashboard endpoint calls it and feeds the
+records to ``story_metrics.compute_story_metrics`` unchanged.
 
 The canonical PLAN_DIR binding is ``pipeline.server.PLAN_DIR``: both
 ``app.dashboard`` and ``pipeline.store`` read the name through a LiveRef
@@ -29,7 +30,6 @@ values the local composition produced.
 """
 import inspect
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -90,25 +90,30 @@ VALID_SIDECAR_LINES = [
 
 
 # ---------------------------------------------------------------------------
-# The seam itself: PipelineService.get_notification_sidecar_path
+# The seam itself: PipelineService.get_notification_history
 # ---------------------------------------------------------------------------
 
-def test_service_accessor_returns_canonical_sidecar_path(plan_dir):
-    """The accessor returns <PLAN_DIR>/<plan>.notifications.jsonl as a Path.
+def test_service_accessor_returns_the_store_history(plan_dir):
+    """The accessor returns (records, malformed) for the plan from the store.
 
     plan_dir patches ONLY pipeline.server.PLAN_DIR, so this passes only if
-    the accessor resolves the canonical (LiveRef) binding at call time.
+    the store the accessor delegates to resolves the canonical (LiveRef)
+    binding at call time.
     """
-    result = dashboard._service.get_notification_sidecar_path("alpha")
-    assert isinstance(result, Path), "accessor must return a Path"
-    assert result == plan_dir / "alpha.notifications.jsonl"
+    _write_manifest(plan_dir, "alpha")
+    _write_sidecar(plan_dir, "alpha", VALID_SIDECAR_LINES)
+
+    records, malformed = dashboard._service.get_notification_history("alpha")
+
+    assert [record["story_key"] for record in records] == ["S1", "S1", "S2", "S2"]
+    assert malformed == 0
 
 
 def test_service_accessor_is_on_pipeline_service_class():
     """The narrow accessor lives on PipelineService itself, not an ad-hoc
     instance attribute, so every service consumer (and the dashboard's
     module-level ``_service``) sees it."""
-    assert callable(PipelineService.get_notification_sidecar_path)
+    assert callable(PipelineService.get_notification_history)
 
 
 # ---------------------------------------------------------------------------
@@ -249,20 +254,20 @@ def test_metrics_blank_and_nondict_lines_counted_as_malformed(plan_dir, client):
 
 def test_metrics_endpoint_delegates_to_service_accessor(plan_dir, client,
                                                         monkeypatch):
-    """The endpoint obtains the sidecar path by calling
-    ``_service.get_notification_sidecar_path`` — proven by spying on the
+    """The endpoint obtains the history by calling
+    ``_service.get_notification_history`` — proven by spying on the
     service instance the routes actually use."""
     _write_manifest(plan_dir, "alpha")
     _write_sidecar(plan_dir, "alpha", VALID_SIDECAR_LINES)
 
     calls = []
-    original = dashboard._service.get_notification_sidecar_path
+    original = dashboard._service.get_notification_history
 
     def spy(plan_name, *args, **kwargs):
         calls.append(plan_name)
         return original(plan_name)
 
-    monkeypatch.setattr(dashboard._service, "get_notification_sidecar_path", spy)
+    monkeypatch.setattr(dashboard._service, "get_notification_history", spy)
 
     response = client.get("/api/plans/alpha/metrics")
     assert response.status_code == 200, response.text
@@ -272,23 +277,19 @@ def test_metrics_endpoint_delegates_to_service_accessor(plan_dir, client,
 def test_metrics_endpoint_uses_accessor_return_value(plan_dir, client,
                                                      monkeypatch):
     """The endpoint feeds the ACCESSOR'S return value to the metrics
-    loader: redirecting the accessor to a different sidecar must change
+    computation: redirecting the accessor to a different history must change
     the computed metrics accordingly."""
     _write_manifest(plan_dir, "alpha")
     _write_sidecar(plan_dir, "alpha", VALID_SIDECAR_LINES)  # stories S1, S2
-    redirected = plan_dir / "redirected.notifications.jsonl"
-    redirected.write_text(
-        json.dumps(
-            {"ts": "t9", "story_key": "RX",
-             "event": "dispatch_failed", "dedup_key": "z"}
-        )
-        + "\n"
-    )
 
     def spy(plan_name, *args, **kwargs):
-        return redirected
+        return (
+            [{"ts": "t9", "story_key": "RX",
+              "event": "dispatch_failed", "dedup_key": "z"}],
+            0,
+        )
 
-    monkeypatch.setattr(dashboard._service, "get_notification_sidecar_path", spy)
+    monkeypatch.setattr(dashboard._service, "get_notification_history", spy)
 
     response = client.get("/api/plans/alpha/metrics")
     assert response.status_code == 200, response.text
@@ -311,7 +312,7 @@ def test_dashboard_source_has_no_local_sidecar_composition():
 
 def test_dashboard_get_plan_metrics_source_calls_accessor():
     """The metrics route itself references the seam accessor."""
-    assert "get_notification_sidecar_path" in inspect.getsource(
+    assert "get_notification_history" in inspect.getsource(
         dashboard.get_plan_metrics
     )
 

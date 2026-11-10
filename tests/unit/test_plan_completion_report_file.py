@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import plan_completion, story_metrics
+from pipeline import server as pipeline_server
 
 PLAN = "planreport01"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -73,6 +74,9 @@ class _Harness:
         self.report_existed_at_notify = []
 
         monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
+        # The notification history now comes from the record store, so the
+        # store is the seam this harness serves the records through.
+        monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))
@@ -98,6 +102,24 @@ class _Harness:
             monkeypatch.setattr(
                 plan_completion, "load_notification_records", fake_loader
             )
+
+        records = self
+
+        class _Records:
+            def get_journal(self, namespace, plan_name, story_key):
+                return []
+
+            def get_notification_history(self, namespace, plan_name):
+                return list(records.records_to_serve[0]), records.records_to_serve[1]
+
+        class _Store:
+            def records(self):
+                return _Records()
+
+        monkeypatch.setattr(
+            plan_completion, "build_store", lambda *a, **k: _Store()
+        )
+        monkeypatch.setattr(pipeline_server, "_store", _Store())
 
     def marker_path(self, plan_name=PLAN):
         return self.tmp_path / f"{plan_name}.plan_completed"

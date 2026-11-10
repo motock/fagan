@@ -20,11 +20,11 @@ import json
 import logging
 import os
 import subprocess
-from pathlib import Path
 from typing import Any
 
 from pipeline import cross_plan, plan_activity, wake
 from pipeline.plan_approval import PlanApprovalMixin
+from pipeline.store_records import DEFAULT_NAMESPACE
 from pipeline.telemetry import record_dispatch_attempt
 from pipeline.usage_record import scoped_story_call
 from pipeline.workspace import (
@@ -295,17 +295,16 @@ class PipelineService(PlanApprovalMixin):
         _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)
 
-    def get_notification_sidecar_path(self, plan_name: str) -> Path:
-        """Return the notifications sidecar Path for a plan (CFG-A3).
+    def get_notification_history(self, plan_name: str) -> tuple[list[dict], int]:
+        """Return ``(records, malformed)`` for a plan's notification history.
 
-        Narrow path accessor so route layers stop composing the on-disk
-        layout themselves. Reads PLAN_DIR through the module LiveRef at call
-        time — no I/O, no parsing, no state — so
-        ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` keeps
-        landing exactly as it does for the rest of the store seam.
+        Thin read-only delegator to the record store, so neither a route nor
+        a caller composes the on-disk ``<plan>.notifications.jsonl`` sidecar
+        path. ``_validate_key`` runs first: an invalid plan name is refused
+        before the store is touched.
         """
         _validate_key(plan_name)
-        return PLAN_DIR / f"{plan_name}.notifications.jsonl"
+        return _store.records().get_notification_history(DEFAULT_NAMESPACE, plan_name)
 
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]

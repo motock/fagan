@@ -20,12 +20,12 @@ best effort: a write failure is logged and does not block the notification.
 
 import logging
 
+from . import server as _server
 from .paths import PLAN_DIR
 from .persistence import _notify_user
 from .plan_summary import format_plan_summary
 from .store import build_store
 from .store_records import InvalidRecordKeyError
-from .story_metrics import load_notification_records
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +93,8 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
         ):
             return False
 
-        records = load_notification_records(
-            PLAN_DIR / f"{plan_name}.notifications.jsonl"
+        records = _server._store.records().get_notification_history(
+            _NAMESPACE, plan_name
         )[0]
         summary = format_plan_summary(
             plan_name, _with_journals(plan_name, manifest), records

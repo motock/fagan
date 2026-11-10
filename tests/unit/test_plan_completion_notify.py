@@ -23,6 +23,7 @@ import logging
 import pytest
 
 from pipeline import plan_completion, story_metrics
+from pipeline import server as pipeline_server
 
 PLAN = "plannotify02"
 
@@ -47,8 +48,12 @@ class _Harness:
         self.summary_calls = []
         self.loader_paths = []
         self.records_to_serve = ([{"event": "story_done", "story_key": "s1"}], 0)
+        self.history_reads = []
 
         monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
+        # The notification history now comes from the record store, so the
+        # store is the seam this harness serves the records through.
+        monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))
@@ -72,6 +77,25 @@ class _Harness:
             monkeypatch.setattr(
                 plan_completion, "load_notification_records", fake_loader
             )
+
+        records = self
+
+        class _Records:
+            def get_journal(self, namespace, plan_name, story_key):
+                return []
+
+            def get_notification_history(self, namespace, plan_name):
+                records.history_reads.append((namespace, plan_name))
+                return list(records.records_to_serve[0]), records.records_to_serve[1]
+
+        class _Store:
+            def records(self):
+                return _Records()
+
+        monkeypatch.setattr(
+            plan_completion, "build_store", lambda *a, **k: _Store()
+        )
+        monkeypatch.setattr(pipeline_server, "_store", _Store())
 
     def marker_path(self, plan_name=PLAN):
         return self.tmp_path / f"{plan_name}.plan_completed"
@@ -113,11 +137,12 @@ def test_formatter_receives_plan_manifest_and_loader_records(harness):
     summary_plan, summary_manifest, summary_records = harness.summary_calls[0]
     assert summary_plan == PLAN
     assert summary_manifest is manifest
-    # Records are exactly what load_notification_records returned (its first
-    # tuple element), not the malformed count or a re-wrapped dict.
+    # Records are exactly what the record store served (its first tuple
+    # element), not the malformed count or a re-wrapped dict.
     assert summary_records == harness.records_to_serve[0]
-    # The loader reads this plan's JSONL sidecar under the (patched) PLAN_DIR.
-    assert harness.loader_paths == [harness.tmp_path / f"{PLAN}.notifications.jsonl"]
+    # The history is read from the record store, for this plan, in the
+    # default namespace.
+    assert harness.history_reads == [("default", PLAN)]
 
 
 def test_single_story_done_boundary(harness):

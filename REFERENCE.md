@@ -2804,10 +2804,11 @@ label-free because plan names and story keys are unbounded, are tracked in the
 process that saw the start, and record nothing when it did not, so they are
 lossy by contract the same way the trace attribution above is.
 
-The usage instruments project the usage JSONL onto metrics; that JSONL stays the
-billing-grade source of truth, and the metrics are a lossy projection of it, so
-their sums need not match its totals. Zero is a real measurement and is
-exported; only a missing value drops a sample.
+The usage instruments project the usage record (the `<plan>.usage.jsonl` file
+with the file store, the `usage` table with SqliteStore) onto metrics; the usage
+record stays the billing-grade source of truth, and the metrics are a lossy
+projection of it, so their sums need not match its totals. Zero is a real
+measurement and is exported; only a missing value drops a sample.
 
 ### Health probes and liveness thresholds (`/livez`, `/readyz`)
 

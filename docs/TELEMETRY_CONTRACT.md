@@ -115,11 +115,12 @@ them.
 | `fagan.usage.cost` | `USD` | `role`, `backend`, `model` | `harness` only |
 | `fagan.usage.call.duration` | `ms` | `role`, `backend` | `harness` only |
 
-The usage JSONL remains the billing-grade source of truth. These metrics are
-lossy projections of it: a sample is dropped when a field is missing or
-malformed, and a record is exported only while the process that recorded it
-holds the instrument, so sums over the metrics need not agree with the JSONL
-totals.
+The usage metrics are lossy projections of the usage record (the
+`<plan>.usage.jsonl` file with the file store, the `usage` table with
+SqliteStore), which stays the billing-grade source of truth. A sample is dropped
+when a field is missing or malformed, and a record is exported only while the
+process that recorded it holds the instrument, so sums over the metrics need not
+agree with the record's totals.
 
 ## Trace propagation
 
@@ -230,3 +231,11 @@ reports `default`. Core is therefore not a multi-tenant router. A hosted
 enterprise deployment that serves several organizations supplies real
 namespaces, one per team, through its own store plugin; the retention and
 deletion rules above apply per namespace in either case.
+
+**Open question.** The sqlite store keeps usage in an append-only `usage` table:
+nothing in core rewrites or deletes a usage row, because a billing-grade record
+may not be. Retention per namespace is therefore not implemented for that
+table yet, and the deletion rule above applies today to the file store's
+`<plan>.usage.jsonl` sidecars and to the telemetry backend. How a sqlite
+deployment expires a namespace's usage records -- without an `UPDATE` or
+`DELETE` against rows already served as billing evidence -- is unresolved.

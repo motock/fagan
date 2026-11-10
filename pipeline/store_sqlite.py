@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pipeline import store_sqlite_notifications, store_sqlite_outbox
+from pipeline import store_sqlite_notifications, store_sqlite_outbox, store_sqlite_usage
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
@@ -576,27 +576,25 @@ class SqliteRecords(
 
     # -- usage records -------------------------------------------------
     def get_usage(self, namespace: str, plan_name: str) -> list[dict]:
-        """Return the plan's usage records, in the order they were written.
+        """Return the plan's usage records from the ``usage`` table, in id order.
 
-        Usage is a JSONL sidecar this store does not own, so the read is
-        delegated to the record view of the internal file store -- the same
-        delegate ``get_journal`` reads through -- which resolves the directory
-        its own writer appended to on every call.
+        Each record's keys are exactly :data:`USAGE_RECORD_FIELDS`. A database
+        that never recorded usage serves an empty history: the read never
+        creates the table.
         """
         self._namespace(namespace)
-        validate_plan_name(plan_name)
-        return self._store._files.records().get_usage(namespace, plan_name)
+        return store_sqlite_usage.read_usage_rows(self._store, namespace, plan_name)
 
     def append_usage(self, namespace: str, plan_name: str, record: dict) -> None:
-        """Append one usage record through the file store's record view.
+        """Append one usage record to the ``usage`` table.
 
-        Delegated exactly like :meth:`get_usage` so the append lands in the same
-        sidecar the read parses; the delegate validates the record before it
-        writes anything, so an invalid record changes nothing.
+        The record is validated before any SQL runs, so a rejected record
+        leaves the table unchanged; the insert runs on the store's connection,
+        so an append made inside :meth:`transaction` joins that transaction and
+        rolls back with it.
         """
         self._namespace(namespace)
-        validate_plan_name(plan_name)
-        self._store._files.records().append_usage(namespace, plan_name, record)
+        store_sqlite_usage.append_usage_row(self._store, namespace, plan_name, record)
 
     # The notification history is the store's ``notifications`` table, served
     # by ``NotificationHistoryMixin`` (pipeline/store_sqlite_notifications.py):

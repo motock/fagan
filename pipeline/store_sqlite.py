@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pipeline import store_sqlite_outbox
+from pipeline import store_sqlite_notifications, store_sqlite_outbox
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
@@ -80,7 +80,7 @@ _SCHEMA = (
 _JOURNAL_OPTIONAL_FIELDS = ("step", "summary", "next_hint")
 
 
-class SqliteStore:
+class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
     """A database-backed ``Store`` for a single host.
 
     The database is the record for plan manifests: each one is stored as JSON
@@ -148,6 +148,11 @@ class SqliteStore:
             # decision 9), created here so an append inside the first
             # transaction of a brand-new file already has its table.
             store_sqlite_outbox.ensure_schema(self._conn)
+            # The notification history is a table too (ADR 0012 decision 9),
+            # created here for the same reason: the table an append inside the
+            # first transaction of a brand-new file writes must not be created
+            # by that transaction, where a rollback would take it away.
+            store_sqlite_notifications.ensure_schema(self._conn)
         # The filesystem half is always the file store, whatever PIPELINE_STORE
         # selects for this process.
         self._files = build_store({"PIPELINE_STORE": "file"})
@@ -440,12 +445,6 @@ class SqliteStore:
                     DEFAULT_NAMESPACE, plan_name, story_key
                 )
 
-    def get_notifications(self, plan_name: str) -> list[str]:
-        return self._files.get_notifications(plan_name)
-
-    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
-        return self._files.get_notification_records(plan_name, limit)
-
     def get_decisions(self, plan_name: str) -> list[dict]:
         return self._files.get_decisions(plan_name)
 
@@ -482,7 +481,11 @@ class SqliteStore:
         self._files.set_active_workspace(path)
 
 
-class SqliteRecords(OutboxContract, OutboxSummaryContract):
+class SqliteRecords(
+    store_sqlite_notifications.NotificationHistoryMixin,
+    OutboxContract,
+    OutboxSummaryContract,
+):
     """The namespaced record view of a :class:`SqliteStore` (ADR 0012 stage A).
 
     Every operation is a view of a legacy ``SqliteStore`` call, so the record
@@ -595,43 +598,11 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         self._store._files.records().append_usage(namespace, plan_name, record)
 
-    # -- notification history ------------------------------------------
-    def append_notification(
-        self, namespace: str, plan_name: str, record: dict
-    ) -> None:
-        """Append one notification to ``plan_name``'s history.
-
-        Delegates to the file view: a notification's two on-disk
-        representations are the plan's sidecars, and the record API is a view
-        of the legacy API on this store (``get_notifications`` /
-        ``get_notification_records`` read the same files), so a notification
-        written here must be the one those readers serve.
-        """
-        self._namespace(namespace)
-        validate_plan_name(plan_name)
-        self._store._files.records().append_notification(
-            namespace, plan_name, record
-        )
-
-    def get_notification_history(
-        self, namespace: str, plan_name: str
-    ) -> tuple[list[dict], int]:
-        """Return ``plan_name``'s notification records and a malformed count."""
-        self._namespace(namespace)
-        validate_plan_name(plan_name)
-        return self._store._files.records().get_notification_history(
-            namespace, plan_name
-        )
-
-    def get_notification_lines(
-        self, namespace: str, plan_name: str, limit: int = 100
-    ) -> list[str]:
-        """Return the last ``limit`` notification lines, each ``f'{ts} {message}'``."""
-        self._namespace(namespace)
-        validate_plan_name(plan_name)
-        return self._store._files.records().get_notification_lines(
-            namespace, plan_name, limit
-        )
+    # The notification history is the store's ``notifications`` table, served
+    # by ``NotificationHistoryMixin`` (pipeline/store_sqlite_notifications.py):
+    # a row written here inside ``transaction()`` commits or rolls back with
+    # the manifest row, and the store's legacy readers serve the same table
+    # (ADR 0012 decision 9).
 
     def get_journal(
         self, namespace: str, plan_name: str, story_key: str

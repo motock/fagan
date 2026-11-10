@@ -79,6 +79,7 @@ computed by `canonical_digest(manifest)`:
   story moving from `todo` to `done` does not revoke an approval.
 - The payload is JSON-serialised with sorted keys and no whitespace, then
   hashed with SHA-256. The manifest is not mutated.
+- A story's `epic` and authored `plan_key`, and the plan's `plan_epics`, `preflight_override` and `repo_url`, are recorded on the manifest but are not plan-defining and do not reset approval.
 
 ### 3.1 Digest version
 

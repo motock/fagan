@@ -150,9 +150,8 @@ def _two_epic_plan(repo_root: Path) -> list[dict]:
 def test_manifest_records_description_epic_plan_key_and_plan_epics(
     manifest_plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
 ) -> None:
-    _write_plan(
-        manifest_plan_dir, "descriptive", _repo(tmp_path), _two_epic_plan(_repo(tmp_path))
-    )
+    repo = _repo(tmp_path)
+    _write_plan(manifest_plan_dir, "descriptive", repo, _two_epic_plan(repo))
 
     result = ingest_mod._ingest_plan_impl("descriptive")
 

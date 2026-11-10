@@ -1,4 +1,8 @@
 {
+  "tests/unit/test_audit_chain.py": [
+    33,
+    36
+  ],
   "tests/unit/test_comms_landing_redesign.py": [
     35
   ],

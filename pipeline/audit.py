@@ -17,7 +17,6 @@ secrets. ``detail`` is for short structural fields: a digest, a role, a sha.
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import logging
 import os
@@ -25,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import persistence
+from . import audit_chain, persistence
 from .actor import actor_id, client_id, current_correlation_id, principal_type
 
 logger = logging.getLogger("pipeline.audit")
@@ -43,13 +42,13 @@ def audit_path(plan_name: str) -> Path:
 
 
 def _canonical(record: dict[str, Any]) -> str:
-    return json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
+    """The canonical JSON the hash is computed over (see ``audit_chain``)."""
+    return audit_chain.canonical(record)
 
 
 def _record_hash(record: dict[str, Any]) -> str:
-    """Hash every field except the record's own ``hash``."""
-    payload = {key: value for key, value in record.items() if key != "hash"}
-    return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+    """Hash every field except the record's own ``hash`` (see ``audit_chain``)."""
+    return audit_chain.record_hash(record)
 
 
 def _tail(path: Path) -> dict[str, Any] | None:
@@ -130,9 +129,7 @@ def _append_at(
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         previous = _tail(path)
-        record: dict[str, Any] = {
-            "seq": 0 if previous is None else int(previous.get("seq", 0)) + 1,
-            "prev_hash": "" if previous is None else previous.get("hash", ""),
+        body: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(),
             "actor": actor_id(),
             "principal_type": principal_type(),
@@ -143,7 +140,7 @@ def _append_at(
             "target": dict(target or {}),
             "detail": dict(detail or {}),
         }
-        record["hash"] = _record_hash(record)
+        record = audit_chain.link(previous, body)
         os.write(fd, (_canonical(record) + "\n").encode("utf-8"))
         return record
     finally:
@@ -200,23 +197,13 @@ def _verify_chain_at(path: Path) -> int | None:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
         return None
-    previous_hash = ""
-    index = 0
+    entries: list[dict[str, Any] | None] = []
     for line in lines:
         if not line.strip():
             continue
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            return index
-        if not isinstance(record, dict):
-            return index
-        if record.get("seq") != index:
-            return index
-        if record.get("prev_hash") != previous_hash:
-            return index
-        if record.get("hash") != _record_hash(record):
-            return index
-        previous_hash = str(record.get("hash", ""))
-        index += 1
-    return None
+            record = None
+        entries.append(record if isinstance(record, dict) else None)
+    return audit_chain.verify_entries(entries)

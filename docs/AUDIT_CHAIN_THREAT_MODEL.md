@@ -22,8 +22,10 @@ Four classes of record are in scope.
   is a hash chain and not merely a log.
 - The host chain: `.audit.host.jsonl` (`HOST_AUDIT_FILE` in
   `pipeline/audit.py`), the same record shape for ticks that are not bound to a
-  plan. Its chain key inside the anchor log and inside the `AuditLog` is
-  `HOST_CHAIN_ID` `"@host"`.
+  plan. In today's anchor log it is keyed `HOST_CHAIN` `"host"`
+  (`pipeline/audit_anchor.py`, used by `_chain_streams` and `_stream_for`), the
+  same string a plan named `host` would use; Known gaps (i) states that collision
+  and how this plan closes it.
 - The decisions chains: `<plan>.decisions.chain.jsonl`, the hash-chained record
   of review/approve/merge/refuse decisions defined by ADR 0014. They are held to
   the same append-only and hash-chain rules as the audit chains and are anchored
@@ -51,10 +53,16 @@ write.
 
 `pipeline/audit.py _verify_chain_at` walks a chain from seq 0 and checks all
 three links a tamper breaks: the running `seq`, the `prev_hash` carried from the
-previous line, and each line's own `hash`. It returns the `seq` of the first bad
-record — not the last good one, not the end of the file — and `None` when the
-stream is intact. `verify_audit_chain` surfaces that position to the caller and
-the `verify` tool prints it.
+previous line, and each line's own `hash`, plus a JSON parse of the line. It
+returns the 0-based record position of the first bad record — not the last good
+one, not the end of the file — and `None` when the stream is intact.
+`verify_audit_chain` surfaces that position to the caller and the `verify` tool
+prints it; `REFERENCE.md` words the same value as "the index of the first
+altered record". On a well-formed prefix the position and the record's own `seq`
+are the same number, which is why the two are loosely called the same thing;
+where a line is duplicated, missing or out of order, read the returned number as
+the position of the first line that is out of step (a file `0,1,1,2` returns 2,
+the position of the offending line, and `0,2` returns 1).
 
 - Edited record: editing the payload at seq 1 in a chain `0,1,2` changes the
   record's `hash`, so the stored hash no longer matches the recomputed one and

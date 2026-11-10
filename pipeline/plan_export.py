@@ -199,3 +199,42 @@ def render_plan_document(manifest: dict) -> dict:
         for epic_name in _epic_order(manifest, epic_order)
     ]
     return document
+
+
+class PlanExportMixin:
+    """Mixed into ``PipelineService``: read a plan back as a plan document."""
+
+    def export_plan(self, plan_name: str) -> dict[str, Any]:
+        """Render *plan_name*'s plan document from its ingested manifest.
+
+        The document is rendered on demand (ADR 0012 decision 5): the manifest
+        is the plan record, so the ``save_plan``-shaped document is derived
+        from it rather than stored a second time and left to drift. Runtime
+        state never reaches the export; see this module's docstring for what is
+        kept and dropped, and why the round trip matters for plan approval
+        (ADR 0007).
+
+        The plan name is validated before the manifest is read, so an invalid
+        name is a validation refusal and never a store lookup.
+
+        Args:
+            plan_name: the plan's name, as passed to
+                ``save_plan``/``ingest_plan`` and as returned by ``list_plans``.
+
+        Returns:
+            ``{'ok': True, 'plan': <document>}``, or ``{'ok': False, 'error':
+            'Plan not found'}`` for a plan that was never ingested.
+        """
+        # Resolved here, not at module import: pipeline.server owns both
+        # bindings, and importing module_ref at import time would import
+        # pipeline.service, which imports this module (a cycle). Resolving at
+        # call time also keeps tests that patch pipeline.server._store landing.
+        from . import server as server_module
+
+        server_module._validate_key(plan_name)
+        manifest = server_module._store.records().get_manifest(
+            "default", plan_name
+        )
+        if manifest is None:
+            return {"ok": False, "error": "Plan not found"}
+        return {"ok": True, "plan": render_plan_document(manifest)}

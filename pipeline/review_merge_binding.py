@@ -197,6 +197,36 @@ def refuse(
     }
 
 
+# How many times the scheduler may automatically send a stale APPROVE back
+# through `review_story` before parking the story for a human. b4 evidence
+# (2026-11-09/10): at 09:30:16 the story parked with "approved e698038a but the
+# branch head is 62dfcaf3" because the head moved after the APPROVE (the agent's
+# review-fix push at 09:27:45). The recovery was a manual forced re-review,
+# which APPROVED the new head - `deny`'s premise that "nothing a retry does can
+# re-earn the review" is false, `review_story` exists. Two automatic attempts
+# covers the ordinary fix-then-approve-then-push cycle without looping.
+REVIEW_REBIND_MAX_ATTEMPTS = 2
+
+
+def binding_denial_action(story: object, rebind_attempts: object) -> str:
+    """What to do when ``check`` denies the merge: re-review, or park?
+
+    Pure: reads the story, never mutates it and never persists anything.
+    ``"rereview"`` while an APPROVE can still be re-earned (below the cap);
+    ``"park"`` for any non-APPROVE verdict (a rejection needs a human, not a
+    silent re-review) and once the ladder is exhausted.
+    """
+    fields = story if isinstance(story, dict) else None
+    verdict = fields.get("review_verdict") if fields is not None else None
+    try:
+        attempts = int(rebind_attempts or 0)
+    except (TypeError, ValueError):
+        attempts = REVIEW_REBIND_MAX_ATTEMPTS
+    if verdict == "APPROVE" and attempts < REVIEW_REBIND_MAX_ATTEMPTS:
+        return "rereview"
+    return "park"
+
+
 def deny(
     plan_name: str,
     story_key: str,
@@ -207,10 +237,14 @@ def deny(
 ) -> None:
     """Scheduler-side refusal: audit, park the story, tell the human.
 
-    Parking (not the merge gate's retry-then-fail loop) is the right terminal
-    state for a stale approval: nothing the scheduler does on a retry can
-    re-earn the review, so retrying would only burn ``merge_attempts`` and
-    then mark a known-good branch failed. ``review_story`` is the way back.
+    Parking is the terminal state for a refusal the scheduler cannot clear by
+    itself. A stale APPROVE no longer lands here on the first mismatch: the
+    advance path routes it back through ``review_story`` automatically (see
+    ``binding_denial_action``), so ``deny`` runs only for a non-APPROVE verdict
+    - a rejection needs a human, not a silent re-review - or once the automatic
+    re-review ladder is spent (``REVIEW_REBIND_MAX_ATTEMPTS``). Retrying from
+    here would only burn ``merge_attempts`` and then mark a known-good branch
+    failed; a manual forced re-review via ``review_story`` is the way back.
     """
     refusal = refuse(plan_name, story_key, story, branch_head, result)
     _rv_job = story.pop("merge_reverify", None)
@@ -292,6 +326,8 @@ def _git(args: list, cwd: str | None) -> subprocess.CompletedProcess | None:
 
 __all__ = [
     "RERUN",
+    "REVIEW_REBIND_MAX_ATTEMPTS",
+    "binding_denial_action",
     "branch_head_sha",
     "check",
     "rebind_after_pipeline_push",

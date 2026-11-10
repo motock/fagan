@@ -424,6 +424,8 @@ def _merge_reverify_gate(
 
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     from .review_merge_binding import (
+        REVIEW_REBIND_MAX_ATTEMPTS,
+        binding_denial_action,
         branch_head_sha,
         check,
         deny,
@@ -535,6 +537,48 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         head = branch_head_sha(gate_branch)
         binding = check(story, head)
         if not binding["ok"]:
+            # b4 evidence (2026-11-09/10): the recovery from a stale approval
+            # was a MANUAL forced re-review, which APPROVED the new head -
+            # `deny`'s premise that a retry cannot re-earn the review is
+            # false, `review_story` exists. So an APPROVE whose head simply
+            # moved is sent back through the normal review path (up to
+            # REVIEW_REBIND_MAX_ATTEMPTS times); anything else parks as today.
+            if (
+                binding_denial_action(story, story.get("review_rebind_attempts", 0))
+                == "rereview"
+                # The b4 shape is a head that moved AFTER an approval: the
+                # evidence is a recorded `last_reviewed_sha` (written when a
+                # review cycle graded a head). With no such record the approval
+                # never covered this branch head at all - not something a
+                # re-review of the SAME unchanged state can remedy - so the
+                # gate parks exactly as it did before this change.
+                and story.get("last_reviewed_sha")
+            ):
+                # Back to the review path. BOTH shas must go: a surviving
+                # review_verdict_sha would let the OLD approval cover the NEW
+                # head, and a surviving last_reviewed_sha would make the
+                # re-review skip the head as "unchanged since the last review".
+                story["status"] = "tests_passed"
+                story.pop("review_verdict_sha", None)
+                story.pop("last_reviewed_sha", None)
+                story["review_rebind_attempts"] = (
+                    story.get("review_rebind_attempts", 0) + 1
+                )
+                _notify_user(
+                    plan_name,
+                    f"{key} review_rebind: the branch head moved after the "
+                    f"approval ({(head or '')[:8]}); re-reviewing it "
+                    f"automatically, attempt "
+                    f"{story['review_rebind_attempts']}/{REVIEW_REBIND_MAX_ATTEMPTS}.",
+                    event="review_rebind",
+                    story_key=key,
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+                continue
             deny(plan_name, key, story, head, binding, summary)
             continue
         gate_error = ""

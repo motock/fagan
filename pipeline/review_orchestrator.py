@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path as _Path  # likewise; `Path` below is a _ServerRef
 from typing import Any
 
-from . import git_ops
+from . import git_ops, parsers
 from .branch_names import story_branch
 from .parsers import _is_transient_backend_exception
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
@@ -479,7 +479,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         )
 
     bind_verdict(story, verdict, before_sha, datetime.now(UTC))
-    story["review_deferred_count"] = 0
+    story.update(review_deferred_count=0, **({"review_rebind_attempts": 0} if verdict == "APPROVE" else {}))  # a fresh APPROVE restarts the merge gate's stale-approval re-review ladder (b4)
 
     # High-risk stories require an additional security-engineer pass; both
     # must APPROVE before the story proceeds to pr_open.
@@ -628,7 +628,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # here (not merged into the UNKNOWN branch above) because it applies
     # equally to a content-free REQUEST_CHANGES from either the ordinary
     # reviewer or a security-reviewer override.
-    if verdict == "REQUEST_CHANGES" and not _has_review_findings(reviewer_output):
+    if verdict == "REQUEST_CHANGES" and (not _has_review_findings(reviewer_output) or (len(reviewer_output) > parsers.UNFOCUSED_REQUEST_CHANGES_MIN_CHARS and not parsers.findings_are_parseable(reviewer_output))):
         inconclusive = story.get("review_inconclusive_count", 0) + 1
         story["review_inconclusive_count"] = inconclusive
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:

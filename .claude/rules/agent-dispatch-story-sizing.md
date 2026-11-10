@@ -171,5 +171,10 @@ conflict class; do it at plan-authoring time, not at merge time.
   verify commands, test names, and negative/boundary cases. Rewrite every
   `dependencies` entry to the new summary strings, and give each combined story
   one explicit `key` from the stories it absorbs.
-- Re-check the plan after authoring: `ingest_plan` reports `file_overlaps` for
+- Set each combined story's `files` to the UNION of the absorbed stories' files,
+  docs and registration modules included (see `pipeline-story-schema.md`, "Declare
+  `files` from where the code actually lives", items 7-9). Rebuilding it from the
+  code alone parked a b5 story on the scope gate.
+- Run `.claude/rules/check_plan_files.py` on the manifest before ingest, then
+  re-check the plan after authoring: `ingest_plan` reports `file_overlaps` for
   concurrently-dispatchable stories — it must be empty.

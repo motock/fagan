@@ -21,7 +21,10 @@ import pipeline.persistence
 import pipeline.server
 from pipeline import notification_outbox, paths
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
-from pipeline.store_contract_transactions import TransactionContract
+from pipeline.store_contract_transactions import (
+    AtomicTransactionContract,
+    TransactionContract,
+)
 from pipeline.store_records import DEFAULT_NAMESPACE, UnknownNamespaceError
 from pipeline.store_sqlite import SqliteStore
 from tests.unit._store_outbox_helpers import SingleNamespaceOutboxBehaviour
@@ -136,6 +139,32 @@ class TestSqliteRecordsOutbox(SingleNamespaceOutboxBehaviour):
         # See tests/unit/test_store_file_records.py: the outbox path
         # resolution reads ``paths`` as a package attribute.
         monkeypatch.setattr(pipeline_package, 'paths', paths)
+
+    @pytest.fixture(autouse=True)
+    def _store(self, db_path, plan_dir):
+        """A ``records()`` view on a fresh database, closed after the test."""
+        store = SqliteStore(db_path)
+        self._store = store.records()
+        try:
+            yield self._store
+        finally:
+            close = getattr(store, 'close', None)
+            if close is not None:
+                close()
+
+    def make_store(self):
+        return self._store
+
+
+class TestSqliteRecordsOutboxAtomic(
+    SingleNamespaceOutboxBehaviour, AtomicTransactionContract
+):
+    """The outbox and atomic-transaction contracts on the sqlite record view.
+
+    The outbox queues are rows in the database, so a write made inside
+    ``transaction()`` commits or rolls back with the manifest row it belongs
+    to: the store declares the atomic tier and behaves like it.
+    """
 
     @pytest.fixture(autouse=True)
     def _store(self, db_path, plan_dir):

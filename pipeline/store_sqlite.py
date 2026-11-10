@@ -1,9 +1,15 @@
 """``SqliteStore``: the single-host database ``Store`` (ADR 0008 stage 2a).
 
 The database holds the store's records -- manifests as JSON in a ``TEXT``
-column -- while everything that is natively a filesystem object is delegated to
-an internal file store. ``build_store`` selects it with ``PIPELINE_STORE`` and
-``PIPELINE_STORE_PATH``.
+column, and the per-channel notification outbox as one row per queued record --
+while everything that is natively a filesystem object (the story log, worktree
+files, the recent/active workspace records and the manifest's on-disk
+projection) is delegated to an internal file store. ``build_store`` selects it
+with ``PIPELINE_STORE`` and ``PIPELINE_STORE_PATH``.
+
+Because the outbox is a table written on the store's own connection, an append
+made inside :meth:`SqliteStore.transaction` joins the open ``BEGIN IMMEDIATE``
+and commits or rolls back with the manifest row that produced it.
 
 Opening a database is a configuration decision, so it validates its inputs
 before touching disk: a relative path would resolve against whatever directory
@@ -24,11 +30,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pipeline import store_sqlite_outbox
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store import build_store
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
+    InvalidRecordKeyError,
     UnknownNamespaceError,
     validate_channel,
     validate_namespace,
@@ -136,12 +144,21 @@ class SqliteStore:
             # must be set outside any transaction.
             self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
             self._conn.execute(_SCHEMA)
+            # The outbox queues are tables in the same database (ADR 0012
+            # decision 9), created here so an append inside the first
+            # transaction of a brand-new file already has its table.
+            store_sqlite_outbox.ensure_schema(self._conn)
         # The filesystem half is always the file store, whatever PIPELINE_STORE
         # selects for this process.
         self._files = build_store({"PIPELINE_STORE": "file"})
         # Manifests written inside a transaction are projected to disk when it
         # commits, so a rolled-back transaction leaves no trace on disk.
         self._pending_projection: dict[str, dict[str, Any]] = {}
+        # Journals are file sidecars this store does not own, so a write made
+        # inside a transaction is buffered and applied only when the outermost
+        # block commits -- a rollback discards it, which is what declaring the
+        # atomic tier promises. ``None`` is a clear.
+        self._pending_journal: list[tuple[str, str, dict[str, Any] | None]] = []
         self._depth = 0
 
     # -- lifecycle ---------------------------------------------------------
@@ -377,14 +394,23 @@ class SqliteStore:
             except BaseException:
                 self._depth = 0
                 self._pending_projection.clear()
+                self._pending_journal.clear()
                 self._conn.execute("ROLLBACK")
                 raise
             else:
                 pending, self._pending_projection = self._pending_projection, {}
+                pending_journal, self._pending_journal = self._pending_journal, []
                 self._depth = 0
                 self._conn.execute("COMMIT")
                 for plan, manifest in pending.items():
                     self._files.save_manifest(plan, manifest)
+                for plan, story_key, record in pending_journal:
+                    if record is None:
+                        self._files.records().clear_journal(
+                            DEFAULT_NAMESPACE, plan, story_key
+                        )
+                    else:
+                        self._files.append_journal(plan, story_key, record)
         finally:
             self._guard.release()
 
@@ -398,7 +424,21 @@ class SqliteStore:
     def append_journal(
         self, plan_name: str, story_key: str, record: dict[str, Any]
     ) -> None:
-        self._files.append_journal(plan_name, story_key, record)
+        with self._guard:
+            if self._depth:
+                self._pending_journal.append((plan_name, story_key, record))
+            else:
+                self._files.append_journal(plan_name, story_key, record)
+
+    def clear_journal(self, plan_name: str, story_key: str) -> None:
+        """Delete a story's journal, deferred when a transaction is open."""
+        with self._guard:
+            if self._depth:
+                self._pending_journal.append((plan_name, story_key, None))
+            else:
+                self._files.records().clear_journal(
+                    DEFAULT_NAMESPACE, plan_name, story_key
+                )
 
     def get_notifications(self, plan_name: str) -> list[str]:
         return self._files.get_notifications(plan_name)
@@ -452,9 +492,10 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
     anything is written.
     """
 
-    #: Ordered for now: its outbox still delegates to the file store, so the
-    #: next story flips this to ``True`` (ADR 0012 decision 9).
-    atomic_transactions = False
+    #: The outbox queues are rows in the store's own database, so a write made
+    #: inside ``transaction()`` commits or rolls back with the manifest row
+    #: (ADR 0012 decision 9).
+    atomic_transactions = True
 
     def __init__(self, store: SqliteStore):
         self._store = store
@@ -643,7 +684,7 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_story_key(story_key)
-        self._store._files.records().clear_journal(namespace, plan_name, story_key)
+        self._store.clear_journal(plan_name, story_key)
 
     # -- journal activity ----------------------------------------------
     def get_journal_updated_at(
@@ -668,21 +709,24 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
         self._namespace(namespace)
         validate_plan_name(plan_name)
         return self._store._files.records().list_journal_keys(namespace, plan_name)
-
-    # -- per-channel outbox queues (ADR 0012 decision 3) ----------------
-    # The queues are delegated to the record view of the file store this store
-    # keeps for its manifest projections; the tables that will hold them arrive
-    # with the story that commits an outbox row with the state change.
+    # -- per-channel outbox queues (ADR 0012 decisions 3 and 9) ----------
+    # The queues are rows in the store's own ``outbox`` table, written on the
+    # store's single connection. Inside ``transaction()`` the write joins the
+    # open ``BEGIN IMMEDIATE``, so an append commits or rolls back with the
+    # manifest row that produced it; outside one it is its own statement.
     def append_outbox(
         self, namespace: str, plan_name: str, channel: str, record: dict
     ) -> None:
-        """Queue ``record`` on the ``(plan_name, channel)`` outbox spool."""
+        """Queue ``record`` on the ``(plan_name, channel)`` outbox table."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_channel(channel)
-        self._store._files.records().append_outbox(
-            namespace, plan_name, channel, record
-        )
+        if not isinstance(record, dict):
+            raise TypeError('record must be a dict')
+        with self._store._guard:
+            store_sqlite_outbox.append(
+                self._store._conn, namespace, plan_name, channel, record
+            )
 
     def read_outbox(
         self,
@@ -695,9 +739,10 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_channel(channel)
-        return self._store._files.records().read_outbox(
-            namespace, plan_name, channel, limit
-        )
+        with self._store._guard:
+            return store_sqlite_outbox.read(
+                self._store._conn, namespace, plan_name, channel, limit
+            )
 
     def ack_outbox(
         self, namespace: str, plan_name: str, channel: str, ids
@@ -706,16 +751,27 @@ class SqliteRecords(OutboxContract, OutboxSummaryContract):
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_channel(channel)
-        return self._store._files.records().ack_outbox(
-            namespace, plan_name, channel, ids
-        )
+        with self._store._guard:
+            return store_sqlite_outbox.ack(
+                self._store._conn, namespace, plan_name, channel, ids
+            )
 
     def outbox_summary(self, namespace: str, plan_name=None) -> dict:
-        """Summarise the outbox through the file view."""
+        """Summarise the outbox rows, counting without carrying a payload."""
         self._namespace(namespace)
-        return self._store._files.records().outbox_summary(namespace, plan_name)
+        if plan_name is not None:
+            try:
+                validate_plan_name(plan_name)
+            except InvalidRecordKeyError:
+                return {'files': 0, 'records': 0, 'oldest_age_s': None}
+        with self._store._guard:
+            return store_sqlite_outbox.summary(
+                self._store._conn, namespace, plan_name
+            )
 
     def list_outboxes(self, namespace: str) -> list[tuple[str, str]]:
         """Return the sorted ``(plan, channel)`` pairs that hold entries."""
         self._namespace(namespace)
+        with self._store._guard:
+            return store_sqlite_outbox.list_queues(self._store._conn, namespace)
         return self._store._files.records().list_outboxes(namespace)

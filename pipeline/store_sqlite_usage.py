@@ -19,6 +19,17 @@ a database that never recorded usage holds no usage table. A read of a database
 with no table serves an empty history rather than failing, which is what a
 reader in another process (the dashboard) needs while a writer holds the lock.
 
+Typed columns inherit SQLite's affinity rules, so a value the validator permits
+may come back with a different Python type than it went in with: an int
+``cost_usd`` (``0``) lands in a ``REAL`` column and reads back as ``0.0``, and
+an integral float ``duration_ms`` (``5.0``) lands in an ``INTEGER`` column and
+reads back as ``5``. Both compare equal to the original, and the round trips the
+usage contract grades -- int token counts, a fractional cost, ``None`` in an
+optional field -- are exact. Tightening the validator (a cost must be a float, a
+count must be an int) would remove the ambiguity; it is tracked as an open
+question rather than changed here, because it is a change to the contract every
+store implements.
+
 Not implemented here, and deliberately: retention per namespace (see
 ``docs/TELEMETRY_CONTRACT.md`` "Retention and tenancy") is an open question --
 nothing prunes this table yet, because a billing-grade row may not be deleted

@@ -136,6 +136,10 @@ class DecisionRecordError(ValueError):
 # --------------------------------------------------------------------------
 
 
+#: The decisions-stream suffix: the anchor key is ``decisions:<plan>``.
+DECISIONS_SUFFIX = ".decisions.chain.jsonl"
+
+
 def decision_stream_path(plan_name: str) -> Path:
     """Return the plan's decision-record stream path.
 
@@ -149,7 +153,42 @@ def decision_stream_path(plan_name: str) -> Path:
     second stream in it rather than a second resolver.
     """
     plan_key = _plan_key(plan_name)
-    return audit.audit_path(plan_key).with_name(f"{plan_key}.decisions.chain.jsonl")
+    return audit.audit_path(plan_key).with_name(f"{plan_key}{DECISIONS_SUFFIX}")
+
+
+def list_decision_chains() -> list[str]:
+    """Return the plan keys that have a decision-record stream, sorted.
+
+    The anchoring pass enumerates the decisions chains through this helper
+    rather than through a glob of its own, so the plan directory is named in
+    exactly one place. The directory comes from
+    :func:`pipeline.audit.audit_path`, which resolves it at call time, so a
+    redirected plan directory redirects this enumeration with it.
+
+    A file name that is not an addressable plan key is skipped rather than
+    returned: its anchor key would alias another chain's (see
+    :func:`_plan_key`), and the caller cannot address it anyway.
+    """
+    probe = audit.audit_path("")
+    try:
+        candidates = sorted(probe.parent.glob(f"*{DECISIONS_SUFFIX}"))
+    except OSError:  # pragma: no cover - a directory that cannot be listed
+        return []
+    plans: list[str] = []
+    for path in candidates:
+        plan = path.name.removesuffix(DECISIONS_SUFFIX)
+        try:
+            _plan_key(plan)
+        except DecisionRecordError:
+            # A decisions stream whose plan name is not addressable: its anchor
+            # key would alias another chain's, so it is not enumerated. The
+            # warning names neither the file nor the path.
+            logger.warning(
+                "skipping a decisions stream whose plan name is not addressable"
+            )
+            continue
+        plans.append(plan)
+    return plans
 
 
 def _plan_key(plan_name: Any) -> str:

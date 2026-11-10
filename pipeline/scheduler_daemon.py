@@ -28,6 +28,7 @@ from pipeline.tick_checks import run_tick_checks
 from pipeline.watchers import scan_all_plans
 
 from .actor import SYSTEM_SCHEDULER, bind_principal
+from .dispatch_fence import mark_worker_abandoned
 
 logger = logging.getLogger(__name__)
 
@@ -524,11 +525,11 @@ class SchedulerDaemon:
         # reconcile; a watched fn that RAISES is a failed call, not an
         # abandonment, and leaves the streak untouched.
         # SRR-2: also record the abandoned worker itself, stamped with the
-        # daemon's monotonic clock, so ``run_once`` can tell a worker that
-        # died (its blocked call returned) from one that is STILL ALIVE — a
-        # leaked plan ``_plan_lock`` that only process death releases.
+        # daemon's clock, so ``run_once`` can tell a worker that died from one
+        # that is STILL ALIVE - a leaked ``_plan_lock`` only death releases.
         self._consecutive_abandons += 1
         self._abandoned_workers.append((worker, self._clock()))
+        mark_worker_abandoned(worker)
         return False, elapsed
 
     def _scan_with_watchdog(self, scan_fn):

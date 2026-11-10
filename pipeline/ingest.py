@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, persistence, testfiles
+from . import cross_plan, persistence, plan_names, testfiles
 from .actor import actor_id
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
@@ -563,7 +563,7 @@ def _ingest_plan_impl(
     only_epics: list[str] | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    _validate_key(plan_name)
+    plan_names.validate_new_plan_name(plan_name)
     plan, refusal = persistence.read_plan_file(PLAN_DIR / f"{plan_name}.json")
     if refusal is not None:
         return refusal

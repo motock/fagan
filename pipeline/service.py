@@ -164,7 +164,7 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import remote_scope, review_audit
+from . import plan_names, remote_scope, review_audit
 from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -570,7 +570,7 @@ class PipelineService(PlanApprovalMixin):
         # Validate before authorizing: authorize() reads the manifest by name and
         # appends to the notification sidecar on denial, so a traversal must be
         # rejected before it can reach either (same ordering as _approve_merge_impl).
-        _validate_key(plan_name)
+        plan_names.validate_new_plan_name(plan_name)
 
         from .authorization import authorize
 
@@ -730,6 +730,7 @@ class PipelineService(PlanApprovalMixin):
         return ready
     def save_plan(self, plan_name: str, plan_json: str, workspace: str | None = None) -> dict[str, Any]:
         _validate_key(plan_name)
+        plan_names.validate_new_plan_name(plan_name)
         # plan:ingest: this writes the content a gated ingest_plan later reads.
         from .authorization import authorize
 

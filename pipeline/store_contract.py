@@ -183,6 +183,22 @@ class RecordStoreContract:
         store = self.make_store()
         _expect(self, InvalidRecordKeyError, lambda: store.get_manifest(DEFAULT_NAMESPACE, _INVALID_KEY))
 
+    def test_put_manifest_rejects_the_reserved_plan_name(self):
+        store = self.make_store()
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.put_manifest(DEFAULT_NAMESPACE, 'host', {'version': 1}),
+        )
+
+    def test_get_manifest_rejects_the_reserved_plan_name(self):
+        store = self.make_store()
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.get_manifest(DEFAULT_NAMESPACE, 'host'),
+        )
+
     def test_put_manifest_rejects_an_invalid_plan_name(self):
         store = self.make_store()
         _expect(

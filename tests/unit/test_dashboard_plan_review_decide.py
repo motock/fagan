@@ -185,6 +185,7 @@ def _write_pending(plan_dir: Path, name: str, manifest: dict | None = None) -> s
     base["approval"] = {
         "status": "pending_approval",
         "digest": digest,
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "warnings_seen": [],
     }
     (plan_dir / f"{name}.manifest.json").write_text(json.dumps(base))

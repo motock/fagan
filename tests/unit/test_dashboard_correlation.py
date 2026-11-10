@@ -303,6 +303,7 @@ def pending_plan(tmp_path, monkeypatch):
     manifest["approval"] = {
         "status": "pending_approval",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "warnings_seen": ["w1"],
     }
     (tmp_path / "p.manifest.json").write_text(json.dumps(manifest))
@@ -389,6 +390,7 @@ def test_reingest_of_unchanged_content_preserves_the_correlation_id():
     manifest["approval"] = {
         "status": "approved",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "decided_by": "alice",
         "at": "2026-01-01T00:00:00+00:00",
         "correlation_id": "req-9",
@@ -410,6 +412,7 @@ def test_reset_clears_the_correlation_id_of_an_invalidated_decision(
     manifest["approval"] = {
         "status": "approved",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "decided_by": "alice",
         "at": "2026-01-01T00:00:00+00:00",
         "correlation_id": "req-9",

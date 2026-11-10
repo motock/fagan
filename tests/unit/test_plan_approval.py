@@ -151,11 +151,18 @@ def test_should_change_when_an_authored_field_changes(mutate):
 
 
 def test_should_not_change_when_only_approval_changes():
-    pending = _manifest(approval={"status": "pending_approval", "digest": "d1"})
+    pending = _manifest(
+        approval={
+            "status": "pending_approval",
+            "digest": "d1",
+            "digest_version": pa.APPROVAL_DIGEST_VERSION,
+        }
+    )
     approved = _manifest(
         approval={
             "status": "approved",
             "digest": "d1",
+            "digest_version": pa.APPROVAL_DIGEST_VERSION,
             "decided_by": "alice",
             "decided_at": "2026-10-26T00:00:00Z",
             "role": "reviewer",
@@ -249,6 +256,7 @@ def test_should_keep_an_approved_record_whose_digest_matches(stub_digest):
         approval={
             "status": "approved",
             "digest": "d1",
+            "digest_version": pa.APPROVAL_DIGEST_VERSION,
             "decided_by": "alice",
             "decided_at": "2026-10-26T00:00:00Z",
             "role": "reviewer",
@@ -275,6 +283,7 @@ def test_should_reset_to_pending_on_changed_content_but_preserve_decision_fields
         approval={
             "status": "approved",
             "digest": "d1",
+            "digest_version": pa.APPROVAL_DIGEST_VERSION,
             "decided_by": "alice",
             "decided_at": "2026-10-26T00:00:00Z",
             "role": "reviewer",
@@ -300,6 +309,7 @@ def test_should_stay_pending_on_a_follow_up_reingest_of_changed_content(stub_dig
         approval={
             "status": "approved",
             "digest": "d1",
+            "digest_version": pa.APPROVAL_DIGEST_VERSION,
             "decided_by": "alice",
             "decided_at": "2026-10-26T00:00:00Z",
             "role": "reviewer",
@@ -408,7 +418,11 @@ def test_should_leave_an_existing_approval_key_untouched_when_disabled(
     _write_plan(plan_dir, tmp_path)
     assert p.ingest_plan("ap")["ok"] is True
 
-    existing = {"status": "approved", "digest": "old"}
+    existing = {
+        "status": "approved",
+        "digest": "old",
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
+    }
     manifest = _read_manifest(plan_dir)
     manifest["approval"] = existing
     _manifest_path(plan_dir).write_text(json.dumps(manifest))
@@ -443,6 +457,7 @@ def test_should_preserve_an_approved_matching_record_across_reingest(
     manifest["approval"] = {
         "status": "approved",
         "digest": manifest["approval"]["digest"],
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
         "decided_by": "alice",
         "decided_at": "2026-10-26T00:00:00Z",
         "role": "reviewer",
@@ -470,6 +485,7 @@ def test_should_reset_to_pending_when_authored_content_changes(
     manifest["approval"] = {
         "status": "approved",
         "digest": manifest["approval"]["digest"],
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
         "decided_by": "alice",
         "decided_at": "2026-10-26T00:00:00Z",
         "role": "reviewer",

@@ -109,6 +109,7 @@ def _write_approvable_manifest(plan_dir: Path) -> dict:
     manifest["approval"] = {
         "status": "pending_approval",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "warnings_seen": [],
     }
     (plan_dir / f"{PLAN}.manifest.json").write_text(json.dumps(manifest))

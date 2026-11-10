@@ -186,6 +186,7 @@ def _with_approval(manifest: dict, **overrides) -> dict:
     approval = {
         "status": "approved",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "decided_by": "alice",
         "at": "2026-11-01T09:00:00Z",
         "self_approved": True,

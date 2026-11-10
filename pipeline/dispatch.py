@@ -38,6 +38,7 @@ from .dispatch_routing import (
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
 from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
+from .story_fields import record_dispatch_baseline
 from .trace_context import agent_traceparent
 
 logger = logging.getLogger("pipeline")
@@ -381,32 +382,19 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Never a gate: the helper is wrapped so any failure degrades to "no
         # baseline", and the marker is written unconditionally right after so
         # a raising snapshot is not retried on every subsequent dispatch.
-        baseline_marker = worktree_path / ".dispatch_baseline_test_checked"
-        if (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and not resuming
-            and not baseline_marker.exists()
-        ):
-            try:
-                baseline = _run_baseline_test_snapshot(worktree_path)
-            except Exception:  # noqa: BLE001 (observability hook, never a gate)
-                baseline = None
-            try:
-                # The marker carries the baseline's failing node ids, not a
-                # bare "ok": the agent-side full-suite done-gate reads them
-                # back out of the worktree to tell a failure the story's own
-                # change introduced from one that was already failing before
-                # it touched the tree (mirroring the tick-side grade's own
-                # baseline exemption). No recorded ids -> an empty list, which
-                # exempts nothing.
-                baseline_ids = (baseline or {}).get("failed_node_ids") or []
-                baseline_marker.write_text(
-                    json.dumps({"failed_node_ids": baseline_ids})
-                )
-            except OSError:
-                pass
-            if baseline is not None and baseline.get("returncode") != 0:
-                story["baseline_test_check"] = baseline
+        # A marker already present means the snapshot ran for this worktree:
+        # the story is recorded from it instead (see record_dispatch_baseline).
+        if dispatch_backend in _LOCAL_BACKEND_NAMES:
+            record_dispatch_baseline(
+                _store,
+                plan_name,
+                story_key,
+                story,
+                worktree_path,
+                marker=worktree_path / ".dispatch_baseline_test_checked",
+                snapshot=_run_baseline_test_snapshot,
+                rerun=not resuming,
+            )
 
         # A rework redispatch (changes_requested with stored review_feedback)
         # on the local Ollama driver can resume the prior dispatch's message

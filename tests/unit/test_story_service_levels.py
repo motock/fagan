@@ -28,6 +28,7 @@ import pytest
 from pipeline import audit as audit_mod
 from pipeline import metrics_exposition as metrics
 from pipeline import persistence, service_levels
+from pipeline.audit_file import FileAuditLog
 
 #: A story's three marks, as the audit stream records them.
 DISPATCHED = "2025-01-01T00:00:00Z"
@@ -147,6 +148,16 @@ def _append_raw(plan_dir: Path, line: str, plan_name: str = "p") -> None:
         stream.write(line + "\n")
 
 
+def _log() -> FileAuditLog:
+    """The audit log the service levels read through.
+
+    The file log resolves the plan directory at call time, so the ``plan_dir``
+    fixture that redirects ``pipeline.persistence.PLAN_DIR`` redirects this
+    log with it.
+    """
+    return FileAuditLog()
+
+
 def _record(action: str, ts: str, plan_name: str = "p", story: str = "S1") -> str:
     """A raw record line, for timestamps ``append_audit`` cannot be given."""
     return json.dumps(
@@ -181,7 +192,7 @@ def _cycle_stories(
 
 def test_a_timeline_records_the_three_marks(monkeypatch, plan_dir) -> None:
     _trio(monkeypatch)
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline == {
         ("p", "S1"): {
             "dispatched": datetime(2025, 1, 1, 0, 0, tzinfo=UTC),
@@ -194,21 +205,21 @@ def test_a_timeline_records_the_three_marks(monkeypatch, plan_dir) -> None:
 def test_two_dispatches_use_the_first_record(monkeypatch, plan_dir) -> None:
     _dispatch(monkeypatch, "2025-01-01T00:10:00Z")
     _dispatch(monkeypatch, "2025-01-01T00:00:00Z")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["dispatched"] == datetime(2025, 1, 1, 0, 10, tzinfo=UTC)
 
 
 def test_a_refused_dispatch_is_not_the_dispatch(monkeypatch, plan_dir) -> None:
     _dispatch(monkeypatch, "2025-01-01T00:10:00Z", outcome="refused")
     _dispatch(monkeypatch, "2025-01-01T05:00:00Z")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["dispatched"] == datetime(2025, 1, 1, 5, 0, tzinfo=UTC)
 
 
 def test_two_review_starts_use_the_earliest_started_at(monkeypatch, plan_dir) -> None:
     _review_start(monkeypatch, "2025-01-01T02:00:00Z")
     _review_start(monkeypatch, "2025-01-01T01:00:00Z")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["review_started"] == datetime(
         2025, 1, 1, 1, 0, tzinfo=UTC
     )
@@ -216,20 +227,20 @@ def test_two_review_starts_use_the_earliest_started_at(monkeypatch, plan_dir) ->
 
 def test_the_story_merge_alias_is_not_a_merge(monkeypatch, plan_dir) -> None:
     _append(monkeypatch, "p", MERGED, action="story:merge")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["merged"] is None
 
 
 def test_a_refused_merge_is_not_a_merge(monkeypatch, plan_dir) -> None:
     _merge(monkeypatch, MERGED, outcome="refused")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["merged"] is None
 
 
 def test_a_corrupt_line_is_skipped(monkeypatch, plan_dir) -> None:
     _append_raw(plan_dir, "{not json")
     _dispatch(monkeypatch, DISPATCHED)
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["dispatched"] == datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -237,18 +248,18 @@ def test_a_corrupt_line_is_skipped(monkeypatch, plan_dir) -> None:
 def test_a_bad_timestamp_is_skipped(monkeypatch, plan_dir, bad_ts: str) -> None:
     _append_raw(plan_dir, _record("story.dispatch", bad_ts))
     _dispatch(monkeypatch, "2025-01-01T00:05:00Z")
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["dispatched"] == datetime(2025, 1, 1, 0, 5, tzinfo=UTC)
 
 
 def test_a_naive_timestamp_is_read_as_utc(monkeypatch, plan_dir) -> None:
     _append_raw(plan_dir, _record("story.dispatch", "2025-01-01T00:00:00"))
-    timeline = service_levels.read_story_timeline(plan_dir)
+    timeline = service_levels.read_story_timeline(_log())
     assert timeline[("p", "S1")]["dispatched"] == datetime(2025, 1, 1, tzinfo=UTC)
 
 
-def test_a_missing_plan_dir_yields_no_timelines(tmp_path: Path) -> None:
-    assert service_levels.read_story_timeline(tmp_path / "gone") == {}
+def test_an_empty_log_yields_no_timelines() -> None:
+    assert service_levels.read_story_timeline(_log()) == {}
 
 
 def test_the_host_audit_stream_is_not_read(monkeypatch, plan_dir) -> None:
@@ -261,7 +272,7 @@ def test_the_host_audit_stream_is_not_read(monkeypatch, plan_dir) -> None:
         target={"plan": "p", "story": "HOST-SENTINEL-STORY"},
     )
     _dispatch(monkeypatch, DISPATCHED)
-    assert sorted(service_levels.read_story_timeline(plan_dir)) == [("p", "S1")]
+    assert sorted(service_levels.read_story_timeline(_log())) == [("p", "S1")]
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +283,7 @@ def test_the_host_audit_stream_is_not_read(monkeypatch, plan_dir) -> None:
 def test_a_merged_story_contributes_the_three_durations(monkeypatch, plan_dir) -> None:
     _trio(monkeypatch)
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles == {
         "dispatch_to_review": {"n": 1, "p50": 3600.0, "p90": 3600.0},
@@ -292,7 +303,7 @@ def test_the_window_lower_edge_is_inclusive(monkeypatch, plan_dir, merged, expec
     _dispatch(monkeypatch, "2025-01-01T00:00:00Z")
     _merge(monkeypatch, merged)
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 2, 1, tzinfo=UTC), window_days=30
+        _log(), now=datetime(2025, 2, 1, tzinfo=UTC), window_days=30
     )
     assert percentiles["cycle"]["n"] == expected_n
 
@@ -303,7 +314,7 @@ def test_a_story_without_a_review_start_contributes_cycle_only(
     _dispatch(monkeypatch, "2025-01-01T00:00:00Z")
     _merge(monkeypatch, "2025-01-01T02:00:00Z")
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles == {
         "dispatch_to_review": {"n": 0},
@@ -316,7 +327,7 @@ def test_a_story_that_never_merged_contributes_nothing(monkeypatch, plan_dir) ->
     _dispatch(monkeypatch, DISPATCHED)
     _review_start(monkeypatch, REVIEW_STARTED)
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles == {
         "dispatch_to_review": {"n": 0},
@@ -330,7 +341,7 @@ def test_a_negative_duration_is_skipped_not_clamped(monkeypatch, plan_dir) -> No
     _review_start(monkeypatch, "2025-01-01T03:00:00Z")
     _merge(monkeypatch, "2025-01-01T02:00:00Z")
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles == {
         "dispatch_to_review": {"n": 1, "p50": 10800.0, "p90": 10800.0},
@@ -342,14 +353,14 @@ def test_a_negative_duration_is_skipped_not_clamped(monkeypatch, plan_dir) -> No
 def test_nearest_rank_percentiles_over_ten_durations(monkeypatch, plan_dir) -> None:
     _cycle_stories(monkeypatch, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles["cycle"] == {"n": 10, "p50": 50.0, "p90": 90.0}
 
 
 def test_no_samples_carries_no_percentile_keys(plan_dir) -> None:
     percentiles = service_levels.service_level_percentiles(
-        plan_dir, now=datetime(2025, 1, 2, tzinfo=UTC)
+        _log(), now=datetime(2025, 1, 2, tzinfo=UTC)
     )
     assert percentiles == {
         "dispatch_to_review": {"n": 0},
@@ -358,8 +369,8 @@ def test_no_samples_carries_no_percentile_keys(plan_dir) -> None:
     }
 
 
-def test_a_missing_plan_dir_yields_no_samples(tmp_path: Path) -> None:
-    percentiles = service_levels.service_level_percentiles(tmp_path / "gone")
+def test_an_empty_log_yields_no_samples() -> None:
+    percentiles = service_levels.service_level_percentiles(_log())
     assert percentiles["cycle"] == {"n": 0}
 
 

@@ -183,6 +183,67 @@ class FileAnchorSink:
             yield AnchorHead(DEFAULT_NAMESPACE, chain, seq, digest)
 
 
+#: ``configured`` -- a sink is configured and usable.
+ANCHOR_CONFIGURED = "configured"
+#: ``unconfigured`` -- no sink, and this deployment is not the file store.
+ANCHOR_UNCONFIGURED = "unconfigured"
+#: ``off`` -- no sink, and this deployment is the file store (its default).
+ANCHOR_OFF = "off"
+#: ``invalid`` -- a sink is configured but the value cannot be used.
+ANCHOR_INVALID = "invalid"
+
+#: The four fixed words :func:`anchor_status` can return.
+ANCHOR_STATUSES: tuple[str, ...] = (
+    ANCHOR_CONFIGURED,
+    ANCHOR_UNCONFIGURED,
+    ANCHOR_OFF,
+    ANCHOR_INVALID,
+)
+
+#: Set once the "no external anchor" notice has been logged in this process.
+_UNCONFIGURED_NOTICE_LOGGED = False
+
+
+def anchor_status(environ: Mapping[str, str] | None = None) -> str:
+    """Return which of the four anchor states this deployment is in.
+
+    The answer is one fixed word (:data:`ANCHOR_STATUSES`) and nothing else: a
+    health payload is readable by anything that can reach the API, so neither
+    the configured value, the sink path nor the text of a failure is returned
+    here -- only which of the four states applies. Nothing is cached, so an
+    operator who fixes the configuration does not have to restart to see it.
+
+    ``configured`` needs a sink this module can build; a value it refuses is
+    ``invalid``. With no sink, the file store is ``off`` (its audit trail was
+    never going to leave the host) and any other store -- including a selection
+    that cannot be resolved at all -- is ``unconfigured``, since that store
+    could have been anchored and is not. The unconfigured case logs one warning
+    per process, naming only the store kind: a health probe runs on every
+    request and must not flood the log.
+    """
+    try:
+        sink = build_anchor_sink(environ)
+    except ValueError:
+        return ANCHOR_INVALID
+    if sink is not None:
+        return ANCHOR_CONFIGURED
+    from pipeline.store import reported_store_kind
+
+    kind = reported_store_kind(os.environ if environ is None else environ)
+    if kind == "file":
+        return ANCHOR_OFF
+    global _UNCONFIGURED_NOTICE_LOGGED
+    if not _UNCONFIGURED_NOTICE_LOGGED:
+        _UNCONFIGURED_NOTICE_LOGGED = True
+        logger.warning(
+            "audit heads are not externally anchored on this deployment "
+            "(store: %s); configure %s to anchor them",
+            kind,
+            PIPELINE_AUDIT_ANCHOR,
+        )
+    return ANCHOR_UNCONFIGURED
+
+
 def build_anchor_sink(environ: Mapping[str, str] | None = None) -> AnchorSink | None:
     """Build the configured sink, or ``None`` when anchoring is off.
 

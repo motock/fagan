@@ -219,6 +219,11 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     _store = _ServerRef("_store")
     summary = _store.records().outbox_summary(DEFAULT_NAMESPACE)
     outbox_health.apply_outbox_health(result, plan_dir, summary=summary)
+    # Additive and never degrading: a deployment without an external anchor is
+    # a property of the install, not a fault in this process.
+    from pipeline.audit_anchor import anchor_status
+
+    result["anchor"] = anchor_status()
     return result
 
 

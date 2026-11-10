@@ -188,6 +188,28 @@ def verify_audit_chain(plan_name: str) -> int | None:
     )
 
 
+def verify_audit_log() -> tuple[dict[str, int | None], int | None]:
+    """Verify every chain through the log; return ``(plans, host)``.
+
+    Read-only: nothing is appended, rewritten or repaired. *plans* maps each
+    plan chain the log lists to the ``seq`` of its first altered record (or
+    ``None`` when it is intact), and *host* is the same verdict for the
+    host-scoped chain, which belongs to no plan.
+    """
+    log = _file_log()
+    plans: dict[str, int | None] = {}
+    for chain in log.list_chains(DEFAULT_NAMESPACE):
+        if chain == HOST_CHAIN_ID:
+            continue
+        plans[chain] = audit_chain.verify_entries(
+            log.read_chain(DEFAULT_NAMESPACE, chain)
+        )
+    host = audit_chain.verify_entries(
+        log.read_chain(DEFAULT_NAMESPACE, HOST_CHAIN_ID)
+    )
+    return plans, host
+
+
 def verify_host_audit_chain() -> int | None:
     """Return the seq of the first altered host record, or ``None`` when intact."""
     return audit_chain.verify_entries(

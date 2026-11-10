@@ -1210,6 +1210,24 @@ one; agent attribution needs the OIDC identity seam (S2).
 
 #### Anchoring the heads (`PIPELINE_AUDIT_ANCHOR`)
 
+`/api/health` reports the deployment's anchoring in one additive field,
+`anchor`, whose value is always one of four fixed words:
+
+```
+anchor: unconfigured
+```
+
+| Value | Meaning |
+| --- | --- |
+| `configured` | A sink is configured and can be built: heads are being anchored. |
+| `unconfigured` | No sink is configured and the selected store is not the file store, so the audit trail has no external anchor at all. Logged once per process, naming only the store kind. |
+| `off` | No sink is configured and the deployment is the file store, its documented default. |
+| `invalid` | A sink is configured but the value cannot be used (an unknown scheme, a relative path, or a path inside `PLAN_DIR`). |
+
+The field never carries the configured value, the sink's path or the text of a
+failure: a health payload is read by anything that can reach the API, and the
+anchor's location is exactly what must not leak there. The verdict is additive —
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PIPELINE_AUDIT_ANCHOR` | *(unset)* | Off: no anchor file is created and nothing extra is verified. `file:<absolute path>` appends each chain's head to an append-only JSONL log on every daemon tick. Any other value — an unknown scheme, a relative path, or a path inside `PLAN_DIR` — raises `ValueError` at first use, naming the variable only and never its value; a mistyped sink stops anchoring rather than silently disabling tamper evidence. |

@@ -86,7 +86,31 @@ def request_decision(
 
 
 def export_plan(plan_name: str) -> dict[str, Any]:
-    """TEMP reference implementation for test validation."""
+    """
+    Export a plan's document, rendered from its ingested manifest.
+
+    Returns the plan document in the same shape `save_plan` accepts -
+    `{"repo_root", "role_config", "team", ["repo_url", "preflight_override",]
+    "epics": [{"summary", "stories": [...]}]}` - with each story's key,
+    summary, description, agent_instructions, dependencies, persona, model,
+    acceptance, risk, backend, tdd_split and (when set) files and
+    blocked_by. Dependencies are the plan's own story keys, not the
+    ticketing provider's issue ids, so the export can be edited and
+    re-ingested as a plan.
+
+    This is a render, not a stored copy (ADR 0012 decision 5: the document
+    is rendered from the manifest when an export is wanted). Runtime state -
+    status, attempts, pr_url, worktree, review verdicts and scores, logs,
+    approvals, owner, delegates, ingest provenance - is never exported; it
+    is not part of the plan. A plan the caller may not see is refused
+    exactly like a plan that does not exist.
+
+    plan_name: the plan's name, as passed to `save_plan`/`ingest_plan` and as
+        returned by `list_plans`.
+
+    Use this to review what a plan actually says, to hand it to another
+    tool or person, or as the starting point for a revised plan.
+    """
     return _service.export_plan(plan_name)
 
 

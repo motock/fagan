@@ -296,7 +296,24 @@ class PipelineService(PlanApprovalMixin):
         return _store.get_manifest_or_none(plan_name)
 
     def export_plan(self, plan_name: str) -> dict:
-        """TEMP reference implementation for test validation."""
+        """Render *plan_name*'s plan document from its ingested manifest.
+
+        The document is rendered on demand (ADR 0012 decision 5): the manifest
+        is the plan record, and the ``save_plan``-shaped document is derived
+        from it rather than stored a second time and left to drift. Runtime
+        state never reaches the export - see ``pipeline.plan_export`` for what
+        is kept and what is dropped, and why the round trip matters for plan
+        approval (ADR 0007).
+
+        Args:
+            plan_name: the plan's name, as passed to ``save_plan``/``ingest_plan``.
+
+        Returns:
+            ``{'ok': True, 'plan': <document>}``, or ``{'ok': False, 'error':
+            ...}`` for a plan that was never ingested. The plan name is
+            validated before the manifest is read, so an invalid name is a
+            validation refusal and never a store lookup.
+        """
         from .plan_export import render_plan_document
 
         _validate_key(plan_name)

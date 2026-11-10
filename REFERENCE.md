@@ -28,6 +28,17 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   (see below). Also reports each cataloged env var's resolved value and which
   config files were consulted. Pure read — check what a plan will actually run
   on *before* executing it.
+- `export_plan(plan_name)` — render a plan's document from its ingested
+  manifest and return it as `{"ok": true, "plan": {...}}`, in the same shape
+  `save_plan` accepts: `repo_root`, `role_config`, `team`, optional `repo_url`
+  and `preflight_override`, and the plan's `epics`/`stories` with their keys,
+  descriptions, instructions, dependencies, persona, model, acceptance, risk,
+  backend and TDD split. The document is rendered on demand (ADR 0012
+  decision 5), never a stored second copy, and runtime state — status,
+  attempts, `pr_url`, worktree, review verdicts, logs, approvals, owner,
+  delegates — is never exported. Only `origin: plan` context sources are
+  included: `repo` and `org` sources are re-merged at ingest. A plan with no
+  manifest, or one the caller may not see, is refused.
 
 ### Dispatch & status
 - `list_ready_stories(plan_name)` — stories whose dependencies are all `done`.
@@ -3373,9 +3384,12 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `record_decision`, `record_security_audit`, `reject_plan`,
   `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
-- eight read-only tools — `check_story_status`, `check_usage`,
-  `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
-  `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
+- nine read-only tools — `check_story_status`, `check_usage`,
+  `export_plan`, `get_effective_config`, `get_story_diff`, `list_decisions`,
+  `list_plans`, `list_ready_stories` and `verify_audit`. Reads are scoped to
+  the plans the caller may see (`app.policy.can_view`): the plan-scoped tools
+  (`check_story_status`, `export_plan`, `get_effective_config`, `get_story_diff`,
+  `list_decisions`, `list_ready_stories`) refuse before their handler runs
   caller may see (`app.policy.can_view`): the plan-scoped tools
   (`check_story_status`, `get_effective_config`, `get_story_diff`,
   `list_decisions`, `list_ready_stories`) refuse before their handler runs

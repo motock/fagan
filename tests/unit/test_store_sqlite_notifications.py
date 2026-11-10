@@ -510,7 +510,7 @@ with records.transaction('default', 'plan-a') as acquired:
         'plan-a',
         {{'ts': '2026-01-01T00:00:00+00:00', 'message': 'crashed'}},
     )
-os._exit(1)
+    os._exit(1)
 """
 
 

@@ -348,6 +348,24 @@ def test_notifications_missing_and_appended(store_factory):
     assert store.get_notifications(PLAN) == []
     assert store.get_notification_records(PLAN) == []
 
+    if isinstance(store, SqliteStore):
+        # SqliteStore serves the legacy readers from its own table, so the
+        # contract seeds through the store's writer, not file sidecars it no
+        # longer reads. A row store has no unparseable lines to skip.
+        store.records().append_notification(
+            DEFAULT_NAMESPACE,
+            PLAN,
+            {"ts": "t1", "message": "m1", "severity": "warning", "story_key": "S1"},
+        )
+
+        assert store.get_notifications(PLAN) == ["t1 m1"]
+        got = store.get_notification_records(PLAN)
+        assert len(got) == 1
+        assert got[0]["message"] == "m1"
+        assert got[0]["severity"] == "warning"
+        assert got[0]["story_key"] == "S1"
+        return
+
     log = _plans_dir(store) / f"{PLAN}.notifications.log"
     log.write_text("first\nsecond\n")
     records = _plans_dir(store) / f"{PLAN}.notifications.jsonl"

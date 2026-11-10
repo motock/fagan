@@ -2672,6 +2672,26 @@ full contracts live in the specs each row links.
 | `PIPELINE_STORE` | *(unset → `file`)* | Which `Store` the pipeline writes its plans through. Unset, or exactly `file`, selects the JSON-files `FileStore` — the default every existing deployment already runs. Exactly `sqlite` selects `SqliteStore`, the single-host database store (ADR 0008 stage 2a), and requires an absolute `PIPELINE_STORE_PATH`; the database is the record for plan manifests — a manifest the pipeline writes straight to its plan file is adopted into the database when it is next read, so the served document never disagrees — while the story log, worktree files and the recent/active workspace records are read from the filesystem, and the notification, audit and journal sidecar files stay on disk under `PLAN_DIR`. Selecting that store migrates no historical data: the plans already on disk are adopted as they are read, and nothing else is imported. Any other value — including an empty string, and `sqlite` without an absolute path — raises at startup rather than falling back: a selection the deployment cannot honour is refused, never silently downgraded, and the refusal never echoes the rejected value. Every `FileStore` construction goes through the same selector, so a single variable decides the store for the MCP server, the dashboard and the unpark tool. The kind in force is reported as `runtime.store` by `/api/health`; the read never constructs a store, so a probe cannot touch the plan directory. | [docs/adr/0008-shared-control-plane-per-repo-workers.md](docs/adr/0008-shared-control-plane-per-repo-workers.md) |
 | `PIPELINE_STORE_PATH` | *(unset)* | Absolute path of the database file used when `PIPELINE_STORE=sqlite`. Required for that selection: a relative path would resolve against whatever directory each process started in, so processes that believe they share a store would write different databases, and it is refused (naming the setting, never the value) rather than resolved. Read on every selection, so re-pointing it needs no restart — but two processes writing one repository must name the same path. Unused by the `file` store. | [docs/adr/0008-shared-control-plane-per-repo-workers.md](docs/adr/0008-shared-control-plane-per-repo-workers.md) |
 
+### The sqlite store's outbox (`PIPELINE_STORE=sqlite`)
+
+A `PIPELINE_STORE=sqlite` deployment keeps its notification outbox queues in the
+database, not in spool files: `SqliteStore` writes one row per queued record to
+an `outbox` table (`namespace`, `plan`, `channel`, `ts`, `record`) in the same
+database file, and the record store's outbox methods (`append_outbox`,
+`read_outbox`, `ack_outbox`, `list_outboxes`, `outbox_summary`) read and write
+those rows. The append joins the store's `BEGIN IMMEDIATE` transaction, so an
+outbox entry is committed together with the manifest row that produced it and is
+rolled back with it; the record view therefore declares the atomic tier. The
+summary counts rows and reads the `ts` column, never the payload.
+
+Switching an existing deployment from the file store to the sqlite store imports
+nothing: outbox spool files (`<plan>.outbox.jsonl` and
+`<plan>.outbox.<channel>.jsonl` under `PLAN_DIR`) are not imported, read, or
+counted by the sqlite store, so queued notifications left in them would never be
+delivered. The one-time operator step before switching is to **drain** the file
+store's outbox queues while the deployment still runs on the file store, and
+only then point `PIPELINE_STORE` at the database.
+
 ### OpenTelemetry endpoint (`PIPELINE_OTEL_ENDPOINT`)
 
 Unset — the default — the pipeline imports no `opentelemetry` module and exports

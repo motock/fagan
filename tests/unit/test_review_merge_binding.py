@@ -548,3 +548,206 @@ def test_scheduler_path_without_a_worktree_denies_on_every_tick_and_never_writes
     story = _read_story(plan_dir)
     assert "worktree" not in story
     assert "branch" not in story
+
+
+# ---------------------------------------------------------------------------
+# binding_denial_action - a stale approval CAN be re-earned by re-reviewing.
+#
+# b4 evidence (2026-11-09/10): at 09:30:16 a story parked with "approved
+# e698038a but the branch head is 62dfcaf3; the review does not cover the
+# commit being merged". The head had moved after the APPROVE (the agent's
+# review-fix push at 09:27:45). The recovery was a manual forced re-review,
+# which APPROVED the new head - so a denial is not always terminal:
+# ``review_story`` can re-earn the approval for the head that will be merged.
+# ---------------------------------------------------------------------------
+def _denial_action(story, attempts):
+    from pipeline import review_merge_binding
+
+    return review_merge_binding.binding_denial_action(story, attempts)
+
+
+def test_binding_denial_action_rereviews_an_approve_below_the_cap():
+    """An APPROVE whose binding no longer covers the head is re-earned by
+    re-reviewing it: attempt 0 and attempt 1 both re-review."""
+    assert _denial_action({"review_verdict": "APPROVE"}, 0) == "rereview"
+    assert _denial_action({"review_verdict": "APPROVE"}, 1) == "rereview"
+
+
+def test_binding_denial_action_parks_at_and_above_the_cap():
+    """The cap is 2 re-reviews: the third denial is terminal."""
+    assert _denial_action({"review_verdict": "APPROVE"}, 2) == "park"
+    assert _denial_action({"review_verdict": "APPROVE"}, 3) == "park"
+
+
+def test_binding_denial_action_parks_for_a_non_approve_verdict():
+    """Only an APPROVE can be re-earned; anything else parks as today."""
+    assert _denial_action({"review_verdict": "REQUEST_CHANGES"}, 0) == "park"
+    assert _denial_action({"review_verdict": "REJECT"}, 0) == "park"
+    assert _denial_action({"review_verdict": ""}, 0) == "park"
+    assert _denial_action({"review_verdict": None}, 0) == "park"
+    assert _denial_action({}, 0) == "park"
+
+
+def test_binding_denial_action_does_not_mutate_the_story():
+    """The decision is pure: it reads the story and leaves it alone."""
+    story = {"review_verdict": "APPROVE", "review_verdict_sha": REVIEWED}
+    assert _denial_action(story, 0) == "rereview"
+    assert story == {"review_verdict": "APPROVE", "review_verdict_sha": REVIEWED}
+
+
+# ---------------------------------------------------------------------------
+# The merge gate re-reviews a moved head instead of parking the story.
+# ---------------------------------------------------------------------------
+MOVED_HEAD = "cafebabecafe99"
+
+
+def _moved_head_story(**overrides):
+    """An approved story whose branch head moved after the approval."""
+    return _scheduler_story(
+        last_reviewed_sha="oldsha1234",
+        **overrides,
+    )
+
+
+def test_moved_head_after_the_approval_is_re_reviewed_not_parked(
+    plan_dir, monkeypatch
+):
+    """Attempt 0: the gate re-reviews the new head instead of parking.
+
+    The story goes back to ``tests_passed`` (the review path re-reviews the
+    head that will be merged), the stale binding and the stale reviewed sha
+    are cleared, the attempt counter advances, and exactly one notice fires.
+    Nothing is rebased, pushed or merged.
+    """
+    from pipeline import advance_merge
+
+    _write_manifest(plan_dir, _moved_head_story())
+    seams = _install_scheduler_seams(monkeypatch, MOVED_HEAD)
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    story = _read_story(plan_dir)
+    assert story["status"] == "tests_passed", (
+        "a moved head must go back to the review path, not to the parked "
+        f"state; got {story['status']!r}"
+    )
+    assert story["review_rebind_attempts"] == 1
+    # The stale binding must be cleared so the re-review binds afresh: a
+    # surviving sha would let the OLD approval cover the NEW head.
+    assert not story.get("review_verdict_sha"), (
+        "the stale binding must be cleared so the re-review binds afresh; "
+        f"got {story.get('review_verdict_sha')!r}"
+    )
+    assert not story.get("last_reviewed_sha"), (
+        "the stale reviewed sha must be cleared so the re-review is not "
+        "skipped as 'HEAD unchanged since the last review'"
+    )
+    assert seams["rebase"].count == 0
+    assert seams["merge_pr"].count == 0
+    assert _bindings(PLAN) == [], "a re-review is not a binding denial"
+    assert len(seams["notify"].calls) == 1
+    args, kwargs = seams["notify"].calls[0]
+    assert kwargs.get("event") == "review_rebind"
+    assert "/2" in args[1], (
+        f"the notice must name the attempt as N/2; got {args[1]!r}"
+    )
+
+
+def test_second_moved_head_is_re_reviewed_again(plan_dir, monkeypatch):
+    """Attempt 1 is still within the cap of two re-reviews."""
+    from pipeline import advance_merge
+
+    _write_manifest(plan_dir, _moved_head_story(review_rebind_attempts=1))
+    seams = _install_scheduler_seams(monkeypatch, MOVED_HEAD)
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    story = _read_story(plan_dir)
+    assert story["status"] == "tests_passed"
+    assert story["review_rebind_attempts"] == 2
+    assert seams["merge_pr"].count == 0
+    assert _bindings(PLAN) == []
+    assert len(seams["notify"].calls) == 1
+    assert seams["notify"].calls[0][1].get("event") == "review_rebind"
+
+
+def test_third_moved_head_parks(plan_dir, monkeypatch):
+    """Attempt 2 exhausts the cap: the story parks, as today."""
+    from pipeline import advance_merge
+
+    _write_manifest(plan_dir, _moved_head_story(review_rebind_attempts=2))
+    seams = _install_scheduler_seams(monkeypatch, MOVED_HEAD)
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    story = _read_story(plan_dir)
+    assert story["status"] == "parked"
+    assert len(_bindings(PLAN)) == 1
+    assert seams["merge_pr"].count == 0
+    assert story.get("review_rebind_attempts", 2) == 2
+
+
+def test_non_approve_verdict_with_a_moved_head_still_parks(plan_dir, monkeypatch):
+    """Only an APPROVE can be re-earned; any other verdict parks as today."""
+    from pipeline import advance_merge
+
+    _write_manifest(
+        plan_dir, _moved_head_story(review_verdict="REQUEST_CHANGES")
+    )
+    seams = _install_scheduler_seams(monkeypatch, MOVED_HEAD)
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    story = _read_story(plan_dir)
+    assert story["status"] == "parked"
+    assert len(_bindings(PLAN)) == 1
+    assert seams["merge_pr"].count == 0
+
+
+# ---------------------------------------------------------------------------
+# A fresh APPROVE resets the re-bind counter.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def agents_dir(tmp_path, monkeypatch):
+    import pipeline.server as p
+
+    d = tmp_path / "agents"
+    d.mkdir()
+    monkeypatch.setattr(p, "AGENTS_DIR", d)
+    return d
+
+
+def test_a_fresh_approve_resets_the_rebind_attempt_counter(
+    plan_dir, agents_dir, monkeypatch
+):
+    """Once the moved head is APPROVED again, the counter starts over.
+
+    The re-review of the new head is a fresh approval, so the next moved head
+    gets the full budget of re-reviews instead of inheriting the old count.
+    """
+    import pipeline.server as p
+
+    story = {
+        "summary": "Add thing",
+        "status": "tests_passed",
+        "worktree": str(plan_dir / "wt"),
+        "risk": "low",
+        "backend": "ollama",
+        "model": "gpt-oss:20b",
+        "review_rebind_attempts": 2,
+    }
+    (plan_dir / f"{PLAN}.manifest.json").write_text(
+        json.dumps({"epics": {}, "stories": {KEY: story}}, indent=2)
+    )
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(
+        p, "_open_pr", lambda *a, **k: "https://example.invalid/pr/2"
+    )
+
+    p.review_story(PLAN, KEY)
+
+    on_disk = _read_story(plan_dir)
+    assert on_disk["review_verdict"] == "APPROVE"
+    assert on_disk.get("review_rebind_attempts", 0) == 0, (
+        "a fresh APPROVE must reset the re-bind attempt counter"
+    )

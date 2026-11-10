@@ -101,6 +101,34 @@ def _parse_verdict(text: str) -> str:
 # using "still bad\nVERDICT: REQUEST_CHANGES") treats even a terse one-line
 # finding as genuine, so any non-whitespace content beyond the verdict line
 # must count.
+# b4 evidence (2026-11-09/10, standalone stack): at 09:26:33 a reviewer
+# returned `review_changes_requested` for 94efbfbc with 1,631 characters of
+# feedback that ended mid-sentence at "ONE blocking finding remains" - the
+# finding itself was cut off, and `story["last_review_findings"]` came back
+# empty. The reviewer persona emits VERDICT FIRST and the findings AFTER it,
+# so a length-truncated response still parses as a verdict and the old bare
+# emptiness check (_has_review_findings) accepted it as a genuine rejection,
+# routing a rework round nobody could act on. A body LONGER than this many
+# characters whose findings are not parseable is treated as
+# "unfocused/truncated" by pipeline/review_orchestrator.py. The threshold is
+# deliberately "longer than", not "at least": a 600-character body is not
+# truncated, and terse stubs ("still bad\nVERDICT: REQUEST_CHANGES", 38
+# characters) stay far below it and keep today's rework behaviour.
+UNFOCUSED_REQUEST_CHANGES_MIN_CHARS = 600
+
+
+def findings_are_parseable(text: str) -> bool:
+    """True when a REQUEST_CHANGES body carries a finding a rework agent can act on.
+
+    Narrower than `_has_review_findings`, which only asks "is there any
+    non-VERDICT text at all?". Here the body must carry at least one
+    file-scoped Blocking finding (so the agent knows where to look) or an
+    explicit unscoped `- Blocking:` finding. A truncated body that emits
+    VERDICT first and then gets cut off mid-prose is NOT parseable.
+    """
+    return bool(_extract_blocking_finding_files(text)) or "- Blocking: (unscoped)" in text
+
+
 def _has_review_findings(text: str) -> bool:
     """True when `text` contains findings beyond the bare VERDICT line."""
     stripped = re.sub(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", "", text, flags=re.IGNORECASE)

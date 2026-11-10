@@ -318,6 +318,14 @@ def _decide(plan_name: str, *, status: str, digest: str, reason: str = "") -> di
                 status_code=409,
                 detail=error if isinstance(error, str) and error else _STALE_DIGEST_DETAIL,
             )
+        if result.get("outdated_digest_version"):
+            # The record was written under another digest version: the plan
+            # needs a fresh approval, not a decision against content the
+            # caller may never have been shown. 409, never the opaque 404.
+            raise HTTPException(
+                status_code=409,
+                detail=plan_approval._OUTDATED_DIGEST_VERSION_ERROR,
+            )
         if result.get("error") == plan_approval._DIGEST_MISMATCH_ERROR:
             raise HTTPException(
                 status_code=409, detail=plan_approval._DIGEST_MISMATCH_ERROR

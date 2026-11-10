@@ -46,14 +46,15 @@ def _approved(manifest):
     """Return ``manifest`` with an ``approved`` record matching its content.
 
     The record mirrors what ``PlanApprovalMixin._decide_plan`` actually writes
-    (``plan``/``status``/``digest``/``decided_by``/``at``/``correlation_id``/
-    ``role``/``self_approved``/``warnings_seen``), so the reset assertions below cannot
-    pass vacuously against a field production never writes.
+    (``plan``/``status``/``digest``/``digest_version``/``decided_by``/``at``/
+    ``correlation_id``/``role``/``self_approved``/``warnings_seen``), so the reset
+    assertions below cannot pass vacuously against a field production never writes.
     """
     manifest["approval"] = {
         "plan": "p",
         "status": "approved",
         "digest": canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
         "decided_by": "local-operator",
         "at": "2026-01-01T00:00:00+00:00",
         "correlation_id": "",

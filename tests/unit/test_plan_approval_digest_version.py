@@ -91,18 +91,22 @@ def _manifest(**overrides):
     return manifest
 
 
-def _approved(manifest, digest_version=None):
+#: Distinguishes "no digest_version field" from "digest_version is None".
+_ABSENT = object()
+
+
+def _approved(manifest, digest_version=_ABSENT):
     """An approval record made against exactly this manifest's content."""
     record = {"status": "approved", "digest": pa.canonical_digest(manifest)}
-    if digest_version is not None:
+    if digest_version is not _ABSENT:
         record["digest_version"] = digest_version
     return record
 
 
-def _pending(manifest, digest_version=None):
+def _pending(manifest, digest_version=_ABSENT):
     """A pending record made against exactly this manifest's content."""
     record = {"status": "pending_approval", "digest": pa.canonical_digest(manifest)}
-    if digest_version is not None:
+    if digest_version is not _ABSENT:
         record["digest_version"] = digest_version
     return record
 
@@ -345,7 +349,9 @@ def test_should_report_the_outdated_reason_for_an_old_version(gate_on):
     assert pa.outdated_reason(manifest) == {"reason": OUTDATED_REASON}
 
 
-def test_should_report_the_outdated_reason_for_a_missing_version(newer_version):
+def test_should_report_the_outdated_reason_for_a_missing_version(
+    gate_on, newer_version
+):
     manifest = _manifest(approval={"status": "approved"})
 
     assert pa.outdated_reason(manifest) == {"reason": OUTDATED_REASON}

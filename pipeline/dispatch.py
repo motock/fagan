@@ -129,7 +129,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # plan before any worktree, git or agent work. Re-read on every call
         # (no cached negative), so approving takes effect immediately.
         if not plan_approval.is_activatable(manifest):
-            return {"ok": False, "error": "plan is not approved", "plan": plan_name}
+            return {"ok": False, "error": "plan is not approved", "plan": plan_name, **plan_approval.outdated_reason(manifest)}
         if story.get("status") in _NON_DISPATCHABLE_STATUSES:
             return {
                 "ok": False,

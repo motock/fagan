@@ -338,7 +338,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     # adjudicates merges, and it re-reads the record on every tick (no cached
     # negative) so approving the plan takes effect on the next tick.
     if not plan_approval.is_activatable(manifest):
-        return {"ok": True, "skipped": "plan_not_approved"}
+        return {"ok": True, "skipped": "plan_not_approved", **plan_approval.outdated_reason(manifest)}
 
     # Per-backend resource gate (Step 5): dispatch and review can run on
     # different backends, so gate each by ITS backend's availability rather

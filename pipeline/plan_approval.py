@@ -19,6 +19,15 @@ the previous record was approved *and* its digest still matches; any authored
 change therefore resets the record to ``pending_approval`` while preserving the
 previous decision metadata for auditability.
 
+Every record also carries a ``digest_version`` (``APPROVAL_DIGEST_VERSION``),
+the version of the digest the approval was made under. A change to *what the
+digest covers* bumps that version, and a record written under any other
+version — including a higher one, seen after a rollback — is not honoured: it
+cannot activate the plan and cannot be decided on, so an approval can never
+stay silently in force against a digest it was not made against. A record
+without the field reads as the legacy version 1, so shipping the field itself
+changes no plan's state.
+
 ``reset_if_changed`` applies the same digest rule to edits made through the
 patch tools (``patch_story`` / ``patch_plan``): an approval cannot outlive an
 authored change made through those tools. It is not a blanket guard for every
@@ -40,6 +49,18 @@ from .actor import current_correlation_id, current_principal
 from .audit import record_audit
 
 APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
+
+#: Version of the approval digest this build writes. Bumped whenever *what the
+#: digest covers* changes, so an approval recorded under another version can
+#: never stay silently in force: only a record written under this version is
+#: honoured.
+APPROVAL_DIGEST_VERSION = 1
+
+#: The version a record without a ``digest_version`` field reads as: records
+#: written before the field existed were made under version 1. While
+#: ``APPROVAL_DIGEST_VERSION`` is still 1 those records stay current, so no
+#: live plan changes state when this ships.
+_LEGACY_DIGEST_VERSION = 1
 
 #: Authored, plan-level fields that participate in the content digest.
 _PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context")
@@ -127,19 +148,57 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def digest_version_is_current(approval: dict[str, Any]) -> bool:
+    """Return whether *approval* was recorded under the current digest version.
+
+    A record without a ``digest_version`` field reads as
+    ``_LEGACY_DIGEST_VERSION``, so records written before the field existed
+    stay valid while the current version is still 1.
+
+    Everything else fails closed — a bool (``True`` is an ``int`` subclass), a
+    string, a float, ``None``, a lower version and, importantly, a *higher*
+    one: a rolled-back build must not honour a record written by a newer one.
+    """
+    if "digest_version" not in approval:
+        return _LEGACY_DIGEST_VERSION == APPROVAL_DIGEST_VERSION
+    version = approval["digest_version"]
+    return type(version) is int and version == APPROVAL_DIGEST_VERSION
+
+
 def is_activatable(manifest: dict[str, Any]) -> bool:
     """Return whether ``manifest`` may be activated (dispatched).
 
     Always true while the gate is disabled — checked first, so a malformed
     ``approval`` value cannot break the default-off path. When enabled, only an
-    ``approval`` dict whose ``status`` is exactly ``"approved"`` qualifies.
+    ``approval`` dict whose ``status`` is exactly ``"approved"`` *and* whose
+    ``digest_version`` is the current one qualifies: an approval recorded
+    against a different digest cannot be honoured.
     """
     if not approval_enabled():
         return True
     approval = manifest.get("approval")
     if not isinstance(approval, dict):
         return False
-    return approval.get("status") == "approved"
+    return approval.get("status") == "approved" and digest_version_is_current(approval)
+
+
+def outdated_reason(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return the refusal detail for an approval under another digest version.
+
+    Spread into the refusal dicts of ``advance`` and ``dispatch`` so the
+    operator learns *why* an approved plan stopped. Empty while the gate is
+    disabled (nothing is gated then), for a plan without a dict ``approval``
+    and for a record written under the current version — those keep exactly
+    the dicts they returned before this function existed.
+    """
+    if not approval_enabled():
+        return {}
+    approval = manifest.get("approval")
+    if not isinstance(approval, dict):
+        return {}
+    if digest_version_is_current(approval):
+        return {}
+    return {"reason": "approval_digest_outdated"}
 
 
 def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -158,7 +217,9 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
 
     digest = canonical_digest(manifest)
     keep_approved = (
-        previous.get("status") == "approved" and previous.get("digest") == digest
+        previous.get("status") == "approved"
+        and previous.get("digest") == digest
+        and digest_version_is_current(previous)
     )
 
     warnings_seen = previous.get("warnings_seen")
@@ -168,6 +229,7 @@ def on_ingest(manifest: dict[str, Any]) -> dict[str, Any]:
     record: dict[str, Any] = {
         "status": "approved" if keep_approved else "pending_approval",
         "digest": digest,
+        "digest_version": APPROVAL_DIGEST_VERSION,
         "warnings_seen": list(warnings_seen),
     }
     for field in _PRESERVED_DECISION_FIELDS:
@@ -187,6 +249,11 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
     function returns ``True``. A
     matching digest returns ``False`` and changes nothing.
 
+    A record whose ``digest_version`` is not the current one is reset too, even
+    when its digest still matches: the digest it carries was computed under a
+    different definition of "the content", so it cannot be compared with a
+    digest computed now. The freshly written record carries the current version.
+
     While the gate is disabled this is a no-op that returns ``False`` without
     touching the manifest, so the default-off path stays byte-identical to
     before this function existed. Non-decision metadata (``warnings_seen``) is
@@ -199,10 +266,15 @@ def reset_if_changed(manifest: dict[str, Any]) -> bool:
     previous = manifest.get("approval")
     if not isinstance(previous, dict):
         previous = {}
-    if previous.get("digest") == digest:
+    if previous.get("digest") == digest and digest_version_is_current(previous):
         return False
 
-    record = {**previous, "status": "pending_approval", "digest": digest}
+    record = {
+        **previous,
+        "status": "pending_approval",
+        "digest": digest,
+        "digest_version": APPROVAL_DIGEST_VERSION,
+    }
     for field in _CLEARED_DECISION_FIELDS:
         record.pop(field, None)
     manifest["approval"] = record
@@ -226,6 +298,15 @@ def _primary_role(principal: Principal) -> str:
 #: Refusal message when the authored content no longer matches the digest the
 #: approval record was made against.
 _DIGEST_MISMATCH_ERROR = "plan content changed; re-ingest before approving"
+
+#: Refusal message when the approval record was written under a digest version
+#: that is not the current one. Deciding on such a record would approve content
+#: the caller may never have been shown, so the record is never upgraded here.
+_OUTDATED_DIGEST_VERSION_ERROR = (
+    "plan approval was recorded under an older digest version; run "
+    "`python -m pipeline.tools.reset_outdated_approvals`, review the plan, "
+    "then decide"
+)
 
 
 class PlanApprovalMixin:
@@ -294,6 +375,15 @@ class PlanApprovalMixin:
         Refuses (``ok=False``) when the recomputed canonical digest differs
         from the digest stored on the approval record: the operator would
         otherwise be approving content they never saw.
+
+        Also refuses, *before* that check (and after the stale ``expected_digest``
+        check, which comes first), a record whose ``digest_version`` is not the
+        current one. The record is never upgraded here: approving in the same
+        call would approve content the caller may never have been shown.
+        Recovery is a reset (a re-ingest, or
+        ``python -m pipeline.tools.reset_outdated_approvals``), then a decision.
+        The refusal writes no manifest, no decisions-log entry and no
+        notification; it records one ``refused`` audit event.
         """
         from .parsers import _validate_key
         from .server import _append_decision, _store
@@ -346,6 +436,19 @@ class PlanApprovalMixin:
             previous = manifest.get("approval")
             if not isinstance(previous, dict):
                 previous = {}
+            if not digest_version_is_current(previous):
+                record_audit(
+                    plan_name,
+                    action=f"plan.{status}",
+                    outcome="refused",
+                    target={"plan": plan_name},
+                    detail={"reason": "outdated_digest_version"},
+                )
+                return {
+                    "ok": False,
+                    "error": _OUTDATED_DIGEST_VERSION_ERROR,
+                    "outdated_digest_version": True,
+                }
             if previous.get("digest") != digest:
                 record_audit(
                     plan_name,
@@ -365,6 +468,7 @@ class PlanApprovalMixin:
                 "plan": plan_name,
                 "status": status,
                 "digest": digest,
+                "digest_version": APPROVAL_DIGEST_VERSION,
                 "decided_by": principal.subject,
                 "at": datetime.now(UTC).isoformat(),
                 "correlation_id": current_correlation_id(),

@@ -1356,6 +1356,8 @@ Graceful degradation for optional components — absence is never an error:
 
 `save_plan` accepts JSON of this shape (the `product-analyst` persona emits it):
 
+The plan name `host` is reserved: `save_plan`, `ingest_plan` and the record store refuse it, because the audit anchor log keys the host chain as `host`.
+
 ```json
 {
   "repo_root": "/absolute/path/to/this/plan's/git/repo",

@@ -55,6 +55,10 @@ _NAMESPACE_RE = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 # Plan names and story keys are flat names, never path fragments.
 _KEY_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 
+#: Names no plan may take.  The audit anchor log keys the host chain as "host",
+#: so a plan of that name would share its anchor key with the host chain.
+RESERVED_PLAN_NAMES = frozenset({'host'})
+
 # The outbox channel key of the legacy e-mail spool (``<plan>.outbox.jsonl``).
 # The leading underscore is forbidden by the instance-name rule below, so this
 # key can never collide with an operator's notification channel instance.
@@ -98,13 +102,20 @@ def validate_namespace(value: str) -> str:
 
 
 def validate_plan_name(value: str) -> str:
-    """Return ``value`` when it is a valid plan name, else raise."""
+    """Return ``value`` when it is a valid plan name, else raise.
+
+    ``"host"`` is reserved: the audit anchor log keys the host chain as
+    ``host`` (``pipeline/audit_anchor.py`` ``HOST_CHAIN``), so a plan of that
+    name would make the anchor log ambiguous.
+    """
     if (
         not isinstance(value, str)
         or _KEY_RE.fullmatch(value) is None
         or '..' in value
     ):
         raise InvalidRecordKeyError('invalid plan name')
+    if value in RESERVED_PLAN_NAMES:
+        raise InvalidRecordKeyError('reserved plan name')
     return value
 
 

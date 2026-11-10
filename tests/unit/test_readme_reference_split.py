@@ -119,6 +119,16 @@ _BLOCKED_BY_SCHEMA_LINE = (
     "not checked) and refreshed on re-ingest."
 )
 
+# The audit-anchor story reserved the plan name `host` (the anchor log keys the
+# host chain as `host`) and stated it in the "Plan / story schema" section. It
+# postdates the pre-split README, so the verbatim guard normalizes this
+# paragraph away and separately requires it to be present.
+_RESERVED_PLAN_NAME_PARAGRAPH = (
+    "The plan name `host` is reserved: `save_plan`, `ingest_plan` and the "
+    "record store refuse it, because the audit anchor log keys the host chain "
+    "as `host`."
+)
+
 # RSGF-1 changed review_story's unchanged-SHA skip to additionally require an
 # unchanged reviewing-logic fingerprint, and documented the new
 # `last_reviewed_logic_fingerprint` manifest key in the "MCP tools reference"
@@ -889,6 +899,10 @@ def test_moved_section_body_is_verbatim(title):
         if title == "Plan / story schema":
             assert _BLOCKED_BY_SCHEMA_LINE in reference_body
             reference_body = reference_body.replace("\n\n" + _BLOCKED_BY_SCHEMA_LINE, "")
+            assert _RESERVED_PLAN_NAME_PARAGRAPH in reference_body
+            reference_body = reference_body.replace(
+                "\n\n" + _RESERVED_PLAN_NAME_PARAGRAPH, ""
+            )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

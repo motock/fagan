@@ -53,6 +53,23 @@ def test_validate_plan_name_rejects_invalid_names(value):
         validate_plan_name(value)
 
 
+def test_validate_plan_name_rejects_the_reserved_name():
+    """The audit anchor log keys the host chain as "host", so a plan may not
+    use that name: the record store refuses it before touching storage."""
+    validate_plan_name = _attr('validate_plan_name')
+    error = _attr('InvalidRecordKeyError')
+    with pytest.raises(error) as excinfo:
+        validate_plan_name('host')
+    assert str(excinfo.value) == 'reserved plan name'
+
+
+def test_validate_plan_name_accepts_names_near_the_reserved_one():
+    """The reservation is exact and case-sensitive: near names stay valid."""
+    validate_plan_name = _attr('validate_plan_name')
+    for value in ('Host', 'hostname', 'host-1', 'my-host'):
+        assert validate_plan_name(value) == value
+
+
 def test_validate_story_key_accepts_valid_keys():
     validate_story_key = _attr('validate_story_key')
     uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'

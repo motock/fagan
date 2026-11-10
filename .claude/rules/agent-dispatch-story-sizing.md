@@ -142,3 +142,34 @@ regressed roughly 160 tests when it assumed the migration was complete.
   targets in the brief with a mechanically-checkable done-criterion (e.g. a
   grep that must return no matches), or split it one story per target so a
   partial attempt shows up as an unclaimed story instead of silent debt.
+
+## Combine same-file stories into one layer story before dispatch (both classes, measured 2026-11-10)
+
+The caps above size one dispatch. They do not size the *plan*: several stories
+that edit the same files create merge seams, and each seam costs a rebase,
+a rework, or a hand-resolved conflict at the merge gate.
+
+**Measured on the standalone stack:** `store-stage-b3-notifications-outbox`
+(14 stories, three parallel same-file stories per wave) produced 38 failure
+events, including 10 rebase-conflict events. `store-stage-b4-audit-anchor`
+combined the same work into 8 layered stories (one parallel pair) and produced
+0 conflicts, ~1.5 events/story vs 2.7. The combination is what removed the
+conflict class; do it at plan-authoring time, not at merge time.
+
+**How to combine:**
+- Merge stories that touch the same production files or form one coherent
+  layer (e.g. an algorithm + its file-backed implementation + its facade).
+- A combined story may absorb at most ~2 original stories' worth of work. Pure
+  mechanical same-file edits can go to 3-4; anything that adds new logic stays
+  at 2. A combined story must still fit one 900s agent sitting — the b4
+  "consumers" trio (3 stories' worth) needed a second attempt, while the audit
+  core (2 stories' worth) fit first try.
+- Keep at most one parallel pair, and make its two stories touch disjoint
+  files. Chain the rest with dependencies even when the code does not require
+  it, so the memory budget and the merge gate stay bounded.
+- Merge the briefs; do not summarize them. Preserve exact paths, literals,
+  verify commands, test names, and negative/boundary cases. Rewrite every
+  `dependencies` entry to the new summary strings, and give each combined story
+  one explicit `key` from the stories it absorbs.
+- Re-check the plan after authoring: `ingest_plan` reports `file_overlaps` for
+  concurrently-dispatchable stories — it must be empty.

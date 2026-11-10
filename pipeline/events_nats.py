@@ -53,6 +53,7 @@ import os
 import ssl
 import stat
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -79,9 +80,24 @@ ENV_MANAGE_STREAM = "PIPELINE_NATS_MANAGE_STREAM"
 #: ``PIPELINE_NATS_DURABLE_TYPES`` -- comma-separated event types a durable
 #: consumer in another process subscribes to.
 ENV_DURABLE_TYPES = "PIPELINE_NATS_DURABLE_TYPES"
+#: ``PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS`` -- how long a publish keeps
+#: retrying a *refused* connection before it reports the broker unreachable
+#: (default ``0``: disabled; a deployment that knows its broker can start late
+#: opts in with a positive number of seconds).
+ENV_CONNECT_RETRY_SECONDS = "PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS"
 
 DEFAULT_STREAM = "PIPELINE"
 DEFAULT_PUBLISH_TIMEOUT_S = 5.0
+#: Disabled by default: ADR 0010 makes ``publish`` bounded by its publish
+#: timeout and fail fast, so a caller that did not ask for a startup window
+#: gets exactly one connection attempt. Only a deployment whose broker is known
+#: to start after the publisher (the standalone stack shares NATS's network
+#: namespace with the pipeline) opts in with a positive number of seconds.
+DEFAULT_CONNECT_RETRY_SECONDS = 0.0
+#: First backoff between two connection attempts; it doubles up to
+#: :data:`_CONNECT_RETRY_MAX_S`.
+_CONNECT_RETRY_INITIAL_S = 0.5
+_CONNECT_RETRY_MAX_S = 5.0
 #: Event types the long-running consumer subscribes to when the environment
 #: does not say otherwise.
 DEFAULT_DURABLE_TYPES = frozenset({"notification", "agent_done"})
@@ -171,6 +187,33 @@ def _parse_publish_timeout(raw: str) -> float:
         raise _refuse(ENV_PUBLISH_TIMEOUT_S, "must be a positive number") from None
     if not math.isfinite(value) or value <= 0:
         raise _refuse(ENV_PUBLISH_TIMEOUT_S, "must be a positive number")
+    return value
+
+
+def _connect_retry_window() -> float:
+    """How long a publish may spend retrying a refused connection.
+
+    Read from the environment *at call time*, never cached: the window is an
+    operational dial a run can change without rebuilding the bus. An unusable
+    value (not a number, not finite, negative) degrades to
+    :data:`DEFAULT_CONNECT_RETRY_SECONDS` with a warning instead of raising --
+    a typo must not turn "the broker is a little late" into a crash. ``0`` is
+    the supported way to disable the retry.
+    """
+    raw = os.environ.get(ENV_CONNECT_RETRY_SECONDS)
+    if raw is None or not raw.strip():
+        return DEFAULT_CONNECT_RETRY_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = math.nan
+    if not math.isfinite(value) or value < 0:
+        logger.warning(
+            "%s must be a number of seconds >= 0; using the default of %gs",
+            ENV_CONNECT_RETRY_SECONDS,
+            DEFAULT_CONNECT_RETRY_SECONDS,
+        )
+        return DEFAULT_CONNECT_RETRY_SECONDS
     return value
 
 
@@ -329,7 +372,10 @@ class NatsEventBus(EventBus):
             valid plan identifier (the same rules ``JsonlEventBus`` applies).
         EventPublishError
             If JetStream does not acknowledge the event within
-            ``PIPELINE_EVENT_PUBLISH_TIMEOUT_S``, or the broker refuses it.
+            ``PIPELINE_EVENT_PUBLISH_TIMEOUT_S``, or the broker refuses it, or
+            the connection is still refused after
+            ``PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS``. Only the last
+            case is retried, and always before anything is sent.
         """
         event_type = self._event_type(event)
         subject = self._subject(event_type, self._event_plan(event))
@@ -338,7 +384,7 @@ class NatsEventBus(EventBus):
 
         try:
             loop = self._ensure_loop()
-            self._ensure_connection(loop)
+            self._ensure_connection_with_retry(loop)
         except ValueError:
             raise
         except Exception:  # noqa: BLE001 - a dead broker becomes one typed error
@@ -506,6 +552,55 @@ class NatsEventBus(EventBus):
             thread.join(timeout=_CLOSE_TIMEOUT_S)
 
     # -- broker operations (async; every `nats` import stays local) ----------
+    def _ensure_connection_with_retry(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Connect, riding out a broker that has not bound its port yet.
+
+        Only a *refused connection* is retried, for at most
+        ``PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS`` (default ``0``,
+        disabled; a deployment that knows its broker starts late opts in),
+        with a short bounded backoff. A refused configuration
+        (``ValueError``: a bad URL, a missing stream) and a dial that consumed
+        its whole budget (``TimeoutError``) are raised at once: neither gets
+        better by waiting, and retrying a dial that already timed out would
+        multiply the caller's worst case by the number of attempts.
+
+        The retry happens *before* the publish, never after an ack, so a
+        durable type keeps its exactly-once contract: nothing has been sent
+        when an attempt fails.
+        """
+        window = _connect_retry_window()
+        deadline = time.monotonic() + window
+        delay = _CONNECT_RETRY_INITIAL_S
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                self._ensure_connection(loop)
+            except (ValueError, TimeoutError):
+                raise
+            except Exception as exc:  # the broker has not bound its port yet
+                remaining = deadline - time.monotonic()
+                if window <= 0 or remaining <= 0:
+                    raise
+                pause = min(delay, remaining)
+                logger.debug(
+                    "the NATS broker refused connection attempt %d (%s); "
+                    "retrying in %.2fs",
+                    attempts,
+                    type(exc).__name__,
+                    pause,
+                )
+                time.sleep(pause)
+                delay = min(delay * 2, _CONNECT_RETRY_MAX_S)
+                continue
+            if attempts > 1:
+                logger.info(
+                    "the NATS broker was slow to start: the connection was "
+                    "established after %d attempts",
+                    attempts,
+                )
+            return
+
     def _ensure_connection(self, loop: asyncio.AbstractEventLoop) -> None:
         """Connect and verify the stream once per process, on a fixed budget.
 

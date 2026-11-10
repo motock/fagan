@@ -89,6 +89,15 @@ The NATS JetStream mapping:
 - The pipeline creates the stream only when `PIPELINE_NATS_MANAGE_STREAM=1`;
   otherwise it requires an existing stream and needs only publish/consume
   permissions.
+- The publisher rides out the broker's startup window. A standalone stack runs
+  NATS with `network_mode: service:pipeline`, so the pipeline's scheduler must
+  start first and its first publishes can land before the broker is listening;
+  a refused connection is therefore retried, before anything is sent, for
+  `PIPELINE_EVENT_PUBLISH_CONNECT_RETRY_SECONDS` (`0`, disabled, is the
+  default; the standalone compose sets `30` so the publisher rides that
+  startup window out).
+  The shared network namespace is what makes that ordering structural: a
+  reverse `depends_on` or a broker healthcheck cannot express it.
 
 ## Consequences
 

@@ -1,0 +1,1 @@
+{"action":"auth.remote_mcp","actor":"legacy-fixture","client_id":"fixture-client","correlation_id":"fixture-correlation","detail":{"reason":"credential rejected"},"hash":"574cc548b5a68c6e55ce18300f99cb53130cde980ee390b5b7c4b4d8682a03f3","outcome":"denied","prev_hash":"","principal_type":"human","seq":0,"target":{"plan":""},"ts":"2026-11-07T10:30:00+00:00"}

@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from pipeline.audit_file import FileAuditLog
 from pipeline.live_ref import LiveRef
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
@@ -267,6 +268,10 @@ class FileStore:
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
         _atomic_write_json(self.manifest_path(plan_name), manifest)
+
+    def audit_log(self) -> FileAuditLog:
+        """Return the file audit log this store keeps its chains in."""
+        return FileAuditLog()
 
     def transaction(self, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:

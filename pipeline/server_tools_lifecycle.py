@@ -85,6 +85,11 @@ def request_decision(
     )
 
 
+def export_plan(plan_name: str) -> dict[str, Any]:
+    """TEMP reference implementation for test validation."""
+    return _service.export_plan(plan_name)
+
+
 def list_decisions(plan_name: str) -> list[dict]:
     """
     Return the overlord's decision log for a plan: every ruling ever made
@@ -309,6 +314,7 @@ def verify_audit() -> dict[str, Any]:
 # re-export it under the same name, so adding a tool here is the only edit
 # needed on the server side.
 TOOLS = (
+    export_plan,
     request_decision,
     list_decisions,
     review_story,

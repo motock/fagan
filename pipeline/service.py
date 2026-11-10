@@ -295,6 +295,16 @@ class PipelineService(PlanApprovalMixin):
         _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)
 
+    def export_plan(self, plan_name: str) -> dict:
+        """TEMP reference implementation for test validation."""
+        from .plan_export import render_plan_document
+
+        _validate_key(plan_name)
+        manifest = _store.records().get_manifest("default", plan_name)
+        if manifest is None:
+            return {"ok": False, "error": "Plan not found"}
+        return {"ok": True, "plan": render_plan_document(manifest)}
+
     def get_notification_history(self, plan_name: str) -> tuple[list[dict], int]:
         """Return ``(records, malformed)`` for a plan's notification history.
 

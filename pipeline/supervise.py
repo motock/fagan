@@ -8,6 +8,16 @@ the dashboard, the MCP transport and (usually) the scheduler daemon, so that
 * a stop signal always ends PID 1: SIGTERM/SIGINT is forwarded to every child,
   stragglers are SIGKILLed after ``SHUTDOWN_GRACE_SECONDS``, everything is
   reaped, and the supervisor exits 0.
+* the process table does not fill up with zombies: this process is PID 1 in the
+  container, so every grandchild whose parent died (an agent killed at its
+  wall-clock limit orphans its ``git``/``sh``/``python`` children) is
+  reparented here. Each tick reaps them; leaking them until
+  ``/proc/sys/kernel/threads-max`` is reached makes ``clone()`` fail with
+  ``EAGAIN`` and no thread in the container can start any more.
+
+Reaping is deliberately explicit rather than ``signal.signal(SIGCHLD,
+SIG_IGN)``: ignoring SIGCHLD hides the exit status of the supervised children
+too, which would break the restart/backoff logging.
 
 The supervisor is configured through the environment, like the rest of the
 deployment:
@@ -144,6 +154,10 @@ class Child:
         self.started_at = 0.0
         self.restart_at: float | None = None
         self.delay = 0.0
+        # The exit code observed by the tick's ``waitpid``, with Popen's
+        # semantics (negative for a signal death). It stays set until the next
+        # start, so the last known status is inspectable.
+        self.status: int | None = None
 
 
 class Supervisor:
@@ -171,10 +185,21 @@ class Supervisor:
         for child in self._children:
             self._spawn(child)
         while self._stop_signal is None:
-            self._check_children(time.monotonic())
+            self._tick()
             if self._stop_signal is None:
                 time.sleep(self._poll_interval)
         return self._shutdown()
+
+    def _tick(self, now: float | None = None) -> None:
+        """One iteration of the main loop: observe, then collect.
+
+        ``_reap_orphans`` only ever *collects* a process and records its
+        status; ``_check_children`` owns the restart bookkeeping, so it acts on
+        the recorded status on the following tick.
+        """
+        now = time.monotonic() if now is None else now
+        self._check_children(now)
+        self._reap_orphans()
 
     def _request_stop(self, number: int, _frame: object) -> None:
         self._stop_signal = number
@@ -190,6 +215,7 @@ class Supervisor:
             return
         child.started_at = time.monotonic()
         child.restart_at = None
+        child.status = None
         log("started %s (pid %s)", child.name, child.process.pid)
 
     def _check_children(self, now: float) -> None:
@@ -198,7 +224,7 @@ class Supervisor:
                 if child.restart_at is not None and now >= child.restart_at:
                     self._spawn(child)
                 continue
-            status = child.process.poll()
+            status = child.status
             if status is not None:
                 child.process = None
                 uptime = now - child.started_at
@@ -211,6 +237,64 @@ class Supervisor:
                     delay,
                 )
 
+    def _reap_orphans(self) -> None:
+        """Collect every exited child and every reparented grandchild.
+
+        The two steps must stay in this order. ``waitpid(-1, ...)`` would also
+        collect a supervised child, and ``Popen`` treats ``ECHILD`` (someone
+        else already reaped it) as exit status 0 - a death would look like a
+        clean exit. So each live direct child is collected by its own pid
+        first, and only then is the rest of the process table swept for
+        orphans reparented to this process (PID 1 in the container).
+
+        Orphans are reaped, never signalled, and their pid is not recorded:
+        this loop only ever collects a process, it never sends one a signal.
+        """
+        for child in self._children:
+            if child.process is None:
+                continue
+            try:
+                pid, status = os.waitpid(child.process.pid, os.WNOHANG)
+            except ChildProcessError:  # already collected by someone else
+                # ``Popen.poll()`` turns this same ECHILD into exit status 0;
+                # record that so the child is restarted instead of being
+                # waited on forever.
+                self._record_exit(child, 0)
+                continue
+            if pid:
+                self._record_exit(child, status)
+        direct = {
+            child.process.pid: child for child in self._children if child.process is not None
+        }
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if pid == 0:  # children exist, none has exited yet
+                return
+            # A direct child that died between the two steps above must not be
+            # dropped: its status would be lost and the restart would never
+            # happen. Only its status is recorded - the restart bookkeeping
+            # stays in _check_children.
+            child = direct.get(pid)
+            if child is not None:
+                self._record_exit(child, status)
+
+    @staticmethod
+    def _record_exit(child: Child, wait_status: int) -> None:
+        """Remember a collected status, keeping ``Popen``'s copy in step.
+
+        The status is collected outside ``Popen``, so ``Popen`` would otherwise
+        still believe the process is running and warn when it is collected.
+        """
+        child.status = os.waitstatus_to_exitcode(wait_status)
+        if child.process is not None:
+            try:
+                child.process.returncode = child.status
+            except AttributeError:  # a stand-in process without that bookkeeping
+                pass
+
     def _back_off(self, child: Child, *, healthy: bool) -> float:
         """Advance the child's restart delay and schedule its next start."""
         if child.delay == 0.0 or healthy:
@@ -222,6 +306,12 @@ class Supervisor:
 
     def _shutdown(self) -> int:
         number = self._stop_signal or signal.SIGTERM
+        # A child whose exit status was already collected by the tick's reaper
+        # is gone; its pid may belong to an unrelated process by now, so it is
+        # dropped here instead of being signalled.
+        for child in self._children:
+            if child.process is not None and child.status is not None:
+                child.process = None
         log("received %s; stopping %d children", signal.Signals(number).name, len(self._children))
         running = [child for child in self._children if child.process is not None]
         for child in running:

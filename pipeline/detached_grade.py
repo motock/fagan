@@ -42,6 +42,39 @@ def _put_manifest(manifest_path, manifest) -> None:
     _store.records().put_manifest("default", plan_name, manifest)
 
 
+
+
+def _fresh_manifest(manifest_path, story_key, story, manifest, keys_at_entry=()):
+    """The manifest to persist: a FRESH read with this story's fields merged in.
+
+    Writing the caller's pre-read ``manifest`` back replaces the whole plan with
+    a copy that predates any concurrent write - a dispatch records
+    ``baseline_test_check`` while the grade is running, and the grade's write
+    then erased it (BASELINE-1 path C), costing a manual pause/edit/resume per
+    loss. Only the story this grade owns is merged, field by field, onto the
+    copy read inside the same lock scope. ``keys_at_entry`` names the fields the
+    grade CONSUMED (popped) so the merge drops them too instead of resurrecting
+    them from the fresh read.
+    """
+    from .server import _store
+    from .story_fields import merge_into_fresh_manifest
+
+    plan_name = Path(manifest_path).name.removesuffix(".manifest.json")
+    drop = tuple(key for key in keys_at_entry if key not in story)
+    try:
+        merged = merge_into_fresh_manifest(
+            _store,
+            plan_name,
+            story_key,
+            story,
+            manifest,
+            drop=drop,
+        )
+    except Exception:  # noqa: BLE001 - a merge failure must not fail the grade
+        return manifest
+    return manifest if merged is None else merged
+
+
 # SA-19: how many detached grades one tick may have in flight at once, and
 # optionally how many xdist workers each of them gets. Both live here rather
 # than in pipeline/story_status.py so that module keeps its size.
@@ -367,7 +400,8 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                               _cap=max_concurrent_grades,
                               _workers=xdist_workers,
                               _apply_xdist=_with_xdist_workers,
-                              _persist=_put_manifest):
+                              _persist=_put_manifest,
+                              _fresh=_fresh_manifest):
     """Run check_story_status's detached-grade lifecycle with pipeline.server's globals.
 
     Rebound onto pipeline.server.__dict__ in pipeline/story_status.py exactly like
@@ -395,6 +429,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
     _grade_workers = globals().get("xdist_workers") or _workers
     _xdist_cmd = globals().get("_with_xdist_workers") or _apply_xdist
     _write_manifest = globals().get("_put_manifest") or _persist
+    _keys_at_entry = frozenset(story)
 
     grading_pid = story.get("grading_pid")
     grading_alive = False
@@ -504,7 +539,12 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     UTC
                 ).isoformat()
                 story["grading_result_path"] = str(result_path)
-                _write_manifest(manifest_path, manifest)
+                _write_manifest(
+                    manifest_path,
+                    _fresh(
+                        manifest_path, story_key, story, manifest, _keys_at_entry
+                    ),
+                )
                 # The tick is free; a LATER tick collects the result.
                 return {"status": "grading", "pid": grade_pid}, None
         # No starter reachable (or the spawn failed): the synchronous grade
@@ -576,6 +616,9 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         story.pop("grading_started_at", None)
         story.pop("grading_result_path", None)
         story["collected_at"] = datetime.now(UTC).isoformat()
-        _write_manifest(manifest_path, manifest)
+        _write_manifest(
+            manifest_path,
+            _fresh(manifest_path, story_key, story, manifest, _keys_at_entry),
+        )
 
     return None, test_result

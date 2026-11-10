@@ -62,6 +62,7 @@ from .parsers import (
 )
 from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
+from .story_fields import merge_into_fresh_manifest
 from .story_status_records import (
     _clear_failure_streaks,
     _record_test_check,
@@ -87,6 +88,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if manifest is None:
         return {"ok": False, "error": "Plan not found"}
     story = manifest["stories"].get(story_key)
+    _story_keys = frozenset(story) if isinstance(story, dict) else frozenset()
     if not story or "pid" not in story:
         return {"ok": False, "error": "Story not dispatched"}
     if story["status"] == "interrupted":
@@ -876,7 +878,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
                 plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
-            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+            _store.records().put_manifest("default", plan_name,  # noqa: F821
+                merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
+                    manifest, keys_at_entry=_story_keys))
             return {
                 "status": "changes_requested",
                 "reason": "no_new_commit_since_last_review",
@@ -892,7 +896,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     else:
         story.pop("failure_kind", None)
 
-    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+    _store.records().put_manifest("default", plan_name,  # noqa: F821
+        merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
+            manifest, drop=("failure_kind",), keys_at_entry=_story_keys))
 
     result = {
         "status": story["status"],
@@ -959,6 +965,10 @@ def bind_to_server(_server: Any) -> None:
     # be reachable there - same reason the detached-grade primitives below are
     # exported.
     _server._baseline_exempted_failures = _baseline_exempted_failures
+
+    # BASELINE-1 path C: the grade-result write merges onto a fresh read, so a
+    # baseline the dispatch recorded meanwhile survives it.
+    _server.merge_into_fresh_manifest = merge_into_fresh_manifest
 
     # The rebound body's test-result bookkeeping and streak clearing are pure
     # manifest mutations (the same ones it performed inline before they were

@@ -127,12 +127,15 @@ class _CapturingDispatchBackend:
         return ""
 
 
-def _stub_fresh_dispatch(monkeypatch, worktree_path, *, preexisting_marker=None):
+def _stub_fresh_dispatch(monkeypatch, worktree_path, *, preexisting_marker=None,
+                         preexisting_marker_content=None):
     """Stub every external boundary a FRESH (non-resuming) local dispatch
     touches so it runs to completion without real git/gh/Plane/subprocess, and
     simulate ``git worktree add`` actually creating the worktree directory -
     optionally already carrying a marker file, exactly as a marker committed
-    to the base branch would. Returns the capturing dispatch backend."""
+    to the base branch would. ``preexisting_marker_content`` writes that
+    file's bytes verbatim (a JSON marker payload); without it the marker is
+    the bare ``ok`` sentinel. Returns the capturing dispatch backend."""
     def _fake_run(cmd, **kw):
         if (
             isinstance(cmd, (list, tuple))
@@ -140,7 +143,11 @@ def _stub_fresh_dispatch(monkeypatch, worktree_path, *, preexisting_marker=None)
         ):
             worktree_path.mkdir(parents=True, exist_ok=True)
             if preexisting_marker is not None:
-                (worktree_path / preexisting_marker).write_text("ok\n")
+                if preexisting_marker_content is None:
+                    content = "ok\n"
+                else:
+                    content = preexisting_marker_content
+                (worktree_path / preexisting_marker).write_text(content)
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(
@@ -164,13 +171,15 @@ def _story(plan_dir, plan_name, story_key):
     return manifest["stories"][story_key]
 
 
-def _fresh_story(status="todo"):
-    return {
+def _fresh_story(status="todo", **overrides):
+    story = {
         "summary": "Do thing",
         "agent_instructions": "Build it.",
         "status": status,
         "dependencies": [],
     }
+    story.update(overrides)
+    return story
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +406,325 @@ def test_snapshot_exception_never_propagates(
     assert "baseline_test_check" not in _story(plan_dir, "baselineboom", "S1")
     assert NOTE not in capturing.calls[0]["prompt"]
     assert (worktree_path / MARKER).exists()
+
+
+# ---------------------------------------------------------------------------
+# 3. The baseline must SURVIVE a redispatch (BASELINE-1, b3+b4 runs)
+#
+# ``story["baseline_test_check"]`` was lost five times across three paths in
+# the b3+b4 runs (2026-11-09/10) and every loss needed a manual
+# pause/edit/resume to restore the cached baseline:
+#
+#   * Path A - the recording was guarded on ``not baseline_marker.exists()``,
+#     so a redispatch onto a worktree that ALREADY carried the marker
+#     (startup-reconcile after a scheduler restart, or a rework) recorded
+#     NOTHING even though the marker and the cached snapshot were both there.
+#   * Path B - the dispatch runs with the plan lock released, so its manifest
+#     write races a ``patch_story`` transaction read and the later
+#     whole-manifest write persists a copy that PREDATES the baseline.
+#   * Path C - a grade write does the same.
+#
+# All three ended in 15-16 unexempted environmental failures. The fix routes
+# every concurrently-writable field through
+# ``pipeline.story_fields.apply_story_fields`` and self-heals a redispatch
+# that finds a marker but no recorded baseline.
+# ---------------------------------------------------------------------------
+class _FakeTestResult:
+    """The slice of a test run ``_baseline_exempted_failures`` reads."""
+
+    def __init__(self, stdout, returncode=1):
+        self.stdout = stdout
+        self.stderr = ""
+        self.returncode = returncode
+
+
+def _exempted_failures(story, stdout):
+    """The node ids the grade would exempt for ``story`` given this run."""
+    from pipeline.detached_grade import _baseline_exempted_failures
+
+    return _baseline_exempted_failures(story, _FakeTestResult(stdout))
+
+
+def _marker_payload(worktree_path):
+    """The marker file's JSON payload."""
+    return json.loads((worktree_path / MARKER).read_text())
+
+
+def _redispatch_with_marker(plan_dir, worktree_root, agents_dir, monkeypatch,
+                            plan_name, marker_payload):
+    """Dispatch onto a worktree that ALREADY carries the baseline marker.
+
+    The marker means the snapshot already ran for this worktree, so the
+    dispatch must not run it again - but it must still be able to RECORD the
+    baseline it implies.
+    """
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, plan_name, {"S1": _fresh_story()})
+    worktree_path = worktree_root / "S1"
+    capturing = _stub_fresh_dispatch(
+        monkeypatch,
+        worktree_path,
+        preexisting_marker=MARKER,
+        preexisting_marker_content=json.dumps(marker_payload),
+    )
+
+    def _boom(path):
+        raise AssertionError("the marker must prevent a second baseline run")
+
+    monkeypatch.setattr(dispatch, "_run_baseline_test_snapshot", _boom)
+    result = p.dispatch_story(plan_name, "S1")
+    assert result["ok"] is True
+    return worktree_path, capturing
+
+
+def test_redispatch_with_marker_records_the_baseline_and_exempts_exact_ids(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Path A: a redispatch onto a worktree that already carries the marker
+    records the failing baseline the marker carries (rc 1 plus the recorded
+    node ids), and the grade then exempts EXACTLY those ids."""
+    marker_ids = ["tests/test_a.py::test_one", "tests/test_b.py::test_two"]
+    _redispatch_with_marker(
+        plan_dir,
+        worktree_root,
+        agents_dir,
+        monkeypatch,
+        "baselineheal",
+        {"returncode": 1, "failed_node_ids": marker_ids},
+    )
+
+    story = _story(plan_dir, "baselineheal", "S1")
+    baseline = story.get("baseline_test_check")
+    assert baseline is not None, "the redispatch must record the baseline"
+    assert baseline["returncode"] == 1
+    assert baseline["failed_node_ids"] == marker_ids
+
+    # The grade exempts exactly the ids the baseline was already failing.
+    stdout = "".join(f"FAILED {node} - assert False\n" for node in marker_ids)
+    assert _exempted_failures(story, stdout) == marker_ids
+
+
+def test_redispatch_with_marker_does_not_exempt_a_new_failure(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The exemption stays fail-closed: a run that ALSO fails on a node id the
+    baseline did not is not exempted."""
+    marker_ids = ["tests/test_a.py::test_one"]
+    _redispatch_with_marker(
+        plan_dir,
+        worktree_root,
+        agents_dir,
+        monkeypatch,
+        "baselineextra",
+        {"returncode": 1, "failed_node_ids": marker_ids},
+    )
+
+    story = _story(plan_dir, "baselineextra", "S1")
+    stdout = (
+        "FAILED tests/test_a.py::test_one - assert False\n"
+        "FAILED tests/test_c.py::test_three - assert False\n"
+    )
+    assert _exempted_failures(story, stdout) is None
+
+
+def test_redispatch_with_empty_marker_ids_records_no_failing_baseline(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A marker that carries NO failing node ids implies nothing was failing,
+    so no failing baseline may be recorded and nothing may be exempted."""
+    _redispatch_with_marker(
+        plan_dir,
+        worktree_root,
+        agents_dir,
+        monkeypatch,
+        "baselineempty",
+        {"returncode": 1, "failed_node_ids": []},
+    )
+
+    story = _story(plan_dir, "baselineempty", "S1")
+    baseline = story.get("baseline_test_check")
+    if baseline is not None:
+        # A recorded baseline must at least not claim a failure.
+        assert baseline.get("returncode") in (None, 0)
+        assert not baseline.get("failed_node_ids")
+    assert _exempted_failures(story, "FAILED tests/test_a.py::test_one - x\n") is None
+
+
+def test_rework_redispatch_with_marker_records_the_baseline(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The other redispatch shape the b3+b4 runs lost: a REWORK redispatch
+    onto a worktree that already carries the marker. The story has no
+    recorded baseline, so the redispatch must restore it from the marker
+    instead of recording nothing."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(
+        plan_dir, "baselinerework", {"S1": _fresh_story(status="changes_requested")}
+    )
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    marker_ids = ["tests/test_a.py::test_one"]
+    (worktree_path / MARKER).write_text(
+        json.dumps({"returncode": 1, "failed_node_ids": marker_ids})
+    )
+    _stub_fresh_dispatch(monkeypatch, worktree_path)
+
+    def _boom(path):
+        raise AssertionError("the marker must prevent a second baseline run")
+
+    monkeypatch.setattr(dispatch, "_run_baseline_test_snapshot", _boom)
+
+    result = p.dispatch_story("baselinerework", "S1")
+
+    assert result["ok"] is True
+    story = _story(plan_dir, "baselinerework", "S1")
+    baseline = story.get("baseline_test_check")
+    assert baseline is not None, "the rework redispatch must record the baseline"
+    assert baseline["returncode"] == 1
+    assert baseline["failed_node_ids"] == marker_ids
+
+
+def test_redispatch_keeps_an_already_recorded_baseline(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A redispatch must never WIPE a baseline the story already carries - the
+    recorded ids are the only evidence of the pre-dispatch failures."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    recorded = {
+        "returncode": 1,
+        "failed_node_ids": ["tests/test_a.py::test_one"],
+    }
+    _write_manifest(
+        plan_dir,
+        "baselinekept",
+        {"S1": _fresh_story(baseline_test_check=recorded)},
+    )
+    worktree_path = worktree_root / "S1"
+    _stub_fresh_dispatch(
+        monkeypatch,
+        worktree_path,
+        preexisting_marker=MARKER,
+        preexisting_marker_content=json.dumps(
+            {"returncode": 1, "failed_node_ids": recorded["failed_node_ids"]}
+        ),
+    )
+
+    def _boom(path):
+        raise AssertionError("the marker must prevent a second baseline run")
+
+    monkeypatch.setattr(dispatch, "_run_baseline_test_snapshot", _boom)
+
+    result = p.dispatch_story("baselinekept", "S1")
+
+    assert result["ok"] is True
+    story = _story(plan_dir, "baselinekept", "S1")
+    assert story["baseline_test_check"] == recorded
+    stdout = "FAILED tests/test_a.py::test_one - assert False\n"
+    assert _exempted_failures(story, stdout) == recorded["failed_node_ids"]
+
+
+def test_marker_json_records_returncode_and_failed_node_ids(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The marker carries the baseline's returncode AND its failing node ids,
+    so a later redispatch can reconstruct the baseline from it alone."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "baselinepayload", {"S1": _fresh_story()})
+    worktree_path = worktree_root / "S1"
+    _stub_fresh_dispatch(monkeypatch, worktree_path)
+
+    node_ids = ["tests/test_a.py::test_one"]
+    monkeypatch.setattr(
+        dispatch,
+        "_run_baseline_test_snapshot",
+        lambda path: {
+            "cmd": ["pytest"],
+            "returncode": 1,
+            "failed_node_ids": node_ids,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        },
+    )
+
+    result = p.dispatch_story("baselinepayload", "S1")
+
+    assert result["ok"] is True
+    payload = _marker_payload(worktree_path)
+    assert payload["returncode"] == 1
+    assert payload["failed_node_ids"] == node_ids
+
+
+def test_marker_json_records_a_green_baseline(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A passing baseline is written to the marker too - with rc 0 and no
+    failing node ids - so the marker never claims a failure that did not
+    happen."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "baselinegreen", {"S1": _fresh_story()})
+    worktree_path = worktree_root / "S1"
+    _stub_fresh_dispatch(monkeypatch, worktree_path)
+
+    monkeypatch.setattr(
+        dispatch,
+        "_run_baseline_test_snapshot",
+        lambda path: {
+            "cmd": ["pytest"],
+            "returncode": 0,
+            "failed_node_ids": [],
+            "stdout_tail": "",
+            "stderr_tail": "",
+        },
+    )
+
+    result = p.dispatch_story("baselinegreen", "S1")
+
+    assert result["ok"] is True
+    payload = _marker_payload(worktree_path)
+    assert payload["returncode"] == 0
+    assert payload["failed_node_ids"] == []
+
+
+def test_a_green_baseline_is_never_exempted():
+    """Negative: a story whose recorded baseline was GREEN must never have its
+    failures waived."""
+    story = _fresh_story()
+    story["baseline_test_check"] = {
+        "returncode": 0,
+        "failed_node_ids": ["tests/test_a.py::test_one"],
+    }
+
+    assert _exempted_failures(story, "FAILED tests/test_a.py::test_one - x\n") is None
+
+
+def test_baseline_test_check_is_not_a_patchable_story_field():
+    """``baseline_test_check`` is pipeline-owned state: it must stay out of
+    ``patch_story``'s editable-field set, while the fields that WERE editable
+    stay editable."""
+    from pipeline import service as pservice
+
+    patchable = pservice._PATCHABLE_STORY_FIELDS
+
+    assert "baseline_test_check" not in patchable
+    assert "agent_instructions" in patchable
+    assert "summary" in patchable
+
+
+def test_dispatch_module_stays_under_the_line_limit():
+    """The baseline code moved OUT into ``pipeline/story_fields.py``, so
+    ``pipeline/dispatch.py`` must not grow past the repo's 1000-line limit."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    lines = sum(1 for _ in (repo_root / "pipeline" / "dispatch.py").open())
+    assert lines <= 1000
+
+
+def test_story_fields_module_stays_under_the_line_limit():
+    """The extracted module is production code too, so it is under the limit
+    as well."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    lines = sum(1 for _ in (repo_root / "pipeline" / "story_fields.py").open())
+    assert lines <= 1000

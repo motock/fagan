@@ -118,6 +118,51 @@ and the version the record's `digest` was computed under.
   Recovering means resetting the record (a re-ingest or the reset tool), not
   deciding in place.
 
+#### Re-approval after a digest version change
+
+Bumping `APPROVAL_DIGEST_VERSION` invalidates every stored approval on
+purpose: the digest those records carry was computed under a different
+definition of "the content", so it cannot be compared with a digest computed
+now, and neither `is_activatable` nor `_decide_plan` will honour it. Without a
+repair path every approved plan would be stranded — unable to dispatch *and*
+unable to be re-approved, because deciding on an out-of-version record is
+refused.
+
+The one-time repair is:
+
+```
+python -m pipeline.tools.reset_outdated_approvals [--dry-run]
+```
+
+It walks every plan whose manifest exists, recomputes the canonical digest of
+the content on disk now, and, under each plan's lock, gives the record one of
+these outcomes:
+
+| Outcome | What happened |
+| --- | --- |
+| `reset_to_pending` | An `approved` record — or a malformed one, or one with an unrecognized status: fail closed — becomes `pending_approval` with the current `digest` and `digest_version`. `decided_by`, `at`, `decided_at`, `correlation_id`, `role`, `self_approved` and a `changes_requested` `reason` are cleared exactly as `reset_if_changed` clears them; `warnings_seen` is kept and `reset_reason: "digest_version_upgrade"` is recorded. One `plan_pending_approval` notice follows. |
+| `restamped` | A `pending_approval` or `changes_requested` record keeps its status — and its `changes_requested` reason, which still stands — and is rebound to the current `digest` and `digest_version`. The plan stays non-activatable. |
+| `current` | The record was already written under the current version. Untouched. |
+| `no_record` | The plan has no `approval` dict (the gate-off shape). Untouched. |
+| `skipped_locked` | The plan lock was held; nothing was read or written. |
+| `skipped_unreadable` | The manifest could not be read; nothing was written. |
+
+**It never approves a plan.** Every record the command writes carries a status
+other than `approved`, so a plan approved under version 1 leaves the command as
+`pending_approval`: the next `approve_plan` or dashboard approve is a
+deliberate decision on content the reviewer is shown (the dashboard sends its
+`expected_digest`, so a stale view is refused rather than approved).
+
+Each write appends exactly one `plan.approval_reset` audit event, `outcome:
+allowed`, with `detail: {from_version, to_version, previous_status, outcome}`
+and no content or principals beyond the actor the audit module stamps. Output
+is one JSON line per plan (`{plan, outcome}`) followed by a summary line
+(`{reset_to_pending, restamped, current, no_record, skipped}`); the exit code is
+`0` when nothing was skipped and `1` otherwise. A second run reports `current`
+for everything — the command is idempotent, and a `skipped_locked` or
+`skipped_unreadable` plan is simply picked up by the next run.
+`--dry-run` reports the same outcomes and writes, audits and notifies nothing.
+
 ## 4. Reset rules
 
 An approval must not outlive the content it approved. Two paths enforce that:

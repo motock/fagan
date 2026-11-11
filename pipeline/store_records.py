@@ -841,14 +841,12 @@ class ContextSnapshotRecords:
     def _snapshots_root(self) -> Path:
         """Return the ``context`` directory, resolved per call.
 
-        The directory is :data:`pipeline.paths.PLAN_DIR` read at call time, the
-        same binding the context providers (``materialize_context_files``) and
-        every caller that reads ``context/<hex>/`` already use, so a plans
-        directory patched on that module is the one the snapshot lands in.
+        The plans directory comes from the file store's own ``manifest_path``,
+        exactly as every other file-layout record kind resolves it: that call
+        re-reads the plans-directory binding on every access, so a directory
+        patched on the server module is the one the snapshot lands in.
         """
-        from . import paths
-
-        return paths.PLAN_DIR / 'context'
+        return self._store.manifest_path('snapshot').parent / 'context'
 
     def _snapshot_folder(self, namespace: str, digest: object) -> Path:
         """Validate the keys and return the folder *digest* lives in for a read."""

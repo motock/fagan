@@ -300,7 +300,7 @@ def get_story_replay(
     log_sources: dict[str, list[str]] = {}
     source_flags = {"agent.log": False, "review.log": False}
     for name in ("agent.log", "review.log"):
-        res = _store.get_worktree_file(story, name)
+        res = _reader.read_worktree_file(story, name)
         if not res["available"]:
             continue
         tail = res["text"].splitlines()[-n:]

@@ -118,6 +118,8 @@ def test_is_plan_completed_is_true_after_the_marker_is_marked(stores):
 
 def test_the_marker_is_per_plan(stores):
     for backend, store in _all_stores(stores):
+        print('DBG', backend, getattr(store, '_plan_path', None),
+              getattr(getattr(store, '_draft_records', lambda: None)(), '_store', None))
         store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN)
         assert store.is_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is False, backend
         assert store.mark_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is True, backend

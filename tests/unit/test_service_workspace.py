@@ -32,7 +32,7 @@ import pytest
 
 import pipeline.workspace as workspace_mod
 from pipeline import server as p
-from pipeline.store import FileStore
+from pipeline.host_state import build_host_state
 
 # ---------------------------------------------------------------------------
 # Fixture helpers

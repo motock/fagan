@@ -285,7 +285,7 @@ class FileStore:
         ``command_lock_wait_seconds()`` to retry for a bounded time."""
         return _TransactionLock(plan_name, wait_seconds)
 
-    list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
+    list_plans = lambda self: sorted(set(self.list_manifests()) | set(self.records().list_plan_drafts(DEFAULT_NAMESPACE)))
 
     def list_manifests(self) -> list[str]:
         return [

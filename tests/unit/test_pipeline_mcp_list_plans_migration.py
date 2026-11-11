@@ -244,7 +244,7 @@ def test_method_body_reads_the_record_store(plan_dir):
     (plan_dir / "alpha.json").write_text(json.dumps({"epics": []}))
     (plan_dir / "beta.manifest.json").write_text(json.dumps({"stories": {}}))
 
-    assert sorted(p.PipelineService.list_plans()) == ["alpha", "beta"]
+    assert sorted(p._service.list_plans()) == ["alpha", "beta"]
 
 
 def test_method_has_no_docstring():

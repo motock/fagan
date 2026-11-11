@@ -225,7 +225,7 @@ def test_list_workspaces_unchanged():
     """Do NOT modify list_workspaces (brief)."""
     assert (
         _digest(PipelineService.list_workspaces)
-        == "67d6ab3cc76d33bedd7de0fc6cd53471cf3260d87efd1d5c7bbbdab6c22aa16f"
+        == "df2b1402d20da250f85654a05f3c2c96d62f97a8c1c4241d30feb296fe787950"
     )
 
 

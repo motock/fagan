@@ -9,7 +9,6 @@ lazily, inside a function: tests patch ``pipeline.server.advance_all_plans``,
 and a module-level binding would not see the patch.
 """
 import datetime as _dt
-import fcntl
 import json
 import logging
 import os
@@ -23,7 +22,7 @@ from pipeline import config_provenance
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.events_nats_consumer import start_consumers, stop_consumers
-from pipeline.paths import PLAN_DIR
+from pipeline.host_state import build_host_state
 from pipeline.tick_checks import run_tick_checks
 from pipeline.watchers import scan_all_plans
 
@@ -302,8 +301,11 @@ class SchedulerDaemon:
         Additive surface only: this deliberately lives OUTSIDE ``health()``
         because existing tests pin health()'s exact key set. Every value is
         read at call time (module-attribute access, nothing cached on self)
-        so a patched ``pipeline.paths.PLAN_DIR`` is visible immediately and
-        the fingerprint always describes the current process.
+        so a rebound plan dir is visible immediately and the fingerprint
+        always describes the current process. The plan directory is the
+        host-local root the host state resolves (the live
+        ``pipeline.server.PLAN_DIR`` binding), the same root the dashboard
+        reports, so the two fingerprints stay comparable.
 
         ``dispatch_backend`` is ``None`` when ``PIPELINE_BACKEND_DISPATCH``
         is unset or empty — never a ``KeyError`` and never an empty string.
@@ -315,7 +317,7 @@ class SchedulerDaemon:
 
         checkout = _checkout_git_state()
         return {
-            "plan_dir": str(paths.PLAN_DIR),
+            "plan_dir": str(build_host_state().root()),
             "worktree_root": str(paths.WORKTREE_ROOT),
             "autonomy": config.PIPELINE_AUTONOMY,
             "dispatch_backend": os.environ.get("PIPELINE_BACKEND_DISPATCH")
@@ -930,19 +932,16 @@ def run_daemon() -> int:
         )
         return 1
 
-    lock_path = PLAN_DIR / ".scheduler_daemon.lock"
-    # Held for the process lifetime: do not close this fd or let it go out of
-    # scope before run_forever() runs, or the flock releases early.
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    host_state = build_host_state()
+    # Held for the process lifetime: the lock object owns the fd, so it must
+    # stay referenced until run_forever() returns or the flock releases early.
+    lock = host_state.scheduler_pid_lock()
+    if not lock.acquire():
         print(
             "scheduler_daemon: another instance already holds the lock at "
-            f"{lock_path}, exiting",
+            f"{lock.path}, exiting",
             file=sys.stderr,
         )
-        os.close(lock_fd)
         return 1
 
     _report_env_conflicts()
@@ -960,7 +959,7 @@ def run_daemon() -> int:
         return 1
 
     health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or str(
-        PLAN_DIR / ".scheduler_health.json"
+        host_state.scheduler_health_path()
     )
 
     bus = build_bus()

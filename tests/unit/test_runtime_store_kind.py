@@ -40,13 +40,14 @@ def _isolated_store_env(monkeypatch):
 def health_client(tmp_path, monkeypatch):
     """``/api/health`` client with the endpoint's plan dir pinned to ``tmp_path``.
 
-    ``health()`` reads ``app.dashboard.PLAN_DIR``, so that is the binding
-    patched here; ``pipeline.paths.PLAN_DIR`` is patched too because
-    ``resolved_topology()`` reads it through the ``pipeline.paths`` module.
-    Pinning keeps the probe off the real plan directory, which also lets the
-    test observe the HTTP status rather than a raised exception.
+    ``health()`` reads the plan directory through the host state, which
+    resolves its root from the ``pipeline.server.PLAN_DIR`` binding, so that
+    is the binding patched here; ``pipeline.paths.PLAN_DIR`` is patched too
+    because ``resolved_topology()`` reads it through the ``pipeline.paths``
+    module. Pinning keeps the probe off the real plan directory, which also
+    lets the test observe the HTTP status rather than a raised exception.
     """
-    monkeypatch.setattr("app.dashboard.PLAN_DIR", tmp_path / "plans")
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path / "plans")
     monkeypatch.setattr("pipeline.paths.PLAN_DIR", tmp_path / "plans")
     return TestClient(dashboard.app)
 

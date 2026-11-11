@@ -51,7 +51,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import notification_outbox, paths, persistence
+from pipeline import notification_outbox, paths, persistence, server
 from pipeline import scheduler_daemon as daemon_mod
 from pipeline.events import InProcessEventBus
 
@@ -69,10 +69,15 @@ def _patch_plan_dir(monkeypatch, target):
     ``persistence`` re-binds ``PLAN_DIR`` from ``.paths`` at import time and
     the outbox module re-binds it again; patch the canonical location, the
     re-bound name, and the outbox module's own binding (if present).
+    ``pipeline.server.PLAN_DIR`` is the binding the host state resolves its
+    root through, so the daemon reads its host-local files from there.
     """
     monkeypatch.setattr(paths, "PLAN_DIR", target)
     monkeypatch.setattr(persistence, "PLAN_DIR", target)
-    monkeypatch.setattr(daemon_mod, "PLAN_DIR", target)
+    monkeypatch.setattr(server, "PLAN_DIR", target)
+    if hasattr(daemon_mod, "PLAN_DIR"):
+        # Pre-migration the daemon held its own module-load copy of PLAN_DIR.
+        monkeypatch.setattr(daemon_mod, "PLAN_DIR", target)
     if hasattr(notification_outbox, "PLAN_DIR"):
         monkeypatch.setattr(notification_outbox, "PLAN_DIR", target)
 

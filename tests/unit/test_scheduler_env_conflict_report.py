@@ -176,7 +176,9 @@ class TestWiring:
         src = inspect.getsource(daemon.run_daemon)
         assert "_report_env_conflicts()" in src
         call_at = src.index("_report_env_conflicts()")
-        assert call_at > src.index("fcntl.flock(")
+        # The flock itself now lives in host_state.SchedulerPidLock; the lock is
+        # taken at this statement, so ordering is still graded here.
+        assert call_at > src.index("scheduler_pid_lock()")
         assert call_at < src.index("health_path =")
 
     def test_report_is_defined_above_run_daemon(self):

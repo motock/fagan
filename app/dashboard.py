@@ -106,6 +106,7 @@ from pipeline.actor import (
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.health_freshness import health_extras, register_probes
+from pipeline.host_state import build_host_state
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService
@@ -125,6 +126,10 @@ __all__ = [
 ]
 
 PLAN_DIR = LiveRef("PLAN_DIR")
+# Host-local records (the UI preferences and the scheduler's liveness snapshot)
+# live behind this seam; ``FileHostState`` resolves its root through the live
+# ``pipeline.server.PLAN_DIR`` binding on every access.
+_host_state = build_host_state()
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
 USAGE_STATE_PATH = LiveRef("USAGE_STATE_PATH")
 # Where dispatched stories' worktrees live — the same root
@@ -287,33 +292,17 @@ def _dashboard_ui_state_path() -> Path:
 def _read_archived_plans() -> set[str]:
     """Which plan names the user has archived/dismissed from the sidebar.
 
-    Fails open (treats a missing or corrupt state file as "nothing
-    archived") rather than 500ing the plan list over a non-critical
-    preference file - the same tolerance _parse_iso already applies to
-    malformed timestamps elsewhere in this module."""
-    path = _dashboard_ui_state_path()
-    if not path.exists():
-        return set()
-    try:
-        data = json.loads(path.read_text())
-        return set(data.get("archived", []))
-    except (json.JSONDecodeError, OSError, AttributeError):
-        return set()
+    Read through the host state (ADR 0012 open question 3: the preference file
+    is host-local, not per-plan) and fail open -- a missing or corrupt file
+    reads as "nothing archived" rather than 500ing the plan list over a
+    non-critical preference file, the same tolerance _parse_iso applies to
+    malformed timestamps in this module."""
+    return set(_host_state.get_dashboard_ui_state().get("archived", []))
 
 
 def _write_archived_plans(archived: set[str]) -> None:
-    """Atomically persist the archived-plan set via a same-directory temp
-    file + os.replace, so a crash or concurrent read never observes a
-    partial write (same pattern pipeline_mcp_server._atomic_write_json
-    uses for manifest.json)."""
-    path = _dashboard_ui_state_path()
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        tmp.write_text(json.dumps({"archived": sorted(archived)}, indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    """Persist the archived-plan set atomically through the host state."""
+    _host_state.put_dashboard_ui_state({"archived": sorted(archived)})
 
 
 @app.get("/api/health")
@@ -334,15 +323,13 @@ def health() -> dict[str, Any]:
     the outbox aggregate plus the verdicts a stale or missing scheduler and a
     stalled outbox imply — while ``ok`` means "the API answered".
     """
-    plan_dir = str(PLAN_DIR)
+    plan_dir = str(_host_state.root())
     scheduler: Any = None
     config_mismatch: list[str] = []
     try:
         # Re-read from disk on every request: the scheduler may write (or
         # remove) the fingerprint between calls, so nothing is cached here.
-        fingerprint_path = PLAN_DIR / ".scheduler_health.json"
-        with open(fingerprint_path, "r", encoding="utf-8") as handle:
-            payload = json.loads(handle.read())
+        payload = _host_state.read_scheduler_health()
         if isinstance(payload, dict) and isinstance(payload.get("config"), dict):
             scheduler = payload["config"]
             resolved = {"plan_dir": plan_dir, "worktree_root": str(WORKTREE_ROOT)}
@@ -364,9 +351,9 @@ def health() -> dict[str, Any]:
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),
         "runtime": resolved_runtime(),
-        **health_extras(PLAN_DIR),
+        **health_extras(_host_state.root()),
     }
-register_probes(app, lambda: PLAN_DIR)
+register_probes(app, lambda: _host_state.root())
 
 
 @app.get("/api/dispatch_health")

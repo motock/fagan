@@ -55,7 +55,11 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         _RecordingDaemon.events.append("start_consumers")
         consumer_buses.append(bus)
 
-    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    # The daemon resolves the host-local root through the host state, which
+    # reads the live pipeline.server.PLAN_DIR binding -- patch that one.
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(mod, "PLAN_DIR"):
+        monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(mod, "SchedulerDaemon", _RecordingDaemon)
     monkeypatch.setattr(mod, "build_bus", lambda: sentinel_bus)
     monkeypatch.setattr(mod, "scan_all_plans", lambda bus: None)

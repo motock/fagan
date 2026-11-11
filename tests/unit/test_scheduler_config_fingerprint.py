@@ -17,6 +17,7 @@ import pytest
 
 from pipeline import config as pipeline_config
 from pipeline import paths as pipeline_paths
+from pipeline import server as pipeline_server
 from pipeline.scheduler_daemon import SchedulerDaemon
 
 # The exact key set pinned by tests/unit/test_scheduler_daemon.py::
@@ -83,10 +84,11 @@ def test_config_fingerprint_autonomy_mirrors_pipeline_config():
 def test_config_fingerprint_plan_dir_read_live(tmp_path, monkeypatch):
     """plan_dir must be read at call time, not cached at import.
 
-    Patching ``pipeline.paths.PLAN_DIR`` (the source module attribute) must
-    be visible through config_fingerprint(); an implementer that did
-    ``from pipeline.paths import PLAN_DIR`` at module import would fail this.
+    Patching the live ``pipeline.server.PLAN_DIR`` binding (the root the host
+    state resolves through) must be visible through config_fingerprint(); an
+    implementer that cached the root at module import would fail this.
     """
+    monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline_paths, "PLAN_DIR", str(tmp_path))
     daemon = _make_daemon()
     assert daemon.config_fingerprint()["plan_dir"] == str(tmp_path)

@@ -139,7 +139,11 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     # different directories.
     monkeypatch.setattr(pipeline_paths, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(persistence, "PLAN_DIR", default_plan_dir)
-    monkeypatch.setattr(scheduler_daemon, "PLAN_DIR", default_plan_dir)
+    if hasattr(scheduler_daemon, "PLAN_DIR"):
+        # Pre-migration the daemon held its own module-load copy of PLAN_DIR;
+        # once it resolves the host-local root through the host state this
+        # binding is gone and the server binding below is what counts.
+        monkeypatch.setattr(scheduler_daemon, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(notification_outbox, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(pserver, "PLAN_DIR", default_plan_dir)
 

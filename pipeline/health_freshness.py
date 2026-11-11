@@ -165,28 +165,24 @@ def scheduler_health_path(
     """Return the scheduler's health file for *directory*.
 
     *directory* wins; then the plan-directory entry of *environ* (the mapping a
-    caller such as the metrics probe was handed); then the configured default,
-    imported lazily so this module stays importable without the full runtime
-    configuration. The resolver lives here because this module owns the file's
-    name and is its reader, so the plans-directory knowledge ADR 0012 keeps on a
-    shrink-only allowlist stays in one place instead of spreading into every
-    caller that wants to know whether the scheduler is alive.
+    caller such as the metrics probe was handed); then the host state's root,
+    resolved per call because the snapshot is a host-local record. The resolver
+    lives here because this module owns the file's name and is its reader.
     """
     if directory is None and environ is not None:
         directory = environ.get("PLAN_DIR")
     if directory is None:
-        from pipeline import paths
+        from pipeline.host_state import build_host_state
 
-        directory = paths.PLAN_DIR
+        directory = build_host_state().root()
     return Path(directory) / HEALTH_FILENAME
 
 
 def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     """Return the freshness extras for ``/api/health``.
 
-    *plan_dir* defaults to :data:`pipeline.paths.PLAN_DIR` -- imported lazily so
-    the module stays importable without the full runtime configuration, and so
-    a caller (or a test) can point the probe at any plan directory.
+    *plan_dir* defaults to the host state's root, re-resolved on every call;
+    an explicit directory still points the probe at any plan directory.
 
     The scheduler snapshot is read from ``<plan_dir>/.scheduler_health.json``;
     any failure to read or parse it means "no payload", which is graded by

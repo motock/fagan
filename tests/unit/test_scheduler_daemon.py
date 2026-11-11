@@ -656,7 +656,13 @@ class FakeSchedulerDaemon:
 def run_daemon_env(tmp_path, monkeypatch):
     """Patch every collaborator run_daemon() wires up, plus PLAN_DIR."""
     FakeSchedulerDaemon.instances = []
-    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    # run_daemon() resolves the host-local root (lock + default health path)
+    # through the host state, which reads the live pipeline.server.PLAN_DIR
+    # binding -- patch that one. The daemon's own alias only existed
+    # pre-migration.
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(mod, "PLAN_DIR"):
+        monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(mod, "SchedulerDaemon", FakeSchedulerDaemon)
 
     sentinel_bus = object()
@@ -764,7 +770,7 @@ def test_run_daemon_health_path_defaults_to_plan_dir_when_env_unset(run_daemon_e
     daemon = FakeSchedulerDaemon.instances[0]
     passed = daemon.kwargs["health_path"]
     assert passed is not None
-    assert pathlib.Path(passed) == pathlib.Path(mod.PLAN_DIR) / ".scheduler_health.json"
+    assert pathlib.Path(passed) == pathlib.Path(server_mod.PLAN_DIR) / ".scheduler_health.json"
 
 
 def test_run_daemon_health_path_set_from_env(run_daemon_env, monkeypatch):

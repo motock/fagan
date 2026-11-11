@@ -61,11 +61,15 @@ def plan_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def record_calls(monkeypatch):
-    """Record every context-snapshot call made through the record API."""
+    """Record every context-snapshot call made through the record API.
+
+    Every implementation is wrapped, so the calls are observed whichever
+    backend the call site reaches for.
+    """
     calls: list[tuple[str, tuple, dict]] = []
 
-    def _wrap(name: str) -> None:
-        original = getattr(FileRecords, name, None)
+    def _wrap(cls, name: str) -> None:
+        original = getattr(cls, name, None)
 
         def spy(self, *args, **kwargs):
             calls.append((name, args, kwargs))
@@ -73,10 +77,11 @@ def record_calls(monkeypatch):
                 raise AssertionError(f'{name} is not implemented yet')
             return original(self, *args, **kwargs)
 
-        monkeypatch.setattr(FileRecords, name, spy, raising=False)
+        monkeypatch.setattr(cls, name, spy, raising=False)
 
-    _wrap('put_context_snapshot')
-    _wrap('get_context_snapshot')
+    for cls in (FileRecords, InMemoryRecordStore, SqliteRecords):
+        _wrap(cls, 'put_context_snapshot')
+        _wrap(cls, 'get_context_snapshot')
     return calls
 
 

@@ -22,8 +22,10 @@ import logging
 
 import pytest
 
+from pipeline import persistence as pipeline_persistence
 from pipeline import plan_completion, story_metrics
 from pipeline import server as pipeline_server
+from pipeline.store import FileStore
 
 PLAN = "plannotify02"
 

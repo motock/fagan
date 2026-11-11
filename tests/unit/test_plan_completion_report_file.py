@@ -85,6 +85,7 @@ class _Harness:
         monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
         monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
+
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))
             self.report_existed_at_notify.append(

@@ -30,10 +30,10 @@ from typing import Any, Protocol
 from pipeline.audit_file import FileAuditLog
 from pipeline.live_ref import LiveRef
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
-from pipeline.store_plan_drafts import PlanDraftRecords
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
+    PlanDraftRecords,
     UnknownNamespaceError,
     validate_channel,
     validate_namespace,

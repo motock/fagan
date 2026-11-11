@@ -335,7 +335,8 @@ def test_reingesting_a_version_1_record_yields_pending_approval(monkeypatch):
     result = plan_approval.on_ingest(manifest)
     assert result["status"] == "pending_approval"
     assert result["digest_version"] == 2
-    assert plan_approval.is_activatable(result) is False
+    manifest["approval"] = result
+    assert plan_approval.is_activatable(manifest) is False
 
 
 def test_a_current_version_record_stays_approved(monkeypatch):
@@ -349,6 +350,8 @@ def test_a_current_version_record_stays_approved(monkeypatch):
     result = plan_approval.on_ingest(manifest)
     assert result["status"] == "approved"
     assert result["digest_version"] == 2
+    manifest["approval"] = result
+    assert plan_approval.is_activatable(manifest) is True
 
 
 # --------------------------------------------------------------------------- #
@@ -356,9 +359,6 @@ def test_a_current_version_record_stays_approved(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_an_empty_stories_mapping_and_a_missing_one_hash_the_same():
-    assert canonical_digest(_manifest(stories={})) == canonical_digest(
-        _manifest(stories={})
-    )
     manifest_without = _manifest()
     manifest_without.pop("stories")
     assert canonical_digest(manifest_without) == canonical_digest(_manifest(stories={}))

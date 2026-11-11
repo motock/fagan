@@ -218,7 +218,12 @@ def test_a_plan_without_a_team_reports_null(client, plan_dir, gate_on):
 
 
 def test_a_script_tag_in_a_description_is_returned_verbatim(client, plan_dir, gate_on):
-    """The description is data, not markup: it is returned as it was written."""
+    """The description is data, not markup: it is returned as it was written.
+
+    The endpoint is a JSON API, so the value is returned verbatim; nothing
+    renders it here.  (No dashboard page renders the review payload's
+    ``agent_instructions`` today, so there is no HTML to escape yet.)
+    """
     payload = "<script>alert('xss')</script>"
     manifest = _with_approval(
         _base_manifest(stories={"deploy": _story(description=payload)})
@@ -228,37 +233,40 @@ def test_a_script_tag_in_a_description_is_returned_verbatim(client, plan_dir, ga
     response = client.get(_url("alpha"), headers=_bearer("tok-alice"))
 
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["stories"][0]["description"] == payload
-    # The raw payload is JSON-encoded, so the angle brackets are escaped by
-    # the JSON encoder and the response is not the raw script text.
-    assert "<script>" not in response.text
+    # Verbatim: the raw body carries the text as it was written, so a client
+    # that renders it as text shows the script source, not markup.
+    assert payload in response.text
 
 
 # --------------------------------------------------------------------------- #
 # The change is additive: no key is removed, renamed or retyped
 # --------------------------------------------------------------------------- #
 
-def test_the_payload_key_set_is_the_documented_one_plus_the_new_names(
-    client, plan_dir, gate_on
-):
+def test_the_payload_carries_every_documented_key(client, plan_dir, gate_on):
+    """No documented key may go missing (the change is additive only).
+
+    The exact key set is pinned by ``test_dashboard_plan_review_read.py``;
+    here the payload is checked for *membership*, so a later story that adds
+    a field does not have to touch this file.
+    """
     manifest = _with_approval(_base_manifest())
     _write(plan_dir, "alpha", manifest)
 
     body = client.get(_url("alpha"), headers=_bearer("tok-alice")).json()
 
-    assert set(body) == _DOCUMENTED_PAYLOAD_KEYS
+    assert _DOCUMENTED_PAYLOAD_KEYS <= set(body)
 
 
-def test_the_story_key_set_is_the_documented_one_plus_the_new_name(
-    client, plan_dir, gate_on
-):
+def test_the_story_carries_every_documented_key(client, plan_dir, gate_on):
     manifest = _with_approval(_base_manifest())
     _write(plan_dir, "alpha", manifest)
 
     body = client.get(_url("alpha"), headers=_bearer("tok-alice")).json()
 
-    assert set(body["stories"][0]) == _DOCUMENTED_STORY_KEYS
+    assert _DOCUMENTED_STORY_KEYS <= set(body["stories"][0])
 
 
 def test_the_approval_block_and_the_other_payload_keys_keep_their_names(

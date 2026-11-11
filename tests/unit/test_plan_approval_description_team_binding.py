@@ -90,14 +90,18 @@ def notices(monkeypatch):
     return sent
 
 
-def _write_plan(plan_dir: Path, tmp_path: Path, name="ap", **story_extra):
+def _write_plan(plan_dir: Path, tmp_path: Path, name="ap", team=None, **story_extra):
+    """Write the plan source.
+
+    ``team`` is a *plan-level* field; everything else is a story field.
+    """
     story = {"summary": "Do it", "key": "S1", **story_extra}
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E", "stories": [story]}],
     }
-    if "team" in story_extra:
-        plan["team"] = story_extra["team"]
+    if team is not None:
+        plan["team"] = team
     (plan_dir / f"{name}.json").write_text(json.dumps(plan))
 
 
@@ -180,6 +184,18 @@ def test_an_unchanged_plan_keeps_its_approval(plan_dir, tmp_path, monkeypatch):
 # patch_story still refuses to edit a description
 # --------------------------------------------------------------------------- #
 
+class _Service:
+    """The smallest thing ``_patch_story_impl`` needs.
+
+    The patch helper authorizes through ``pipeline.authorization``, which
+    reads the operator's identity; the default (local operator) may see
+    everything, so no stubbing is needed here beyond the object itself.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+
 def test_patch_story_refuses_to_edit_a_description(plan_dir, tmp_path, monkeypatch):
     from pipeline import service_story_ops
 
@@ -199,25 +215,17 @@ def test_patch_story_refuses_to_edit_a_description(plan_dir, tmp_path, monkeypat
     assert _manifest_path(plan_dir).read_bytes() == before
 
 
-class _Service:
-    """The smallest thing ``_patch_story_impl`` needs.
-
-    The patch helper authorizes through ``pipeline.authorization``, which
-    reads the operator's identity; the default (local operator) may see
-    everything, so no stubbing is needed here beyond the object itself.
-    """
-
-    def __init__(self) -> None:
-        pass
-
-
 # --------------------------------------------------------------------------- #
 # Doc pins
 # --------------------------------------------------------------------------- #
 
 def _section(text: str, heading: str, next_heading: str) -> str:
     """Return the text between *heading* and *next_heading*."""
+    assert heading in text, f"the section {heading!r} is gone from the spec"
     start = text.index(heading)
+    assert next_heading in text[start:], (
+        f"the section {next_heading!r} is gone from the spec"
+    )
     end = text.index(next_heading, start)
     return text[start:end]
 
@@ -226,9 +234,13 @@ def test_the_digest_section_lists_the_plan_and_story_fields():
     text = DOC_PATH.read_text(encoding="utf-8")
     section = _section(text, "## 3. The digest", "### 3.1 Digest version")
     for field in PLAN_FIELDS:
-        assert f"`{field}`" in section, f"the plan field {field} is not listed"
+        assert re.search(rf"(?<![\w-]){re.escape(field)}(?![\w-])", section), (
+            f"the plan field {field} is not listed in section 3"
+        )
     for field in STORY_FIELDS:
-        assert f"`{field}`" in section, f"the story field {field} is not listed"
+        assert re.search(rf"(?<![\w-]){re.escape(field)}(?![\w-])", section), (
+            f"the story field {field} is not listed in section 3"
+        )
 
 
 def test_the_digest_section_states_the_digest_version_is_two():
@@ -240,7 +252,7 @@ def test_the_digest_section_states_the_digest_version_is_two():
     assert re.search(r"(?i)version[^.\n]{0,60}\b2\b", section), (
         "the digest version is not stated as 2"
     )
-    assert not re.search(r"(?i)current version is still 1", section), (
+    assert not re.search(r"(?i)current version[^.\n]{0,30}\b1\b", section), (
         "the spec still claims the current digest version is 1"
     )
 

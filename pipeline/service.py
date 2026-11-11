@@ -348,8 +348,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         """Return a combined list of recent and manifest workspaces.
 
         Each entry is ``{"path": str, "exists": bool, "valid": bool}``.
-        Recents are returned first in the order provided by
-        ``self._store.get_recent_workspaces``.  Manifest-only entries are
+        Recents are returned first in the order provided by the host
+        state's ``get_recent_workspaces``.  Manifest-only entries are
         appended after, preserving the order returned by the manifest
         discovery helper.  Paths are de‑duplicated by resolved path.
         """

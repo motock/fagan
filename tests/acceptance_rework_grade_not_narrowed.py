@@ -15,7 +15,6 @@ the oracle - that is the FM-A behavior this change must NOT widen.
 import json
 import subprocess
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 
@@ -34,7 +33,6 @@ def _grade(tmp_path, monkeypatch, extra_story, test_cmd):
     plans.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plans)
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
 
     worktree = tmp_path / "wt"
     worktree.mkdir()

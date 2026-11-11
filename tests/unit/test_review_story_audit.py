@@ -26,7 +26,6 @@ from datetime import datetime
 
 import pytest
 
-import pipeline.concurrency as pcon
 import pipeline.persistence as ppers
 import pipeline.server as p
 import pipeline.store as pstore
@@ -45,7 +44,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(pstore, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.delenv("PIPELINE_STORE", raising=False)
     return d
 

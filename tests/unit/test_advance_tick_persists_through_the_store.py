@@ -25,6 +25,7 @@ import pytest
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 from pipeline import concurrency
+from pipeline import server as p
 from pipeline.store_records import InvalidRecordKeyError, validate_plan_name
 
 _PLAN = "store-tick-plan"
@@ -33,7 +34,7 @@ _PLAN = "store-tick-plan"
 @pytest.fixture(autouse=True)
 def _isolate_plan_lock(tmp_path, monkeypatch):
     """Point the real flock at tmp_path (mirrors test_released_plan_lock.py)."""
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()

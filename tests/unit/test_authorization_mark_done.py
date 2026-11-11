@@ -19,7 +19,6 @@ import pytest
 import pipeline.server as p
 from app.identity import LOCAL_OPERATOR
 from pipeline import ci as pci
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import plan_completion as pcomp
 from pipeline.actor import ANONYMOUS, bind_principal
@@ -43,7 +42,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     # plan_completion holds no PLAN_DIR binding any more: the completion
     # marker and report are records of the store, which resolves the plans
     # directory through the server binding patched above.  The module-level

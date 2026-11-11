@@ -216,12 +216,10 @@ def _write_plan(
 
 def _patch_plan_dir(monkeypatch: pytest.MonkeyPatch, plan_dir: Path) -> None:
     """Patch the PLAN_DIR bindings the conftest plan_dir fixture patches."""
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
 
 
 def _ingest(plan_name: str) -> dict:

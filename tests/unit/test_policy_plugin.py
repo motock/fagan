@@ -408,7 +408,6 @@ def _bind_plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # pipeline.server must be imported before pipeline.ingest (see
     # tests/unit/test_authorization.py) so the import cycle resolves.
     import pipeline.server as p
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
     from pipeline.authorization import ENFORCE_ENV
 
@@ -416,7 +415,6 @@ def _bind_plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     monkeypatch.delenv(ENFORCE_ENV, raising=False)
     return plan_dir
 

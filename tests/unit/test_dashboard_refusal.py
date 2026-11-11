@@ -23,7 +23,6 @@ from fastapi import HTTPException
 from app import dashboard as d
 from app.dashboard_refusal import raise_if_forbidden
 from app.identity import Principal
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as psrv
 from pipeline.actor import bind_principal
@@ -56,7 +55,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(psrv, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

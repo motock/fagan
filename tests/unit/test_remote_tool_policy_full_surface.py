@@ -20,7 +20,6 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 
 from pipeline import server
-from pipeline import concurrency
 import pipeline.persistence
 from app.identity import Principal
 from pipeline.actor import bind_principal
@@ -122,7 +121,6 @@ def _plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every PLAN_DIR binding, and so the manifests and audit, at a temp dir."""
     monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline.persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

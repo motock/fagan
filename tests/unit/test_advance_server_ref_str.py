@@ -17,7 +17,6 @@ import pipeline.server
 
 import pipeline.advance
 import pipeline.advance_merge
-import pipeline.concurrency as pcon
 import pipeline.persistence as ppers
 import pipeline.usage as pusage
 from pipeline import server as p
@@ -113,7 +112,6 @@ def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch):
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     (plan_dir / "cifail.manifest.json").write_text(
         json.dumps(
             {

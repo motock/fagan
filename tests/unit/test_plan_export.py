@@ -34,7 +34,6 @@ import pytest
 # tests/unit/test_ingest_keyless_reingest.py).
 import pipeline.server as p
 from app.identity import Principal
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from pipeline import remote_tool_policy
@@ -78,7 +77,6 @@ def plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

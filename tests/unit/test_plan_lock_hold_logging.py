@@ -8,9 +8,8 @@ crosses ``PIPELINE_PLAN_LOCK_SLOW_SECONDS``. A failed non-blocking acquire
 emits exactly one INFO ``plan lock contended``. The reentrant fast path logs
 nothing.
 
-All tests patch ``pipeline.concurrency.PLAN_DIR`` at a ``tmp_path`` (the
-module reads it as a bare global at call time) so the flock never touches the
-real plans directory.
+All tests patch ``pipeline.server.PLAN_DIR`` (via the ``p`` alias) at a
+``tmp_path``, so the flock never touches the real plans directory.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import time
 import pytest
 
 from pipeline import concurrency
+from pipeline import server as p
 
 LOGGER_NAME = "pipeline.concurrency"
 RELEASE_MESSAGE = "plan lock released"
@@ -99,7 +99,7 @@ def fake_clock(monkeypatch):
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

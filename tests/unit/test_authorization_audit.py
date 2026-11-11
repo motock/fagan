@@ -24,7 +24,7 @@ import pytest
 
 import pipeline.server  # noqa: F401 - see the module docstring's import note
 from app.identity import LOCAL_OPERATOR
-from pipeline import audit, concurrency, persistence, server
+from pipeline import audit, persistence, server
 from pipeline.actor import bind_correlation_id, bind_principal
 from pipeline.authorization import ENFORCE_ENV, authorize
 
@@ -33,16 +33,16 @@ from pipeline.authorization import ENFORCE_ENV, authorize
 def plan_dirs(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at a throwaway directory.
 
-    ``pipeline_persistence`` and ``pipeline_concurrency`` import ``PLAN_DIR``
-    from ``pipeline_paths`` at module load and read it as a free variable, so
-    the patch has to land on their own bindings too. ``pipeline.audit`` reads
-    ``persistence.PLAN_DIR`` at call time, so it follows automatically.
+    ``pipeline_persistence`` imports ``PLAN_DIR`` from ``pipeline_paths`` at
+    module load and reads it as a free variable, so the patch has to land on
+    its own binding too. ``pipeline.concurrency`` and ``pipeline.audit`` read
+    ``pipeline.server``/``persistence`` PLAN_DIR at call time, so they follow
+    automatically.
     """
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(server, "PLAN_DIR", d)
     monkeypatch.setattr(persistence, "PLAN_DIR", d)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", d)
     monkeypatch.delenv(ENFORCE_ENV, raising=False)
     return d
 

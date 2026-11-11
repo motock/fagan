@@ -19,7 +19,6 @@ import contextlib
 import json
 import subprocess
 
-from pipeline import concurrency as pipeline_concurrency
 from pipeline import dispatch_worktree
 from pipeline import persistence as pipeline_persistence
 from pipeline import server as pipeline_server
@@ -39,13 +38,13 @@ def _lock(value):
 def _plan_dirs(monkeypatch, tmp_path):
     """Point every module-level plan directory at ``tmp_path``.
 
-    ``pipeline.server``, ``pipeline.persistence`` and ``pipeline.concurrency``
-    each expose their own module-level ``PLAN_DIR``; the notification sidecar is
-    written through ``pipeline.persistence``'s copy.
+    ``pipeline.server`` and ``pipeline.persistence`` each bind their own
+    module-level ``PLAN_DIR``; the notification sidecar is written through
+    ``pipeline.persistence``'s copy.  ``pipeline.concurrency`` resolves
+    ``pipeline.server.PLAN_DIR`` at call time, so the server patch covers it.
     """
     monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(pipeline_concurrency, "PLAN_DIR", tmp_path)
 
 
 def _records(plan_name):

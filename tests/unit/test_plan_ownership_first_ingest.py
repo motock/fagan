@@ -20,7 +20,6 @@ import pytest
 import pipeline.server as p
 from app.identity import LOCAL_OPERATOR, Principal
 from pipeline import audit as audit_mod
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from pipeline.actor import bind_principal
@@ -55,15 +54,14 @@ def provider(monkeypatch):
 def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at ``tmp_path``.
 
-    pipeline_persistence and pipeline_concurrency import PLAN_DIR from
-    pipeline_paths at module load and read it as a free var, so patches must
-    land on their own bindings too.
+    pipeline_persistence imports PLAN_DIR from pipeline_paths at module load
+    and reads it as a free var, so the patch must land on its own binding too;
+    pipeline.concurrency resolves pipeline.server.PLAN_DIR at call time.
     """
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.setattr(audit_mod, "PLAN_DIR", d, raising=False)
     return d
 

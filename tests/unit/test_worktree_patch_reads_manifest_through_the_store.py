@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as pserver
 from pipeline import worktree_patch
@@ -127,7 +126,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(pserver, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

@@ -28,6 +28,7 @@ import pytest
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 from pipeline import concurrency, review_gate_notice
+from pipeline import server as p
 from pipeline.review_gate_notice import (
     clear_review_gate_notice,
     should_notify_review_gate,
@@ -101,7 +102,7 @@ def test_clear_on_unknown_plan_is_a_noop():
 @pytest.fixture(autouse=True)
 def _isolate_plan_lock(tmp_path, monkeypatch):
     """Point the real flock at tmp_path and give every test a clean held-set."""
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()

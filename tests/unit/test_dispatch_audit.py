@@ -24,7 +24,6 @@ import pytest
 
 from app.identity import Principal
 from pipeline import audit as pipeline_audit
-from pipeline import concurrency as pipeline_concurrency
 from pipeline import dispatch_worktree
 from pipeline import persistence as pipeline_persistence
 from pipeline import server as pipeline_server
@@ -44,7 +43,6 @@ def _plan_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point every module-level plan directory at ``tmp_path``."""
     monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(pipeline_concurrency, "PLAN_DIR", tmp_path)
 
 
 def _audit_records(plan_name: str) -> list[dict]:

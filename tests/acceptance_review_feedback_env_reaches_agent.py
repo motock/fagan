@@ -26,7 +26,6 @@ import json
 import subprocess
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline import ticketing as pt
@@ -47,7 +46,6 @@ def _dispatch(tmp_path, monkeypatch, story):
     plans.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plans)
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
     worktrees = tmp_path / "worktrees"
     worktrees.mkdir()
     monkeypatch.setattr(p, "WORKTREE_ROOT", worktrees)

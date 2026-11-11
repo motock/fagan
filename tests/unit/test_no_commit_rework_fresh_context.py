@@ -25,7 +25,6 @@ reaches through its late-bound ``_ServerRef``).
 import json
 from pathlib import Path
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import rebrief
 from pipeline import server as p
@@ -55,11 +54,11 @@ def _make_plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
-    # pipeline_persistence and pipeline_concurrency import PLAN_DIR from
-    # pipeline_paths at module load and read it as a free var, so patches
-    # must land on their own bindings too.
+    # pipeline_persistence imports PLAN_DIR from pipeline_paths at module
+    # load and reads it as a free var, so the patch must land on its own
+    # binding too; pipeline.concurrency resolves pipeline.server.PLAN_DIR
+    # at call time.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

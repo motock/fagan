@@ -51,7 +51,6 @@ def reaper(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline.server, "PLAN_DIR", plans)
     store = _file_store()
     monkeypatch.setattr(pipeline.server, "_store", store)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
     return store, plans
 
 

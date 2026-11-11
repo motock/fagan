@@ -27,7 +27,6 @@ import pytest
 # imports _ingest_plan_impl back from pipeline.ingest -- so importing
 # pipeline.ingest first re-enters a partially-initialized pipeline.server.
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 
@@ -65,7 +64,6 @@ def keyless_plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     # Pin the dispatch provider to "claude" so the preflight gate never fires
     # (it would otherwise consult the operator's real role registry).
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")

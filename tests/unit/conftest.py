@@ -93,8 +93,8 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     records accumulated in ~/.claude/plans/cap1.S1.journal.json from
     test_check_story_status_lint_gate.py alone. Tests that need a specific
     shared PLAN_DIR (e.g. the `plan_dir` fixture, which also patches
-    pipeline.server.PLAN_DIR/pipeline.concurrency.PLAN_DIR to the same
-    directory) simply monkeypatch persistence.PLAN_DIR again afterward,
+    pipeline.server.PLAN_DIR and persistence.PLAN_DIR to the same directory)
+    simply monkeypatch persistence.PLAN_DIR again afterward,
     which composes fine with this default.
 
     Uses tmp_path_factory (a directory tree independent of this test's own
@@ -152,19 +152,17 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
 def plan_dir(tmp_path, monkeypatch):
     """Shared PLAN_DIR fixture for test modules that do not define their own.
 
-    Patches pipeline.server, pipeline.persistence, and pipeline.concurrency
-    PLAN_DIR bindings to the same directory so manifest writes/journals land
+    Patches the pipeline.server and pipeline.persistence PLAN_DIR bindings to
+    the same directory so manifest writes/journals land
     in the test tmp_path. Test modules that define their own ``plan_dir``
     fixture shadow this one (pytest resolves module-level fixtures first).
     """
     import pipeline.server as p
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

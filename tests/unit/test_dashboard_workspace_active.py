@@ -31,7 +31,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import dashboard as d
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 
@@ -54,7 +53,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

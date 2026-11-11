@@ -406,7 +406,7 @@ class _FakeAutonomy:
 
 @pytest.fixture(autouse=True)
 def _isolate_plan_lock(tmp_path, monkeypatch):
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()
@@ -681,7 +681,6 @@ def plan_dir(tmp_path, monkeypatch):
     from pipeline import persistence as ppers
 
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", d)
     return d
 
 

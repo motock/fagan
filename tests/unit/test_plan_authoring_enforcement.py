@@ -42,7 +42,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.authorization import ENFORCE_ENV
@@ -72,9 +71,10 @@ def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at a throwaway directory.
 
     ``pipeline.service`` reads PLAN_DIR through a ``_ServerRef``, so patching
-    ``pipeline.server`` covers the service; the persistence/concurrency
-    bindings are patched too for the manifest and sidecar reads, and
-    ``app.dashboard``'s own copy for the route's workspace lookup.
+    ``pipeline.server`` covers the service; the persistence binding is patched
+    too for the manifest and sidecar reads, and ``app.dashboard``'s own copy
+    for the route's workspace lookup. ``pipeline.concurrency`` resolves
+    ``pipeline.server.PLAN_DIR`` at call time.
     """
     from app import dashboard as d
 
@@ -83,7 +83,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

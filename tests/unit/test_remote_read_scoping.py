@@ -25,7 +25,6 @@ import pipeline.persistence as ppers
 import app.policy as policy_module
 from app.identity import LOCAL_OPERATOR, Principal
 from pipeline import authorization
-from pipeline import concurrency as pcon
 from pipeline.actor import bind_principal
 from pipeline.remote_tool_policy import remote_tool_policy
 
@@ -86,7 +85,6 @@ def _plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     directory.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

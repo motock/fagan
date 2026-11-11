@@ -7,7 +7,6 @@ import subprocess
 import pytest
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline import ticketing as pt
@@ -78,7 +77,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(pper, "AGENTS_DIR", agents)
     monkeypatch.setattr(p, "PLAN_DIR", plans)
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
     monkeypatch.setattr(p, "WORKTREE_ROOT", wt)
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(

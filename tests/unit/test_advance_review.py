@@ -121,7 +121,6 @@ def _isolate_plan_lock(tmp_path, monkeypatch):
     call time, so a patched ``PLAN_DIR`` is what makes ``path`` the plan's own
     ``<plan>.manifest.json``.
     """
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield

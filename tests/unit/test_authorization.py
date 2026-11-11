@@ -18,7 +18,6 @@ import pytest
 # pipeline.ingest first re-enters a partially-initialized pipeline.server.
 import pipeline.server as p
 from app.identity import LOCAL_OPERATOR
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.authorization import (
@@ -45,15 +44,15 @@ class _BrokenPolicy:
 def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at a throwaway directory.
 
-    ``pipeline_persistence`` and ``pipeline_concurrency`` import ``PLAN_DIR``
-    from ``pipeline_paths`` at module load and read it as a free variable, so
-    the patch has to land on their own bindings too.
+    ``pipeline_persistence`` imports ``PLAN_DIR`` from ``pipeline_paths`` at
+    module load and reads it as a free variable, so the patch has to land on
+    its own binding too. ``pipeline.concurrency`` resolves
+    ``pipeline.server.PLAN_DIR`` at call time, so the server patch covers it.
     """
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

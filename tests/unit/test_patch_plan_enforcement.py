@@ -28,9 +28,10 @@ The contract these tests pin down:
 
 ``plan_dir`` shadows the shared fixture from ``tests/unit/conftest.py`` with
 the shape ``tests/unit/test_authorization.py`` uses: a per-test ``tmp_path``
-with the ``pipeline.server``, ``pipeline.persistence`` and
-``pipeline.concurrency`` PLAN_DIR bindings patched -- the bindings the store,
-the manifest reads and the denial sidecar all resolve through.
+with the ``pipeline.server`` and ``pipeline.persistence`` PLAN_DIR bindings
+patched -- the bindings the store, the manifest reads and the denial sidecar
+all resolve through (``pipeline.concurrency`` resolves the server binding at
+call time).
 """
 
 from __future__ import annotations
@@ -40,7 +41,6 @@ import json
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.authorization import ENFORCE_ENV
@@ -60,7 +60,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

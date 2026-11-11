@@ -37,6 +37,7 @@ import pytest
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 from pipeline import concurrency, dispatch_lease
+from pipeline import server as p
 
 _PLAN = "lock-release-plan"
 
@@ -49,12 +50,11 @@ _PLAN = "lock-release-plan"
 def _isolate_plan_lock(tmp_path, monkeypatch):
     """Point the real flock at tmp_path and give every test a clean held-set.
 
-    Mirrors tests/unit/test_released_plan_lock.py: PLAN_DIR is patched
-    directly on the concurrency module (bypassing the _ServerRef
-    indirection), so ``_plan_lock``/``_released_plan_lock`` never touch the
-    real ~/.claude/plans directory.
+    Mirrors tests/unit/test_released_plan_lock.py: PLAN_DIR is patched on
+    ``pipeline.server`` (via the ``p`` alias), so ``_plan_lock`` /
+    ``_released_plan_lock`` never touch the real ~/.claude/plans directory.
     """
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()

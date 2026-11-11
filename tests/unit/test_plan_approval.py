@@ -414,6 +414,7 @@ def test_should_write_a_byte_identical_manifest_when_disabled(
     unset_bytes = _manifest_path(plan_dir).read_bytes()
 
     _manifest_path(plan_dir).unlink()
+    _write_plan(plan_dir, tmp_path)
     monkeypatch.setenv(pa.APPROVAL_ENV, "off")
     assert p.ingest_plan("ap")["ok"] is True
     off_bytes = _manifest_path(plan_dir).read_bytes()
@@ -436,6 +437,7 @@ def test_should_leave_an_existing_approval_key_untouched_when_disabled(
     manifest = _read_manifest(plan_dir)
     manifest["approval"] = existing
     _manifest_path(plan_dir).write_text(json.dumps(manifest))
+    _write_plan(plan_dir, tmp_path)
 
     assert p.ingest_plan("ap")["ok"] is True
 
@@ -475,6 +477,7 @@ def test_should_preserve_an_approved_matching_record_across_reingest(
         "warnings_seen": ["w1"],
     }
     _manifest_path(plan_dir).write_text(json.dumps(manifest))
+    _write_plan(plan_dir, tmp_path)
 
     assert p.ingest_plan("ap")["ok"] is True
 

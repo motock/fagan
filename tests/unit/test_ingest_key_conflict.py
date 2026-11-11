@@ -148,6 +148,7 @@ def test_reingesting_same_plan_does_not_conflict_with_itself(
     manifest = json.loads(manifest_path.read_text())
     manifest["stories"]["TOPO-X"]["status"] = "in_progress"
     manifest_path.write_text(json.dumps(manifest))
+    _plan_with_story(plan_dir, "mine", tmp_path, "TOPO-X")
 
     assert _ingest("mine")["ok"] is True
 

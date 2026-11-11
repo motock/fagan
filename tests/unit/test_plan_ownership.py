@@ -138,12 +138,15 @@ def test_delegates_persist_in_order() -> None:
 def test_reingest_keeps_plan_named_owner(
     plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
 ) -> None:
-    _write_plan(plan_dir, "owned-plan", _repo_root(tmp_path), owner="alice")
+    repo_root = _repo_root(tmp_path)
+    _write_plan(plan_dir, "owned-plan", repo_root, owner="alice")
 
     # Only the local operator may name an owner on the first ingest, so the
     # plan file's owner lands then; the later re-ingests must not displace it.
+    first_ok = _ingest(plan_dir, "owned-plan", LOCAL_OPERATOR.subject)["ok"]
+    _write_plan(plan_dir, "owned-plan", repo_root, owner="alice")
     assert (
-        _ingest(plan_dir, "owned-plan", LOCAL_OPERATOR.subject)["ok"],
+        first_ok,
         _ingest(plan_dir, "owned-plan", "carol")["ok"],
         _manifest(plan_dir, "owned-plan")["owner"],
     ) == (True, True, "alice")

@@ -173,6 +173,7 @@ def test_an_unchanged_plan_keeps_its_approval(plan_dir, tmp_path, monkeypatch):
     _write_plan(plan_dir, tmp_path, description="First description.", team="core")
     assert p.ingest_plan("ap")["ok"] is True
     _approve(plan_dir)
+    _write_plan(plan_dir, tmp_path, description="First description.", team="core")
 
     assert p.ingest_plan("ap")["ok"] is True
 

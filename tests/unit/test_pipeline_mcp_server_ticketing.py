@@ -53,6 +53,7 @@ def test_ingest_plan_reingest_preserves_stories_from_untouched_epics(
     manifest["stories"]["S1"]["pr_url"] = "https://example.com/pr/48"
     (plan_dir / "reingest.manifest.json").write_text(json.dumps(manifest))
 
+    (plan_dir / "reingest.json").write_text(json.dumps(plan))
     result = p.ingest_plan("reingest", only_epics=["E2"])
 
     assert result["ok"] is True
@@ -103,6 +104,7 @@ def test_ingest_plan_overwrite_true_drops_untouched_epics(
     }
     (plan_dir / "ovr.json").write_text(json.dumps(plan))
     p.ingest_plan("ovr")
+    (plan_dir / "ovr.json").write_text(json.dumps(plan))
 
     result = p.ingest_plan("ovr", only_epics=["E2"], overwrite=True)
 
@@ -127,6 +129,7 @@ def test_ingest_plan_reingest_preserves_top_level_paused_and_fallback_fields(
     manifest["local_model_fallback"] = "glm-5.2:cloud"
     (plan_dir / "topkeys.manifest.json").write_text(json.dumps(manifest))
 
+    (plan_dir / "topkeys.json").write_text(json.dumps(plan))
     result = p.ingest_plan("topkeys")
 
     assert result["ok"] is True

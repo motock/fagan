@@ -186,6 +186,14 @@ An approval must not outlive the content it approved. Two paths enforce that:
 `set_plan_role_config` writes `role_config` directly and is not reset there —
 an approval can outlive such a change until the next ingest.
 
+A successful full ingest consumes the staged draft (the draft is deleted once
+the manifest is written, ADR 0012 decision 5), so after it the manifest is the
+plan record; an `only_epics` ingest, a refused ingest and a `skipped: locked`
+ingest keep the draft. Consuming the draft does not move what an approval
+binds to: the digest is still computed from the manifest's plan-defining
+content, so re-staging an export and re-ingesting it unchanged keeps the
+approval.
+
 Changing a story's `description` or the plan's `team` and re-ingesting resets
 the approval to `pending_approval`; `patch_story` cannot edit `description`.
 

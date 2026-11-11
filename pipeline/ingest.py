@@ -545,6 +545,15 @@ def _story_extra_fields(story: dict) -> dict:
     return {"tdd_split": bool(story.get("tdd_split", False))}
 
 
+def _consume_plan_draft(plan_name: str) -> None:
+    """Delete the staged draft: after a full ingest the manifest is the plan."""
+    records = plan_draft._records()
+    if records is not None:
+        records.delete_plan_draft(plan_draft.DEFAULT_NAMESPACE, plan_name)
+        return
+    (_store.manifest_path(plan_name).parent / f"{plan_name}.json").unlink(missing_ok=True)
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:
@@ -582,6 +591,12 @@ def _ingest_plan_impl(
     plan_names.validate_new_plan_name(plan_name)
     plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
+        missing = f"No plan named {plan_name}"
+        # A plan whose draft a full ingest consumed names the way out (ADR 0012).
+        if refusal.get("error") == missing and _store.manifest_path(plan_name).exists():
+            return {"ok": False, "error": (
+                f"plan '{plan_name}' has no staged draft: save_plan it "
+                "(export_plan renders the current plan) before re-ingesting")}
         return refusal
 
     # advance_all_plans() iterates every plan in shared PLAN_DIR, each
@@ -885,6 +900,11 @@ def _ingest_plan_impl(
             final_manifest["approval"] = on_ingest(final_manifest)
             notify_pending = pending_notice_due(previous_approval, final_manifest["approval"])
         _atomic_write_json(manifest_path, final_manifest)
+        # ADR 0012 decision 5: a full ingest consumes the draft. A crash between
+        # this write and the delete leaves it, and the next ingest re-applies
+        # identical content by explicit story key - which is idempotent.
+        if only_epics is None:
+            _consume_plan_draft(plan_name)
         if notify_pending:
             notify_approval_event(plan_name, final_manifest, "plan_pending_approval")
 

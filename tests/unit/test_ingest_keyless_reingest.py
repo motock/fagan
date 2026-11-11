@@ -297,6 +297,7 @@ def test_second_ingest_of_a_keyless_plan_is_rejected(
     manifest_path = keyless_plan_dir / "kp.manifest.json"
     before_text = manifest_path.read_text()
     before_count = len(json.loads(before_text)["stories"])
+    _write_plan(keyless_plan_dir, "kp", [_epic("E1", [_story("A")])], tmp_path)
 
     result = _ingest("kp")
 
@@ -323,6 +324,7 @@ def test_second_ingest_with_overwrite_succeeds(
 ) -> None:
     _write_plan(keyless_plan_dir, "kp", [_epic("E1", [_story("A")])], tmp_path)
     assert _ingest("kp")["ok"] is True
+    _write_plan(keyless_plan_dir, "kp", [_epic("E1", [_story("A")])], tmp_path)
 
     result = _ingest("kp", overwrite=True)
 
@@ -340,6 +342,12 @@ def test_fully_keyed_plan_reingests_fine(
         tmp_path,
     )
     assert _ingest("kp")["ok"] is True
+    _write_plan(
+        keyless_plan_dir,
+        "kp",
+        [_epic("E1", [_story("A", key="S1"), _story("B", key="S2")])],
+        tmp_path,
+    )
 
     result = _ingest("kp")
 
@@ -361,6 +369,15 @@ def test_reingest_with_only_epics_excluding_the_keyless_epic_succeeds(
         tmp_path,
     )
     assert _ingest("kp")["ok"] is True
+    _write_plan(
+        keyless_plan_dir,
+        "kp",
+        [
+            _epic("E1", [_story("A")]),
+            _epic("E2", [_story("B", key="S2")]),
+        ],
+        tmp_path,
+    )
 
     result = _ingest("kp", only_epics=["E2"])
 
@@ -380,6 +397,15 @@ def test_reingest_with_only_epics_including_the_keyless_epic_is_rejected(
         tmp_path,
     )
     assert _ingest("kp")["ok"] is True
+    _write_plan(
+        keyless_plan_dir,
+        "kp",
+        [
+            _epic("E1", [_story("A")]),
+            _epic("E2", [_story("B", key="S2")]),
+        ],
+        tmp_path,
+    )
 
     result = _ingest("kp", only_epics=["E1"])
 
@@ -406,6 +432,7 @@ def test_keyless_reingest_error_is_reported_before_the_lock_is_taken(
             raise AssertionError("the transaction must not be entered")
 
     monkeypatch.setattr(p, "_store", _NoTransactionStore(p._store))
+    _write_plan(keyless_plan_dir, "kp", [_epic("E1", [_story("A")])], tmp_path)
 
     assert _ingest("kp") == {"ok": False, "error": _expected_error("A")}
 

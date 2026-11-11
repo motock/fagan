@@ -1514,6 +1514,10 @@ which resets its approval.
 
 ---
 
+### Draft consumption
+
+A successful full `ingest_plan` consumes the staged draft: the draft is deleted once the manifest is written, because the manifest is the only record of the plan (ADR 0012 decision 5). An `only_epics` ingest keeps the draft, because the epics it did not ingest exist nowhere else; so does a refused ingest and an ingest skipped with `skipped: locked`, because nothing was written. Re-ingesting a plan with no staged draft is refused with `plan '<name>' has no staged draft: save_plan it (export_plan renders the current plan) before re-ingesting`. Editing a story's description or the plan's team and re-ingesting resets plan approval to pending_approval.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

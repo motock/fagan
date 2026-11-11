@@ -514,6 +514,7 @@ def test_final_rework_escalation_survives_ingest_replan(
     (plan_dir / "freplan.manifest.json").write_text(json.dumps(manifest))
 
     # Re-ingest (e.g. a new story was added to the plan). The key must survive.
+    (plan_dir / "freplan.json").write_text(json.dumps(plan))
     result = p.ingest_plan("freplan")
 
     assert result["ok"] is True

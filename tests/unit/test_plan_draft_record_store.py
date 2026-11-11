@@ -410,3 +410,62 @@ def test_the_listings_are_sorted(plan_dir, records):
 
     assert PipelineService().list_plans() == ["alpha", "beta"]
     assert PipelineService().list_ingestable_plans() == ["alpha", "beta"]
+
+
+# --------------------------------------------------------------------------- #
+# docs contract: the reference and the changelog describe the new shape
+# --------------------------------------------------------------------------- #
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REFERENCE = _REPO_ROOT / "REFERENCE.md"
+_CHANGELOG = _REPO_ROOT / "CHANGELOG.md"
+
+
+def _reference_entry(tool: str) -> str:
+    """Return the REFERENCE.md bullet that documents ``tool`` and its wraps."""
+    lines = _REFERENCE.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if not line.lstrip().startswith(f"- `{tool}"):
+            continue
+        entry = [line]
+        for follow in lines[index + 1:]:
+            if not follow.strip() or follow.startswith("- ") or follow.startswith("#"):
+                break
+            entry.append(follow)
+        return "\n".join(entry)
+    raise AssertionError(f"REFERENCE.md documents no entry for {tool}")
+
+
+def test_reference_save_plan_entry_no_longer_advertises_a_written_file():
+    entry = _reference_entry("save_plan(")
+
+    assert "~/.claude/plans" not in entry
+    assert '"path"' not in entry
+
+
+def test_reference_save_plan_entry_says_the_plan_is_staged():
+    entry = _reference_entry("save_plan(").lower()
+
+    assert "stag" in entry or "draft" in entry or "record" in entry
+
+
+def test_reference_list_plans_entry_says_a_draft_or_a_manifest():
+    entry = _reference_entry("list_plans(").lower()
+
+    assert "draft" in entry or "manifest" in entry
+
+
+def test_changelog_records_the_save_plan_response_change():
+    text = _CHANGELOG.read_text(encoding="utf-8")
+
+    assert "save_plan" in text
+    assert "staged" in text.lower()
+
+
+def test_changelog_records_the_change_in_the_unreleased_section():
+    text = _CHANGELOG.read_text(encoding="utf-8")
+    start = text.index("## ")
+    rest = text[start + 3:].lstrip("\n")
+    end = rest.find("\n## ")
+    section = rest if end == -1 else rest[:end]
+
+    assert "save_plan" in section

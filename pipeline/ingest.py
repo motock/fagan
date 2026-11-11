@@ -593,8 +593,7 @@ def _ingest_plan_impl(
     plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
         missing = f"No plan named {plan_name}"
-        # A plan with a manifest but no draft had it consumed by a full ingest
-        # (ADR 0012 decision 5); a plan with neither keeps the legacy refusal.
+        # A plan whose draft a full ingest consumed names the way out (ADR 0012).
         if refusal.get("error") == missing and _store.manifest_path(plan_name).exists():
             return {"ok": False, "error": (
                 f"plan '{plan_name}' has no staged draft: save_plan it "

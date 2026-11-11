@@ -1,21 +1,18 @@
 """Tests for active-workspace accessors on PipelineService (pipeline/service.py).
 
-Story: add two thin delegators next to ``resolve_workspace`` /
-``list_workspaces`` (service.py lines 354-416):
+``PipelineService.get_active_workspace(self) -> str | None`` and
+``PipelineService.set_active_workspace(self, path: str | None) -> None`` are thin
+delegators to the module-level ``_host_state`` free variable -- the host-local
+state seam (``pipeline/host_state.py``) that owns the workspace records now that
+they are off the Store (ADR 0012, decision 4).
 
-- ``PipelineService.get_active_workspace(self) -> str | None`` returns
-  ``_store.get_active_workspace()`` — the module-level ``_store`` free
-  variable, the same seam ``resolve_workspace`` uses at line 373.
-- ``PipelineService.set_active_workspace(self, path: str | None) -> None``
-  delegates to ``_store.set_active_workspace(path)``.
-
-The persistence layer (``pipeline/store.py``) already landed in story 1 and is
-covered by ``tests/unit/test_store_active_workspace.py``; these tests cover the
+The persistence layer (``pipeline/host_state.py``) is covered by
+``tests/unit/test_store_active_workspace.py``; these tests cover the
 service-level delegation seam only. The shared ``plan_dir`` fixture from
 ``tests/unit/conftest.py`` patches ``pipeline.server.PLAN_DIR`` to a tmp
-directory, and ``pipeline.server._store`` (a ``FileStore``) resolves PLAN_DIR
-through that same binding at call time, so the round trips below exercise the
-real on-disk behavior without touching the operator's ``~/.claude/plans/``.
+directory, and ``FileHostState`` resolves that same binding at call time, so the
+round trips below exercise the real on-disk behavior without touching the
+operator's ``~/.claude/plans/``.
 """
 
 import hashlib
@@ -80,30 +77,30 @@ def test_set_active_workspace_signature():
     assert sig.return_annotation is None
 
 
-def test_get_active_workspace_delegates_to_store_free_var(service, monkeypatch):
-    """get_active_workspace must read the module-level ``_store`` free var."""
-    sentinel = "/abs/from-fake-store"
+def test_get_active_workspace_delegates_to_host_state_free_var(service, monkeypatch):
+    """get_active_workspace must read the module-level ``_host_state`` free var."""
+    sentinel = "/abs/from-fake-host-state"
     calls = []
 
-    class _FakeStore:
+    class _FakeHostState:
         def get_active_workspace(self):
             calls.append("get")
             return sentinel
 
-    monkeypatch.setattr(server_mod, "_store", _FakeStore())
+    monkeypatch.setattr(server_mod, "_host_state", _FakeHostState())
     assert service.get_active_workspace() == sentinel
     assert calls == ["get"]
 
 
-def test_set_active_workspace_delegates_to_store_free_var(service, monkeypatch):
-    """set_active_workspace must delegate to ``_store.set_active_workspace``."""
+def test_set_active_workspace_delegates_to_host_state_free_var(service, monkeypatch):
+    """set_active_workspace must delegate to the host state."""
     calls = []
 
-    class _FakeStore:
+    class _FakeHostState:
         def set_active_workspace(self, path):
             calls.append(path)
 
-    monkeypatch.setattr(server_mod, "_store", _FakeStore())
+    monkeypatch.setattr(server_mod, "_host_state", _FakeHostState())
     assert service.set_active_workspace("/abs/ws-a") is None
     assert calls == ["/abs/ws-a"]
 
@@ -112,13 +109,13 @@ def test_set_active_workspace_delegates_to_store_free_var(service, monkeypatch):
 
 
 def test_set_active_workspace_propagates_store_errors(service, monkeypatch):
-    """Thin delegator: a store failure surfaces as-is (no swallowing)."""
+    """Thin delegator: a host-state failure surfaces as-is (no swallowing)."""
 
-    class _ExplodingStore:
+    class _ExplodingHostState:
         def set_active_workspace(self, path):
             raise RuntimeError("store exploded")
 
-    monkeypatch.setattr(server_mod, "_store", _ExplodingStore())
+    monkeypatch.setattr(server_mod, "_host_state", _ExplodingHostState())
     with pytest.raises(RuntimeError, match="store exploded"):
         service.set_active_workspace("/abs/ws-a")
 
@@ -189,7 +186,7 @@ def test_service_delegation_does_not_disturb_recent_workspaces(service, plan_dir
     the recents list that resolve_workspace/list_workspaces maintain."""
     service.set_active_workspace("/abs/ws-a")
     assert service.get_active_workspace() == "/abs/ws-a"
-    assert server_mod._store.get_recent_workspaces() == []
+    assert server_mod._host_state.get_recent_workspaces() == []
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +217,7 @@ def test_resolve_workspace_unchanged():
     source at story start."""
     assert (
         _digest(PipelineService.resolve_workspace)
-        == "add1799d7b9761a4d65f52692224ec239491d4ccf27329735532cb976cab329a"
+        == "6a05a0689b299f3ef665f09eb5cdb61fff5e00ddbb7a1bd102f6e69761a6e6f2"
     )
 
 
@@ -228,7 +225,7 @@ def test_list_workspaces_unchanged():
     """Do NOT modify list_workspaces (brief)."""
     assert (
         _digest(PipelineService.list_workspaces)
-        == "67d6ab3cc76d33bedd7de0fc6cd53471cf3260d87efd1d5c7bbbdab6c22aa16f"
+        == "df2b1402d20da250f85654a05f3c2c96d62f97a8c1c4241d30feb296fe787950"
     )
 
 
@@ -245,31 +242,30 @@ def test_save_plan_still_uses_store_seam_unchanged():
     assert "active_workspace" not in src
 
 
-def test_resolve_workspace_still_records_recents_via_store():
-    """resolve_workspace's line-373 seam (_store.add_recent_workspace) must
-    survive this story verbatim."""
+def test_resolve_workspace_still_records_recents_via_host_state():
+    """resolve_workspace must record recents on the host state."""
     src = _normalized_source(PipelineService.resolve_workspace)
-    assert "_store.add_recent_workspace(resolved_path)" in src
+    assert "_host_state.add_recent_workspace(resolved_path)" in src
 
 
-def test_list_workspaces_still_reads_store_recents():
+def test_list_workspaces_still_reads_host_state_recents():
     src = _normalized_source(PipelineService.list_workspaces)
-    assert "_store.get_recent_workspaces()" in src
+    assert "_host_state.get_recent_workspaces()" in src
 
 
 def test_store_module_untouched_by_this_story():
-    """pipeline/store.py already landed in story 1; this story must not edit
-    it. Both active-workspace methods must still exist on FileStore, with
-    their story-1 bodies unchanged (digest of normalized source)."""
+    """The workspace records moved verbatim onto FileHostState; the store no
+    longer implements them."""
+    from pipeline.host_state import FileHostState
     from pipeline.server import FileStore
 
-    assert hasattr(FileStore, "get_active_workspace")
-    assert hasattr(FileStore, "set_active_workspace")
+    assert not hasattr(FileStore, "get_active_workspace")
+    assert not hasattr(FileStore, "set_active_workspace")
     assert (
-        _digest(FileStore.get_active_workspace)
-        == "16fff6ba868a18448929aa4583591c5cf5cebf45960ad488b1944038c616caf8"
+        _digest(FileHostState.get_active_workspace)
+        == "8935cd78800677f3230b1a42d0f1922bab05d2018b564532b0ee2e7604341275"
     )
     assert (
-        _digest(FileStore.set_active_workspace)
-        == "c7a8842b3e5a1f7fd378f876e1f4f50c740f056bc9fe19c775bf42d7ce34b06b"
+        _digest(FileHostState.set_active_workspace)
+        == "29f33d061f26b34996689fb8f0b064ab7890c1d9c42e198e2cbb6aa4ee685b78"
     )

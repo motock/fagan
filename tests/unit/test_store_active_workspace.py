@@ -1,26 +1,27 @@
-"""Tests for active-workspace persistence on FileStore (pipeline/store.py).
+"""Tests for active-workspace persistence on FileHostState (pipeline/host_state.py).
 
-Covers FileStore active-workspace get/set: negative and boundary cases for
-reading and writing ``PLAN_DIR / active_workspace.json``.
+Covers the active-workspace get/set bodies now that they live on the host state
+(ADR 0012, decision 4) instead of on the store: negative and boundary cases for
+reading and writing ``<plans dir>/active_workspace.json``.
 
-- ``get_active_workspace() -> str | None`` reads ``PLAN_DIR /
-  active_workspace.json``, which holds a JSON object ``{"path": "<abs
-  path>"}``. It returns the path string when the file exists, parses as a
-  dict, and ``path`` is a non-empty str. It must NEVER raise: missing,
-  empty, malformed, non-dict, or bad-``path`` content all resolve to
-  ``None`` (same tolerance as ``get_recent_workspaces``).
+- ``get_active_workspace() -> str | None`` reads ``active_workspace.json``,
+  which holds a JSON object ``{"path": "<abs path>"}``. It returns the path
+  string when the file exists, parses as a dict, and ``path`` is a non-empty
+  str. It must NEVER raise: missing, empty, malformed, non-dict, or
+  bad-``path`` content all resolve to ``None`` (same tolerance as
+  ``get_recent_workspaces``).
 - ``set_active_workspace(path: str | None) -> None`` writes
   ``{"path": path}`` atomically: write to
-  ``PLAN_DIR / f'active_workspace.json.tmp.{os.getpid()}'`` then
-  ``os.replace`` onto the target (mirroring ``add_recent_workspace``'s
-  try/except BaseException cleanup). ``None`` or ``""`` clears the
-  selection; a string replaces any previous selection.
+  ``f'active_workspace.json.tmp.{os.getpid()}'`` then ``os.replace`` onto the
+  target (mirroring ``add_recent_workspace``'s try/except BaseException
+  cleanup). ``None`` or ``""`` clears the selection; a string replaces any
+  previous selection.
 
 The shared ``plan_dir`` fixture from tests/unit/conftest.py patches
-``pipeline.server.PLAN_DIR`` to a tmp directory, and FileStore resolves
-PLAN_DIR through that same binding at call time. No path validation
-belongs at this layer — that happens in pipeline/workspace.py — so
-arbitrary strings must round-trip untouched.
+``pipeline.server.PLAN_DIR`` to a tmp directory, and FileHostState resolves
+that same binding at call time. No path validation belongs at this layer —
+that happens in pipeline/workspace.py — so arbitrary strings must round-trip
+untouched.
 """
 
 import contextlib
@@ -29,7 +30,13 @@ import os
 
 import pytest
 
-from pipeline.server import FileStore, Store
+from pipeline.host_state import FileHostState
+from pipeline.store import Store
+
+# These cases were written against ``FileStore`` while the workspace records
+# lived on the store. The bodies moved verbatim onto ``FileHostState`` (ADR
+# 0012, decision 4), so the same expectations run against the new home.
+FileStore = FileHostState
 
 ACTIVE_FILENAME = "active_workspace.json"
 
@@ -297,7 +304,7 @@ def test_active_workspace_storage_does_not_disturb_recent_workspaces(plan_dir):
     assert recents_on_disk == ["/abs/ws-a"]
 
 
-def test_store_protocol_declares_active_workspace_methods():
-    """Store Protocol must declare every public FileStore method (precedent: be1f72a / #476)."""
-    assert hasattr(Store, "get_active_workspace")
-    assert hasattr(Store, "set_active_workspace")
+def test_store_protocol_no_longer_declares_active_workspace_methods():
+    """The workspace records are host-local now (ADR 0012, decision 4)."""
+    assert not hasattr(Store, "get_active_workspace")
+    assert not hasattr(Store, "set_active_workspace")

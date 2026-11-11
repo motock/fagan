@@ -104,7 +104,7 @@ def test_should_pass_active_workspace_when_none_given(tmp_path):
         return None, "boom"
 
     with (
-        patch("pipeline.service._store.get_active_workspace", return_value=str(tmp_path)),
+        patch("pipeline.service._host_state.get_active_workspace", return_value=str(tmp_path)),
         patch("pipeline.service._run_decompose_detailed", fake),
     ):
         svc.decompose_plan(GOAL)

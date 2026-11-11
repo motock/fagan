@@ -189,6 +189,7 @@ from .git_ops import (
     _worktree_has_new_commits,
     _worktree_has_non_wip_commits,  # noqa: F401 (re-exported for test patching)
 )
+from .host_state import build_host_state
 
 # Merge adjudication helpers (moved to pipeline/merge.py). Re-exported so
 # tests that monkeypatch pipeline.server.<name> still resolve.
@@ -566,11 +567,8 @@ def _scoped_repo_root(plan_name: str):
 
 
 
-
-
-
-
 _store = build_store()
+_host_state = build_host_state()
 
 from pipeline.service import PipelineService
 

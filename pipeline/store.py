@@ -217,10 +217,6 @@ class Store(Protocol):
     def get_notifications(self, plan_name: str) -> list[str]: ...
     def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]: ...
     def get_decisions(self, plan_name: str) -> list[dict]: ...
-    def get_recent_workspaces(self) -> list[str]: ...
-    def add_recent_workspace(self, path: str) -> None: ...
-    def get_active_workspace(self) -> str | None: ...
-    def set_active_workspace(self, path: str | None) -> None: ...
     def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
     def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
@@ -418,54 +414,9 @@ class FileStore:
             return self.get_manifest(plan_name)
         except (json.JSONDecodeError, OSError):
             return None
-    def get_recent_workspaces(self) -> list[str]:
-        path = PLAN_DIR / "recent_workspaces.json"
-        if not path.exists():
-            return []
-        try:
-            data = json.loads(path.read_text(errors="replace"))
-        except (json.JSONDecodeError, OSError):
-            return []
-        if not isinstance(data, list):
-            return []
-        return [str(x) for x in data if isinstance(x, str)]
-
-    def add_recent_workspace(self, path: str) -> None:
-        recent = self.get_recent_workspaces()
-        recent = [p for p in recent if p != path]
-        recent.insert(0, path)
-        recent = recent[:20]
-        tmp = PLAN_DIR / f"recent_workspaces.json.tmp.{os.getpid()}"
-        try:
-            tmp.write_text(json.dumps(recent))
-            os.replace(tmp, PLAN_DIR / "recent_workspaces.json")
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-
-    def get_active_workspace(self) -> str | None:
-        path = PLAN_DIR / "active_workspace.json"
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(errors="replace"))
-        except (json.JSONDecodeError, OSError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        value = data.get("path")
-        if isinstance(value, str) and value:
-            return value
-        return None
-
-    def set_active_workspace(self, path: str | None) -> None:
-        tmp = PLAN_DIR / f"active_workspace.json.tmp.{os.getpid()}"
-        try:
-            tmp.write_text(json.dumps({"path": path}))
-            os.replace(tmp, PLAN_DIR / "active_workspace.json")
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+    # The recent/active workspace records are host-local (not namespaced, never
+    # replicated), so they live on pipeline.host_state.FileHostState rather than
+    # on the Store (ADR 0012, decision 4).
 
     def records(self) -> "FileRecords":
         """Return the namespaced record view of this store (ADR 0012)."""

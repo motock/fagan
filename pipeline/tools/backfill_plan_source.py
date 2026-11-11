@@ -157,6 +157,10 @@ def _prospective(
         for field in STORY_FIELDS:
             if field in draft_story:
                 story[field] = draft_story[field]
+        # A plan document keys its stories by an authored ``key``; the manifest
+        # records that same key as ``plan_key`` (``ingest_manifest``).
+        if "key" in draft_story:
+            story["plan_key"] = draft_story["key"]
     # Plan-level descriptive fields, from the draft's own plan document.
     epics = draft.get("epics")
     if isinstance(epics, list):

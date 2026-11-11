@@ -134,7 +134,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path / "plans")
     return tmp_path / "plans"
 
-
 def test_should_write_snapshot_content_and_meta(plan_dir):
     digest = cs.snapshot_context("hello")
     hexdigest = hashlib.sha256(b"hello").hexdigest()

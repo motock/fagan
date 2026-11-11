@@ -409,6 +409,28 @@ def test_render_then_ingest_keeps_the_canonical_digest(plan_dir, provider, tmp_p
     assert second["plan_epics"] == manifest["plan_epics"]
 
 
+def test_render_keeps_an_authored_epic_with_no_stories(plan_dir, provider, tmp_path):
+    """``plan_epics`` keeps epics that have no stories; the render must too.
+
+    Dropping one would make the export differ from the manifest it came from,
+    so re-ingesting it would author a different plan than the one approved.
+    """
+    repo = _repo(tmp_path)
+    epics = _fixture_epics() + [{"summary": "Empty epic", "stories": []}]
+    manifest = _ingest(plan_dir, "sparse", repo, epics)
+    assert manifest["plan_epics"] == ["First epic", "Second epic", "Empty epic"]
+
+    document = _render(manifest)
+
+    assert [epic["summary"] for epic in document["epics"]] == manifest["plan_epics"]
+    assert document["epics"][-1] == {"summary": "Empty epic", "stories": []}
+
+    (plan_dir / "sparse-copy.json").write_text(json.dumps(document))
+    copied = ingest_mod._ingest_plan_impl("sparse-copy")
+    assert copied.get("ok") is True, copied
+    assert _manifest_of("sparse-copy")["plan_epics"] == manifest["plan_epics"]
+
+
 # --------------------------------------------------------------------------- #
 # The tool
 # --------------------------------------------------------------------------- #
@@ -562,10 +584,22 @@ def _is_refusal(reply: Any) -> bool:
 # The documentation pins
 # --------------------------------------------------------------------------- #
 def test_reference_documents_export_plan_as_a_tool():
-    # The "MCP tools reference" section is byte-pinned against the pre-split
-    # README (tests/unit/test_readme_reference_split.py), so the tool is
-    # documented beside the remote read allowlist instead.
+    # The tool is documented in two places: the "MCP tools reference" tool list
+    # (the `### Planning` bullets, where a reader looks for a plan tool) and its
+    # own paragraph beside the remote read allowlist, which states the runtime
+    # state it never exports and its remote plan-scoping.
     text = REFERENCE.read_text(encoding="utf-8")
+    sections = text.split("\n## ")
+    tools_section = next(
+        (section for section in sections if section.startswith("MCP tools reference")),
+        "",
+    )
+    planning = tools_section.partition("### Planning")[2].partition("### ")[0]
+    assert "- `export_plan(plan_name)`" in planning, (
+        "REFERENCE.md's MCP tools reference must list export_plan among the "
+        "planning tools"
+    )
+
     blocks = [block for block in text.split("\n\n") if block.startswith("`export_plan(plan_name)`")]
 
     assert blocks, "REFERENCE.md must describe export_plan in its own paragraph"

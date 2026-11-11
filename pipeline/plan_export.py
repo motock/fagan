@@ -136,14 +136,19 @@ def _epic_order(manifest: dict[str, Any], seen: list[str]) -> list[str]:
     """Order the rendered epics: ``plan_epics`` order first, then any other.
 
     ``plan_epics`` records every epic the plan authored, in authored order
-    (including epics with no stories). An epic found only on a story keeps its
-    first-seen position after them, so a manifest written before ``plan_epics``
-    existed still renders deterministically.
+    *including epics with no stories*, so those are rendered (empty) rather
+    than dropped: dropping one would make the re-ingested plan differ from the
+    manifest it came from, and the canonical digest with it. An epic found only
+    on a story keeps its first-seen position after them, so a manifest written
+    before ``plan_epics`` existed still renders deterministically.
     """
     plan_epics = manifest.get("plan_epics")
     if not isinstance(plan_epics, list):
         return seen
-    ordered = [name for name in plan_epics if isinstance(name, str) and name in seen]
+    ordered: list[str] = []
+    for name in plan_epics:
+        if isinstance(name, str) and name and name not in ordered:
+            ordered.append(name)
     ordered.extend(name for name in seen if name not in ordered)
     return ordered
 
@@ -195,7 +200,7 @@ def render_plan_document(manifest: dict) -> dict:
         )
 
     document["epics"] = [
-        {"summary": epic_name, "stories": stories_by_epic[epic_name]}
+        {"summary": epic_name, "stories": stories_by_epic.get(epic_name, [])}
         for epic_name in _epic_order(manifest, epic_order)
     ]
     return document

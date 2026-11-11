@@ -15,6 +15,16 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   if the model's response wasn't valid/shaped JSON.
 - `save_plan(plan_name, plan_json)` — save a plan JSON to `~/.claude/plans/`.
 - `list_plans()` — list saved plans.
+- `export_plan(plan_name)` — render a plan's document from its ingested
+  manifest, on demand (ADR 0012 decision 5: the document is rendered from the
+  manifest when an export is wanted, never stored as a second copy). Returns
+  `{"ok": true, "plan": {...}}` in the same shape `save_plan` accepts, so an
+  export can be edited and re-ingested. Runtime state (status, attempts,
+  `pr_url`, worktree, review verdicts/scores, logs, approvals, owner,
+  delegates, ingest provenance) is never exported; only `origin: plan` context
+  sources are included, because `repo` and `org` sources are re-merged at
+  ingest. A plan that was never ingested answers `{"ok": false, "error": "Plan
+  not found"}`.
 - `ingest_plan(plan_name, only_epics=None)` — push a plan into Plane (epics +
   issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. Carries each
   story's `persona`, `model`, `risk`, and `backend` into the manifest. A

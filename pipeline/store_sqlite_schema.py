@@ -139,9 +139,21 @@ def _migration_3(conn: sqlite3.Connection) -> None:
     conn.execute(_CONTEXT_SNAPSHOTS_SCHEMA)
 
 
+def _migration_4(conn: sqlite3.Connection) -> None:
+    """Stamp each plan manifest row with when it was last written.
+
+    Existing rows get the adoption time, since their real write time was never
+    recorded; every write from here on stores the actual time.
+    """
+    conn.execute('ALTER TABLE story_manifests ADD COLUMN updated_at REAL')
+    conn.execute(
+        "UPDATE story_manifests SET updated_at = CAST(strftime('%s','now') AS REAL)"
+    )
+
+
 #: The migrations, in order.  The version a database is at is how many of them
 #: it has run, so a migration is appended and never renumbered.
-MIGRATIONS = (_migration_1, _migration_2, _migration_3)
+MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4)
 
 
 def latest_version() -> int:

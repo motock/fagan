@@ -14,6 +14,10 @@ namespace must never see or change the default namespace's records, and a
 malformed namespace is refused with ``InvalidRecordKeyError`` before anything is
 stored.
 
+A manifest's last-write time, ``get_manifest_updated_at``, is graded with the
+manifest cases: it is a float bracketed by the put, never moves backwards, is
+``None`` for a plan never put, and follows the namespace rules of ``get_manifest``.
+
 Each test declares the protocol names it exercises with ``@covers``;
 ``test_every_protocol_method_is_covered_by_a_contract_test`` asserts that the
 declarations cover every name in ``RECORD_STORE_METHODS``, and
@@ -26,6 +30,7 @@ loading ``pipeline.server``.
 
 import hashlib
 import threading
+import time
 from collections import namedtuple
 
 import pytest
@@ -315,6 +320,57 @@ def test_malformed_or_reserved_plan_name_is_refused(backend, plan_name):
         backend.store.put_manifest(DEFAULT_NAMESPACE, plan_name, M1)
 
     assert backend.store.list_plans(DEFAULT_NAMESPACE) == []
+
+
+@covers('get_manifest_updated_at', 'put_manifest')
+def test_manifest_updated_at_is_a_float_between_the_put_and_its_surroundings(backend):
+    before = time.time()
+    backend.store.put_manifest(DEFAULT_NAMESPACE, PLAN, M1)
+    after = time.time()
+
+    updated_at = backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, PLAN)
+
+    assert isinstance(updated_at, float)
+    assert before <= updated_at <= after
+
+
+@covers('get_manifest_updated_at', 'put_manifest')
+def test_a_second_manifest_put_never_moves_updated_at_backwards(backend):
+    backend.store.put_manifest(DEFAULT_NAMESPACE, PLAN, M1)
+    first = backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, PLAN)
+
+    backend.store.put_manifest(DEFAULT_NAMESPACE, PLAN, M2)
+
+    assert backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, PLAN) >= first
+
+
+@covers('get_manifest_updated_at')
+def test_manifest_updated_at_is_none_for_a_plan_never_put(backend):
+    assert backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, PLAN) is None
+
+
+@covers('get_manifest_updated_at', 'put_manifest')
+@pytest.mark.parametrize('plan_name', ['../escape', 'host', ''])
+def test_manifest_updated_at_refuses_a_malformed_plan_name(backend, plan_name):
+    with pytest.raises(InvalidRecordKeyError):
+        backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, plan_name)
+
+
+@covers('get_manifest_updated_at', 'put_manifest')
+def test_a_foreign_namespace_reads_no_manifest_updated_at(backend):
+    backend.store.put_manifest(DEFAULT_NAMESPACE, PLAN, M1)
+
+    if 'manifest' in backend.serves_other:
+        assert backend.store.get_manifest_updated_at(FOREIGN, PLAN) is None
+    else:
+        with pytest.raises(UnknownNamespaceError):
+            backend.store.get_manifest_updated_at(FOREIGN, PLAN)
+
+
+@covers('get_manifest_updated_at')
+def test_a_malformed_namespace_is_refused_by_manifest_updated_at(backend):
+    with pytest.raises(InvalidRecordKeyError):
+        backend.store.get_manifest_updated_at(INVALID_NAMESPACE, PLAN)
 
 
 # -- decisions and journals ----------------------------------------------------

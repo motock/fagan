@@ -568,6 +568,20 @@ class FileRecords(PlanRecords, OutboxContract, OutboxSummaryContract):
             raise TypeError('manifest must be a dict')
         self._store.save_manifest(plan_name, manifest)
 
+    def get_manifest_updated_at(self, namespace: str, plan_name: str) -> float | None:
+        """Return the manifest file's ``st_mtime``, or ``None`` when it is absent.
+
+        The path comes from the file store's own resolution, so the stat is of
+        the same file :meth:`get_manifest` reads.  A stat, never an open.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        try:
+            return self._store.manifest_path(plan_name).stat().st_mtime
+        except FileNotFoundError:
+            return None
+
     # -- plan listing --------------------------------------------------
     def list_plans(self, namespace: str) -> list[str]:
         validate_namespace(namespace)

@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+import time
 
 import pytest
 
@@ -224,8 +225,8 @@ def test_a_new_database_gets_the_latest_version(db_path):
     with _opened(db_path):
         pass
 
-    assert store_sqlite_schema.latest_version() == 3
-    assert _version(db_path) == [3]
+    assert store_sqlite_schema.latest_version() == 4
+    assert _version(db_path) == [4]
 
 
 def test_the_version_is_recorded_once(db_path):
@@ -298,12 +299,12 @@ def test_a_version_one_database_with_rows_is_migrated(db_path, monkeypatch):
         'MIGRATIONS',
         store_sqlite_schema.MIGRATIONS + (_adds_a_column,),
     )
-    assert store_sqlite_schema.latest_version() == 4
+    assert store_sqlite_schema.latest_version() == 5
 
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [4]
+    assert _version(db_path) == [5]
     assert _row_counts(db_path) == before
     with _probe(db_path) as conn:
         columns = {row[1] for row in conn.execute('PRAGMA table_info(notifications)')}
@@ -418,3 +419,44 @@ def test_a_refused_database_is_not_left_open(db_path, monkeypatch):
     with pytest.raises(sqlite3.ProgrammingError):
         connections[0].execute('SELECT 1')
     assert _version(db_path) == [newer]
+
+
+def _columns(db_path, table):
+    with _probe(db_path) as conn:
+        return {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+
+
+def test_a_new_database_has_the_manifest_updated_at_column(db_path):
+    """Migration 4 adds ``updated_at`` to ``story_manifests`` on a fresh file too."""
+    with _opened(db_path):
+        pass
+
+    assert 'updated_at' in _columns(db_path, 'story_manifests')
+
+
+def test_a_migrated_database_ends_with_the_same_manifest_columns_as_a_new_one(db_path, tmp_path):
+    """A database adopted from before versioning matches a new one column for column."""
+    fresh = str(tmp_path / 'fresh.db')
+    with _opened(fresh):
+        pass
+    _legacy_database(db_path)
+
+    with _opened(db_path):
+        pass
+
+    assert _columns(db_path, 'story_manifests') == _columns(fresh, 'story_manifests')
+
+
+def test_a_manifest_row_present_before_migration_four_is_stamped_with_its_adoption_time(db_path):
+    """The backfill gives every existing manifest row a real time, not NULL."""
+    _legacy_database(db_path, version=3)
+
+    before = time.time()
+    with _opened(db_path):
+        pass
+    after = time.time()
+
+    with _probe(db_path) as conn:
+        (updated_at,) = conn.execute('SELECT updated_at FROM story_manifests').fetchone()
+    assert isinstance(updated_at, float)
+    assert int(before) <= updated_at <= after

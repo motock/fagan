@@ -21,10 +21,13 @@ are ``staticmethod``s: the protocol describes what a reader must answer, not
 what state it carries, and a fake can be substituted at class or instance
 level without a binding dance.
 
-The roots are read through ``LiveRef`` bindings to ``pipeline.server`` so
-``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` still lands (a
-module-load copy would freeze the real ``~/.claude/plans`` path into every
-test run). Once HostState lands these bindings point at its story-log root.
+The roots are read through live references to ``pipeline.server`` so a test
+that monkeypatches the server's plans directory still lands (a module-load
+copy would freeze the real ``~/.claude/plans`` path into every test run).
+The worktree root is bound here; the story-log root is resolved per call
+through the file store (see ``_story_log_root``) because the plan-directory
+allowlist pins that module as the sole owner of the binding. Once HostState
+lands, both point at its story-log root.
 """
 
 from __future__ import annotations

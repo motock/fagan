@@ -851,9 +851,16 @@ class ContextSnapshotRecords:
         return paths.PLAN_DIR / 'context'
 
     def _snapshot_folder(self, namespace: str, digest: object) -> Path:
-        """Validate the keys and return the folder *digest* lives in."""
+        """Validate the keys and return the folder *digest* lives in for a read."""
         validate_namespace(namespace)
+        hexdigest = context_address(digest)
+        self._refuse_other_namespace(namespace)
+        return self._snapshots_root() / hexdigest
+
+    def _put_snapshot_folder(self, namespace: str, digest: object) -> Path:
+        """Validate the keys for a write and return the folder to create."""
         hexdigest = validate_context_digest(digest)
+        validate_namespace(namespace)
         self._refuse_other_namespace(namespace)
         return self._snapshots_root() / hexdigest
 

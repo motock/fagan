@@ -405,15 +405,12 @@ def _run_daemon(monkeypatch, plan_root) -> tuple[int, str]:
 
     Returns the daemon's exit code and what it printed on stderr.
     """
-    import io
     from contextlib import redirect_stderr
-
-    instances: list = []
+    from io import StringIO
 
     class FakeDaemon:
         def __init__(self, **kwargs) -> None:
             self.kwargs = kwargs
-            instances.append(self)
 
         def run_forever(self, stop_event) -> None:
             return None
@@ -425,20 +422,28 @@ def _run_daemon(monkeypatch, plan_root) -> tuple[int, str]:
     monkeypatch.delenv("PIPELINE_SCHEDULER_INTERVAL_S", raising=False)
     monkeypatch.delenv("PIPELINE_SCHEDULER_HEALTH_PATH", raising=False)
 
-    err = io.StringIO()
+    err = StringIO()
     with redirect_stderr(err):
         code = daemon_mod.run_daemon()
     return code, err.getvalue()
 
 
 def test_daemon_lock_lives_under_the_host_state_root(plan_root, monkeypatch):
-    """The single-instance lock is created in the host-state root."""
-    code, _ = _run_daemon(monkeypatch, plan_root)
+    """The single-instance lock is created in the host-state root.
 
-    assert code == 0, f"the daemon must start; got exit code {code}"
+    ``pipeline.paths.PLAN_DIR`` is pinned at an empty sibling directory so
+    the daemon cannot fall back to the real plan directory: the lock must
+    land in the root the host state resolves.
+    """
+    code, err = _run_daemon(monkeypatch, plan_root)
+
+    assert code == 0, f"the daemon must start; got exit code {code} (stderr: {err!r})"
     assert (plan_root / LOCK_FILE).exists(), (
         f"the daemon lock must live under the host-state root; expected "
         f"{plan_root / LOCK_FILE}"
+    )
+    assert not (plan_root.parent / "other-plans" / LOCK_FILE).exists(), (
+        "the daemon must not take the module-load copy of PLAN_DIR"
     )
 
 
@@ -479,4 +484,17 @@ def test_a_stale_lock_from_a_dead_pid_does_not_block_the_daemon(
     assert code == 0, (
         f"a stale lock from a dead pid must not block the daemon; got exit "
         f"code {code} (stderr: {err!r})"
+    )
+
+
+def test_a_lock_from_a_live_pid_blocks_the_daemon(plan_root, monkeypatch):
+    """A lock naming a live process keeps the next daemon out."""
+    lock_path = plan_root / LOCK_FILE
+    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    code, err = _run_daemon(monkeypatch, plan_root)
+
+    assert code == 1, (
+        f"a lock held by a live pid must block the daemon; got exit code "
+        f"{code} (stderr: {err!r})"
     )

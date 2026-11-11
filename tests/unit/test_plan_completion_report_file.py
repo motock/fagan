@@ -72,7 +72,9 @@ class _Harness:
         self.loader_paths = []
         self.records_to_serve = ([{"event": "story_done", "story_key": "s1"}], 0)
         self.summary_text = f"SUMMARY[{PLAN}]"
+        self.summary_text = f"SUMMARY[{PLAN}]"
         # Snapshot of whether the report file existed when _notify_user ran.
+        self.report_existed_at_notify = []
         # The plan-completion module holds no PLAN_DIR binding any more: the
         # once-only marker and the durable report are records of the store now.
         # The store resolves the plans directory through the server module
@@ -83,9 +85,6 @@ class _Harness:
         monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
         monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
-        monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
-        monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
-
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))
             self.report_existed_at_notify.append(

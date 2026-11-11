@@ -18,6 +18,8 @@ BRIEF = "Do the thing."
 
 @pytest.fixture
 def manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     specs = [
         ("plan-src", PLANNER_TEXT, ["planner"]),

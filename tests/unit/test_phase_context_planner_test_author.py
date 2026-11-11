@@ -8,7 +8,7 @@ import pytest
 import pipeline.review as review_mod
 import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
-from pipeline import paths, planner, test_author
+from pipeline import paths, persistence, planner, server, test_author
 
 PLANNER_TEXT = "Planner-only guidance."
 AUTHOR_TEXT = "Test-author-only guidance."

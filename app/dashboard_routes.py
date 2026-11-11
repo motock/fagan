@@ -79,8 +79,8 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         # Parse progress for in_progress stories with a worktree
         progress = None
         if story.get("status") == "in_progress":
-            plan_file = _store.get_worktree_file(story, ".agent_plan.md")
-            scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
+            plan_file = _reader.read_worktree_file(story, ".agent_plan.md")
+            scratch_file = _reader.read_worktree_file(story, ".agent_scratchpad.md")
             if plan_file["available"] and scratch_file["available"]:
                 progress = _parse_progress(plan_file["text"], scratch_file["text"])
         decorated_stories[story_key] = {**story, "last_activity": last_activity}

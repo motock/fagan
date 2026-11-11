@@ -22,7 +22,7 @@ import os
 import subprocess
 from typing import Any
 
-from pipeline import cross_plan, plan_activity, wake
+from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.store_records import DEFAULT_NAMESPACE
 from pipeline.telemetry import record_dispatch_attempt

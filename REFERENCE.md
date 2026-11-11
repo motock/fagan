@@ -3373,12 +3373,13 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `record_decision`, `record_security_audit`, `reject_plan`,
   `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
-- eight read-only tools — `check_story_status`, `check_usage`,
+- nine read-only tools — `check_story_status`, `check_usage`, `export_plan`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
   `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
   caller may see (`app.policy.can_view`): the plan-scoped tools
-  (`check_story_status`, `get_effective_config`, `get_story_diff`,
-  `list_decisions`, `list_ready_stories`) refuse before their handler runs
+  (`check_story_status`, `export_plan`, `get_effective_config`,
+  `get_story_diff`, `list_decisions`, `list_ready_stories`) refuse before their
+  handler runs
   unless the caller owns or is a delegate of the plan, and return one fixed
   refusal that is identical for a plan that does not exist and one the caller
   may not see, so the reply is no existence oracle; `list_plans` and
@@ -3399,11 +3400,12 @@ sources are re-merged at ingest. It takes the same `plan_name` and validation as
 the read tools above, and answers `{"ok": false, "error": "Plan not found"}` for
 a plan that was never ingested.
 
-Every registered tool except `decompose_plan` and `export_plan` is on the
+`export_plan` is a read tool on the allowlist, scoped like the plan-scoped reads
+above: a remote caller who may not see the plan gets the same refusal it gets
+for a plan that does not exist, so the reply never reveals whether a plan is on
+disk. Every registered tool except `decompose_plan` is on the
 allowlist, so every one of them is remotely callable and decides through the
-policy. `export_plan` is registered and documented here, but it is not on the
-allowlist yet, so a remote caller is refused outright by default deny;
-locally it is gated by the same plan-scoped check as the read tools.
+policy.
 `decompose_plan` is refused outright, by default deny: it drafts a plan from
 text and has no plan to authorize, and the one host-scoped grant it could ask
 for, `plan:ingest`, is held by every authenticated caller on an ownerless

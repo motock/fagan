@@ -149,10 +149,10 @@ def test_remote_tool_allowed_refuses_decompose_plan() -> None:
 #: Tools registered on the server but deliberately left without a remote policy
 #: decision. The policy refuses a name in neither set *before* its handler runs,
 #: so a name here is a **refusal**, not a grant: it is never remotely callable
-#: and no plan can be probed through it. The exemption exists only for a story
-#: whose scope forbids the allowlist change that would grant the tool --
-#: ``export_plan`` lands that way (its remote scoping is a later story).
-UNDECIDED_BY_DESIGN = frozenset({"export_plan"})
+#: and no plan can be probed through it. Empty today -- every registered tool has
+#: a decision -- and kept so a future tool that lands before its scoping story
+#: has to be listed here, in the open, rather than defaulting in.
+UNDECIDED_BY_DESIGN = frozenset()
 
 
 def test_every_registered_tool_has_a_remote_policy_decision() -> None:

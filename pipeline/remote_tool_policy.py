@@ -23,8 +23,9 @@ behaviour is unchanged.
 Read tools are scoped to the plans a remote principal may see -- the plans it
 owns or is a delegate of, per ``app.policy.can_view``:
 
-* the plan-scoped read tools (``check_story_status``, ``get_effective_config``,
-  ``get_story_diff``, ``list_decisions``, ``list_ready_stories``) refuse *before* the handler runs
+* the plan-scoped read tools (``check_story_status``, ``export_plan``,
+  ``get_effective_config``, ``get_story_diff``, ``list_decisions``,
+  ``list_ready_stories``) refuse *before* the handler runs
   when their ``plan_name`` argument is missing, not a string, not a safe plan
   key (the same ``[A-Za-z0-9._-]`` rule the tools' own path building uses), or
   names a plan the caller may not see. The refusal is one fixed result,
@@ -105,6 +106,7 @@ REMOTE_READ = frozenset(
     {
         "check_story_status",
         "check_usage",
+        "export_plan",
         "get_effective_config",
         "get_story_diff",
         "list_decisions",
@@ -136,6 +138,7 @@ _HIDDEN_PLAN = "This plan is not available to the authenticated principal."
 PLAN_SCOPED_READ = frozenset(
     {
         "check_story_status",
+        "export_plan",
         "get_effective_config",
         "get_story_diff",
         "list_decisions",

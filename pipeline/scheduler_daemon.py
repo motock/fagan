@@ -933,19 +933,16 @@ def run_daemon() -> int:
         )
         return 1
 
-    lock_path = PLAN_DIR / ".scheduler_daemon.lock"
-    # Held for the process lifetime: do not close this fd or let it go out of
-    # scope before run_forever() runs, or the flock releases early.
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    host_state = build_host_state()
+    # Held for the process lifetime: the lock object owns the fd, so it must
+    # stay referenced until run_forever() returns or the flock releases early.
+    lock = host_state.scheduler_pid_lock()
+    if not lock.acquire():
         print(
             "scheduler_daemon: another instance already holds the lock at "
-            f"{lock_path}, exiting",
+            f"{lock.path}, exiting",
             file=sys.stderr,
         )
-        os.close(lock_fd)
         return 1
 
     _report_env_conflicts()

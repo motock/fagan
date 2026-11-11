@@ -58,12 +58,13 @@ DOC_PATH = Path(__file__).resolve().parents[2] / "docs" / "specs" / "PLAN_APPROV
 
 @pytest.fixture(autouse=True)
 def _no_manifest_mtime(monkeypatch):
-    """Make ``updated_at`` deterministic (the OSError fallback, 0.0)."""
+    """Make ``updated_at`` deterministic (the vanished-manifest fallback, 0.0)."""
 
-    def _raise(_plan_name):
-        raise OSError("manifest vanished")
+    class _VanishedRecords:
+        def get_manifest_updated_at(self, _namespace, _plan_name):
+            return None
 
-    monkeypatch.setattr(d._store, "manifest_path", _raise)
+    monkeypatch.setattr(d._store, "records", lambda: _VanishedRecords())
 
 
 def test_approval_key_present():

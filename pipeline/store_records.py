@@ -9,6 +9,7 @@ and its validators; the only implementation it carries is
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os

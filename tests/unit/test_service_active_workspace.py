@@ -80,30 +80,30 @@ def test_set_active_workspace_signature():
     assert sig.return_annotation is None
 
 
-def test_get_active_workspace_delegates_to_store_free_var(service, monkeypatch):
-    """get_active_workspace must read the module-level ``_store`` free var."""
-    sentinel = "/abs/from-fake-store"
+def test_get_active_workspace_delegates_to_host_state_free_var(service, monkeypatch):
+    """get_active_workspace must read the module-level ``_host_state`` free var."""
+    sentinel = "/abs/from-fake-host-state"
     calls = []
 
-    class _FakeStore:
+    class _FakeHostState:
         def get_active_workspace(self):
             calls.append("get")
             return sentinel
 
-    monkeypatch.setattr(server_mod, "_store", _FakeStore())
+    monkeypatch.setattr(server_mod, "_host_state", _FakeHostState())
     assert service.get_active_workspace() == sentinel
     assert calls == ["get"]
 
 
-def test_set_active_workspace_delegates_to_store_free_var(service, monkeypatch):
-    """set_active_workspace must delegate to ``_store.set_active_workspace``."""
+def test_set_active_workspace_delegates_to_host_state_free_var(service, monkeypatch):
+    """set_active_workspace must delegate to the host state."""
     calls = []
 
-    class _FakeStore:
+    class _FakeHostState:
         def set_active_workspace(self, path):
             calls.append(path)
 
-    monkeypatch.setattr(server_mod, "_store", _FakeStore())
+    monkeypatch.setattr(server_mod, "_host_state", _FakeHostState())
     assert service.set_active_workspace("/abs/ws-a") is None
     assert calls == ["/abs/ws-a"]
 

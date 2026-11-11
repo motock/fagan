@@ -167,14 +167,12 @@ def _isolate_patch_store():
 def plan_dir(tmp_path, monkeypatch):
     """Redirect every PLAN_DIR binding the apply path reads."""
     import pipeline.server as p
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

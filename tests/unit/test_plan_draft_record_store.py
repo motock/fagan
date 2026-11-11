@@ -37,7 +37,6 @@ import pytest
 # import-cycle note in tests/unit/test_ingest_keyless_reingest.py).
 import pipeline.server as p
 from app.identity import Principal
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import remote_scope, repo_clone, service
 from pipeline.actor import bind_principal
@@ -73,7 +72,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

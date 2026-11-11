@@ -51,7 +51,6 @@ import pytest
 
 import pipeline.server as p
 import pipeline.ticketing as pt
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 
 # ---------------------------------------------------------------------------
@@ -68,7 +67,6 @@ def plan_dir(tmp_path, monkeypatch):
     # pipeline_paths at module load and read it as a free var, so patches
     # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

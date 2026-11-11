@@ -52,7 +52,6 @@ import json
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.authorization import ENFORCE_ENV, authorize
@@ -71,7 +70,6 @@ def plan_dir(tmp_path, monkeypatch):
     directory.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
-    monkeypatch.setattr(pcon, "PLAN_DIR", directory)
     return directory
 
 

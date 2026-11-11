@@ -172,7 +172,6 @@ def plan_dir(tmp_path, monkeypatch):
     real ``dashboard_module._service`` see this test's manifest.
     """
     import pipeline.server as pserver
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"
@@ -180,6 +179,8 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pserver, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    if hasattr(dashboard_module, "PLAN_DIR"):
+        monkeypatch.setattr(dashboard_module, "PLAN_DIR", d)
     return d
 
 

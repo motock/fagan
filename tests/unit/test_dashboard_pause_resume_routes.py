@@ -22,7 +22,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import dashboard as d
-from pipeline import concurrency as pcon
 from pipeline import server as pserver
 
 
@@ -35,7 +34,6 @@ def plan_dir(tmp_path, monkeypatch):
     # or the route and the service disagree about where the manifest lives.
     monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pserver, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(pcon, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

@@ -24,7 +24,7 @@ import pytest
 
 import pipeline.server  # noqa: F401 - see the module docstring's import note
 from app.identity import LOCAL_OPERATOR
-from pipeline import audit, concurrency, persistence, server
+from pipeline import audit, persistence, server
 from pipeline.actor import bind_correlation_id, bind_principal
 from pipeline.authorization import ENFORCE_ENV, authorize
 
@@ -42,7 +42,6 @@ def plan_dirs(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(server, "PLAN_DIR", d)
     monkeypatch.setattr(persistence, "PLAN_DIR", d)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", d)
     monkeypatch.delenv(ENFORCE_ENV, raising=False)
     return d
 

@@ -23,7 +23,6 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -51,7 +50,6 @@ def plan_dir(tmp_path, monkeypatch):
     # pipeline_paths at module load and read it as a free var, so the patches
     # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

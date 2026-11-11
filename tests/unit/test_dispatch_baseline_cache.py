@@ -346,14 +346,12 @@ def _manifest(plan_dir, plan_name):
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     """Point PLAN_DIR at a throwaway dir for every module that resolves it."""
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
     from pipeline import server as p
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

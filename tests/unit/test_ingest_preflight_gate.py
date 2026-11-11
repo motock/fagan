@@ -33,7 +33,6 @@ import pytest
 # pipeline.ingest first re-enters a partially-initialized pipeline.server.
 import pipeline.server as p
 from app import role_registry
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from pipeline import ticketing as pt
@@ -70,7 +69,6 @@ def preflight_plan_dir(tmp_path, monkeypatch):
     # pipeline_paths at module load and read it as a free var, so patches
     # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

@@ -10,7 +10,6 @@ import pytest
 
 # pipeline.server must load before pipeline.ingest (circular import order).
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 
@@ -21,7 +20,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
     wt = tmp_path / "worktrees"
     wt.mkdir()

@@ -23,7 +23,6 @@ import os
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 
 # ---------------------------------------------------------------------------
@@ -101,7 +100,6 @@ def test_invalid_plan_name_raises_and_creates_no_stray_lock(tmp_path, monkeypatc
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     # Snapshot the filesystem under tmp_path before the call so we can detect
     # any stray .lock file created as a side effect.
     locks_before = {
@@ -139,7 +137,6 @@ def test_review_story_skips_when_lock_held(tmp_path, monkeypatch):
     agents_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(p, "AGENTS_DIR", agents_dir)
 
     story = _make_story(plan_dir, status="tests_passed")

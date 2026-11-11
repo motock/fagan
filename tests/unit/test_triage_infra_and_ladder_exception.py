@@ -58,14 +58,12 @@ _INFRA_LINE = f"{INFRA_FAILURE_LOG_SUBSTRING}: connection refused"
 def plan_dir(tmp_path, monkeypatch):
     """Patch every PLAN_DIR binding the sweep could read through."""
     import pipeline.server as p
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

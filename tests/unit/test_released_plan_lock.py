@@ -46,6 +46,7 @@ import threading
 import pytest
 
 from pipeline import concurrency
+from pipeline import server as p
 
 REACQUIRE_TIMEOUT_ENV = "PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS"
 
@@ -53,7 +54,7 @@ REACQUIRE_TIMEOUT_ENV = "PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS"
 @pytest.fixture(autouse=True)
 def _plan_dir_and_held_set_isolation(tmp_path, monkeypatch):
     """Point PLAN_DIR at tmp_path and give every test an empty held set."""
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()
@@ -118,7 +119,7 @@ def _run_timeout_scenario(monkeypatch, tmp_path, plan, env_value):
     # also honours the env value; a call-time implementation reads it
     # directly. Reload resets module globals, so re-patch PLAN_DIR.
     importlib.reload(concurrency)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
 
     contender_acquired = threading.Event()
     release_contender = threading.Event()
@@ -284,7 +285,7 @@ def test_malformed_timeout_env_degrades_to_default(monkeypatch, tmp_path):
     monkeypatch.setenv(REACQUIRE_TIMEOUT_ENV, "abc")
     # must not raise at import time either, whichever point the module reads
     importlib.reload(concurrency)
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
 
     # call time, no-op path: must not raise
     with concurrency._released_plan_lock("relock-malformed-noop"):

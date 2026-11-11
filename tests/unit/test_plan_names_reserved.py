@@ -13,7 +13,6 @@ import json
 
 import pytest
 
-import pipeline.concurrency as pcon
 import pipeline.persistence as ppers
 import pipeline.server as p
 from pipeline import authorization, ingest, plan_names
@@ -31,7 +30,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

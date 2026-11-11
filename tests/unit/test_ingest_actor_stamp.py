@@ -22,7 +22,6 @@ import pytest
 # tests/unit/test_ingest_keyless_reingest.py for the import-cycle note).
 import pipeline.server as p
 from app.identity import Principal
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from pipeline.actor import bind_principal
@@ -64,7 +63,6 @@ def actor_plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

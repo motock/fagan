@@ -74,13 +74,11 @@ def agents_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

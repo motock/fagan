@@ -37,6 +37,7 @@ import pytest
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 from pipeline import concurrency
+from pipeline import server as p
 
 _PLAN = "review-lock-release-plan"
 
@@ -49,7 +50,7 @@ _PLAN = "review-lock-release-plan"
 def _isolate_plan_lock(tmp_path, monkeypatch):
     """Mirrors tests/unit/test_advance_dispatch_releases_plan_lock.py: point
     the real flock at tmp_path and give every test a clean held-set."""
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     concurrency._held_plan_locks().clear()
     yield
     concurrency._held_plan_locks().clear()

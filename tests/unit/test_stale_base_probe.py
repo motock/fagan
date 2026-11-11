@@ -19,7 +19,6 @@ import contextlib
 import json
 import subprocess
 
-from pipeline import concurrency as pipeline_concurrency
 from pipeline import dispatch_worktree
 from pipeline import persistence as pipeline_persistence
 from pipeline import server as pipeline_server
@@ -45,7 +44,6 @@ def _plan_dirs(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(pipeline_concurrency, "PLAN_DIR", tmp_path)
 
 
 def _records(plan_name):

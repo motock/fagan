@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import concurrency
+from pipeline import server as p
 from pipeline import service_story_ops as story_ops
 from pipeline.store import FileStore
 
@@ -28,7 +29,7 @@ PLAN = "p-lock"
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     """Point both the lock and the store at a throwaway plans directory."""
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     monkeypatch.setattr("pipeline.store.PLAN_DIR", tmp_path)
     monkeypatch.delenv(concurrency.COMMAND_LOCK_WAIT_ENV_VAR, raising=False)
     return tmp_path

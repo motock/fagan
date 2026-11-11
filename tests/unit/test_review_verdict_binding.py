@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline.review_verdict_binding import bind_verdict
 
@@ -84,7 +83,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

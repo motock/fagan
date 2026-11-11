@@ -44,14 +44,12 @@ def plan_dir(tmp_path, monkeypatch):
     """Local copy of the plan_dir fixture (the one in test_pipeline_mcp_server.py
     is not shared across modules). Patches PLAN_DIR on pipeline.server and the
     sibling modules that captured it at import time."""
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

@@ -23,6 +23,7 @@ import time
 import pytest
 
 from pipeline import concurrency
+from pipeline import server as p
 
 LOGGER_NAME = "pipeline.concurrency"
 RELEASE_MESSAGE = "plan lock released"
@@ -99,7 +100,7 @@ def fake_clock(monkeypatch):
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(concurrency, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(p, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

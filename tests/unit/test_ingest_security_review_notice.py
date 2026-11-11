@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -31,7 +30,6 @@ def plans(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

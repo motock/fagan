@@ -21,7 +21,6 @@ from contextlib import contextmanager
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import unpark as unpark_mod
 from pipeline.store import FileStore
@@ -40,7 +39,6 @@ def plan_dir(tmp_path, monkeypatch):
     # pipeline_paths at module load and read it as a free var, so patches
     # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

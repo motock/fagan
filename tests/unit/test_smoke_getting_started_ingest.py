@@ -189,12 +189,10 @@ def _pin_plan_dir(monkeypatch: pytest.MonkeyPatch, plan_dir: Path) -> None:
     var (or only ``pipeline.server``) would let a module keep the operator's
     real ``~/.claude/plans`` binding and flock it.
     """
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
 
 
 def _real_plan_dir() -> Path:
@@ -319,14 +317,12 @@ def test_scratch_plan_dir_wiring_pins_all_three_bindings(
     plan_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """All three PLAN_DIR bindings point at the scratch dir, never the real one."""
-    from pipeline import concurrency as pcon
     from pipeline import persistence as ppers
 
     _pin_plan_dir(monkeypatch, plan_dir)
 
     assert p.PLAN_DIR == plan_dir
     assert ppers.PLAN_DIR == plan_dir
-    assert pcon.PLAN_DIR == plan_dir
 
     real_dir = _real_plan_dir()
     assert plan_dir != real_dir, "the scratch plan dir IS the operator's real one"

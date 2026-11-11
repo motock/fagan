@@ -43,7 +43,6 @@ import pytest
 
 # Import the server: it binds story_status onto its own namespace at load
 # (story_status.bind_to_server), which these tests rely on.
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline import story_status  # noqa: F401
@@ -80,7 +79,6 @@ def oa2_plan_dir(tmp_path, monkeypatch):
     # persistence/concurrency import PLAN_DIR as a free variable at module
     # load, so the patch must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
     return plans
 
 

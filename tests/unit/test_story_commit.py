@@ -68,7 +68,6 @@ def plan_dir(tmp_path, monkeypatch):
     # persistence and concurrency bind PLAN_DIR by value at their own module
     # load, so the patch has to land on those bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

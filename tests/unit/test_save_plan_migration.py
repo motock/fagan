@@ -22,7 +22,6 @@ import textwrap
 
 import pytest
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 
@@ -35,7 +34,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 # ---------- C1: PipelineService.save_plan method exists with right shape ----

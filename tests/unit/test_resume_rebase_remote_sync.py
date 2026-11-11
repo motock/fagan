@@ -18,7 +18,6 @@ import subprocess
 from pathlib import Path
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import rebase as prebase
@@ -61,7 +60,6 @@ def _dispatch_env(tmp_path, monkeypatch):
     plans.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plans)
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
-    monkeypatch.setattr(pcon, "PLAN_DIR", plans)
 
     wts = tmp_path / "worktrees"
     wts.mkdir()

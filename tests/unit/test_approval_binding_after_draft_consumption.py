@@ -40,7 +40,6 @@ import pytest
 # pipeline.server must load before pipeline.ingest (see the import-order note
 # in tests/unit/test_ingest_keyless_reingest.py).
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import ingest as ingest_mod
 from pipeline import persistence as ppers
 from pipeline import plan_approval as pa
@@ -56,7 +55,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
     return d
 

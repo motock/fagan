@@ -27,7 +27,6 @@ import pytest
 # tests/unit/test_ingest_keyless_reingest.py for the import-cycle note).
 import pipeline.server as p
 from app.identity import LOCAL_OPERATOR
-from pipeline import concurrency as pcon
 from pipeline import dispatch as dispatch_mod
 from pipeline import ingest as ingest_mod
 from pipeline import parsers
@@ -51,7 +50,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     monkeypatch.setenv(ENFORCE_ENV, "")
     monkeypatch.delenv(ENFORCE_ENV, raising=False)
     return d

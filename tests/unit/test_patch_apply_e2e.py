@@ -44,7 +44,6 @@ from fastapi.testclient import TestClient
 import app.dashboard as dashboard_module
 import pipeline.server as pserver
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER, ORIGIN_UI, get_or_create_api_key
-from pipeline import concurrency as pcon
 from pipeline import event_wiring, worktree_patch
 from pipeline import persistence as ppers
 
@@ -83,6 +82,8 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pserver, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    if hasattr(dashboard_module, "PLAN_DIR"):
+        monkeypatch.setattr(dashboard_module, "PLAN_DIR", d)
     return d
 
 

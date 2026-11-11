@@ -6,7 +6,6 @@ from unittest.mock import Mock
 import pytest
 
 import pipeline.server as p
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 
 
@@ -20,7 +19,6 @@ def plan_dir(tmp_path, monkeypatch):
     # must land on their own bindings too (mirrors test_pipeline_mcp_server.py's
     # plan_dir fixture).
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 # Helper to init a git repo with one commit

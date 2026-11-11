@@ -48,7 +48,6 @@ import subprocess
 import pytest
 
 from app import backend, role_registry
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
@@ -102,7 +101,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

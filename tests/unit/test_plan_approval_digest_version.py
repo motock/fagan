@@ -45,7 +45,6 @@ import pytest
 import pipeline.advance as advance_module
 import pipeline.config as config_module
 import pipeline.dispatch as pdispatch
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import plan_approval as pa
 from pipeline import server as p
@@ -367,7 +366,6 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 

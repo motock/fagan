@@ -1,3 +1,5 @@
+# ruff: noqa: F811, I001
+# The client fixture is imported from _dashboard_helpers and used as a test parameter, which F811 flags falsely (same pattern as tests/unit/test_dashboard_*.py, which pyproject.toml exempts).
 """Tests for the new ``pipeline/workspace_reader.py`` seam (ADR 0012, decision 12).
 
 The reader owns the two workspace reads that used to live inside

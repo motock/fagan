@@ -112,13 +112,13 @@ def test_set_active_workspace_delegates_to_store_free_var(service, monkeypatch):
 
 
 def test_set_active_workspace_propagates_store_errors(service, monkeypatch):
-    """Thin delegator: a store failure surfaces as-is (no swallowing)."""
+    """Thin delegator: a host-state failure surfaces as-is (no swallowing)."""
 
-    class _ExplodingStore:
+    class _ExplodingHostState:
         def set_active_workspace(self, path):
             raise RuntimeError("store exploded")
 
-    monkeypatch.setattr(server_mod, "_store", _ExplodingStore())
+    monkeypatch.setattr(server_mod, "_host_state", _ExplodingHostState())
     with pytest.raises(RuntimeError, match="store exploded"):
         service.set_active_workspace("/abs/ws-a")
 

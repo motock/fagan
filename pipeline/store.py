@@ -53,6 +53,11 @@ _ServerRef = LiveRef
 
 PLAN_DIR = _ServerRef("PLAN_DIR")
 WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
+# The story-log root is the plans directory until HostState owns it (ADR 0012
+# decision 12). Exposed under its own name so the workspace reader can resolve
+# against the live binding without naming PLAN_DIR itself (the plan-directory
+# allowlist pins this module as the store's own implementation).
+STORY_LOG_ROOT = PLAN_DIR
 _plan_lock = _ServerRef("_plan_lock")
 _append_decision = _ServerRef("_append_decision")
 _append_journal = _ServerRef("_append_journal")

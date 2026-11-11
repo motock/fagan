@@ -5,9 +5,11 @@ These mirror the safety logic that lives in ``app/dashboard.py``'s
 ``_read_worktree_file`` helpers and assert that the new
 ``FileStore``/``PipelineService`` seams replicate that logic byte-for-byte.
 
-The implementation does not exist yet (this is the RED test file written
-first); every accessor below should fail with an AttributeError/ImportError
-until ``pipeline/server.py`` grows the methods.
+The story-log and worktree-file reads moved to the ``WorkspaceReader`` seam
+(ADR 0012 decision 1): the store no longer carries them, so those cases now
+live in ``tests/unit/test_workspace_reader.py`` and
+``tests/unit/test_store_no_workspace_reads.py``. What stays here is the
+journal accessor surface of the store and the service.
 """
 
 import json
@@ -225,316 +227,10 @@ class TestGetJournalFinalTs:
 
 
 # ---------------------------------------------------------------------------
-# get_story_log
+# The story-log and worktree-file reads moved to the WorkspaceReader seam
+# (ADR 0012 decision 1); they are asserted in
+# tests/unit/test_workspace_reader.py and tests/unit/test_store_no_workspace_reads.py.
 # ---------------------------------------------------------------------------
-
-class TestGetStoryLog:
-    def _manifest_with_log(self, plan_dir, story_key, log_value):
-        """Write a manifest whose stories[story_key]['log'] = log_value."""
-        manifest = {"stories": {story_key: {"log": log_value}}}
-        _write_text(plan_dir / f"{plan_dir.name}.manifest.json", json.dumps(manifest))
-        return manifest
-
-    def test_happy_path_returns_tail(self, plan_dir):
-        plan, story = plan_dir.name, "S1"
-        log_path = plan_dir / f"{plan}.{story}.log"
-        all_lines = [f"line {i}" for i in range(10)]
-        _write_text(log_path, "\n".join(all_lines))
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest, lines=5)
-        assert result["available"] is True
-        assert result["lines"] == all_lines[-5:]
-
-    def test_default_lines_is_200(self, plan_dir):
-        """When lines is omitted, the default tail is 200 lines."""
-        plan, story = plan_dir.name, "S1"
-        log_path = plan_dir / f"{plan}.{story}.log"
-        all_lines = [f"line {i}" for i in range(300)]
-        _write_text(log_path, "\n".join(all_lines))
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is True
-        assert len(result["lines"]) == 200
-        assert result["lines"] == all_lines[-200:]
-
-    def test_lines_clamped_to_cap_500(self, plan_dir):
-        """lines > _LOG_TAIL_CAP (500) is clamped to 500."""
-        plan, story = plan_dir.name, "S1"
-        log_path = plan_dir / f"{plan}.{story}.log"
-        all_lines = [f"line {i}" for i in range(600)]
-        _write_text(log_path, "\n".join(all_lines))
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest, lines=600)
-        assert result["available"] is True
-        assert len(result["lines"]) == 500
-        assert result["lines"] == all_lines[-500:]
-
-    def test_lines_zero_falls_back_to_default(self, plan_dir):
-        """lines < 1 is coerced to the default (200), not 0/all."""
-        plan, story = plan_dir.name, "S1"
-        log_path = plan_dir / f"{plan}.{story}.log"
-        all_lines = [f"line {i}" for i in range(300)]
-        _write_text(log_path, "\n".join(all_lines))
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest, lines=0)
-        assert result["available"] is True
-        assert len(result["lines"]) == 200
-
-    def test_missing_log_file_returns_unavailable(self, plan_dir):
-        plan, story = plan_dir.name, "S1"
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_missing_log_field_returns_unavailable(self, plan_dir):
-        plan, story = plan_dir.name, "S1"
-        manifest = {"stories": {story: {}}}  # no 'log' key
-        _write_text(plan_dir / f"{plan}.manifest.json", json.dumps(manifest))
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_empty_log_field_returns_unavailable(self, plan_dir):
-        plan, story = plan_dir.name, "S1"
-        manifest = {"stories": {story: {"log": ""}}}
-        _write_text(plan_dir / f"{plan}.manifest.json", json.dumps(manifest))
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_story_key_missing_from_manifest_returns_unavailable(self, plan_dir):
-        plan, story = plan_dir.name, "S1"
-        manifest = {"stories": {"other": {"log": "x.log"}}}
-        _write_text(plan_dir / f"{plan}.manifest.json", json.dumps(manifest))
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_manifest_not_dict_returns_unavailable(self, plan_dir):
-        store = FileStore()
-        result = store.get_story_log("p", "S1", manifest=None)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_manifest_stories_not_dict_returns_unavailable(self, plan_dir):
-        store = FileStore()
-        result = store.get_story_log("p", "S1", manifest={"stories": "nope"})
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_story_not_dict_returns_unavailable(self, plan_dir):
-        store = FileStore()
-        result = store.get_story_log("p", "S1", manifest={"stories": {"S1": "nope"}})
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_log_path_outside_plan_dir_returns_unavailable(self, plan_dir):
-        """A manifest log path pointing outside PLAN_DIR (e.g. ../outside.log)
-        must degrade to available=False, never read the file."""
-        plan, story = plan_dir.name, "S1"
-        # write a file just outside plan_dir
-        outside = plan_dir.parent / "outside.log"
-        _write_text(outside, "secret\n")
-        manifest = {"stories": {story: {"log": "../outside.log"}}}
-        _write_text(plan_dir / f"{plan}.manifest.json", json.dumps(manifest))
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_absolute_log_path_outside_plan_dir_returns_unavailable(self, plan_dir, tmp_path):
-        """An absolute log path outside PLAN_DIR must also be rejected."""
-        plan, story = plan_dir.name, "S1"
-        outside = tmp_path / "elsewhere.log"
-        _write_text(outside, "secret\n")
-        manifest = {"stories": {story: {"log": str(outside)}}}
-        _write_text(plan_dir / f"{plan}.manifest.json", json.dumps(manifest))
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is False
-        assert result["lines"] == []
-
-    def test_non_utf8_log_decodes_with_replacement_chars(self, plan_dir):
-        """Non-UTF-8 bytes must decode to U+FFFD replacement chars, not raise."""
-        plan, story = plan_dir.name, "S1"
-        log_path = plan_dir / f"{plan}.{story}.log"
-        _write_bytes(log_path, b"good\xff\xfebad\n")
-        manifest = self._manifest_with_log(plan_dir, story, f"{plan}.{story}.log")
-        store = FileStore()
-        result = store.get_story_log(plan, story, manifest)
-        assert result["available"] is True
-        joined = "".join(result["lines"])
-        # replacement char U+FFFD must appear, not an exception
-        assert "\ufffd" in joined
-
-    def test_never_raises_on_any_bad_input(self, plan_dir):
-        store = FileStore()
-        cases = [
-            ("", "", None),
-            ("p", "", {}),
-            ("p", "S1", {"stories": "x"}),
-            ("p", "S1", {"stories": {"S1": "x"}}),
-            ("p", "S1", {"stories": {"S1": {"log": "../../etc/passwd"}}}),
-            ("p", "S1", {"stories": {"S1": {"log": None}}}),
-        ]
-        for plan, story, manifest in cases:
-            try:
-                store.get_story_log(plan, story, manifest)
-            except Exception as exc:  # noqa: BLE001
-                pytest.fail(f"get_story_log({plan!r},{story!r},{manifest!r}) raised {exc!r}")
-
-
-# ---------------------------------------------------------------------------
-# get_worktree_file
-# ---------------------------------------------------------------------------
-
-class TestGetWorktreeFile:
-    def test_happy_path_returns_text(self, plan_dir, worktree_root):
-        story_key = "S1"
-        wt = worktree_root / story_key
-        wt.mkdir(parents=True, exist_ok=True)
-        _write_text(wt / ".agent_plan.md", "# plan body\n")
-        story = {"worktree": str(wt)}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is True
-        assert result["text"] == "# plan body\n"
-
-    def test_missing_file_returns_unavailable(self, plan_dir, worktree_root):
-        story_key = "S1"
-        wt = worktree_root / story_key
-        wt.mkdir(parents=True, exist_ok=True)
-        story = {"worktree": str(wt)}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_missing_worktree_dir_returns_unavailable(self, plan_dir, worktree_root):
-        story = {"worktree": str(worktree_root / "gone")}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_story_not_dict_returns_unavailable(self, plan_dir, worktree_root):
-        store = FileStore()
-        result = store.get_worktree_file("not-a-dict", ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_story_missing_worktree_returns_unavailable(self, plan_dir, worktree_root):
-        store = FileStore()
-        result = store.get_worktree_file({}, ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_empty_filename_returns_unavailable(self, plan_dir, worktree_root):
-        story = {"worktree": str(worktree_root / "S1")}
-        store = FileStore()
-        result = store.get_worktree_file(story, "")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_filename_with_slash_rejected(self, plan_dir, worktree_root):
-        story_key = "S1"
-        wt = worktree_root / story_key
-        wt.mkdir(parents=True, exist_ok=True)
-        _write_text(wt / "sibling.txt", "sibling\n")
-        story = {"worktree": str(wt)}
-        store = FileStore()
-        result = store.get_worktree_file(story, "sibling.txt")  # plain ok
-        assert result["available"] is True
-        # but a path separator must be rejected
-        result = store.get_worktree_file(story, "sub/dir.txt")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_filename_with_backslash_rejected(self, plan_dir, worktree_root):
-        story = {"worktree": str(worktree_root / "S1")}
-        store = FileStore()
-        result = store.get_worktree_file(story, "sub\\dir.txt")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_filename_dot_dot_rejected(self, plan_dir, worktree_root):
-        story_key = "S1"
-        wt = worktree_root / story_key
-        wt.mkdir(parents=True, exist_ok=True)
-        # a sibling worktree exists
-        sib = worktree_root / "S2"
-        sib.mkdir(parents=True, exist_ok=True)
-        _write_text(sib / "secret.txt", "secret\n")
-        story = {"worktree": str(wt)}
-        store = FileStore()
-        # ".." filename must not escape to the sibling
-        result = store.get_worktree_file(story, "..")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_filename_dot_rejected(self, plan_dir, worktree_root):
-        story = {"worktree": str(worktree_root / "S1")}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_relative_worktree_rejected(self, plan_dir, worktree_root):
-        """A relative worktree path is a corrupt manifest -> fail closed."""
-        story = {"worktree": "relative/path"}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_worktree_outside_worktree_root_rejected(self, plan_dir, worktree_root, tmp_path):
-        """A worktree path pointing outside WORKTREE_ROOT must be rejected."""
-        outside = tmp_path / "elsewhere"
-        outside.mkdir(parents=True, exist_ok=True)
-        _write_text(outside / ".agent_plan.md", "secret\n")
-        story = {"worktree": str(outside)}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is False
-        assert result["text"] == ""
-
-    def test_non_utf8_file_decodes_with_replacement_chars(self, plan_dir, worktree_root):
-        story_key = "S1"
-        wt = worktree_root / story_key
-        wt.mkdir(parents=True, exist_ok=True)
-        _write_bytes(wt / ".agent_plan.md", b"good\xff\xfebad")
-        story = {"worktree": str(wt)}
-        store = FileStore()
-        result = store.get_worktree_file(story, ".agent_plan.md")
-        assert result["available"] is True
-        assert "\ufffd" in result["text"]
-
-    def test_never_raises_on_any_bad_input(self, plan_dir, worktree_root):
-        store = FileStore()
-        cases = [
-            (None, ".agent_plan.md"),
-            ({}, ""),
-            ({}, ".agent_plan.md"),
-            ({"worktree": ""}, ".agent_plan.md"),
-            ({"worktree": "rel"}, ".agent_plan.md"),
-            ({"worktree": str(worktree_root / "S1")}, "../escape"),
-            ({"worktree": str(worktree_root / "S1")}, "a/b"),
-            ({"worktree": "/etc"}, "passwd"),
-        ]
-        for story, filename in cases:
-            try:
-                store.get_worktree_file(story, filename)
-            except Exception as exc:  # noqa: BLE001
-                pytest.fail(f"get_worktree_file({story!r},{filename!r}) raised {exc!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -585,10 +281,12 @@ class TestPipelineServiceDelegators:
             assert callable(getattr(svc, name)), f"PipelineService.{name} missing"
 
     def test_delegators_exist_on_file_store(self):
-        """All four GROUP-2 accessors must be callable methods on FileStore."""
+        """The journal accessors stay on FileStore; the workspace reads do not."""
         store = FileStore()
-        for name in ("get_journal", "get_journal_final_ts", "get_story_log", "get_worktree_file"):
+        for name in ("get_journal", "get_journal_final_ts"):
             assert callable(getattr(store, name)), f"FileStore.{name} missing"
+        for name in ("get_story_log", "get_worktree_file"):
+            assert not hasattr(store, name), f"FileStore still exposes {name}"
 
 
 # ---------------------------------------------------------------------------
@@ -597,10 +295,16 @@ class TestPipelineServiceDelegators:
 
 class TestStoreProtocolDeclaresAccessors:
     def test_abstract_store_declares_get_journal(self):
-        """The abstract Store base class (the seam) must declare all four
-        GROUP-2 accessors so a custom Store implementation is forced to
-        provide them."""
+        """The abstract Store base class (the seam) must declare the journal
+        accessors so a custom Store implementation is forced to provide them."""
         from pipeline.server import Store  # the abstract base
 
-        for name in ("get_journal", "get_journal_final_ts", "get_story_log", "get_worktree_file"):
+        for name in ("get_journal", "get_journal_final_ts"):
             assert hasattr(Store, name), f"Store abstract base missing {name}"
+
+    def test_abstract_store_declares_no_workspace_read(self):
+        """The abstract Store base class must not declare a workspace read."""
+        from pipeline.server import Store  # the abstract base
+
+        for name in ("get_story_log", "get_worktree_file"):
+            assert not hasattr(Store, name), f"Store abstract base still has {name}"

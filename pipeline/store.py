@@ -42,7 +42,6 @@ from pipeline.store_records import (
     validate_story_key,
     validate_usage_record,
 )
-from pipeline.workspace_reader import local_workspace_reader
 
 logger = logging.getLogger(__name__)
 
@@ -225,8 +224,6 @@ class Store(Protocol):
     def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
     def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
-    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]: ...
-    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]: ...
 
 
 class _TransactionLock:
@@ -414,12 +411,6 @@ class FileStore:
         if isinstance(last, dict):
             return last.get("ts")
         return None
-
-    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
-        return local_workspace_reader.read_story_log(plan_name, story_key, manifest, lines)
-
-    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
-        return local_workspace_reader.read_worktree_file(story, filename)
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         """Return manifest or None on missing/corrupt."""

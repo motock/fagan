@@ -42,8 +42,8 @@ from pipeline import server as p
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     """Mirror of the plan_dir fixture in test_pipeline_mcp_server.py: patches
-    PLAN_DIR on pipeline.server and on the persistence/concurrency modules
-    that read it as a free var."""
+    PLAN_DIR on pipeline.server and on the persistence module that reads it
+    as a free var (pipeline.concurrency resolves it at call time)."""
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)

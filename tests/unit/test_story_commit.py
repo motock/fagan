@@ -65,8 +65,9 @@ def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
-    # persistence and concurrency bind PLAN_DIR by value at their own module
-    # load, so the patch has to land on those bindings too.
+    # persistence binds PLAN_DIR by value at its own module load, so the patch
+    # has to land on that binding too; concurrency resolves
+    # pipeline.server.PLAN_DIR at call time.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     return d
 

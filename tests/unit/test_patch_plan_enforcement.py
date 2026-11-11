@@ -28,9 +28,10 @@ The contract these tests pin down:
 
 ``plan_dir`` shadows the shared fixture from ``tests/unit/conftest.py`` with
 the shape ``tests/unit/test_authorization.py`` uses: a per-test ``tmp_path``
-with the ``pipeline.server``, ``pipeline.persistence`` and
-``pipeline.concurrency`` PLAN_DIR bindings patched -- the bindings the store,
-the manifest reads and the denial sidecar all resolve through.
+with the ``pipeline.server`` and ``pipeline.persistence`` PLAN_DIR bindings
+patched -- the bindings the store, the manifest reads and the denial sidecar
+all resolve through (``pipeline.concurrency`` resolves the server binding at
+call time).
 """
 
 from __future__ import annotations

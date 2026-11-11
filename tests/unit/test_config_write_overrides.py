@@ -47,7 +47,8 @@ _VALID_BACKENDS = frozenset({"claude", "local", "ollama", "lmstudio", "mlx", "au
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """A tmp PLAN_DIR patched into server, persistence, and concurrency."""
+    """A tmp PLAN_DIR patched into server and persistence (concurrency
+    resolves the server binding at call time)."""
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"

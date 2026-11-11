@@ -76,8 +76,9 @@ def oa2_plan_dir(tmp_path, monkeypatch):
     plans = tmp_path / "plans"
     plans.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plans)
-    # persistence/concurrency import PLAN_DIR as a free variable at module
-    # load, so the patch must land on their own bindings too.
+    # persistence imports PLAN_DIR as a free variable at module load, so the
+    # patch must land on its own binding too; concurrency resolves
+    # pipeline.server.PLAN_DIR at call time.
     monkeypatch.setattr(ppers, "PLAN_DIR", plans)
     return plans
 

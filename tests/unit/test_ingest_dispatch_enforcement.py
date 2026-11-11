@@ -42,9 +42,10 @@ DENIED = ANONYMOUS
 def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at a throwaway directory.
 
-    ``pipeline_persistence`` and ``pipeline_concurrency`` import ``PLAN_DIR``
-    from ``pipeline_paths`` at module load and read it as a free variable, so
-    the patch has to land on their own bindings too.
+    ``pipeline_persistence`` imports ``PLAN_DIR`` from ``pipeline_paths`` at
+    module load and reads it as a free variable, so the patch has to land on
+    its own binding too. ``pipeline.concurrency`` resolves
+    ``pipeline.server.PLAN_DIR`` at call time, so the server patch covers it.
     """
     d = tmp_path / "plans"
     d.mkdir()

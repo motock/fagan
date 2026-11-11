@@ -76,8 +76,9 @@ def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
-    # persistence / concurrency read PLAN_DIR as a free var, so the patches
-    # must land on their own bindings too.
+    # persistence reads PLAN_DIR as a free var, so the patch must land on its
+    # own binding too; concurrency resolves pipeline.server.PLAN_DIR at call
+    # time.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     return d
 

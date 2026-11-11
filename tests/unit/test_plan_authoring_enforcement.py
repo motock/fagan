@@ -71,9 +71,10 @@ def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding at a throwaway directory.
 
     ``pipeline.service`` reads PLAN_DIR through a ``_ServerRef``, so patching
-    ``pipeline.server`` covers the service; the persistence/concurrency
-    bindings are patched too for the manifest and sidecar reads, and
-    ``app.dashboard``'s own copy for the route's workspace lookup.
+    ``pipeline.server`` covers the service; the persistence binding is patched
+    too for the manifest and sidecar reads, and ``app.dashboard``'s own copy
+    for the route's workspace lookup. ``pipeline.concurrency`` resolves
+    ``pipeline.server.PLAN_DIR`` at call time.
     """
     from app import dashboard as d
 

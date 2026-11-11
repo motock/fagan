@@ -283,11 +283,12 @@ def _isolate_patch_store():
 def plan_dir(tmp_path, monkeypatch):
     """PLAN_DIR for every binding the tick and the apply engine read.
 
-    ``pipeline.concurrency.PLAN_DIR`` is where ``_plan_lock`` puts the
-    ``<plan>.lock`` file, ``pipeline.server.PLAN_DIR`` is where the manifest
-    is read, and ``pipeline.persistence.PLAN_DIR`` is where the journal
-    lands.  All three must point at the same tmp directory or the lock and
-    the manifest would live in different worlds.
+    ``pipeline.concurrency.PLAN_DIR`` (a ``_ServerRef``) is where
+    ``_plan_lock`` puts the ``<plan>.lock`` file, ``pipeline.server.PLAN_DIR``
+    is where the manifest is read, and ``pipeline.persistence.PLAN_DIR`` is
+    where the journal lands.  Patching the server binding therefore covers
+    concurrency, and both must point at the same tmp directory as
+    persistence or the lock and the manifest would live in different worlds.
     """
     d = tmp_path / "plans"
     d.mkdir()

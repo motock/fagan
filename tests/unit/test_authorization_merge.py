@@ -26,9 +26,10 @@ The contract these tests pin down:
 import time, so ``monkeypatch.setenv`` is observed at call time.
 
 ``plan_dir`` is the shared fixture from ``tests/unit/conftest.py``, which
-points the ``pipeline.server``, ``pipeline.persistence`` and
-``pipeline.concurrency`` PLAN_DIR bindings at one tmp directory -- the same
-bindings the store and the denial sidecar read through.
+points the ``pipeline.server`` and ``pipeline.persistence`` PLAN_DIR bindings
+at one tmp directory -- the same bindings the store and the denial sidecar
+read through (``pipeline.concurrency`` resolves the server binding at call
+time).
 """
 
 import json

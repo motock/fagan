@@ -37,8 +37,9 @@ LOCKED = {
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Redirect pipeline.server.PLAN_DIR (and the persistence/concurrency
-    copies) to an isolated tmp dir."""
+    """Redirect pipeline.server.PLAN_DIR and the persistence copy to an
+    isolated tmp dir (pipeline.concurrency resolves the server binding at
+    call time)."""
     from pipeline import persistence as ppers
 
     d = tmp_path / "plans"

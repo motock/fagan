@@ -28,10 +28,11 @@ from pipeline import server as pserver
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     # _service.pause_plan/resume_plan run the real PipelineService code
-    # path, which reads PLAN_DIR as a free variable in both pipeline.server
-    # (FileStore) and pipeline.concurrency (_plan_lock's lock-file path) -
-    # both must point at the same tmp dir as the dashboard's own PLAN_DIR,
-    # or the route and the service disagree about where the manifest lives.
+    # path, which reads PLAN_DIR as a free variable in pipeline.server
+    # (FileStore); pipeline.concurrency (_plan_lock's lock-file path) resolves
+    # that same server binding at call time. It must point at the same tmp
+    # dir as the dashboard's own PLAN_DIR, or the route and the service
+    # disagree about where the manifest lives.
     monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pserver, "PLAN_DIR", tmp_path)
     return tmp_path

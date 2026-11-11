@@ -104,7 +104,6 @@ REMOTE_ENFORCED = frozenset(
 REMOTE_READ = frozenset(
     {
         "check_story_status",
-        "export_plan",
         "check_usage",
         "get_effective_config",
         "get_story_diff",
@@ -141,7 +140,6 @@ PLAN_SCOPED_READ = frozenset(
         "get_story_diff",
         "list_decisions",
         "list_ready_stories",
-        "export_plan",
     }
 )
 

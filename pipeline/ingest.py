@@ -922,6 +922,15 @@ def _ingest_plan_impl(
             final_manifest["approval"] = on_ingest(final_manifest)
             notify_pending = pending_notice_due(previous_approval, final_manifest["approval"])
         _atomic_write_json(manifest_path, final_manifest)
+        # ADR 0012 decision 5: the manifest is the only record of the plan, so
+        # a successful *full* ingest consumes the draft. A crash between this
+        # write and the delete leaves the draft behind; the next ingest then
+        # re-applies identical content by explicit story key, which is
+        # idempotent. An only_epics ingest keeps the draft: the epics it did
+        # not ingest exist nowhere else.  Deleted only after the write, so a
+        # write failure never loses the authored plan.
+        if only_epics is None:
+            _consume_plan_draft(plan_name)
         if notify_pending:
             notify_approval_event(plan_name, final_manifest, "plan_pending_approval")
 

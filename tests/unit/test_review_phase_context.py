@@ -14,6 +14,8 @@ TEXT = "Always use the shared Button component."
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     return tmp_path
 

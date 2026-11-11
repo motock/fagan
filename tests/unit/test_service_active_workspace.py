@@ -189,7 +189,7 @@ def test_service_delegation_does_not_disturb_recent_workspaces(service, plan_dir
     the recents list that resolve_workspace/list_workspaces maintain."""
     service.set_active_workspace("/abs/ws-a")
     assert service.get_active_workspace() == "/abs/ws-a"
-    assert server_mod._store.get_recent_workspaces() == []
+    assert server_mod._host_state.get_recent_workspaces() == []
 
 
 # ---------------------------------------------------------------------------

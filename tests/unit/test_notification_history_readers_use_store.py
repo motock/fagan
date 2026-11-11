@@ -392,7 +392,10 @@ class _PlanHarness:
 
         # The plan-completion module holds no PLAN_DIR binding any more: the
         # once-only marker and the report are records of the store, which
-        # this stand-in serves in memory.
+        # this stand-in serves in memory.  The module-level binding is
+        # patched only while it still exists, so no run ever writes into the
+        # real plans directory.
+        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
         # The plan-completion module builds its own store; point that lookup
         # at the same records the service would read, so the history comes
         # from one place whichever seam the reader reaches for.

@@ -383,30 +383,20 @@ def test_notifications_missing_and_appended(store_factory):
     assert got[0]["story_key"] == "S1"
 
 
-def test_get_story_log_missing_and_present(store_factory):
-    """A story log is read relative to the plans directory, fail-open."""
+def test_store_protocol_declares_no_workspace_read(store_factory):
+    """The Store protocol exposes no workspace read (ADR 0012 decision 1).
+
+    The story log and the worktree files are read through the
+    ``WorkspaceReader`` seam, not through the store, so no control-plane
+    method returns or reads a filesystem path.
+    """
+    from pipeline.store import Store
+
     store = store_factory()
 
-    assert store.get_story_log(PLAN, STORY, EMPTY) == {"available": False, "lines": []}
-
-    (_plans_dir(store) / f"{PLAN}.{STORY}.log").write_text("a\nb\nc\n")
-    manifest = {"stories": {STORY: {"log": f"{PLAN}.{STORY}.log"}}}
-
-    got = store.get_story_log(PLAN, STORY, manifest, lines=2)
-
-    assert got == {"available": True, "lines": ["b", "c"]}
-
-
-def test_get_worktree_file_rejects_unsafe_input(store_factory):
-    """Only a plain filename inside an absolute worktree is readable."""
-    store = store_factory()
-    empty = {"available": False, "text": ""}
-
-    assert store.get_worktree_file({}, "notes.md") == empty
-    assert store.get_worktree_file("not-a-dict", "notes.md") == empty
-    assert store.get_worktree_file({"worktree": "relative/path"}, "notes.md") == empty
-    assert store.get_worktree_file({"worktree": "/tmp"}, "../escape") == empty
-    assert store.get_worktree_file({"worktree": "/tmp"}, "") == empty
+    for name in ("get_story_log", "get_worktree_file"):
+        assert not hasattr(Store, name), f"Store still declares {name}"
+        assert not hasattr(store, name), f"{type(store).__name__} still exposes {name}"
 
 
 def test_recent_workspaces_add_dedupes_and_prepends(store_factory):
@@ -457,33 +447,6 @@ def test_update_story_missing_manifest_raises(store_factory):
         store.update_story(PLAN, STORY, {"status": "running"})
 
 
-def test_get_worktree_file_reads_plain_file_inside_worktree(store_factory, tmp_path, monkeypatch):
-    """A plain filename inside the configured worktree root is served."""
-    store = store_factory()
-    worktree = tmp_path / "worktree"
-    worktree.mkdir()
-    (worktree / "notes.md").write_text("hello\n")
-    monkeypatch.setattr(pipeline.server, "WORKTREE_ROOT", tmp_path)
-
-    got = store.get_worktree_file({"worktree": str(worktree)}, "notes.md")
-
-    assert got == {"available": True, "text": "hello\n"}
-    assert store.get_worktree_file({"worktree": str(worktree)}, "absent.md")[
-        "available"
-    ] is False
-
-
-def test_get_story_log_rejects_absolute_path(store_factory, tmp_path):
-    """An absolute log path in a manifest is treated as corrupt, not followed."""
-    store = store_factory()
-    outside = tmp_path / "outside.log"
-    outside.write_text("secret\n")
-    manifest = {"stories": {STORY: {"log": str(outside)}}}
-
-    assert store.get_story_log(PLAN, STORY, manifest) == {
-        "available": False,
-        "lines": [],
-    }
 
 
 # ---------------------------------------------------------------------------

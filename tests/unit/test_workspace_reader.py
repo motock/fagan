@@ -110,7 +110,12 @@ def outside_worktree(tmp_path):
 
 @pytest.fixture
 def store_tripwire(monkeypatch):
-    """Record every workspace read that still goes through the store."""
+    """Record every workspace read that still goes through the store.
+
+    The store no longer carries these reads (ADR 0012 decision 1), so the
+    tripwire only arms itself if such a method ever comes back: a route
+    that reaches the workspace through the store is recorded here.
+    """
     calls: list[str] = []
     store_cls = type(server._store)
     for name in ("get_worktree_file", "get_story_log"):
@@ -342,22 +347,16 @@ def test_read_worktree_file_swallows_os_errors(roots, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# the store and the service delegate to the reader
+# the store no longer reads the workspace; the service delegates to the reader
 # ---------------------------------------------------------------------------
 
 
-def test_file_store_delegates_story_log_reads_to_the_reader(monkeypatch):
-    sentinel = {"available": True, "lines": ["delegated"]}
-    _patch_reader_method(monkeypatch, "read_story_log", sentinel)
+def test_file_store_no_longer_reads_the_workspace():
+    """ADR 0012 decision 1: the store is not a workspace reader any more."""
+    store = FileStore()
 
-    assert FileStore().get_story_log("demo", "S1", {}) == sentinel
-
-
-def test_file_store_delegates_worktree_file_reads_to_the_reader(monkeypatch):
-    sentinel = {"available": True, "text": "delegated"}
-    _patch_reader_method(monkeypatch, "read_worktree_file", sentinel)
-
-    assert FileStore().get_worktree_file({"worktree": "/tmp"}, "notes.md") == sentinel
+    for name in ("get_story_log", "get_worktree_file"):
+        assert not hasattr(store, name), f"FileStore still exposes {name}"
 
 
 def test_pipeline_service_delegates_story_log_reads_to_the_reader(monkeypatch):

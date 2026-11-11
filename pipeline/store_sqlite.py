@@ -107,9 +107,12 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
     by a later read.
 
     Reads that are natively filesystem objects are delegated to an internal
-    file store: ``get_story_log``, ``get_worktree_file``, the recent and active
-    workspace records, and the manifest's on-disk projection
-    (``manifest_path``, refreshed when a save commits).
+    file store: the recent and active workspace records, and the manifest's
+    on-disk projection (``manifest_path``, refreshed when a save commits).
+    The workspace reads themselves -- the story log and the worktree files --
+    are not store methods at all: they go through the ``WorkspaceReader`` seam
+    (``pipeline/workspace_reader.py``, ADR 0012 decision 1), so no
+    control-plane method here returns or reads a filesystem path.
 
     The notification and journal sidecar files remain on disk under ``PLAN_DIR``
     and are not represented in the database. The audit chain is a table in it
@@ -475,20 +478,6 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
 
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
         return self._files.get_journal_final_ts(plan_name, story_key)
-
-    def get_story_log(
-        self,
-        plan_name: str,
-        story_key: str,
-        manifest: dict[str, Any],
-        lines: int = 200,
-    ) -> dict[str, Any]:
-        return self._files.get_story_log(plan_name, story_key, manifest, lines)
-
-    def get_worktree_file(
-        self, story: dict[str, Any], filename: str
-    ) -> dict[str, Any]:
-        return self._files.get_worktree_file(story, filename)
 
     def get_recent_workspaces(self) -> list[str]:
         return self._files.get_recent_workspaces()

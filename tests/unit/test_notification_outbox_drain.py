@@ -53,6 +53,7 @@ import pytest
 
 from pipeline import notification_outbox, paths, persistence
 from pipeline import scheduler_daemon as daemon_mod
+from pipeline import server
 from pipeline.events import InProcessEventBus
 
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"

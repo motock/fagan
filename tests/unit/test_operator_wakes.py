@@ -58,7 +58,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
-    monkeypatch.setattr(pcomp, "PLAN_DIR", d)
     monkeypatch.setattr(paths, "PLAN_DIR", d)
     return d
 

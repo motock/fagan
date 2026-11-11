@@ -83,8 +83,6 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pserver, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
-    if hasattr(dashboard_module, "PLAN_DIR"):
-        monkeypatch.setattr(dashboard_module, "PLAN_DIR", d)
     return d
 
 

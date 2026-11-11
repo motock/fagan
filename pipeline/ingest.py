@@ -615,10 +615,17 @@ def _ingest_plan_impl(
     plan_names.validate_new_plan_name(plan_name)
     plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
-        # A draft that is missing is the ordinary "already ingested" case:
-        # answer with the way out instead of the bare record-reader message.
+        # A missing draft is the ordinary "already ingested" case: a full
+        # ingest consumed it, so name the way out rather than the bare
+        # record-reader message.
         if plan is None and refusal.get("error") == f"No plan named {plan_name}":
-            return _no_staged_draft_error(plan_name)
+            return {
+                "ok": False,
+                "error": (
+                    f"plan '{plan_name}' has no staged draft: save_plan it "
+                    "(export_plan renders the current plan) before re-ingesting"
+                ),
+            }
         return refusal
 
     # advance_all_plans() iterates every plan in shared PLAN_DIR, each

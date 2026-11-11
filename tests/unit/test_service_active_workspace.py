@@ -267,5 +267,5 @@ def test_store_module_untouched_by_this_story():
     )
     assert (
         _digest(FileHostState.set_active_workspace)
-        == "@@SET_ACTIVE_DIGEST@@"
+        == "29f33d061f26b34996689fb8f0b064ab7890c1d9c42e198e2cbb6aa4ee685b78"
     )

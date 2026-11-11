@@ -464,8 +464,8 @@ class RecordStore(Protocol):
         ``O_CREAT|O_EXCL`` (or the backend's equivalent), so two racing ticks
         cannot both report completion.
 
-        This is the durable record behind the legacy ``<plan>.plan_completed``
-        file in ``PLAN_DIR``: one marker, one notice (ADR 0012 decision 3).
+        This is the durable record behind the legacy completion marker file in
+        the plans directory: one marker, one notice (ADR 0012 decision 3).
         """
         ...
 

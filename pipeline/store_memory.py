@@ -61,10 +61,11 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # plan), held as a deep copy so a caller's later mutation of the dict
         # it passed never changes what is stored.
         self._drafts: dict[tuple[str, str], dict] = {}
-        # The plan-completion marker and report (ADR 0012 decision 3): the sets
-        # of plans whose marker is set, and the report text per plan.  A marker
-        # is a membership test, so a set is exactly the record.
-        self._completed: set[tuple[str, str]] = set()
+        # The plan-completion marker and report (ADR 0012 decision 3): the
+        # plans whose marker is set, and the report text per plan.  Both are
+        # dicts keyed by (namespace, plan), so the transaction undo log can
+        # restore them like every other structure.
+        self._completed: dict[tuple[str, str], bool] = {}
         self._reports: dict[tuple[str, str], str] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.

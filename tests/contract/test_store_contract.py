@@ -399,9 +399,15 @@ def test_store_protocol_declares_no_workspace_read(store_factory):
         assert not hasattr(store, name), f"{type(store).__name__} still exposes {name}"
 
 
-def test_recent_workspaces_add_dedupes_and_prepends(store_factory):
-    """The most recent workspace is first, and re-adding it does not duplicate."""
-    store = store_factory()
+def test_recent_workspaces_add_dedupes_and_prepends():
+    """The most recent workspace is first, and re-adding it does not duplicate.
+
+    Moved off the store onto the host state (ADR 0012, decision 4); the store
+    contract no longer covers workspace records.
+    """
+    from pipeline.host_state import FileHostState
+
+    store = FileHostState()
 
     assert store.get_recent_workspaces() == []
 
@@ -412,9 +418,15 @@ def test_recent_workspaces_add_dedupes_and_prepends(store_factory):
     assert store.get_recent_workspaces() == ["/repo/one", "/repo/two"]
 
 
-def test_active_workspace_round_trip_and_clear(store_factory):
-    """The active workspace persists, and clearing it reads back as None."""
-    store = store_factory()
+def test_active_workspace_round_trip_and_clear():
+    """The active workspace persists, and clearing it reads back as None.
+
+    Host-local record now (ADR 0012, decision 4), not part of the store
+    contract.
+    """
+    from pipeline.host_state import FileHostState
+
+    store = FileHostState()
 
     assert store.get_active_workspace() is None
 
@@ -423,6 +435,19 @@ def test_active_workspace_round_trip_and_clear(store_factory):
 
     store.set_active_workspace(None)
     assert store.get_active_workspace() is None
+
+
+def test_store_contract_declares_no_workspace_records(store_factory):
+    """The store exposes no workspace record methods any more."""
+    store = store_factory()
+    for name in (
+        "get_recent_workspaces",
+        "add_recent_workspace",
+        "get_active_workspace",
+        "set_active_workspace",
+    ):
+        assert not hasattr(Store, name), f"Store still declares {name}"
+        assert not hasattr(store, name), f"{type(store).__name__} still exposes {name}"
 
 
 def test_get_manifest_or_none_reads_saved_and_swallows_corrupt(store_factory):

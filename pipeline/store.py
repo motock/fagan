@@ -538,7 +538,7 @@ class FileStore:
         return FileRecords(self)
 
 
-class FileRecords(PlanDraftRecords, OutboxContract, OutboxSummaryContract):
+class FileRecords(PlanRecords, OutboxContract, OutboxSummaryContract):
     """The namespaced record view over one :class:`FileStore` (ADR 0012).
 
     Every operation delegates to the legacy ``FileStore`` methods, so the

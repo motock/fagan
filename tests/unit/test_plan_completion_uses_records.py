@@ -14,9 +14,10 @@ Covered here:
   marker is still set, and the failure is logged at WARNING;
 * an empty (or missing) ``stories`` dict is not a completed plan.
 
-The notification sink is stubbed on the module under test; the record store is
-the real one, pointed at a temporary plans directory, so the marker and report
-records are read back through the same public API a caller would use.
+The notification sink and the summary renderer are stubbed on the module under
+test; the record store is the real one, pointed at a temporary plans
+directory, so the marker and report records are read back through the same
+public API a caller would use.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from pipeline.store import FileStore
 from pipeline.store_records import DEFAULT_NAMESPACE
 
 PLAN = 'plan-completion-flow'
+SUMMARY = 'SUMMARY[plan-completion-flow]'
 
 
 def _manifest(statuses=None, *, include_stories=True):
@@ -63,29 +65,30 @@ def harness(tmp_path, monkeypatch):
             (plan_name, message, kwargs)
         ),
     )
-
-    records = FileStore().records()
-    monkeypatch.setattr(server, '_store', records)
     monkeypatch.setattr(
         plan_completion,
-        'build_store',
-        lambda *a, **k: records,
+        'format_plan_summary',
+        lambda plan_name, manifest, records: SUMMARY,
     )
 
-    class _Harness:
-        plan_dir = plan_dir
+    store = FileStore()
+    records = store.records()
+    monkeypatch.setattr(server, '_store', store)
+    monkeypatch.setattr(plan_completion, 'build_store', lambda *a, **k: store)
 
+    class _Harness:
         def __init__(self):
             self.notify_calls = calls
+            self.records = records
 
         def call(self, manifest, plan_name=PLAN):
             return plan_completion.notify_if_plan_completed(plan_name, manifest)
 
         def is_completed(self, plan_name=PLAN):
-            return records.is_plan_completed(DEFAULT_NAMESPACE, plan_name)
+            return self.records.is_plan_completed(DEFAULT_NAMESPACE, plan_name)
 
         def report(self, plan_name=PLAN):
-            return records.get_plan_report(DEFAULT_NAMESPACE, plan_name)
+            return self.records.get_plan_report(DEFAULT_NAMESPACE, plan_name)
 
     return _Harness()
 
@@ -100,7 +103,7 @@ def test_a_completed_plan_notifies_once_and_sets_the_marker(harness):
 
     assert result is True
     assert len(harness.notify_calls) == 1
-    plan_name, message, kwargs = harness.notify_calls[0]
+    plan_name, _message, kwargs = harness.notify_calls[0]
     assert plan_name == PLAN
     assert kwargs['event'] == 'plan_completed'
     assert kwargs['severity'] == 'info'
@@ -115,7 +118,7 @@ def test_the_report_record_holds_the_notified_summary(harness):
 
     report = harness.report()
     assert report is not None, 'the plan report record must be written'
-    _, message, _ = harness.notify_calls[0]
+    _plan_name, message, _kwargs = harness.notify_calls[0]
     assert message.strip() in report
 
 
@@ -167,29 +170,14 @@ def test_a_failing_notice_leaves_the_marker_unset_so_a_later_tick_retries(
 
 
 def test_a_failing_report_write_still_notifies_and_sets_the_marker(
-    harness, monkeypatch, caplog
+    harness, caplog
 ):
     manifest = _manifest({'s1': 'done'})
-
-    def boom(namespace, plan_name, text):
-        raise OSError('report write failed')
-
-    monkeypatch.setattr(
-        type(harness.report.__self__ if False else object),  # placeholder
-        'x',
-        None,
-        raising=False,
-    )
-
-    # Patch the record view the implementation writes through: a report write
-    # that raises must not block the notice.
-    store = server._store
-    original = store.put_plan_report
-
-    def failing_put(namespace, plan_name, text):
-        raise OSError('report write failed')
-
-    monkeypatch.setattr(store, 'put_plan_report', failing_put)
+    # A directory where the report file belongs makes the write raise
+    # OSError (IsADirectoryError) without touching the notification path.
+    (harness.records and None)
+    report_path = harness.plan_dir / f'{PLAN}.report.md'
+    report_path.mkdir(parents=True, exist_ok=True)
 
     with caplog.at_level(logging.WARNING):
         result = harness.call(manifest)

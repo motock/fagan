@@ -18,6 +18,12 @@ from urllib.parse import urlsplit
 
 from . import paths
 from .global_rules_install import _write_atomic
+from .live_ref import LiveRef
+from .store_records import DEFAULT_NAMESPACE
+
+#: The process store, resolved per call on ``pipeline.server`` so the store a
+#: test patches is the one the snapshot is written through.
+_store = LiveRef("_store")
 
 SUPPORTED_PROVIDERS = ("dir",)
 SUPPORTED_MODES = ("prompt",)

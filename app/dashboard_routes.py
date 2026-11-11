@@ -317,7 +317,7 @@ def get_story_replay(
             # a missing/short/corrupt sidecar (older worktree from
             # before this feature, or a story this format never
             # reached) leaves `tail` exactly as it is today.
-            ts_res = _store.get_worktree_file(story, "agent.log.ts")
+            ts_res = _reader.read_worktree_file(story, "agent.log.ts")
             if ts_res["available"]:
                 ts_lines = ts_res["text"].splitlines()
                 ts_tail = ts_lines[-len(tail):]

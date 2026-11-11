@@ -243,7 +243,7 @@ def test_post_workspace_denial_does_not_record_a_recent_workspace(
     res = client.post("/api/workspace", json={"path": "/etc/ws-attacker"})
     assert res.status_code == 400
 
-    assert p._store.get_recent_workspaces() == []
+    assert p._host_state.get_recent_workspaces() == []
 
 
 # ---------------------------------------------------------------------------

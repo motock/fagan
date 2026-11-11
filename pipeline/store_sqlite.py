@@ -34,6 +34,7 @@ from pipeline import (
     store_sqlite_audit,
     store_sqlite_notifications,
     store_sqlite_outbox,
+    store_sqlite_schema,
     store_sqlite_usage,
 )
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
@@ -71,13 +72,6 @@ def _is_lock_conflict(exc: sqlite3.OperationalError) -> bool:
         message = str(exc).lower()
         return "locked" in message or "busy" in message
     return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
-
-_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS story_manifests ("
-    "plan_name TEXT PRIMARY KEY, "
-    "manifest_json TEXT NOT NULL"
-    ")"
-)
 
 # The optional progress fields the file store fills in on every journal entry
 # it serves. The record view omits them when the writer never set them, so a
@@ -154,21 +148,17 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
             # which matches SQLite allowing one writer per database. The mode
             # must be set outside any transaction.
             self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
-            self._conn.execute(_SCHEMA)
-            # The outbox queues are tables in the same database (ADR 0012
-            # decision 9), created here so an append inside the first
-            # transaction of a brand-new file already has its table.
-            store_sqlite_outbox.ensure_schema(self._conn)
-            # The notification history is a table too (ADR 0012 decision 9),
-            # created here for the same reason: the table an append inside the
-            # first transaction of a brand-new file writes must not be created
-            # by that transaction, where a rollback would take it away.
-            store_sqlite_notifications.ensure_schema(self._conn)
-            # The audit trail is a table too (ADR 0012 decision 10), created
-            # here for the same reason and with its append-only guards, so a
-            # history that is written from the first transaction on cannot be
-            # rewritten through this database.
-            store_sqlite_audit.ensure_schema(self._conn)
+            # The schema is versioned and migrated in one transaction here, so
+            # a database written by a newer build is refused (never opened and
+            # written to) and one without a version is adopted as version 1.
+            # A rollback therefore takes the whole migration with it.
+            try:
+                store_sqlite_schema.migrate(self._conn)
+            except BaseException:
+                # A refused or failed migration must not leave the database's
+                # file and its write lock held by a store that will never serve.
+                self._conn.close()
+                raise
         # The filesystem half is always the file store, whatever PIPELINE_STORE
         # selects for this process.
         self._files = build_store({"PIPELINE_STORE": "file"})

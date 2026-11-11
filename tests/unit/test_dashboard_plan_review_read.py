@@ -65,7 +65,9 @@ _CLEAN_STORY = {
     ),
 }
 
-#: The exact keys the 200 payload carries — no more, no less.
+#: The exact keys the 200 payload carries — no more, no less.  ``team`` is
+#: the plan's team: it is part of the approved content, so the reviewer sees
+#: it (the payload change is purely additive).
 _PAYLOAD_KEYS = {
     "plan",
     "approval",
@@ -76,12 +78,15 @@ _PAYLOAD_KEYS = {
     "role_config",
     "stories",
     "warnings",
+    "team",
 }
 
 #: The exact keys of the projected ``approval`` block.
 _APPROVAL_KEYS = {"status", "digest", "decided_by", "at", "self_approved", "reason"}
 
-#: The exact keys of one projected story.
+#: The exact keys of one projected story.  ``description`` is the story's
+#: authored description: it is part of the approved content, so the reviewer
+#: sees it (the payload change is purely additive).
 _STORY_KEYS = {
     "key",
     "summary",
@@ -94,6 +99,7 @@ _STORY_KEYS = {
     "dependencies",
     "blocked_by",
     "preflight",
+    "description",
 }
 
 #: The one fixed 404 the endpoint may ever emit for an unreadable or

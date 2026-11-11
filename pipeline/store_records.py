@@ -826,10 +826,11 @@ class ContextSnapshotRecords:
     overwrites, and there is deliberately no delete and no listing -- a
     snapshot is only ever added to and read back.
 
-    The file layout is unchanged (``PLAN_DIR/context/<hex>/content.txt`` plus
-    ``meta.json``), so an operator and the tools that already read those two
-    files keep working.  The implementation lives here, next to the contract it
-    satisfies, because ``pipeline/store.py`` sits on the 1000-line gate.
+    The file layout is unchanged (``context/<hex>/content.txt`` plus
+    ``meta.json`` in the plans directory), so an operator and the tools that
+    already read those two files keep working.  The implementation lives here,
+    next to the contract it satisfies, because ``pipeline/store.py`` sits on
+    the 1000-line gate.
 
     The host class supplies ``_refuse_other_namespace`` (this view serves
     :data:`DEFAULT_NAMESPACE`).

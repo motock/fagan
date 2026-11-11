@@ -43,7 +43,11 @@ def run_daemon_env(tmp_path, monkeypatch):
     stderr line alone, never on the operator's real plist / ~/.claude.json.
     """
     FakeSchedulerDaemon.instances = []
-    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    # The daemon resolves the host-local root (lock + health path) through the
+    # host state, which reads the live pipeline.server.PLAN_DIR binding.
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(mod, "PLAN_DIR"):
+        monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(mod, "SchedulerDaemon", FakeSchedulerDaemon)
     monkeypatch.setattr(mod, "_report_env_conflicts", lambda: None)
 

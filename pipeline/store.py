@@ -34,6 +34,7 @@ from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     UnknownNamespaceError,
+    UnreadableRecordError,
     validate_channel,
     validate_namespace,
     validate_notification_record,

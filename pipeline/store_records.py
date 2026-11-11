@@ -90,6 +90,22 @@ class InvalidUsageRecordError(RecordStoreError, ValueError):
     """
 
 
+class UnreadableRecordError(RecordStoreError, ValueError):
+    """Raised when a stored record exists but cannot be read back.
+
+    Missing is not unreadable: a record that is not there is ``None`` (or an
+    empty list, or ``False`` when it was deleted), while a record that is there
+    and malformed is a failure a caller must see.  ``reason`` carries the
+    refusal text the legacy reader produces for the same file
+    (:func:`pipeline.persistence.read_plan_file`), so a message built from this
+    error stays byte-identical to the one ingest already prints.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 def validate_namespace(value: str) -> str:
     """Return ``value`` when it is a valid namespace, else raise.
 
@@ -371,7 +387,6 @@ class RecordStore(Protocol):
 
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one ``(namespace, plan_name)`` pair.
-
         A context manager that yields whether the lock was acquired, and never        blocks longer than ``wait_seconds``.  Callers MUST check the yielded
         bool and skip all work when it is ``False``: this is the scheduler's
         "skip this tick" path, and it must stay cheap.  ``wait_seconds`` is

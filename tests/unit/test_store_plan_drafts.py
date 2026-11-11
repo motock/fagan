@@ -343,3 +343,22 @@ def test_list_plan_drafts_skips_a_json_file_without_an_epics_key(stores, plan_di
     store.put_plan_draft(DEFAULT_NAMESPACE, PLAN, DRAFT)
     (plan_dir / 'other.json').write_text(json.dumps({'title': 'x'}), encoding='utf-8')
     assert store.list_plan_drafts(DEFAULT_NAMESPACE) == [PLAN]
+
+
+# -- the sqlite backend keeps the draft in its database -----------------
+
+
+def test_the_sqlite_backend_stages_the_draft_in_its_database_not_on_disk(
+    stores, plan_dir
+):
+    """The sqlite store's draft is a row, so the plans directory stays empty.
+
+    The file backend still keeps today's layout; the sqlite backend moved the
+    draft into its own database, so a draft it staged leaves no file behind.
+    """
+    store = stores['sqlite']
+
+    store.put_plan_draft(DEFAULT_NAMESPACE, PLAN, DRAFT)
+
+    assert store.get_plan_draft(DEFAULT_NAMESPACE, PLAN) == DRAFT
+    assert list(plan_dir.iterdir()) == []

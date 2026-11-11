@@ -94,9 +94,54 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     store_sqlite_audit.ensure_schema(conn)
 
 
+#: The record tables: the decisions and the checkpoint journals (migration 2),
+#: then the plan drafts, the completion records and the context snapshots
+#: (migration 3).  Every statement is parameterized at its use site; these are
+#: only the shapes.
+_DECISIONS_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS decisions (namespace TEXT NOT NULL, '
+    'plan TEXT NOT NULL, seq INTEGER NOT NULL, record_json TEXT NOT NULL, '
+    'PRIMARY KEY (namespace, plan, seq))'
+)
+_JOURNAL_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS journal (namespace TEXT NOT NULL, '
+    'plan TEXT NOT NULL, story_key TEXT NOT NULL, seq INTEGER NOT NULL, '
+    'record_json TEXT NOT NULL, created_at REAL NOT NULL, '
+    'PRIMARY KEY (namespace, plan, story_key, seq))'
+)
+_PLAN_DRAFTS_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS plan_drafts (namespace TEXT NOT NULL, '
+    'plan TEXT NOT NULL, plan_json TEXT NOT NULL, '
+    'PRIMARY KEY (namespace, plan))'
+)
+_PLAN_COMPLETIONS_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS plan_completions (namespace TEXT NOT NULL, '
+    'plan TEXT NOT NULL, completed_at TEXT, report_text TEXT, '
+    'PRIMARY KEY (namespace, plan))'
+)
+_CONTEXT_SNAPSHOTS_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS context_snapshots (namespace TEXT NOT NULL, '
+    'digest TEXT NOT NULL, content TEXT NOT NULL, meta_json TEXT NOT NULL, '
+    'PRIMARY KEY (namespace, digest))'
+)
+
+
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """Store the decisions and the checkpoint journals as table rows."""
+    conn.execute(_DECISIONS_SCHEMA)
+    conn.execute(_JOURNAL_SCHEMA)
+
+
+def _migration_3(conn: sqlite3.Connection) -> None:
+    """Store the plan drafts, the completion records and the snapshots."""
+    conn.execute(_PLAN_DRAFTS_SCHEMA)
+    conn.execute(_PLAN_COMPLETIONS_SCHEMA)
+    conn.execute(_CONTEXT_SNAPSHOTS_SCHEMA)
+
+
 #: The migrations, in order.  The version a database is at is how many of them
 #: it has run, so a migration is appended and never renumbered.
-MIGRATIONS = (_migration_1,)
+MIGRATIONS = (_migration_1, _migration_2, _migration_3)
 
 
 def latest_version() -> int:

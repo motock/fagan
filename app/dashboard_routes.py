@@ -206,7 +206,7 @@ def get_story_log(
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
+    return _reader.read_story_log(plan_name, story_key, manifest, lines=lines)
 
 
 def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:

@@ -151,7 +151,8 @@ def test_local_operator_save_plan_returns_unchanged_result(plan_dir, monkeypatch
         result = _save(body)
 
     assert result["ok"] is True
-    assert result["path"] == str(plan_dir / f"{PLAN}.json")
+    assert result["plan"] == PLAN
+    assert result["staged"] is True
     assert result["epic_count"] == 1
     assert json.loads((plan_dir / f"{PLAN}.json").read_text()) == PLAN_BODY
 

@@ -13,8 +13,11 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   subagent's output), then `save_plan` it yourself. Returns `{"ok": true,
   "plan": {...}}` on success, or `{"ok": false, "error": ..., "raw": ...}`
   if the model's response wasn't valid/shaped JSON.
-- `save_plan(plan_name, plan_json)` — save a plan JSON to `~/.claude/plans/`.
-- `list_plans()` — list saved plans.
+- `save_plan(plan_name, plan_json)` — validate a plan JSON and stage it as a
+  plan draft in the record store, ready for `ingest_plan`. Answers `{"ok":
+  true, "plan": <name>, "staged": true, "epic_count": ..., "story_count":
+  ...}` — no filesystem path.
+- `list_plans()` — list plans with a staged draft or an ingested manifest.
 - `export_plan(plan_name)` — render a plan's document from its ingested
   manifest, on demand (ADR 0012 decision 5: the document is rendered from the
   manifest when an export is wanted, never stored as a second copy). Returns

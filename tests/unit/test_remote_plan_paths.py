@@ -36,10 +36,20 @@ REFUSAL = "a remote plan must name repo_url, not repo_root or a workspace"
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Redirect the service's PLAN_DIR into tmp_path."""
+    """Redirect the service's plans directory into tmp_path.
+
+    ``save_plan`` stages the plan draft through the record store, whose draft
+    path resolves the plans directory on ``pipeline.server`` per call, so the
+    server binding is the one that decides where the draft lands; the
+    ``pipeline.service`` re-export is patched too because the service reads it
+    directly elsewhere.
+    """
+    import pipeline.server as p
+
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(service, "PLAN_DIR", d)
+    monkeypatch.setattr(p, "PLAN_DIR", d)
     return d
 
 

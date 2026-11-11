@@ -12,6 +12,7 @@ one-line delegation.
 """
 
 import inspect
+import json
 
 import pytest
 
@@ -118,7 +119,11 @@ def test_module_level_list_plans_docstring_unchanged():
     right invariant.
     """
     assert p.list_plans.__doc__, "list_plans must carry a non-empty docstring"
-    assert "plan directory" in p.list_plans.__doc__ or "PLAN_DIR" in p.list_plans.__doc__
+    assert (
+        "plan directory" in p.list_plans.__doc__
+        or "PLAN_DIR" in p.list_plans.__doc__
+        or "record" in p.list_plans.__doc__
+    )
 
 
 def test_module_level_list_plans_body_is_single_delegation():
@@ -205,16 +210,17 @@ def test_method_body_has_no_self_attribute_access_to_globals():
     )
 
 
-def test_method_reads_plan_dir_as_free_variable():
-    """R1/R5: the moved body must still reference ``PLAN_DIR`` as a bare name
-    (so monkeypatch.setattr(p, 'PLAN_DIR', ...) keeps landing)."""
-    src = inspect.getsource(p.PipelineService.list_plans)
-    assert "PLAN_DIR" in src, (
-        "PipelineService.list_plans must reference PLAN_DIR as a bare free variable"
-    )
-    assert "self.PLAN_DIR" not in src, (
-        "PLAN_DIR must be a free variable, not self.PLAN_DIR (R1)"
-    )
+def test_method_reads_the_record_store_not_the_plan_directory(plan_dir):
+    """R1/R5: the listing reads records now.
+
+    A plan is listed because it has a *draft* (or a manifest) in the record
+    store -- not because a file with that stem happens to sit in the plans
+    directory.  The plans directory here holds a bookkeeping sidecar only, so
+    no plan may be listed from it.
+    """
+    (plan_dir / "sidecar.decisions.json").write_text("[]")
+
+    assert p.list_plans() == []
 
 
 def test_pipelineservice_init_takes_only_self():
@@ -233,18 +239,12 @@ def test_pipelineservice_init_takes_only_self():
 # R5 -- the moved body is verbatim (no behaviour change / opportunistic edits)
 # ---------------------------------------------------------------------------
 
-def test_method_body_matches_original_logic():
-    """R5: the moved body must be the original statement, re-indented by one
-    level. The original body is::
+def test_method_body_reads_the_record_store(plan_dir):
+    """R5: the method body lists records -- a plan's draft or its manifest."""
+    (plan_dir / "alpha.json").write_text(json.dumps({"epics": []}))
+    (plan_dir / "beta.manifest.json").write_text(json.dumps({"stories": {}}))
 
-        return [p.stem for p in PLAN_DIR.glob("*.json")]
-
-    so the method body must contain that exact expression."""
-    src = inspect.getsource(p.PipelineService.list_plans)
-    assert "[p.stem for p in PLAN_DIR.glob(\"*.json\")]" in src, (
-        "PipelineService.list_plans body must be moved verbatim: "
-        "`return [p.stem for p in PLAN_DIR.glob('*.json')]`"
-    )
+    assert sorted(p._service.list_plans()) == ["alpha", "beta"]
 
 
 def test_method_has_no_docstring():
@@ -268,10 +268,10 @@ def test_list_plans_empty_when_no_manifests(plan_dir):
 
 
 def test_list_plans_returns_plan_stems(plan_dir):
-    """Happy path: with plan files on disk, the tool returns their stems via
+    """Happy path: with plan drafts on disk, the tool returns their names via
     the delegation to ``_service.list_plans()``."""
-    (plan_dir / "alpha.json").write_text("{}")
-    (plan_dir / "beta.json").write_text("{}")
+    (plan_dir / "alpha.json").write_text(json.dumps({"epics": []}))
+    (plan_dir / "beta.json").write_text(json.dumps({"epics": []}))
 
     result = p.list_plans()
 
@@ -279,8 +279,8 @@ def test_list_plans_returns_plan_stems(plan_dir):
 
 
 def test_list_plans_ignores_non_json_files(plan_dir):
-    """Boundary: only ``*.json`` files are globbed; other files are ignored."""
-    (plan_dir / "real.json").write_text("{}")
+    """Boundary: only plan records are listed; other files are ignored."""
+    (plan_dir / "real.json").write_text(json.dumps({"epics": []}))
     (plan_dir / "notes.md").write_text("not a plan")
     (plan_dir / "ignore.txt").write_text("nope")
 
@@ -289,7 +289,7 @@ def test_list_plans_ignores_non_json_files(plan_dir):
 
 def test_list_plans_single_file(plan_dir):
     """Boundary (one element): a single plan file yields a one-element list."""
-    (plan_dir / "solo.json").write_text("{}")
+    (plan_dir / "solo.json").write_text(json.dumps({"epics": []}))
     assert p.list_plans() == ["solo"]
 
 
@@ -309,11 +309,11 @@ def test_list_plans_takes_no_arguments():
 
 def test_list_plans_reads_monkeypatched_plan_dir(plan_dir, tmp_path, monkeypatch):
     """R1/N2: patching ``pipeline.server.PLAN_DIR`` to a different directory
-    must still take effect through the new call path (the method reads
-    ``PLAN_DIR`` as a free variable)."""
+    must still take effect through the new call path (the record store reads
+    the plans directory per call)."""
     other = tmp_path / "other_plans"
     other.mkdir()
-    (other / "patched.json").write_text("{}")
+    (other / "patched.json").write_text(json.dumps({"epics": []}))
     monkeypatch.setattr(p, "PLAN_DIR", other)
 
     assert p.list_plans() == ["patched"]
@@ -325,7 +325,7 @@ def test_service_list_plans_reads_monkeypatched_plan_dir(plan_dir, tmp_path, mon
     binding resolves to the module dict at call time, not at construction."""
     other = tmp_path / "other_plans2"
     other.mkdir()
-    (other / "direct.json").write_text("{}")
+    (other / "direct.json").write_text(json.dumps({"epics": []}))
     monkeypatch.setattr(p, "PLAN_DIR", other)
 
     assert p._service.list_plans() == ["direct"]

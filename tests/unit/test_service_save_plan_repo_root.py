@@ -55,7 +55,8 @@ def test_t1_workspace_none_preserves_existing_repo_root(plan_dir):
     svc = p.PipelineService()
     r = svc.save_plan("t1", plan)
     assert r["ok"] is True
-    assert r["path"].endswith("t1.json")
+    assert r["plan"] == "t1"
+    assert r["staged"] is True
     written = (plan_dir / "t1.json").read_text()
     assert written == json.dumps(json.loads(plan), indent=2)
     assert '"repo_root": "/model/x"' in written

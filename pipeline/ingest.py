@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, persistence, plan_names, testfiles
+from . import cross_plan, persistence, plan_draft, plan_names, testfiles
 from .actor import actor_id
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
@@ -580,7 +580,7 @@ def _ingest_plan_impl(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     plan_names.validate_new_plan_name(plan_name)
-    plan, refusal = persistence.read_plan_file(PLAN_DIR / f"{plan_name}.json")
+    plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
         return refusal
 

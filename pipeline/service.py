@@ -164,7 +164,7 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import plan_export, plan_names, remote_scope, review_audit
+from . import plan_draft, plan_export, plan_names, remote_scope, review_audit
 from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -307,33 +307,19 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         return _store.records().get_notification_history(DEFAULT_NAMESPACE, plan_name)
 
     def list_plans(self) -> list[str]:
-        return [p.stem for p in PLAN_DIR.glob("*.json")]
+        return plan_draft.list_plan_names(_store.records())
 
     def list_ingestable_plans(self) -> list[str]:
-        """List raw plan-source files in PLAN_DIR that are valid ingest
-        targets: a file named exactly '<name>.json' (no other '.' in the
-        stem, which excludes '<name>.manifest.json', '<name>.decisions.json',
-        journal files, and other bookkeeping JSON in the same directory)
-        whose content parses as a JSON object containing an 'epics' key (the
-        same shape pipeline/ingest.py's _ingest_plan_impl itself requires).
-        A file that fails to parse, or is not a JSON object, or lacks
-        'epics', is silently skipped rather than raising. Returns names
+        """List the plans staged for ingest and not yet ingested.
+
+        A plan is an ingest target when the record store holds a plan draft for
+        it -- a ``<name>.json`` document parsing as a JSON object with an
+        ``epics`` key, the same shape pipeline/ingest.py's _ingest_plan_impl
+        itself requires -- and it has no manifest yet. A draft that cannot be
+        read or parsed is silently skipped rather than raising. Returns names
         sorted alphabetically.
-        Plans that already have a companion '<stem>.manifest.json' are excluded as already ingested.
         """
-        names = []
-        for path in sorted(PLAN_DIR.glob("*.json")):
-            if "." in path.stem:
-                continue
-            if (PLAN_DIR / f'{path.stem}.manifest.json').exists():
-                continue
-            try:
-                data = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            if isinstance(data, dict) and "epics" in data:
-                names.append(path.stem)
-        return names
+        return plan_draft.list_ingestable_plan_names(_store.records())
 
     def resolve_workspace(self, path: str | None, create: bool = False) -> dict:
         """Resolve a workspace path.
@@ -578,8 +564,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if refusal is not None:
             return refusal
         # SA-05: a repo_url plan was cloned at save_plan; re-fetch that clone so
-        # ingest reads a fresh checkout. The plan file is not rewritten.
-        err = remote_scope.refresh_saved_plan_clone(PLAN_DIR / f"{plan_name}.json")
+        # ingest reads a fresh checkout. The staged draft is not rewritten.
+        plan, _refusal = plan_draft.read_plan_draft(plan_name)
+        err = remote_scope.refresh_plan_clone(plan)
         if err is not None:
             return err
         result = _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
@@ -782,13 +769,14 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if "epics" not in plan:
             return {"ok": False, "error": "Plan must contain 'epics' key"}
 
-        path = PLAN_DIR / f"{plan_name}.json"
-        _atomic_write_json(path, plan)
+        records = _store.records()
+        records.put_plan_draft(DEFAULT_NAMESPACE, plan_name, plan)
 
         story_count = sum(len(e.get("stories", [])) for e in plan["epics"])
         return {
             "ok": True,
-            "path": str(path),
+            "plan": plan_name,
+            "staged": True,
             "epic_count": len(plan["epics"]),
             "story_count": story_count,
         }

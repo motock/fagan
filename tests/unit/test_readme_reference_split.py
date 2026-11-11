@@ -107,6 +107,22 @@ _PATCH_PLAN_BULLET = (
 # section. The pre-split README at 2cca309~1 predates the tool, so the verbatim
 # guard for that section normalizes the new bullet away — and separately
 # requires it to be present, so the normalization can never mask its removal.
+# Store stage B5 moved the plan *draft* onto the record store, so save_plan
+# stages rather than writes a file and answers without a path, and list_plans
+# lists plans with a draft or a manifest. The pre-split README predates both
+# changes, so the guard normalizes the two rewritten bullets back to the
+# original wording — and requires the rewritten form first.
+_SAVE_PLAN_STAGED_BULLETS = (
+    "- `save_plan(plan_name, plan_json)` — validate a plan JSON and stage it as a\n"
+    "  plan draft in the record store, ready for `ingest_plan`. Answers `{\"ok\":\n"
+    "  true, \"plan\": <name>, \"staged\": true, \"epic_count\": ..., \"story_count\":\n"
+    "  ...}` — no filesystem path.\n"
+    "- `list_plans()` — list plans with a staged draft or an ingested manifest."
+)
+_SAVE_PLAN_ORIGINAL_BULLETS = (
+    "- `save_plan(plan_name, plan_json)` — save a plan JSON to `~/.claude/plans/`.\n"
+    "- `list_plans()` — list saved plans."
+)
 _EXPORT_PLAN_BULLET = (
     "- `export_plan(plan_name)` — render a plan's document from its ingested\n"
     "  manifest, on demand (ADR 0012 decision 5: the document is rendered from the\n"
@@ -772,6 +788,18 @@ def test_moved_section_body_is_verbatim(title):
                 f"new export_plan(plan_name) tool."
             )
             reference_body = reference_body.replace("\n" + _EXPORT_PLAN_BULLET, "")
+            # Store stage B5 rewrote the save_plan and list_plans bullets (the
+            # plan draft is a record now, and the listing names plans with a
+            # draft or a manifest). Require the rewritten form, then normalize
+            # it back to the pre-split wording.
+            assert _SAVE_PLAN_STAGED_BULLETS in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must document that "
+                f"save_plan stages a plan draft and list_plans lists plans with "
+                f"a draft or a manifest."
+            )
+            reference_body = reference_body.replace(
+                _SAVE_PLAN_STAGED_BULLETS, _SAVE_PLAN_ORIGINAL_BULLETS
+            )
         if title == "Unattended operation & logs":
             # The launchd label was renamed com.claude.pipeline.* ->
             # com.fagan.pipeline.* (the plist/template files and generator

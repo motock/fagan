@@ -28,8 +28,6 @@ keeps the service file (already long, and touched by several later stories)
 to a three-line delegation.
 """
 
-import json
-from pathlib import Path
 from typing import Any
 
 from app.identity import LOCAL_OPERATOR, SYSTEM_AUTH_METHOD
@@ -177,25 +175,21 @@ def resolve_repo_url(plan: dict) -> dict | None:
     return None
 
 
-def refresh_saved_plan_clone(plan_path: Any) -> dict | None:
-    """Re-fetch the clone named by a saved plan's ``repo_url``, or return ``None``.
+def refresh_plan_clone(plan: dict | None) -> dict | None:
+    """Re-fetch the clone named by a staged plan's ``repo_url``, or return ``None``.
 
-    Called by ``ingest_plan`` so a long-lived server ingests a fresh checkout,
-    not whatever was cloned when the plan was saved. The plan file is read,
-    never written: its ``repo_root`` is the save-time managed path and does not
-    need to change.
+    Called by ``ingest_plan`` with the draft it just read from the record
+    store, so a long-lived server ingests a fresh checkout, not whatever was
+    cloned when the plan was saved. The draft is read, never written: its
+    ``repo_root`` is the save-time managed path and does not need to change.
 
-    A plan with no ``repo_url`` -- or one that cannot be read at all -- is left
-    to ``_ingest_plan_impl``, which owns the unreadable-plan refusal, so this
-    hook never turns another caller's contract into a different error.
+    A plan with no ``repo_url`` -- or no plan at all -- is left to
+    ``_ingest_plan_impl``, which owns the unreadable-plan refusal, so this hook
+    never turns another caller's contract into a different error.
     """
-    try:
-        saved = json.loads(Path(plan_path).read_text())
-    except (OSError, ValueError):
+    if not isinstance(plan, dict) or "repo_url" not in plan:
         return None
-    if not isinstance(saved, dict) or "repo_url" not in saved:
-        return None
-    url = saved["repo_url"]
+    url = plan["repo_url"]
     err = _invalid_repo_url(url)
     if err is not None:
         return err

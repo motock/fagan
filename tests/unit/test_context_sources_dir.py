@@ -131,8 +131,12 @@ def test_should_reject_secret_file_without_echoing_value(tree, label):
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path / "plans")
-    return tmp_path / "plans"
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(server, "PLAN_DIR", d)
+    monkeypatch.setattr(persistence, "PLAN_DIR", d)
+    monkeypatch.setattr(paths, "PLAN_DIR", d)
+    return d
 
 def test_should_write_snapshot_content_and_meta(plan_dir):
     digest = cs.snapshot_context("hello")

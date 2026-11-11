@@ -2,8 +2,9 @@
 
 See docs/plans/EXTERNAL_CONTEXT_SOURCES_PLAN.md §4.2, §4.4, §4.9 and §5.
 Validation and normalization are pure; only the ``dir`` provider, the
-``git`` provider (which shells out to git and clones into ``PLAN_DIR``)
-and the snapshot store below do I/O.
+``git`` provider (which shells out to git and clones into the host cache
+root from :class:`pipeline.host_state.HostState`) and the snapshot store
+below do I/O.
 """
 
 import hashlib
@@ -16,10 +17,9 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import paths
 from .global_rules_install import _write_atomic
 from .live_ref import LiveRef
-from .store_records import DEFAULT_NAMESPACE
+from .store_records import DEFAULT_NAMESPACE, context_digest
 
 #: The process store, resolved per call on ``pipeline.server`` so the store a
 #: test patches is the one the snapshot is written through.
@@ -339,6 +339,15 @@ _GIT_TIMEOUT_SECONDS = 120
 _FULL_SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
+def _host_state():
+    # Imported at call time: pipeline.host_state reaches back through
+    # pipeline.parsers into this module's importers, so a module-level import
+    # is a cycle.
+    from .host_state import build_host_state
+
+    return build_host_state()
+
+
 def _run_git(args: list[str], *, cwd: Path | None = None) -> str:
     # No credentials or auth flags: private remotes use the operator's own git
     # configuration. Prompts are disabled so an unauthenticated remote fails
@@ -390,9 +399,13 @@ def _resolve_ref_to_sha(name: object, url: str, ref: str) -> str:
 
 
 def _ensure_clone(name: object, url: str, sha: str) -> Path:
-    base = (paths.PLAN_DIR / "context" / "git").resolve()
+    # The sha arrives from a remote's ls-remote output as well as from the uri,
+    # so it is checked before any path is built or any git command runs.
+    if not _FULL_SHA.fullmatch(sha):
+        raise ContextSourceError(f"source {name!r}: git checkout path escapes the clone root")
+    base = Path(_host_state().git_clone_root()).resolve()
     target = (base / sha).resolve()
-    if target.parent != base or not _FULL_SHA.match(sha):
+    if target.parent != base:
         raise ContextSourceError(f"source {name!r}: git checkout path escapes the clone root")
     if (target / ".git").is_dir():
         return target
@@ -414,8 +427,8 @@ def _ensure_clone(name: object, url: str, sha: str) -> Path:
 def resolve_git_source(source: dict) -> dict:
     """Resolve a ``git`` source to the ``dir`` result plus the pinned commit ``sha``.
 
-    The ref is resolved to a commit, shallow-fetched once into
-    ``PLAN_DIR/context/git/<sha>/``, and read with the ``dir`` selection logic.
+    The ref is resolved to a commit, shallow-fetched once into the host
+    clone root (``context/git/<sha>/``), and read with the ``dir`` selection logic.
     The remote is only ever read.
     """
     name = source.get("name")
@@ -462,34 +475,87 @@ def _has_files_meta(meta_path) -> bool:
         return False
 
 
-def materialize_context_files(source: dict, text: str) -> str:
-    """Write resolved *text* as per-file entries under the snapshot store.
+def _files_map(name: object, text: str) -> dict[str, str]:
+    """Split concatenated ``--- <relpath> ---`` text into ``{relpath: content}``."""
+    files: dict[str, str] = {}
+    for rel, content in _split_file_entries(text):
+        if rel in files:
+            raise ContextSourceError(f"source {name!r}: duplicate file path {rel!r}")
+        files[rel] = content
+    return files
 
-    Lives under ``PLAN_DIR/context/<digest-hex>/files/`` (never the worktree,
-    where ``git add -A`` would commit it) and returns that digest folder.
+
+def _canonical_json(mapping: dict[str, str]) -> str:
+    """Serialize a file map the one way its digest is ever computed."""
+    return json.dumps(mapping, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def snapshot_content(source: dict, text: str) -> str:
+    """Return the record content to store for resolved *text*.
+
+    A prompt-mode snapshot is the text itself. A files-mode snapshot is one
+    record whose content is the canonical JSON map ``{relpath: content}``, so
+    its digest is ``sha256`` of that JSON. This is a different digest from the
+    concatenated text's: digests recorded before this change still resolve,
+    because :func:`materialize_context_files` reads a legacy text record too.
+    """
+    if source.get("mode", "prompt") != "files":
+        return text
+    return _canonical_json(_files_map(source.get("name"), text))
+
+
+def _snapshot_files(name: object, content: str) -> dict[str, str]:
+    """Read a stored snapshot's content back as ``{relpath: content}``.
+
+    Canonical JSON is the current record. Anything else is legacy concatenated
+    text, split the way it was written, so an old-layout record still loads.
+    """
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        parsed = None
+    if (
+        isinstance(parsed, dict)
+        and all(isinstance(value, str) for value in parsed.values())
+        and _canonical_json(parsed) == content
+    ):
+        return parsed
+    return _files_map(name, content)
+
+
+def materialize_context_files(source: dict, content: str) -> str:
+    """Materialize a stored files snapshot into the host cache; return its folder.
+
+    *content* is the snapshot record's content (canonical JSON, or legacy text).
+    The folder is ``HostState.context_cache_dir(digest)``, outside the worktree
+    where ``git add -A`` would commit it. Every relpath is checked, including
+    that it resolves inside the ``files`` folder, before anything is written.
     Re-materializing an existing snapshot is a no-op.
     """
-    hexdigest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    folder = paths.PLAN_DIR / "context" / hexdigest
+    name = source.get("name")
+    digest = context_digest(content)
+    folder = _host_state().context_cache_dir(digest)
     if _has_files_meta(folder / "meta.json"):
         return str(folder)
-    entries = _split_file_entries(text)
-    if not entries:
-        raise ContextSourceError(f"source {source.get('name')!r}: no file entries to materialize")
-    for rel, _content in entries:
-        if not _is_safe_relpath(rel):
-            raise ContextSourceError(f"source {source.get('name')!r}: unsafe file path {rel!r}")
+    files = _snapshot_files(name, content)
+    if not files:
+        raise ContextSourceError(f"source {name!r}: no file entries to materialize")
     files_root = folder / "files"
-    for rel, content in entries:
+    for rel in files:
+        if not _is_safe_relpath(rel) or not (files_root / rel).resolve().is_relative_to(
+            files_root.resolve()
+        ):
+            raise ContextSourceError(f"source {name!r}: unsafe file path {rel!r}")
+    for rel, body in files.items():
         target = files_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        _write_atomic(target, content)
+        _write_atomic(target, body)
     meta = {
-        "name": source.get("name"),
+        "name": name,
         "provider": source.get("provider"),
         "uri": source.get("uri"),
-        "digest": "sha256:" + hexdigest,
-        "files": [{"path": rel, "bytes": len(content.encode("utf-8"))} for rel, content in entries],
+        "digest": digest,
+        "files": [{"path": rel, "bytes": len(body.encode("utf-8"))} for rel, body in files.items()],
     }
     _write_atomic(folder / "meta.json", json.dumps(meta))
     return str(folder)

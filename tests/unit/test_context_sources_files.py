@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import context_sources as cs
-from pipeline import paths
+from pipeline import paths, server
 from pipeline.persona import _build_dispatch_command, _with_files_pointers
 
 TEXT = "--- a.txt ---\nalpha\n--- sub/dir/b.md ---\nbeta\n"
@@ -16,6 +16,7 @@ SOURCE = {"name": "docs", "provider": "dir", "uri": "/some/where"}
 def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
+    monkeypatch.setattr(server, "PLAN_DIR", d)
     monkeypatch.setattr(paths, "PLAN_DIR", d)
     return d
 
@@ -27,10 +28,10 @@ def test_should_materialize_files_preserving_subdirectories(plan_dir):
     assert (folder / "files" / "sub" / "dir" / "b.md").read_text() == "beta\n"
 
 
-def test_should_place_snapshot_under_plan_dir_digest_folder(plan_dir):
+def test_should_place_snapshot_under_host_cache_digest_folder(plan_dir):
     folder = Path(cs.materialize_context_files(SOURCE, TEXT))
 
-    assert folder.parent == plan_dir / "context"
+    assert folder.parent == plan_dir / "context-cache"
     assert len(folder.name) == 64
 
 

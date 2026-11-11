@@ -551,7 +551,6 @@ def _consume_plan_draft(plan_name: str) -> None:
     if records is not None:
         records.delete_plan_draft(plan_draft.DEFAULT_NAMESPACE, plan_name)
         return
-    # A partial store has no record view; delete the file it would read.
     (_store.manifest_path(plan_name).parent / f"{plan_name}.json").unlink(missing_ok=True)
 
 

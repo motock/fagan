@@ -201,16 +201,8 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     """
     payload: object = None
     try:
-        if plan_dir is None:
-            # ADR 0012 open question 3: the snapshot is a host-local record, so
-            # the default read goes through the host state (which resolves its
-            # root through the live ``pipeline.server.PLAN_DIR`` binding).
-            from pipeline.host_state import build_host_state
-
-            payload = build_host_state().read_scheduler_health()
-        else:
-            with open(scheduler_health_path(plan_dir), "r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+        with open(scheduler_health_path(plan_dir), "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
     except Exception:  # noqa: BLE001 (read-only probe: any failure means "absent")
         # Absent, unreadable (including a directory at that path), empty,
         # invalid-JSON or wrong-shaped snapshots all mean "not reported".

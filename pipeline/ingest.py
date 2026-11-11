@@ -50,7 +50,6 @@ from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
-from .store_records import DEFAULT_NAMESPACE
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so

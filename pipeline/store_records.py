@@ -469,5 +469,9 @@ RECORD_STORE_METHODS = (
     'append_notification',
     'get_notification_history',
     'get_notification_lines',
+    'put_plan_draft',
+    'get_plan_draft',
+    'delete_plan_draft',
+    'list_plan_drafts',
     'transaction',
 )

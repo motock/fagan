@@ -241,7 +241,7 @@ def test_save_plan_still_uses_store_seam_unchanged():
     """
     src = _normalized_source(PipelineService.save_plan)
     assert "_atomic_write_json" not in src
-    assert "plan_draft" in src
+    assert "put_plan_draft(" in src
     assert "active_workspace" not in src
 
 

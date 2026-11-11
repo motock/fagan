@@ -27,8 +27,7 @@ import pytest
 # import-cycle note in tests/unit/test_ingest_keyless_reingest.py).
 import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
-from pipeline import dispatch_context
-from pipeline import paths, persistence, server
+from pipeline import dispatch_context, paths, persistence, server
 from pipeline.store import FileRecords
 from pipeline.store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
 

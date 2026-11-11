@@ -546,6 +546,38 @@ def _story_extra_fields(story: dict) -> dict:
     return {"tdd_split": bool(story.get("tdd_split", False))}
 
 
+def _no_staged_draft_error(plan_name: str) -> dict[str, Any]:
+    """The refusal for an ingest of a plan with no staged draft.
+
+    ADR 0012 decision 5: a successful full ingest consumes the draft, so
+    re-ingesting an already-ingested plan has nothing left to read.  The
+    message names the way out (``save_plan``, or ``export_plan`` to render the
+    current plan) rather than the internal record that is missing.
+    """
+    return {
+        "ok": False,
+        "error": (
+            f"plan '{plan_name}' has no staged draft: save_plan it "
+            "(export_plan renders the current plan) before re-ingesting"
+        ),
+    }
+
+
+def _consume_plan_draft(plan_name: str) -> None:
+    """Delete ``plan_name``'s staged draft: the manifest is the plan now."""
+    records = plan_draft._records()
+    if records is not None:
+        records.delete_plan_draft(DEFAULT_NAMESPACE, plan_name)
+        return
+    # A partial store has no record view; its draft is the file the record
+    # view would have read (see plan_draft.read_plan_draft's fallback).
+    path = _store.manifest_path(plan_name).parent / f"{plan_name}.json"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _keyless_reingest_error(
     plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
 ) -> str | None:

@@ -185,6 +185,69 @@ class FileHostState:
             tmp.unlink(missing_ok=True)
             raise
 
+    def root(self) -> Path:
+        """The host-local root these records live under."""
+        return self._root()
+
+    # -- the dashboard's UI preferences -----------------------------------
+
+    def get_dashboard_ui_state(self) -> dict[str, Any]:
+        """Read the dashboard's UI preferences, defaulting to nothing archived.
+
+        A missing, unreadable, invalid or wrong-shaped file reads as the empty
+        state: it is a non-critical preference record, never a reason to fail.
+        """
+        path = self._root() / _UI_STATE_FILE
+        try:
+            data = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        archived = data.get("archived")
+        if not isinstance(archived, list):
+            return {}
+        return {**data, "archived": [str(name) for name in archived]}
+
+    def put_dashboard_ui_state(self, state: Mapping[str, Any]) -> None:
+        """Persist the dashboard's UI preferences atomically."""
+        self._atomic_write_json(_UI_STATE_FILE, state)
+
+    # -- the scheduler's host-local files ---------------------------------
+
+    def scheduler_health_path(self) -> Path:
+        """Where this host's scheduler writes its liveness snapshot."""
+        return self._root() / _HEALTH_FILE
+
+    def read_scheduler_health(self) -> dict[str, Any] | None:
+        """Read the scheduler snapshot; ``None`` when there is no usable one."""
+        try:
+            data = json.loads(self.scheduler_health_path().read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def write_scheduler_health(self, payload: Mapping[str, Any]) -> None:
+        """Persist the scheduler's liveness snapshot atomically."""
+        self._atomic_write_json(_HEALTH_FILE, payload)
+
+    def scheduler_pid_lock(self) -> SchedulerPidLock:
+        """The daemon's single-instance lock, held under the host-local root."""
+        return SchedulerPidLock(self._root() / _LOCK_FILE)
+
+    # -- internals ---------------------------------------------------------
+
+    def _atomic_write_json(self, filename: str, payload: Mapping[str, Any]) -> None:
+        """Write *payload* as JSON via a same-directory temp file + replace."""
+        root = self._root()
+        tmp = root / f"{filename}.tmp.{os.getpid()}"
+        try:
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, root / filename)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
 
 def build_host_state() -> HostState:
     """Return the host state used by the pipeline server."""

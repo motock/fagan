@@ -805,10 +805,10 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         return _store.get_journal_final_ts(plan_name, story_key)
 
     def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
-        return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
+        return local_workspace_reader.read_story_log(plan_name, story_key, manifest, lines)
 
     def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
-        return _store.get_worktree_file(story, filename)
+        return local_workspace_reader.read_worktree_file(story, filename)
 
     def get_story_diff(
         self, plan_name: str, story_key: str, manifest: dict[str, Any], path: str | None = None,

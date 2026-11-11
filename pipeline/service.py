@@ -327,8 +327,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
         Delegates to :func:`pipeline.workspace.validate_workspace` or
         :func:`pipeline.workspace.create_workspace` based on ``create``.
-        If the result has ``ok`` true, records the resolved path via
-        ``self._store.add_recent_workspace``.
+        If the result has ``ok`` true, records the resolved path on the
+        host state (``add_recent_workspace``).
         Returns the result dict unchanged.
         """
         import pipeline.workspace as _workspace

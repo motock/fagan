@@ -24,7 +24,7 @@ import pipeline.persistence
 # cold-importability (every pipeline module imports cold, see
 # tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
-from pipeline.store import FileStore
+from pipeline.store import FileStore, Store
 from pipeline.store_contract_notifications import NotificationHistoryContract
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE

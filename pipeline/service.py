@@ -110,6 +110,7 @@ class _ServerRef:
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
 _store = _ServerRef("_store")
+_host_state = _ServerRef("_host_state")
 _VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
 _notify_user = _ServerRef("_notify_user")
 PLAN_DIR = _ServerRef("PLAN_DIR")
@@ -340,7 +341,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             # or fall back to the input.
             resolved_path = result.get("path") or path
             if resolved_path:
-                _store.add_recent_workspace(resolved_path)
+                _host_state.add_recent_workspace(resolved_path)
         return result
 
     def list_workspaces(self) -> list[dict]:
@@ -356,7 +357,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         seen = set()
         workspaces: list[dict] = []
         # Recents first
-        for p in _store.get_recent_workspaces():
+        for p in _host_state.get_recent_workspaces():
             if p in seen:
                 continue
             seen.add(p)
@@ -405,7 +406,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         propagates, so an unexpected failure surfaces instead of quietly
         degrading into "no workspace selected".
         """
-        path = _store.get_active_workspace()
+        path = _host_state.get_active_workspace()
         if path is None:
             return None
         try:
@@ -547,7 +548,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     def set_active_workspace(self, path: str | None) -> None:
         """Set the active workspace; None clears it."""
-        _store.set_active_workspace(path)
+        _host_state.set_active_workspace(path)
 
     def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
         return _approve_merge_impl(plan_name, story_key)

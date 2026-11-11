@@ -571,6 +571,8 @@ def _scoped_repo_root(plan_name: str):
 
 
 _store = build_store()
+from pipeline.host_state import build_host_state as _bhs
+_host_state = _bhs()
 
 from pipeline.service import PipelineService
 

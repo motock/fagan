@@ -4,7 +4,7 @@ import json
 import pytest
 
 from pipeline import context_sources as cs
-from pipeline import paths
+from pipeline import paths, persistence, server
 
 
 def _source(root, **overrides):

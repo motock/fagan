@@ -323,15 +323,13 @@ def health() -> dict[str, Any]:
     the outbox aggregate plus the verdicts a stale or missing scheduler and a
     stalled outbox imply — while ``ok`` means "the API answered".
     """
-    plan_dir = str(PLAN_DIR)
+    plan_dir = str(_host_state.root())
     scheduler: Any = None
     config_mismatch: list[str] = []
     try:
         # Re-read from disk on every request: the scheduler may write (or
         # remove) the fingerprint between calls, so nothing is cached here.
-        fingerprint_path = PLAN_DIR / ".scheduler_health.json"
-        with open(fingerprint_path, "r", encoding="utf-8") as handle:
-            payload = json.loads(handle.read())
+        payload = _host_state.read_scheduler_health()
         if isinstance(payload, dict) and isinstance(payload.get("config"), dict):
             scheduler = payload["config"]
             resolved = {"plan_dir": plan_dir, "worktree_root": str(WORKTREE_ROOT)}

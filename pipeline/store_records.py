@@ -387,6 +387,7 @@ class RecordStore(Protocol):
 
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one ``(namespace, plan_name)`` pair.
+
         A context manager that yields whether the lock was acquired, and never        blocks longer than ``wait_seconds``.  Callers MUST check the yielded
         bool and skip all work when it is ``False``: this is the scheduler's
         "skip this tick" path, and it must stay cheap.  ``wait_seconds`` is

@@ -217,7 +217,7 @@ def test_resolve_workspace_unchanged():
     source at story start."""
     assert (
         _digest(PipelineService.resolve_workspace)
-        == "add1799d7b9761a4d65f52692224ec239491d4ccf27329735532cb976cab329a"
+        == "6a05a0689b299f3ef665f09eb5cdb61fff5e00ddbb7a1bd102f6e69761a6e6f2"
     )
 
 

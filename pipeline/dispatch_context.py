@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from . import context_sources as ctxsrc
-from . import paths
 from .persona import _with_files_pointers
 from .service import _ServerRef
+from .store_records import DEFAULT_NAMESPACE
 
 _store = _ServerRef("_store")
 _notify_user = _ServerRef("_notify_user")

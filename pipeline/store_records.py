@@ -2,14 +2,18 @@
 
 The record store API is made of *records*, never paths, and every operation
 takes ``namespace`` as its first argument.  This module defines the contract
-only: it holds no storage code and mutates no state.
+and its validators; the only implementation it carries is
+:class:`PlanDraftRecords`, the file-layout plan-draft mixin that
+``pipeline/store.py`` inherits, because that module sits on the 1000-line gate.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
-from typing import Protocol
+from pathlib import Path
+from typing import Any, Protocol
 
 DEFAULT_NAMESPACE = 'default'
 
@@ -88,6 +92,22 @@ class InvalidUsageRecordError(RecordStoreError, ValueError):
     record's values include token counts and cost, and an error raised on the
     way to storage must not become a second, unvalidated copy of the record.
     """
+
+
+class UnreadableRecordError(RecordStoreError, ValueError):
+    """Raised when a stored record exists but cannot be read back.
+
+    Missing is not unreadable: a record that is not there is ``None`` (or an
+    empty list, or ``False`` when it was deleted), while a record that is there
+    and malformed is a failure a caller must see.  ``reason`` carries the
+    refusal text the legacy reader produces for the same file
+    (:func:`pipeline.persistence.read_plan_file`), so a message built from this
+    error stays byte-identical to the one ingest already prints.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 def validate_namespace(value: str) -> str:
@@ -369,6 +389,56 @@ class RecordStore(Protocol):
         """
         ...
 
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Stage ``plan`` as the transient plan draft of ``plan_name``.
+
+        The draft is the plan document an operator hands the pipeline before
+        ingest (ADR 0012 decision 3, "Plan draft (transient)
+        ``<plan>.json``").  It replaces any previous draft *wholesale*: a
+        field absent from ``plan`` is absent from the draft afterwards, never
+        inherited from the document it replaced.
+
+        ``plan`` must be a dict and is serialised before anything is written,
+        so a document that cannot be stored leaves no trace behind.  The
+        namespace and plan name are validated first; an unknown namespace is
+        refused before storage is touched.
+        """
+        ...
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return ``plan_name``'s staged plan draft, or ``None`` when absent.
+
+        A read, so it creates nothing.  Missing is not unreadable: a plan with
+        no draft is ``None``, while a draft that exists but is malformed, is
+        not a JSON object, or cannot be read raises
+        :class:`UnreadableRecordError` whose ``reason`` is the refusal text
+        the legacy reader (:func:`pipeline.persistence.read_plan_file`)
+        produces for the same file.  A truncated write must never surface as a
+        bare ``JSONDecodeError``: ingest builds its refusal message from this
+        error and that message stays byte-identical.
+        """
+        ...
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s plan draft; return whether one was deleted.
+
+        ``False`` -- not an error -- when there was no draft to delete, so the
+        call is idempotent and a second delete reports ``False``.
+        """
+        ...
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plan names that have a staged draft.
+
+        Only ``<plan>.json`` files whose stem holds no ``'.'`` count, so a
+        plan's manifest, decisions and journal sidecars are not drafts, and
+        the file must hold a JSON object with an ``epics`` key -- the same
+        filter :meth:`pipeline.service.PipelineService.list_ingestable_plans`
+        applies.  A file that cannot be parsed is skipped, not raised: one bad
+        draft must not blind a caller that lists them all.
+        """
+        ...
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one ``(namespace, plan_name)`` pair.
 
@@ -403,5 +473,128 @@ RECORD_STORE_METHODS = (
     'append_notification',
     'get_notification_history',
     'get_notification_lines',
+    'put_plan_draft',
+    'get_plan_draft',
+    'delete_plan_draft',
+    'list_plan_drafts',
     'transaction',
 )
+
+
+class PlanDraftRecords:
+    """The transient plan-draft operations, mixed into the file record view.
+
+    A *plan draft* is the staged plan document an operator hands the pipeline
+    before ingest (ADR 0012 decision 3, "Plan draft (transient) ``<plan>.json``").
+    It is not durable store state: it is the plan JSON ``save_plan`` writes and
+    ingest reads, so the file store keeps today's layout and the many callers
+    that write a plan file by hand keep working.
+
+    The file-layout implementation lives in this module, next to the contract it
+    satisfies, because ``pipeline/store.py`` sits on the 1000-line gate and a
+    record kind with real behaviour cannot grow there.
+
+    The host class supplies ``_store`` (the legacy file store, whose
+    ``manifest_path`` resolves the plans directory per call) and
+    ``_refuse_other_namespace`` (this view serves :data:`DEFAULT_NAMESPACE`).
+    """
+
+    #: Provided by the host record view.
+    _store: Any
+
+    def _refuse_other_namespace(self, namespace: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def _draft_path(self, plan_name: str) -> Path:
+        """Return ``<plans dir>/<plan>.json``, resolved per call.
+
+        The plans directory comes from the file store's own ``manifest_path``,
+        which resolves the server module's plans-directory binding through a
+        :class:`pipeline.live_ref.LiveRef` at call time, so a plans directory
+        patched on that module is the one the draft lands in.
+        """
+        return self._store.manifest_path(plan_name).parent / f"{plan_name}.json"
+
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Stage ``plan`` as ``plan_name``'s transient plan draft.
+
+        The layout is the one ingest already reads -- ``<plan>.json`` in the
+        plans directory -- so a plan handed over by hand and a plan handed over
+        by ``save_plan`` land in the same place, and the draft replaces any
+        previous one wholesale.
+
+        The write goes through ``pipeline.server._atomic_write_json`` resolved
+        per call (the module attribute, never an import-time copy), so a patched
+        writer is the one the write goes through and ``save_plan``'s staging and
+        this call share a single writer.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(plan, dict):
+            raise TypeError('plan must be a dict')
+        from pipeline import server
+
+        server._atomic_write_json(self._draft_path(plan_name), plan)
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return ``plan_name``'s plan draft, or ``None`` when it has none.
+
+        Read through :func:`pipeline.persistence.read_plan_file`, the reader
+        ingest already refuses with, so a malformed or unreadable draft raises
+        :class:`UnreadableRecordError` carrying that reader's own reason text
+        and ingest's refusal messages stay byte-identical.  Missing is not
+        unreadable: an absent draft is ``None``.  Nothing is cached, so a draft
+        rewritten on disk is read afresh on the next call.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        path = self._draft_path(plan_name)
+        if not path.is_file():
+            return None
+        from pipeline import persistence
+
+        plan, refusal = persistence.read_plan_file(path)
+        if refusal is not None:
+            raise UnreadableRecordError(refusal['error'])
+        return plan
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s draft; report whether one was deleted.
+
+        ``False`` -- not an error -- when there was nothing to delete, so the
+        call is idempotent and a second delete reports ``False``.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        try:
+            self._draft_path(plan_name).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plan names that have an ingestable draft.
+
+        Only ``<plan>.json`` files count: a stem holding a ``'.'`` is a
+        manifest, decisions or journal sidecar, and the file must hold a JSON
+        object with an ``epics`` key -- the same filter
+        :meth:`pipeline.service.PipelineService.list_ingestable_plans` applies.
+        A file that cannot be read or parsed is skipped rather than raised: one
+        bad draft must not blind a caller that lists them all.
+        """
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        drafts = []
+        for path in self._draft_path('draft').parent.glob('*.json'):
+            if '.' in path.stem:
+                continue
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if isinstance(document, dict) and 'epics' in document:
+                drafts.append(path.stem)
+        return sorted(drafts)

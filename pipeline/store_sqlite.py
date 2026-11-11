@@ -563,6 +563,40 @@ class SqliteRecords(
         self._namespace(namespace)
         return self._store.list_manifests()
 
+    # -- plan drafts (ADR 0012 decision 3) ------------------------------
+    # The draft is a file sidecar this store does not own -- the same file
+    # ``save_plan`` stages and ingest refuses with -- so all four operations
+    # delegate to the record view of the file store the drafts live in,
+    # resolved per call, exactly as ``get_journal`` reads through it.
+    def _draft_records(self):
+        """Return the file store's record view, resolved per call."""
+        return self._store._files.records()
+
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Stage ``plan`` as the transient plan draft of ``plan_name``."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(plan, dict):
+            raise TypeError('plan must be a dict')
+        self._draft_records().put_plan_draft(namespace, plan_name, plan)
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return ``plan_name``'s plan draft, or ``None`` when it has none."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._draft_records().get_plan_draft(namespace, plan_name)
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s plan draft; return whether one was deleted."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._draft_records().delete_plan_draft(namespace, plan_name)
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plan names that have an ingestable draft."""
+        self._namespace(namespace)
+        return self._draft_records().list_plan_drafts(namespace)
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.
 

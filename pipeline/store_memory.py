@@ -21,7 +21,10 @@ import time
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
+    UnknownNamespaceError,
+    UnreadableRecordError,
     validate_channel,
     validate_namespace,
     validate_notification_record,
@@ -54,6 +57,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # commits another thread's writes.
         self._transactions = threading.local()
         self._manifests: dict[tuple[str, str], dict] = {}
+        # The transient plan drafts (ADR 0012 decision 3), per (namespace,
+        # plan), held as a deep copy so a caller's later mutation of the dict
+        # it passed never changes what is stored.
+        self._drafts: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
@@ -120,6 +127,112 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 if stored_namespace == namespace
             }
             return sorted(names)
+
+    # -- plan drafts (ADR 0012 decision 3) ------------------------------
+    def _draft_path(self, plan_name: str):
+        """Return ``<plans dir>/<plan>.json``, resolved per call.
+
+        The draft is a *transient file* the file store stages (``save_plan``),
+        not durable store state, so the reference store reads a draft it does
+        not hold itself from the plans directory the writers use, through
+        :mod:`pipeline.persistence` -- the reader ingest already refuses with --
+        rather than constructing a file store of its own.  The directory comes
+        from the writer's own path helper, so a plans directory patched on that
+        module is the one that is read.
+        """
+        from pipeline import persistence
+
+        return persistence._journal_path(plan_name, 'story').parent / (
+            f'{plan_name}.json'
+        )
+
+    def _draft_namespace(self, namespace: str) -> None:
+        """Validate ``namespace`` and refuse anything but ``'default'``.
+
+        A plan draft is the staged document ``save_plan`` writes and ingest
+        consumes, and both core paths serve ``DEFAULT_NAMESPACE`` only: this
+        reference store therefore refuses any other namespace for the four
+        draft operations, before any state is touched, exactly as the file and
+        sqlite record views do.
+        """
+        validate_namespace(namespace)
+        if namespace != DEFAULT_NAMESPACE:
+            raise UnknownNamespaceError('unknown namespace')
+
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Store a copy of ``plan`` as ``plan_name``'s draft, wholesale."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(plan, dict):
+            raise TypeError('plan must be a dict')
+        # Serialise before touching any state: a document that cannot be
+        # stored must leave no trace behind.
+        json.dumps(plan)
+        with self._lock:
+            self._record_undo(self._drafts, (namespace, plan_name))
+            self._drafts[(namespace, plan_name)] = copy.deepcopy(plan)
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return a copy of ``plan_name``'s draft, or ``None`` when absent.
+
+        A draft this store holds itself answers from memory.  A draft this store
+        does not hold is read from the plans directory through
+        :func:`pipeline.persistence.read_plan_file`, the reader ``save_plan``
+        stages it for and ingest refuses with -- the same transitional fallback
+        ``SqliteRecords`` makes until stage C.  A malformed file therefore raises
+        :class:`UnreadableRecordError` carrying that reader's reason text, never
+        a bare ``JSONDecodeError``.
+        """
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            plan = self._drafts.get((namespace, plan_name))
+            if plan is not None:
+                return copy.deepcopy(plan)
+        path = self._draft_path(plan_name)
+        if not path.is_file():
+            return None
+        from pipeline import persistence
+
+        plan, refusal = persistence.read_plan_file(path)
+        if refusal is not None:
+            raise UnreadableRecordError(refusal['error'])
+        return plan
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s draft; return whether one was deleted."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            if (namespace, plan_name) in self._drafts:
+                self._record_undo(self._drafts, (namespace, plan_name))
+                del self._drafts[(namespace, plan_name)]
+                return True
+        try:
+            self._draft_path(plan_name).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plans in ``namespace`` that have an ingestable draft."""
+        self._draft_namespace(namespace)
+        with self._lock:
+            names = {
+                plan_name
+                for (stored_namespace, plan_name), plan in self._drafts.items()
+                if stored_namespace == namespace and 'epics' in plan
+            }
+        for path in self._draft_path('probe').parent.glob('*.json'):
+            if '.' in path.stem:
+                continue
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if isinstance(document, dict) and 'epics' in document:
+                names.add(path.stem)
+        return sorted(names)
 
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:

@@ -110,6 +110,21 @@ in practice.
 - The scheduler daemon now keeps retrying the NATS broker in the background when the broker is not up yet at start-up (the standalone stack starts `nats` a few milliseconds after the pipeline container), and starts the durable consumers when it answers. Before, those consumers stayed down until the container was restarted and their events piled up in the stream.
 - REFERENCE.md now documents `PIPELINE_PLAN_LOCK_SLOW_SECONDS`, `PIPELINE_COMMAND_LOCK_WAIT_SECONDS`, `PIPELINE_DASHBOARD_PUBLIC_URL`, `PIPELINE_APPROVAL_LINK_PATH` and `PIPELINE_DASHBOARD_PLUGINS`.
 
+### Upgrading
+
+- Plans ingested before the manifest descriptive-fields story carry their
+  authored `description`, `epic`, `plan_key`, `plan_epics`,
+  `preflight_override` and `repo_url` only in their staged plan draft, not on
+  the manifest. Backfill them once with
+  `python -m pipeline.tools.backfill_plan_source` (`--dry-run` first; see
+  REFERENCE.md, "Operator runbook: backfilling plans ingested before these
+  fields existed").
+  Run it **before deploying the draft-consumption story** and **before the
+  digest-version-2 build**: it refuses (and reports `skipped_digest`) any plan
+  whose `canonical_digest` would change, and under digest version 1 those fields
+  are not digest members, so no approval record is touched and no re-approval is
+  needed.
+
 ## [0.9.0] - 2026-11-03
 
 ### Changed

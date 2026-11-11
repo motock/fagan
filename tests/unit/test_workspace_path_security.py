@@ -720,9 +720,9 @@ class TestServiceLayerEnforcement:
 
     def test_service_denial_is_not_recorded_as_recent_workspace(self, plan_dir):
         from pipeline import server as p
-        from pipeline import store as store_mod
+        from pipeline.host_state import FileHostState
 
-        store = store_mod.FileStore()
+        store = FileHostState()
         before = store.get_recent_workspaces()
         p._service.resolve_workspace("/etc/pwned-ws", create=True)
         assert store.get_recent_workspaces() == before

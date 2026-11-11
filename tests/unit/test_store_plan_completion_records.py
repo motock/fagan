@@ -134,10 +134,6 @@ def test_is_plan_completed_is_true_after_the_marker_is_marked(stores):
 
 def test_the_marker_is_per_plan(stores):
     for backend, store in _all_stores(stores):
-        view = store._draft_records() if hasattr(store, '_draft_records') else store
-        marker = view._plan_path(OTHER_PLAN, '.plan_completed')
-        print('DBG', backend, marker, marker.exists(),
-              sorted(p.name for p in marker.parent.iterdir()))
         store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN)
         assert store.is_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is False, backend
         assert store.mark_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is True, backend

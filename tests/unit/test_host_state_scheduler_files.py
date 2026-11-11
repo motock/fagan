@@ -77,6 +77,9 @@ def plan_root(tmp_path, monkeypatch):
     root = tmp_path / "plans"
     root.mkdir()
     monkeypatch.setattr(server_mod, "PLAN_DIR", root)
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+    monkeypatch.setattr(server_mod, "WORKTREE_ROOT", worktrees)
     # ``pipeline.paths`` is the module-level default other modules read.
     # Point it at an EMPTY sibling directory so a module that still reads
     # it observes "no file here" instead of the real plan directory.
@@ -85,6 +88,7 @@ def plan_root(tmp_path, monkeypatch):
     from pipeline import paths as paths_mod
 
     monkeypatch.setattr(paths_mod, "PLAN_DIR", other)
+    monkeypatch.setattr(paths_mod, "WORKTREE_ROOT", other)
     return root
 
 

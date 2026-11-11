@@ -4,7 +4,7 @@
 live on the store: the recent-workspaces list and the active workspace.  They
 are host-local (not namespaced, never replicated), so they move behind a
 ``HostState`` protocol with a file-backed implementation, and
-``build_host_state()`` is the only way to obtain one.
+``build_host_state()`` is the only constructor.
 
 What is graded here is behaviour through the public API only:
 
@@ -51,9 +51,8 @@ WORKSPACE_METHODS = (
 )
 
 
-@pytest.fixture
-def hs():
-    """The host state under test, built through the only public constructor."""
+def _hs():
+    """Build the host state through the only public constructor."""
     assert host_state is not None, "pipeline/host_state.py does not exist yet"
     return host_state.build_host_state()
 
@@ -110,26 +109,26 @@ def test_module_exposes_protocol_implementation_and_factory():
     assert host_state is not None, "pipeline/host_state.py does not exist yet"
     assert hasattr(host_state, "HostState"), "HostState protocol is missing"
     assert hasattr(host_state, "FileHostState"), "FileHostState is missing"
-    assert callable(getattr(host_state, "build_host_state", None))
     assert issubclass(host_state.HostState, Protocol), (
         "HostState must be a typing.Protocol"
     )
+    for name in WORKSPACE_METHODS:
+        assert hasattr(host_state.HostState, name), (
+            f"HostState must declare {name}"
+        )
 
 
-def test_built_host_state_provides_the_four_workspace_methods():
+def test_build_host_state_returns_the_file_implementation():
     assert host_state is not None, "pipeline/host_state.py does not exist yet"
     built = host_state.build_host_state()
+    assert isinstance(built, host_state.FileHostState)
     for name in WORKSPACE_METHODS:
         assert callable(getattr(built, name, None)), f"{name} is missing"
-        assert callable(getattr(host_state.FileHostState, name, None)), (
-            f"FileHostState.{name} is missing"
-        )
 
 
 def test_workspace_methods_are_not_namespaced():
     """Host-local state is not namespaced data: no namespace argument."""
-    assert host_state is not None, "pipeline/host_state.py does not exist yet"
-    built = host_state.build_host_state()
+    built = _hs()
     expected_args = {
         "get_recent_workspaces": 0,
         "add_recent_workspace": 1,
@@ -147,19 +146,22 @@ def test_workspace_methods_are_not_namespaced():
 # ---------------------------------------------------------------------------
 
 
-def test_added_workspace_is_read_back(hs, plan_dir):
+def test_added_workspace_is_read_back(plan_dir):
+    hs = _hs()
     hs.add_recent_workspace("/abs/ws-a")
     assert hs.get_recent_workspaces() == ["/abs/ws-a"]
 
 
-def test_readding_a_workspace_moves_it_to_the_front(hs, plan_dir):
+def test_readding_a_workspace_moves_it_to_the_front(plan_dir):
+    hs = _hs()
     hs.add_recent_workspace("/abs/ws-a")
     hs.add_recent_workspace("/abs/ws-b")
     hs.add_recent_workspace("/abs/ws-a")
     assert hs.get_recent_workspaces() == ["/abs/ws-a", "/abs/ws-b"]
 
 
-def test_recents_are_capped_at_twenty_and_evict_the_oldest(hs, plan_dir):
+def test_recents_are_capped_at_twenty_and_evict_the_oldest(plan_dir):
+    hs = _hs()
     for i in range(21):
         hs.add_recent_workspace(f"/abs/ws-{i:02d}")
     recents = hs.get_recent_workspaces()
@@ -169,21 +171,21 @@ def test_recents_are_capped_at_twenty_and_evict_the_oldest(hs, plan_dir):
     assert "/abs/ws-01" in recents
 
 
-def test_malformed_recents_file_reads_as_empty(hs, plan_dir):
+def test_malformed_recents_file_reads_as_empty(plan_dir):
     (plan_dir / RECENT_FILE).write_text("{not json")
-    assert hs.get_recent_workspaces() == []
+    assert _hs().get_recent_workspaces() == []
 
 
-def test_non_list_recents_file_reads_as_empty(hs, plan_dir):
+def test_non_list_recents_file_reads_as_empty(plan_dir):
     (plan_dir / RECENT_FILE).write_text(json.dumps({"path": "/abs/ws-a"}))
-    assert hs.get_recent_workspaces() == []
+    assert _hs().get_recent_workspaces() == []
 
 
-def test_non_string_recents_entries_are_dropped(hs, plan_dir):
+def test_non_string_recents_entries_are_dropped(plan_dir):
     (plan_dir / RECENT_FILE).write_text(
         json.dumps(["/abs/ws-a", 5, None, ["/abs/ws-b"], {"path": "/abs/ws-c"}])
     )
-    assert hs.get_recent_workspaces() == ["/abs/ws-a"]
+    assert _hs().get_recent_workspaces() == ["/abs/ws-a"]
 
 
 # ---------------------------------------------------------------------------
@@ -191,27 +193,29 @@ def test_non_string_recents_entries_are_dropped(hs, plan_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_active_workspace_round_trips_a_path(hs, plan_dir):
+def test_active_workspace_round_trips_a_path(plan_dir):
+    hs = _hs()
     hs.set_active_workspace("/abs/ws-a")
     assert hs.get_active_workspace() == "/abs/ws-a"
     on_disk = json.loads((plan_dir / ACTIVE_FILE).read_text())
     assert on_disk["path"] == "/abs/ws-a"
 
 
-def test_active_workspace_none_round_trips_and_clears(hs, plan_dir):
+def test_active_workspace_none_round_trips_and_clears(plan_dir):
+    hs = _hs()
     hs.set_active_workspace("/abs/ws-a")
     hs.set_active_workspace(None)
     assert hs.get_active_workspace() is None
 
 
-def test_malformed_active_workspace_file_reads_as_none(hs, plan_dir):
+def test_malformed_active_workspace_file_reads_as_none(plan_dir):
     (plan_dir / ACTIVE_FILE).write_text("{not json")
-    assert hs.get_active_workspace() is None
+    assert _hs().get_active_workspace() is None
 
 
-def test_non_dict_active_workspace_file_reads_as_none(hs, plan_dir):
+def test_non_dict_active_workspace_file_reads_as_none(plan_dir):
     (plan_dir / ACTIVE_FILE).write_text(json.dumps(["/abs/ws-a"]))
-    assert hs.get_active_workspace() is None
+    assert _hs().get_active_workspace() is None
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +223,8 @@ def test_non_dict_active_workspace_file_reads_as_none(hs, plan_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_records_live_directly_under_the_root(hs, plan_dir):
+def test_records_live_directly_under_the_root(plan_dir):
+    hs = _hs()
     hs.add_recent_workspace("/abs/ws-a")
     hs.set_active_workspace("/abs/ws-a")
     assert sorted(p.name for p in plan_dir.iterdir()) == [ACTIVE_FILE, RECENT_FILE]
@@ -233,9 +238,10 @@ def _break_atomic_replace(monkeypatch):
     monkeypatch.setattr(os, "rename", boom)
 
 
-def test_failed_recents_write_leaves_no_temporary_file(hs, plan_dir, monkeypatch):
+def test_failed_recents_write_leaves_no_temporary_file(plan_dir, monkeypatch):
     (plan_dir / RECENT_FILE).write_text(json.dumps(["/abs/old"]))
     before = sorted(p.name for p in plan_dir.iterdir())
+    hs = _hs()
     _break_atomic_replace(monkeypatch)
     with contextlib.suppress(OSError):
         hs.add_recent_workspace("/abs/new")
@@ -243,9 +249,10 @@ def test_failed_recents_write_leaves_no_temporary_file(hs, plan_dir, monkeypatch
     assert json.loads((plan_dir / RECENT_FILE).read_text()) == ["/abs/old"]
 
 
-def test_failed_active_write_leaves_no_temporary_file(hs, plan_dir, monkeypatch):
+def test_failed_active_write_leaves_no_temporary_file(plan_dir, monkeypatch):
     (plan_dir / ACTIVE_FILE).write_text(json.dumps({"path": "/abs/old"}))
     before = sorted(p.name for p in plan_dir.iterdir())
+    hs = _hs()
     _break_atomic_replace(monkeypatch)
     with contextlib.suppress(OSError):
         hs.set_active_workspace("/abs/new")
@@ -258,7 +265,8 @@ def test_failed_active_write_leaves_no_temporary_file(hs, plan_dir, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_writes_land_in_the_patched_server_plan_dir(hs, plan_dir, monkeypatch):
+def test_writes_land_in_the_patched_server_plan_dir(plan_dir, monkeypatch):
+    hs = _hs()
     other = plan_dir.parent / "other-plans"
     other.mkdir()
     monkeypatch.setattr(server_mod, "PLAN_DIR", other)
@@ -269,12 +277,11 @@ def test_writes_land_in_the_patched_server_plan_dir(hs, plan_dir, monkeypatch):
 
 def test_root_is_resolved_at_call_time_not_at_construction(plan_dir, monkeypatch):
     """The binding is read per call, so a later re-patch still lands."""
-    assert host_state is not None, "pipeline/host_state.py does not exist yet"
-    built = host_state.build_host_state()
+    hs = _hs()
     other = plan_dir.parent / "other-plans"
     other.mkdir()
     monkeypatch.setattr(server_mod, "PLAN_DIR", other)
-    built.add_recent_workspace("/abs/ws-a")
+    hs.add_recent_workspace("/abs/ws-a")
     assert (other / RECENT_FILE).exists()
 
 
@@ -303,7 +310,9 @@ def test_sqlite_store_no_longer_implements_the_workspace_methods():
 # ---------------------------------------------------------------------------
 
 
-def test_service_resolve_workspace_records_the_recent(plan_dir, refusing_store, tmp_path):
+def test_service_resolve_workspace_records_the_recent(
+    plan_dir, refusing_store, tmp_path
+):
     repo = _init_git_repo(tmp_path / "repo")
     result = PipelineService().resolve_workspace(str(repo))
     assert result.get("ok") is True
@@ -311,19 +320,25 @@ def test_service_resolve_workspace_records_the_recent(plan_dir, refusing_store, 
     assert str(repo) in recents
 
 
-def test_service_list_workspaces_reads_the_recents(plan_dir, refusing_store, tmp_path):
+def test_service_list_workspaces_reads_the_recents(
+    plan_dir, refusing_store, tmp_path
+):
     repo = _init_git_repo(tmp_path / "repo")
     (plan_dir / RECENT_FILE).write_text(json.dumps([str(repo)]))
     paths = {entry["path"] for entry in PipelineService().list_workspaces()}
     assert str(repo) in paths
 
 
-def test_service_get_active_workspace_reads_the_active_record(plan_dir, refusing_store):
+def test_service_get_active_workspace_reads_the_active_record(
+    plan_dir, refusing_store
+):
     (plan_dir / ACTIVE_FILE).write_text(json.dumps({"path": "/abs/pre-seeded"}))
     assert PipelineService().get_active_workspace() == "/abs/pre-seeded"
 
 
-def test_service_set_active_workspace_writes_the_active_record(plan_dir, refusing_store):
+def test_service_set_active_workspace_writes_the_active_record(
+    plan_dir, refusing_store
+):
     PipelineService().set_active_workspace("/abs/ws-a")
     on_disk = json.loads((plan_dir / ACTIVE_FILE).read_text())
     assert on_disk["path"] == "/abs/ws-a"

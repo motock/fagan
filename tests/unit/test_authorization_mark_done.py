@@ -21,6 +21,7 @@ from app.identity import LOCAL_OPERATOR
 from pipeline import ci as pci
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
+from pipeline import plan_completion as pcomp
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.authorization import ENFORCE_ENV
 from pipeline.ticketing import LogicalState

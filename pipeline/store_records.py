@@ -799,6 +799,88 @@ class PlanCompletionRecords:
         return path.read_text(encoding='utf-8')
 
 
+class ContextSnapshotRecords:
+    """Content-addressed context snapshots, mixed into the file record view.
+
+    A snapshot is the resolved text of a plan's external ``context`` source
+    (ADR 0012 decision 11): an immutable, content-addressed blob whose key is
+    the SHA-256 of its own content.  ``put`` refuses a digest that addresses
+    other content, a second put of a stored digest is a no-op that never
+    overwrites, and there is deliberately no delete and no listing -- a
+    snapshot is only ever added to and read back.
+
+    The file layout is unchanged (``PLAN_DIR/context/<hex>/content.txt`` plus
+    ``meta.json``), so an operator and the tools that already read those two
+    files keep working.  The implementation lives here, next to the contract it
+    satisfies, because ``pipeline/store.py`` sits on the 1000-line gate.
+
+    The host class supplies ``_refuse_other_namespace`` (this view serves
+    :data:`DEFAULT_NAMESPACE`).
+    """
+
+    def _refuse_other_namespace(self, namespace: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def _snapshots_root(self) -> Path:
+        """Return the ``context`` directory, resolved per call.
+
+        The directory is :data:`pipeline.paths.PLAN_DIR` read at call time, the
+        same binding the context providers (``materialize_context_files``) and
+        every caller that reads ``context/<hex>/`` already use, so a plans
+        directory patched on that module is the one the snapshot lands in.
+        """
+        from . import paths
+
+        return paths.PLAN_DIR / 'context'
+
+    def _snapshot_folder(self, namespace: str, digest: object) -> Path:
+        """Validate the keys and return the folder *digest* lives in."""
+        validate_namespace(namespace)
+        hexdigest = validate_context_digest(digest)
+        self._refuse_other_namespace(namespace)
+        return self._snapshots_root() / hexdigest
+
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store ``content`` under ``digest`` once; never overwrite it.
+
+        The digest is checked against the content *before* the folder is even
+        named, so a refused put writes nothing at all.
+        """
+        hexdigest = verify_context_digest(digest, content)
+        folder = self._snapshot_folder(namespace, digest)
+        payload = snapshot_meta(meta, digest, content)
+        folder.mkdir(parents=True, exist_ok=True)
+        # ``O_CREAT|O_EXCL`` is the immutability: exactly one put of a digest
+        # can create its ``content.txt``, and every later put leaves it alone.
+        try:
+            fd = os.open(
+                folder / 'content.txt', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+            )
+        except FileExistsError:
+            return
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(content)
+        _atomic_write_json(folder / 'meta.json', payload)
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return ``{'content', 'meta'}`` for ``digest``, or ``None``."""
+        folder = self._snapshot_folder(namespace, digest)
+        try:
+            content = (folder / 'content.txt').read_text(encoding='utf-8')
+        except OSError:
+            return None
+        meta: dict = {}
+        try:
+            stored = json.loads((folder / 'meta.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            stored = None
+        if isinstance(stored, dict):
+            meta = stored
+        return {'content': content, 'meta': meta}
+
+
 class PlanRecords(
     PlanCompletionRecords, PlanDraftRecords, ContextSnapshotRecords
 ):

@@ -42,8 +42,8 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app import dashboard
 import pipeline.server as server_mod
+from app import dashboard
 from pipeline import health_freshness
 from pipeline import scheduler_daemon as daemon_mod
 

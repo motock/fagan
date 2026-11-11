@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import persistence, plan_completion
+from pipeline import persistence, plan_completion, server
 from pipeline.local_success import classify_story
 from pipeline.plan_summary import format_plan_summary
 

@@ -6,7 +6,7 @@ import pytest
 import pipeline.review as review_mod
 import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
-from pipeline import paths
+from pipeline import paths, persistence, server
 
 NAME = "ux"
 TEXT = "Always use the shared Button component."

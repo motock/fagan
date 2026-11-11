@@ -315,19 +315,15 @@ def resolve_dir_source(source: dict) -> dict:
 
 
 def snapshot_context(text: str, meta: dict | None = None) -> str:
-    """Persist *text* under ``PLAN_DIR/context/<digest-hex>/`` and return its digest.
+    """Persist *text* through the context-snapshot record and return its digest.
 
-    *meta* adds provider metadata (e.g. a resolved git ``sha``) to ``meta.json``.
+    The snapshot is content-addressed (ADR 0012 decision 11): the digest is
+    ``'sha256:' + sha256(text)`` and the record store is the only writer, so a
+    snapshot that is already stored is never rewritten.  *meta* adds provider
+    metadata (e.g. a resolved git ``sha``), which the first write keeps.
     """
-    payload = text.encode("utf-8")
-    hexdigest = hashlib.sha256(payload).hexdigest()
-    digest = "sha256:" + hexdigest
-    folder = paths.PLAN_DIR / "context" / hexdigest
-    if (folder / "meta.json").exists():
-        return digest
-    folder.mkdir(parents=True, exist_ok=True)
-    _write_atomic(folder / "content.txt", text)
-    _write_atomic(folder / "meta.json", json.dumps({**(meta or {}), "digest": digest, "bytes": len(payload)}))
+    digest = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    _store.records().put_context_snapshot(DEFAULT_NAMESPACE, digest, text, meta or {})
     return digest
 
 

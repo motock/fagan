@@ -241,3 +241,27 @@ def test_a_rejected_report_writes_nothing_to_the_plans_directory(stores, plan_di
         with pytest.raises(TypeError):
             store.put_plan_report(DEFAULT_NAMESPACE, PLAN, 5)
     assert list(plan_dir.iterdir()) == []
+
+
+# -- the sqlite backend keeps the completion records in its database -----
+
+
+def test_the_sqlite_backend_keeps_the_marker_and_the_report_in_its_database(
+    stores, plan_dir, backend
+):
+    """The sqlite store's completion records are rows, so no file is written.
+
+    The file backend still keeps today's layout; the sqlite backend moved the
+    marker and the report into its own database, so the plans directory stays
+    empty.
+    """
+    if backend != 'sqlite':
+        pytest.skip('the database layout is the sqlite store\'s own')
+    store = stores['sqlite']
+
+    assert store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN) is True
+    store.put_plan_report(DEFAULT_NAMESPACE, PLAN, REPORT)
+
+    assert store.is_plan_completed(DEFAULT_NAMESPACE, PLAN) is True
+    assert store.get_plan_report(DEFAULT_NAMESPACE, PLAN) == REPORT
+    assert list(plan_dir.iterdir()) == []

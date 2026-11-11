@@ -34,6 +34,7 @@ from pipeline import (
     store_sqlite_audit,
     store_sqlite_notifications,
     store_sqlite_outbox,
+    store_sqlite_records,
     store_sqlite_schema,
     store_sqlite_usage,
 )
@@ -44,10 +45,14 @@ from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     UnknownNamespaceError,
+    UnreadableRecordError,
+    context_address,
+    snapshot_meta,
     validate_channel,
     validate_namespace,
     validate_plan_name,
     validate_story_key,
+    verify_context_digest,
 )
 
 # How long ``transaction()`` keeps retrying a contended write lock before it
@@ -73,13 +78,10 @@ def _is_lock_conflict(exc: sqlite3.OperationalError) -> bool:
         return "locked" in message or "busy" in message
     return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
-# The optional progress fields the file store fills in on every journal entry
-# it serves. The record view omits them when the writer never set them, so a
-# record read back is the record that was written.
-_JOURNAL_OPTIONAL_FIELDS = ("step", "summary", "next_hint")
-
-
-class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
+class SqliteStore(
+    store_sqlite_records.RecordTablesMixin,
+    store_sqlite_notifications.NotificationHistoryMixin,
+):
     """A database-backed ``Store`` for a single host.
 
     The database is the record for plan manifests: each one is stored as JSON
@@ -165,11 +167,9 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
         # Manifests written inside a transaction are projected to disk when it
         # commits, so a rolled-back transaction leaves no trace on disk.
         self._pending_projection: dict[str, dict[str, Any]] = {}
-        # Journals are file sidecars this store does not own, so a write made
-        # inside a transaction is buffered and applied only when the outermost
-        # block commits -- a rollback discards it, which is what declaring the
-        # atomic tier promises. ``None`` is a clear.
-        self._pending_journal: list[tuple[str, str, dict[str, Any] | None]] = []
+        # Journals, decisions, drafts, completion records and snapshots are
+        # rows of this store's database, so a write made inside a transaction
+        # is part of it and commits or rolls back with the manifest row.
         self._depth = 0
 
     # -- lifecycle ---------------------------------------------------------
@@ -318,6 +318,9 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
         self.save_manifest(plan_name, manifest)
         return story
 
+    def list_plans(self) -> list[str]:
+        return self._files.list_plans()
+
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         """Fail-open manifest read, served from the same records as the strict one.
 
@@ -414,60 +417,16 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
             except BaseException:
                 self._depth = 0
                 self._pending_projection.clear()
-                self._pending_journal.clear()
                 self._conn.execute("ROLLBACK")
                 raise
             else:
                 pending, self._pending_projection = self._pending_projection, {}
-                pending_journal, self._pending_journal = self._pending_journal, []
                 self._depth = 0
                 self._conn.execute("COMMIT")
                 for plan, manifest in pending.items():
                     self._files.save_manifest(plan, manifest)
-                for plan, story_key, record in pending_journal:
-                    if record is None:
-                        self._files.records().clear_journal(
-                            DEFAULT_NAMESPACE, plan, story_key
-                        )
-                    else:
-                        self._files.append_journal(plan, story_key, record)
         finally:
             self._guard.release()
-
-    # -- delegations to the file store ------------------------------------
-    def list_plans(self) -> list[str]:
-        return self._files.list_plans()
-
-    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
-        self._files.append_decision(plan_name, record)
-
-    def append_journal(
-        self, plan_name: str, story_key: str, record: dict[str, Any]
-    ) -> None:
-        with self._guard:
-            if self._depth:
-                self._pending_journal.append((plan_name, story_key, record))
-            else:
-                self._files.append_journal(plan_name, story_key, record)
-
-    def clear_journal(self, plan_name: str, story_key: str) -> None:
-        """Delete a story's journal, deferred when a transaction is open."""
-        with self._guard:
-            if self._depth:
-                self._pending_journal.append((plan_name, story_key, None))
-            else:
-                self._files.records().clear_journal(
-                    DEFAULT_NAMESPACE, plan_name, story_key
-                )
-
-    def get_decisions(self, plan_name: str) -> list[dict]:
-        return self._files.get_decisions(plan_name)
-
-    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
-        return self._files.get_journal(plan_name, story_key)
-
-    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
-        return self._files.get_journal_final_ts(plan_name, story_key)
 
     # get_recent_workspaces / add_recent_workspace / get_active_workspace /
     # set_active_workspace moved to pipeline.host_state (ADR 0012, decision 4):
@@ -535,13 +494,9 @@ class SqliteRecords(
         return self._store.list_manifests()
 
     # -- plan drafts (ADR 0012 decision 3) ------------------------------
-    # The draft is a file sidecar this store does not own -- the same file
-    # ``save_plan`` stages and ingest refuses with -- so all four operations
-    # delegate to the record view of the file store the drafts live in,
-    # resolved per call, exactly as ``get_journal`` reads through it.
-    def _draft_records(self):
-        """Return the file store's record view, resolved per call."""
-        return self._store._files.records()
+    # The draft ``save_plan`` stages and ingest refuses with is a row of this
+    # store's ``plan_drafts`` table, written and read through parameterized
+    # statements only, so nothing lands in the plans directory.
 
     def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
         """Stage ``plan`` as the transient plan draft of ``plan_name``."""
@@ -549,41 +504,66 @@ class SqliteRecords(
         validate_plan_name(plan_name)
         if not isinstance(plan, dict):
             raise TypeError('plan must be a dict')
-        self._draft_records().put_plan_draft(namespace, plan_name, plan)
+        # Serialise before touching storage: a document that cannot be stored
+        # must leave no trace behind.
+        json.dumps(plan)
+        self._store._put_draft_row(namespace, plan_name, plan)
 
     def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
-        """Return ``plan_name``'s plan draft, or ``None`` when it has none."""
+        """Return ``plan_name``'s plan draft, or ``None`` when it has none.
+
+        A draft this store holds itself answers from its table.  A draft it does
+        not hold is read from the plans directory through
+        :func:`pipeline.persistence.read_plan_file` -- the reader ``save_plan``
+        stages it for and ingest refuses with -- so a plan staged by a writer
+        that still writes the file is never lost.  That fallback only reads: a
+        draft this store writes is a row, and nothing is ever staged on disk.
+        """
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._draft_records().get_plan_draft(namespace, plan_name)
+        payload = self._store._draft_payload(namespace, plan_name)
+        if payload is not None:
+            return json.loads(payload)
+        from pipeline import persistence
+
+        path = persistence._journal_path(plan_name, 'story').parent / (
+            f'{plan_name}.json'
+        )
+        if not path.is_file():
+            return None
+        plan, refusal = persistence.read_plan_file(path)
+        if refusal is not None:
+            raise UnreadableRecordError(refusal['error'])
+        return plan
 
     def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
         """Delete ``plan_name``'s plan draft; return whether one was deleted."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._draft_records().delete_plan_draft(namespace, plan_name)
+        return self._store._delete_draft_row(namespace, plan_name)
 
     def list_plan_drafts(self, namespace: str) -> list[str]:
         """Return the sorted plan names that have an ingestable draft."""
         self._namespace(namespace)
-        return self._draft_records().list_plan_drafts(namespace)
+        return self._store._draft_plans(namespace)
 
     # -- plan completion marker and report (ADR 0012 decision 3) --------
-    # Both are file sidecars in the plans directory that this store does not
-    # own -- the same ``<plan>.plan_completed`` and ``<plan>.report.md`` files
-    # the file record view writes -- so all four operations delegate to that
-    # view, exactly as the plan-draft kind above does.
+    # The once-only marker and the report are columns of one row of this
+    # store's ``plan_completions`` table, so neither is a file in the plans
+    # directory any more.
     def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
         """Create ``plan_name``'s completion marker; True only if created."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._draft_records().mark_plan_completed(namespace, plan_name)
+        return self._store._mark_completed_row(
+            namespace, plan_name, store_sqlite_records.completion_timestamp()
+        )
 
     def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
         """Whether ``plan_name``'s completion marker exists."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._draft_records().is_plan_completed(namespace, plan_name)
+        return self._store._completed_at(namespace, plan_name) is not None
 
     def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
         """Store ``plan_name``'s report, replacing the previous one wholesale."""
@@ -591,34 +571,38 @@ class SqliteRecords(
         validate_plan_name(plan_name)
         if not isinstance(text, str):
             raise TypeError('plan report must be a str')
-        self._draft_records().put_plan_report(namespace, plan_name, text)
+        self._store._put_report_row(namespace, plan_name, text)
 
     def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
         """Return ``plan_name``'s report, or ``None`` when it has none."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._draft_records().get_plan_report(namespace, plan_name)
+        return self._store._report_text(namespace, plan_name)
 
     # -- context snapshots (ADR 0012 decision 11) -----------------------
-    # A context snapshot is a content-addressed blob in the plans directory
-    # that this store does not own -- the same ``context/<hex>/`` files the
-    # context providers write -- so both operations delegate to the file
-    # record view, resolved per call, exactly as the kinds above do.  They
-    # move into a sqlite table of their own in the story that stores
-    # decisions, journals, plan drafts, completion records and snapshots.
+    # A snapshot is content-addressed, so it is a row of this store's
+    # ``context_snapshots`` table keyed by ``(namespace, digest)``: written
+    # once with an insert-or-ignore and never updated, because the digest
+    # names the content the row holds.
     def put_context_snapshot(
         self, namespace: str, digest: str, content: str, meta: dict
     ) -> None:
         """Store the snapshot ``digest`` addresses, once and for all."""
         self._namespace(namespace)
-        self._draft_records().put_context_snapshot(
-            namespace, digest, content, meta
+        hexdigest = verify_context_digest(digest, content)
+        payload = snapshot_meta(meta, digest, content)
+        self._store._put_snapshot_row(
+            namespace, 'sha256:' + hexdigest, content, payload
         )
 
     def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
         """Return ``{'content', 'meta'}`` for ``digest``, or ``None``."""
         self._namespace(namespace)
-        return self._draft_records().get_context_snapshot(namespace, digest)
+        hexdigest = context_address(digest)
+        stored = self._store._snapshot_row(namespace, 'sha256:' + hexdigest)
+        if stored is None:
+            stored = self._store._snapshot_row(namespace, digest)
+        return stored
 
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.
@@ -640,10 +624,10 @@ class SqliteRecords(
         """Return the decision records for ``plan_name``."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        # Read through the internal file store's record view, which resolves the
-        # directory this store's writers append to on every call -- the legacy
-        # ``get_decisions`` would answer from the reader's binding instead.
-        return self._store._files.records().get_decisions(namespace, plan_name)
+        return [
+            json.loads(payload)
+            for payload in self._store._decision_payloads(namespace, plan_name)
+        ]
 
     def append_decision(self, namespace: str, plan_name: str, record: dict) -> None:
         """Append one decision record to ``plan_name``."""
@@ -694,17 +678,21 @@ class SqliteRecords(
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_story_key(story_key)
-        # Same reason as ``get_decisions``: the internal file store's record view
-        # reads the journal file its own writer appends to, resolved per call,
-        # and already omits the display-only fields the writer never set.
-        entries = self._store._files.records().get_journal(
-            namespace, plan_name, story_key
-        )
+        # The record view omits the display-only fields the writer never set,
+        # so a record read back is the record that was written; the defaults
+        # are applied on the way out and never written back to the row.
+        entries = [
+            json.loads(payload)
+            for payload in self._store._journal_payloads(
+                namespace, plan_name, story_key
+            )
+        ]
         return [
             {
                 key: value
                 for key, value in entry.items()
-                if value is not None or key not in _JOURNAL_OPTIONAL_FIELDS
+                if value is not None
+                or key not in store_sqlite_records.JOURNAL_OPTIONAL_FIELDS
             }
             for entry in entries
         ]
@@ -723,12 +711,7 @@ class SqliteRecords(
     def clear_journal(
         self, namespace: str, plan_name: str, story_key: str
     ) -> None:
-        """Delete a story's journal through the file store's record view.
-
-        The journal is a file sidecar this store does not own, so the deletion
-        is delegated to the record view whose writer appended it, resolved per
-        call -- the same delegate ``get_journal`` reads through.
-        """
+        """Delete a story's journal rows, which are the store's own."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_story_key(story_key)
@@ -740,23 +723,20 @@ class SqliteRecords(
     ) -> float | None:
         """Return when the story's journal was last appended to, or ``None``.
 
-        A journal is a file sidecar this store does not own, so both the
-        activity and the listing are read through the record view of the file
-        store the journals are written to -- the same delegate ``get_journal``
-        reads through.
+        The activity is read from the rows themselves -- the last append's
+        stamp -- so a journal that was cleared has no activity, exactly as a
+        deleted sidecar had none.
         """
         self._namespace(namespace)
         validate_plan_name(plan_name)
         validate_story_key(story_key)
-        return self._store._files.records().get_journal_updated_at(
-            namespace, plan_name, story_key
-        )
+        return self._store._journal_updated_at(namespace, plan_name, story_key)
 
     def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
         """Return the sorted story keys that have a journal in ``plan_name``."""
         self._namespace(namespace)
         validate_plan_name(plan_name)
-        return self._store._files.records().list_journal_keys(namespace, plan_name)
+        return self._store._journal_keys(namespace, plan_name)
     # -- per-channel outbox queues (ADR 0012 decisions 3 and 9) ----------
     # The queues are rows in the store's own ``outbox`` table, written on the
     # store's single connection. Inside ``transaction()`` the write joins the

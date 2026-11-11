@@ -224,8 +224,8 @@ def test_a_new_database_gets_the_latest_version(db_path):
     with _opened(db_path):
         pass
 
-    assert store_sqlite_schema.latest_version() == 1
-    assert _version(db_path) == [1]
+    assert store_sqlite_schema.latest_version() == 3
+    assert _version(db_path) == [3]
 
 
 def test_the_version_is_recorded_once(db_path):
@@ -251,8 +251,13 @@ def test_a_new_database_holds_every_table_of_migration_one(db_path):
     }
 
 
-def test_an_unversioned_database_is_adopted_as_version_one(db_path):
-    """A database written before versioning is version 1, not an upgrade."""
+def test_an_unversioned_database_is_adopted_at_the_latest_version(db_path):
+    """A database written before versioning is adopted, not upgraded.
+
+    Adoption rewrites no row, so the tables the prerequisite plans added are
+    the ones the database still holds and the version it is stamped with is
+    the one this code knows.
+    """
     _legacy_database(db_path)
     before = _row_counts(db_path)
     assert _version(db_path) == []
@@ -260,7 +265,7 @@ def test_an_unversioned_database_is_adopted_as_version_one(db_path):
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [1]
+    assert _version(db_path) == [store_sqlite_schema.latest_version()]
     assert _row_counts(db_path) == before
 
 
@@ -293,12 +298,12 @@ def test_a_version_one_database_with_rows_is_migrated(db_path, monkeypatch):
         'MIGRATIONS',
         store_sqlite_schema.MIGRATIONS + (_adds_a_column,),
     )
-    assert store_sqlite_schema.latest_version() == 2
+    assert store_sqlite_schema.latest_version() == 4
 
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [2]
+    assert _version(db_path) == [4]
     assert _row_counts(db_path) == before
     with _probe(db_path) as conn:
         columns = {row[1] for row in conn.execute('PRAGMA table_info(notifications)')}
@@ -316,12 +321,13 @@ def test_a_new_database_is_migrated_all_the_way(db_path, monkeypatch):
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [2]
+    assert _version(db_path) == [store_sqlite_schema.latest_version()]
 
 
 def test_a_newer_version_is_refused(db_path):
     """A database from a newer build is refused, never opened and written to."""
-    _legacy_database(db_path, version=2)
+    newer = store_sqlite_schema.latest_version() + 1
+    _legacy_database(db_path, version=newer)
     before = _table_names(db_path)
     rows_before = _row_counts(db_path)
 
@@ -329,11 +335,11 @@ def test_a_newer_version_is_refused(db_path):
         SqliteStore(db_path)
 
     message = str(excinfo.value)
-    assert '2' in message and '1' in message, (
+    assert str(newer) in message and str(newer - 1) in message, (
         'the refusal must name the database version and the code version'
     )
     assert db_path not in message, 'the refusal must never echo the path'
-    assert _version(db_path) == [2], 'the version of a refused database must not change'
+    assert _version(db_path) == [newer], 'the version of a refused database must not change'
     assert _table_names(db_path) == before
     assert _row_counts(db_path) == rows_before
 
@@ -388,13 +394,14 @@ def test_opening_twice_is_idempotent(db_path):
     with _opened(db_path) as store:
         assert store.get_manifest(PLAN) == MANIFEST
 
-    assert _version(db_path) == [1]
+    assert _version(db_path) == [store_sqlite_schema.latest_version()]
     assert _row_counts(db_path) == snapshot
 
 
 def test_a_refused_database_is_not_left_open(db_path, monkeypatch):
     """A refusal closes the connection it opened before giving up."""
-    _legacy_database(db_path, version=2)
+    newer = store_sqlite_schema.latest_version() + 1
+    _legacy_database(db_path, version=newer)
     connections = []
     migrate = store_sqlite_schema.migrate
 
@@ -410,4 +417,4 @@ def test_a_refused_database_is_not_left_open(db_path, monkeypatch):
     assert len(connections) == 1
     with pytest.raises(sqlite3.ProgrammingError):
         connections[0].execute('SELECT 1')
-    assert _version(db_path) == [2]
+    assert _version(db_path) == [newer]

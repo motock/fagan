@@ -324,3 +324,27 @@ def test_the_file_store_reads_a_snapshot_written_by_the_layout(store, plan_dir, 
     assert found is not None
     assert found['content'] == CONTENT
     assert found['meta']['provider'] == 'dir'
+
+
+# -- the sqlite backend keeps the snapshot in its database ----------------
+
+
+def test_the_sqlite_backend_keeps_the_snapshot_in_its_database_not_on_disk(
+    store, plan_dir, backend
+):
+    """The sqlite store's snapshot is a row, so the plans directory stays empty.
+
+    The file backend still keeps today's layout; the sqlite backend moved the
+    snapshot into its own database, so a snapshot it stored leaves no file
+    behind.
+    """
+    if backend != 'sqlite':
+        pytest.skip('the database layout is the sqlite store\'s own')
+
+    digest = digest_of(CONTENT)
+    store.put_context_snapshot(DEFAULT_NAMESPACE, digest, CONTENT, META)
+
+    found = store.get_context_snapshot(DEFAULT_NAMESPACE, digest)
+    assert found is not None
+    assert found['content'] == CONTENT
+    assert list(plan_dir.iterdir()) == []

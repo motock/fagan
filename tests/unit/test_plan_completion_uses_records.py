@@ -80,6 +80,7 @@ def harness(tmp_path, monkeypatch):
         def __init__(self):
             self.notify_calls = calls
             self.records = records
+            self.plan_dir = plan_dir
 
         def call(self, manifest, plan_name=PLAN):
             return plan_completion.notify_if_plan_completed(plan_name, manifest)

@@ -52,6 +52,25 @@ class _Records:
         self.history = {k: list(v) for k, v in (history or {}).items()}
         self.malformed = 0
         self.raise_on_read: Exception | None = None
+        # The plan-completion marker and report are records of the store too.
+        self.completed: set[tuple[str, str]] = set()
+        self.reports: dict[tuple[str, str], str] = {}
+
+    def is_plan_completed(self, namespace, plan_name):
+        return (namespace, plan_name) in self.completed
+
+    def mark_plan_completed(self, namespace, plan_name):
+        key = (namespace, plan_name)
+        if key in self.completed:
+            return False
+        self.completed.add(key)
+        return True
+
+    def put_plan_report(self, namespace, plan_name, text):
+        self.reports[(namespace, plan_name)] = text
+
+    def get_plan_report(self, namespace, plan_name):
+        return self.reports.get((namespace, plan_name))
 
     def get_notification_history(self, namespace, plan_name):
         self._owner.calls.append((namespace, plan_name))

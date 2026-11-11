@@ -114,6 +114,16 @@ in practice.
 
 ### Upgrading
 
+- A `PIPELINE_STORE=sqlite` deployment does not import its file-store history
+  by itself. Before pointing the store at the database, run once, as the
+  operator, `python -m pipeline.tools.import_file_store --db <absolute path> [--dry-run]`
+  (`--dry-run` first). It copies every record kind (manifests, plan drafts,
+  completion markers and reports, decisions, journals, usage, outbox queues,
+  notification history and context snapshots) and each audit chain into the
+  database, verbatim, so the audit hash chain and its file anchors still match.
+  It is safe to re-run, never modifies the source files, and exits non-zero
+  when anything was refused; the JSON summary names what and why.
+
 - Plans ingested before the manifest descriptive-fields story carry their
   authored `description`, `epic`, `plan_key`, `plan_epics`,
   `preflight_override` and `repo_url` only in their staged plan draft, not on

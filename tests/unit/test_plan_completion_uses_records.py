@@ -56,6 +56,10 @@ def harness(tmp_path, monkeypatch):
     plan_dir.mkdir()
     monkeypatch.setattr(server, 'PLAN_DIR', plan_dir)
     monkeypatch.setattr(persistence, 'PLAN_DIR', plan_dir)
+    # The module under test holds no PLAN_DIR binding any more (the marker and
+    # the report are records now).  The patch keeps a pre-migration run
+    # hermetic and is inert once the binding is gone.
+    monkeypatch.setattr(plan_completion, 'PLAN_DIR', plan_dir, raising=False)
 
     calls = []
     monkeypatch.setattr(

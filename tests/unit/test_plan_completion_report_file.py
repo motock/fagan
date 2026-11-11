@@ -34,8 +34,10 @@ from pathlib import Path
 
 import pytest
 
+from pipeline import persistence as pipeline_persistence
 from pipeline import plan_completion, story_metrics
 from pipeline import server as pipeline_server
+from pipeline.store import FileStore
 
 PLAN = "planreport01"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,13 +72,19 @@ class _Harness:
         self.loader_paths = []
         self.records_to_serve = ([{"event": "story_done", "story_key": "s1"}], 0)
         self.summary_text = f"SUMMARY[{PLAN}]"
+        self.summary_text = f"SUMMARY[{PLAN}]"
         # Snapshot of whether the report file existed when _notify_user ran.
         self.report_existed_at_notify = []
-
-        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
-        # The notification history now comes from the record store, so the
-        # store is the seam this harness serves the records through.
+        # The plan-completion module holds no PLAN_DIR binding any more: the
+        # once-only marker and the durable report are records of the store now.
+        # The store resolves the plans directory through the server module
+        # (and, for the sidecars, through the persistence module), so those
+        # are the bindings to point at the scratch dir.  The module-level
+        # binding is patched only while it still exists, so no run ever
+        # writes into the real plans directory.
+        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
+        monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))
@@ -104,6 +112,10 @@ class _Harness:
             )
 
         records = self
+        # The once-only marker and the durable report are real records: they
+        # are served by the file-backed record view, so they land in the
+        # scratch plans directory the assertions below look at.
+        real = FileStore().records()
 
         class _Records:
             def get_journal(self, namespace, plan_name, story_key):
@@ -111,6 +123,18 @@ class _Harness:
 
             def get_notification_history(self, namespace, plan_name):
                 return list(records.records_to_serve[0]), records.records_to_serve[1]
+
+            def is_plan_completed(self, namespace, plan_name):
+                return real.is_plan_completed(namespace, plan_name)
+
+            def mark_plan_completed(self, namespace, plan_name):
+                return real.mark_plan_completed(namespace, plan_name)
+
+            def put_plan_report(self, namespace, plan_name, text):
+                return real.put_plan_report(namespace, plan_name, text)
+
+            def get_plan_report(self, namespace, plan_name):
+                return real.get_plan_report(namespace, plan_name)
 
         class _Store:
             def records(self):

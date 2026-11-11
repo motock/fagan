@@ -33,7 +33,7 @@ from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
-    PlanDraftRecords,
+    PlanRecords,
     UnknownNamespaceError,
     validate_channel,
     validate_namespace,
@@ -538,7 +538,7 @@ class FileStore:
         return FileRecords(self)
 
 
-class FileRecords(PlanDraftRecords, OutboxContract, OutboxSummaryContract):
+class FileRecords(PlanRecords, OutboxContract, OutboxSummaryContract):
     """The namespaced record view over one :class:`FileStore` (ADR 0012).
 
     Every operation delegates to the legacy ``FileStore`` methods, so the

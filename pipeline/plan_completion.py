@@ -5,23 +5,23 @@ transition.  It checks whether every story in the plan manifest has reached
 ``done`` and, if so, emits exactly one ``plan_completed`` notification whose
 message is the plan summary rendered by :mod:`pipeline.plan_summary`.
 
-Once-only is enforced here, not by ``dedup_key``: the dedup key is captured at
-write time and only collapsed later by the dashboard, so it cannot suppress a
-second write.  A ``<plan>.plan_completed`` marker file under ``PLAN_DIR`` is
-created only AFTER the notification has been emitted, so a failed emission can
-be retried by a later tick.
+Once-only is enforced by the store, not by ``dedup_key``: the dedup key is
+captured at write time and only collapsed later by the dashboard, so it cannot
+suppress a second write.  The ``<plan>.plan_completed`` marker record is created
+only AFTER the notification has been emitted, so a failed emission can be
+retried by a later tick.
 
 The function never raises: it runs inside a scheduler tick and must not break
 the story transition that triggered it.
 
-The summary is also written to ``<plan>.report.md`` in ``PLAN_DIR``; this is
-best effort: a write failure is logged and does not block the notification.
+The summary is also stored as the plan's report record, the
+``<plan>.report.md`` file in ``PLAN_DIR``; this is best effort: a write failure
+is logged and does not block the notification.
 """
 
 import logging
 
 from . import server as _server
-from .paths import PLAN_DIR
 from .persistence import _notify_user
 from .plan_summary import format_plan_summary
 from .store import build_store
@@ -78,8 +78,8 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
     otherwise (plan not complete, already notified, or any failure).
     """
     try:
-        marker = PLAN_DIR / f"{plan_name}.plan_completed"
-        if marker.exists():
+        records = _server._store.records()
+        if records.is_plan_completed(_NAMESPACE, plan_name):
             return False
 
         stories = manifest.get("stories") or {}
@@ -93,19 +93,15 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
         ):
             return False
 
-        records = _server._store.records().get_notification_history(
-            _NAMESPACE, plan_name
-        )[0]
+        history = records.get_notification_history(_NAMESPACE, plan_name)[0]
         summary = format_plan_summary(
-            plan_name, _with_journals(plan_name, manifest), records
+            plan_name, _with_journals(plan_name, manifest), history
         )
         # A durable copy for retros; the notification is the delivery, this
-        # file is the record. Never blocks the notification.
+        # record is the file. Never blocks the notification.
         try:
-            (PLAN_DIR / f"{plan_name}.report.md").write_text(
-                summary + "\n", encoding="utf-8"
-            )
-        except OSError:
+            records.put_plan_report(_NAMESPACE, plan_name, summary + "\n")
+        except Exception:
             logger.warning("plan report write failed for %s", plan_name, exc_info=True)
         _notify_user(
             plan_name,
@@ -114,7 +110,9 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
             severity="info",
             dedup_key=f"plan_completed:{plan_name}",
         )
-        marker.touch()
+        # Only after the notice: a failed emission must stay retryable, and the
+        # atomic create is what makes exactly one caller announce the plan.
+        records.mark_plan_completed(_NAMESPACE, plan_name)
         return True
     except Exception:
         logger.exception("plan_completed check failed for %s", plan_name)

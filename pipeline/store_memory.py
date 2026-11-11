@@ -61,6 +61,12 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # plan), held as a deep copy so a caller's later mutation of the dict
         # it passed never changes what is stored.
         self._drafts: dict[tuple[str, str], dict] = {}
+        # The plan-completion marker and report (ADR 0012 decision 3): the
+        # plans whose marker is set, and the report text per plan.  Both are
+        # dicts keyed by (namespace, plan), so the transaction undo log can
+        # restore them like every other structure.
+        self._completed: dict[tuple[str, str], bool] = {}
+        self._reports: dict[tuple[str, str], str] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
@@ -233,6 +239,46 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             if isinstance(document, dict) and 'epics' in document:
                 names.add(path.stem)
         return sorted(names)
+
+    # -- plan completion marker and report (ADR 0012 decision 3) --------
+    def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Create ``plan_name``'s completion marker; True only if created.
+
+        The check-and-set runs under the store lock, so two racing callers
+        cannot both report completion.
+        """
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            if (namespace, plan_name) in self._completed:
+                return False
+            self._record_undo(self._completed, (namespace, plan_name))
+            self._completed[(namespace, plan_name)] = True
+            return True
+
+    def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Whether ``plan_name``'s completion marker exists."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            return (namespace, plan_name) in self._completed
+
+    def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
+        """Store ``plan_name``'s report, replacing the previous one wholesale."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(text, str):
+            raise TypeError('plan report must be a str')
+        with self._lock:
+            self._record_undo(self._reports, (namespace, plan_name))
+            self._reports[(namespace, plan_name)] = text
+
+    def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
+        """Return ``plan_name``'s report, or ``None`` when it has none."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            return self._reports.get((namespace, plan_name))
 
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:

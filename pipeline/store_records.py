@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any, Protocol
@@ -455,6 +456,36 @@ class RecordStore(Protocol):
         """
         ...
 
+    def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Create ``plan_name``'s once-only completion marker, atomically.
+
+        Returns ``True`` only for the call that created the marker, ``False``
+        when it was already there -- the create is a single atomic
+        ``O_CREAT|O_EXCL`` (or the backend's equivalent), so two racing ticks
+        cannot both report completion.
+
+        This is the durable record behind the legacy completion marker file in
+        the plans directory: one marker, one notice (ADR 0012 decision 3).
+        """
+        ...
+
+    def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Whether ``plan_name``'s completion marker exists."""
+        ...
+
+    def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
+        """Store ``plan_name``'s report, replacing any previous one wholesale.
+
+        The report is the plan-completion summary retros read back; it is a
+        record, never the delivery.  A non-``str`` report is refused with
+        :class:`TypeError` before anything is written.
+        """
+        ...
+
+    def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
+        """Return ``plan_name``'s report, or ``None`` when it has none."""
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -477,6 +508,10 @@ RECORD_STORE_METHODS = (
     'get_plan_draft',
     'delete_plan_draft',
     'list_plan_drafts',
+    'mark_plan_completed',
+    'is_plan_completed',
+    'put_plan_report',
+    'get_plan_report',
     'transaction',
 )
 
@@ -598,3 +633,97 @@ class PlanDraftRecords:
             if isinstance(document, dict) and 'epics' in document:
                 drafts.append(path.stem)
         return sorted(drafts)
+
+
+class PlanCompletionRecords:
+    """The plan-completion marker and report, mixed into the file record view.
+
+    Plan completion leaves two durable artefacts behind (ADR 0012 decision 3):
+    the once-only ``<plan>.plan_completed`` marker and the ``<plan>.report.md``
+    summary retros read back.  The file layout is unchanged, so a caller that
+    reads either file directly keeps seeing what it saw before.
+
+    The file-layout implementation lives here, next to the contract it
+    satisfies, because ``pipeline/store.py`` sits on the 1000-line gate.
+
+    The host class supplies ``_store`` (the legacy file store, whose
+    ``manifest_path`` resolves the plans directory per call) and
+    ``_refuse_other_namespace`` (this view serves :data:`DEFAULT_NAMESPACE`).
+    """
+
+    #: Provided by the host record view.
+    _store: Any
+
+    def _refuse_other_namespace(self, namespace: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def _plan_path(self, plan_name: str, suffix: str) -> Path:
+        """Return the plans directory ``plan_name``'s ``suffix`` file lives in.
+
+        The directory comes from the file store's own ``manifest_path``, which
+        resolves the plans directory per call, so a plans directory patched on
+        the server module is the one the record lands in.
+        """
+        return self._store.manifest_path(plan_name).parent / f'{plan_name}{suffix}'
+
+    def _validate(self, namespace: str, plan_name: str) -> None:
+        """Validate ``namespace`` and ``plan_name`` before anything is written."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+
+    def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Create ``plan_name``'s marker with ``O_CREAT|O_EXCL``; True if created.
+
+        The exclusive create is the atomicity: two racing callers both open the
+        same path, exactly one succeeds, and the loser gets ``FileExistsError``
+        and reports ``False`` -- no read-then-write window, so the plan is
+        announced once.
+        """
+        self._validate(namespace, plan_name)
+        path = self._plan_path(plan_name, '.plan_completed')
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            return False
+        os.close(fd)
+        return True
+
+    def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Whether ``plan_name``'s completion marker exists."""
+        self._validate(namespace, plan_name)
+        return self._plan_path(plan_name, '.plan_completed').exists()
+
+    def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
+        """Write ``plan_name``'s report to ``<plan>.report.md``, wholesale."""
+        self._validate(namespace, plan_name)
+        if not isinstance(text, str):
+            raise TypeError('plan report must be a str')
+        path = self._plan_path(plan_name, '.report.md')
+        tmp = path.with_name(f'{path.name}.tmp')
+        tmp.write_text(text, encoding='utf-8')
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            # Leave nothing behind: a failed replace must not litter the plans
+            # directory with a half-written report.
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
+        """Return ``plan_name``'s report, or ``None`` when it has none."""
+        self._validate(namespace, plan_name)
+        path = self._plan_path(plan_name, '.report.md')
+        if not path.is_file():
+            return None
+        return path.read_text(encoding='utf-8')
+
+
+class PlanRecords(PlanCompletionRecords, PlanDraftRecords):
+    """The whole plan-side record view, mixed into the file record view.
+
+    A composition of the plan-lifecycle record kinds -- the transient plan
+    draft and the plan-completion marker/report -- so ``pipeline/store.py``,
+    which sits on the 1000-line gate, names one base instead of one per kind.
+    """
+

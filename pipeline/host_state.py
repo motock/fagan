@@ -86,7 +86,10 @@ class SchedulerPidLock:
             os.close(fd)
             return False
         holder = _pid_from_fd(fd)
-        if holder is not None and holder != os.getpid() and _pid_is_alive(holder):
+        if holder is not None and _pid_is_alive(holder):
+            # A live pid recorded in the file names a running daemon: the flock
+            # may be free again (this process could be the holder itself) but the
+            # recorded owner never got to finish, so refuse and let it exit.
             os.close(fd)  # releases the flock taken above
             return False
         os.ftruncate(fd, 0)

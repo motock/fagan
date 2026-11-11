@@ -1,9 +1,9 @@
 """dispatch_story delivers mode=files sources as a snapshot pointer, never inline."""
 import json
-from pathlib import Path
 
 from pipeline import paths
 from pipeline import server as p
+from pipeline.host_state import FileHostState
 from tests.unit.test_dispatch_context import (  # noqa: F401
     _source,
     _story,
@@ -27,7 +27,7 @@ def test_should_render_pointer_and_omit_text_for_files_mode(env, plan_dir, ctx_d
     prompt = builds[0]["prompt"]
     assert "USE-TABS-ALWAYS" not in prompt
     assert "- guide.md" in prompt
-    assert str(paths.PLAN_DIR / "context") in prompt
+    assert str(paths.PLAN_DIR / "context-cache") in prompt
 
 
 def test_should_materialize_snapshot_files_for_files_mode(env, plan_dir, ctx_dir):  # noqa: F811
@@ -35,8 +35,8 @@ def test_should_materialize_snapshot_files_for_files_mode(env, plan_dir, ctx_dir
 
     p.dispatch_story("plan", "CTX-1")
 
-    digest = _story(plan_dir)["context_digests"]["ux"]["digest"].removeprefix("sha256:")
-    written = Path(plan_dir) / "context" / digest / "files" / "guide.md"
+    digest = _story(plan_dir)["context_digests"]["ux"]["digest"]
+    written = FileHostState().context_cache_dir(digest) / "files" / "guide.md"
     assert written.read_text() == "USE-TABS-ALWAYS\n"
 
 

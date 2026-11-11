@@ -24,6 +24,7 @@ from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
 from pipeline.parsers import _validate_key
+from pipeline.store_records import validate_context_digest
 
 __all__ = [
     "FileHostState",
@@ -56,6 +57,12 @@ _LOCK_FILE = ".scheduler_daemon.lock"
 _PLAN_LOCK_SUFFIX = ".lock"
 _HEAVY_LOCK_FILE = "heavy.lock"
 _PLAN_LOCK_RETRY_SECONDS = 0.05
+
+# Host cache (ADR 0012 decision 11: rebuildable, never replicated). Files-variant
+# snapshots are materialized under ``context-cache/<hex>/``; git clones live under
+# ``context/git/<sha>/``, the same directory the git provider always used.
+_CONTEXT_CACHE_DIR = "context-cache"
+_GIT_CLONE_ROOT = ("context", "git")
 
 
 @dataclass(frozen=True)
@@ -188,6 +195,10 @@ class HostState(Protocol):
 
     def scheduler_pid_lock(self) -> SchedulerPidLock: ...
 
+    def context_cache_dir(self, digest: str) -> Path: ...
+
+    def git_clone_root(self) -> Path: ...
+
     def plan_lock(
         self, plan_name: str, wait_seconds: float = 0.0
     ) -> AbstractContextManager[PlanLock]: ...
@@ -301,6 +312,20 @@ class FileHostState:
     def scheduler_pid_lock(self) -> SchedulerPidLock:
         """The daemon's single-instance lock, held under the host-local root."""
         return SchedulerPidLock(self._root() / _LOCK_FILE)
+
+    # -- the context host cache -------------------------------------------
+
+    def context_cache_dir(self, digest: str) -> Path:
+        """Folder a files-variant snapshot is materialized into.
+
+        The digest is validated first, so only ``sha256:<64 hex>`` reaches a
+        path: a malformed value raises before anything is named on disk.
+        """
+        return self._root() / _CONTEXT_CACHE_DIR / validate_context_digest(digest)
+
+    def git_clone_root(self) -> Path:
+        """Directory the git provider clones each pinned commit under."""
+        return self._root().joinpath(*_GIT_CLONE_ROOT)
 
     # -- plan and heavy locks ----------------------------------------------
 

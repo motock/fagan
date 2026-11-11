@@ -9,7 +9,6 @@
  "pipeline/checkpoint.py": 6,
  "pipeline/config.py": 1,
  "pipeline/config_provenance.py": 1,
- "pipeline/context_sources.py": 5,
  "pipeline/cross_plan.py": 5,
  "pipeline/dispatch_baseline.py": 2,
  "pipeline/escalation.py": 1,

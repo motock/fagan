@@ -75,7 +75,9 @@ def _write_manifest(plan_dir, plan_name, repo_root=None, stories=None):
 
 @pytest.fixture
 def store():
-    return FileStore()
+    # The recent-workspace record is host-local since ADR 0012 decision 4, so
+    # the recents assertions below read the host state, not the store.
+    return build_host_state()
 
 
 # ---------------------------------------------------------------------------

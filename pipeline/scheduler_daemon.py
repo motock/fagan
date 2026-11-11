@@ -302,8 +302,11 @@ class SchedulerDaemon:
         Additive surface only: this deliberately lives OUTSIDE ``health()``
         because existing tests pin health()'s exact key set. Every value is
         read at call time (module-attribute access, nothing cached on self)
-        so a patched ``pipeline.paths.PLAN_DIR`` is visible immediately and
-        the fingerprint always describes the current process.
+        so a rebound plan dir is visible immediately and the fingerprint
+        always describes the current process. The plan directory is the
+        host-local root the host state resolves (the live
+        ``pipeline.server.PLAN_DIR`` binding), the same root the dashboard
+        reports, so the two fingerprints stay comparable.
 
         ``dispatch_backend`` is ``None`` when ``PIPELINE_BACKEND_DISPATCH``
         is unset or empty — never a ``KeyError`` and never an empty string.
@@ -315,7 +318,7 @@ class SchedulerDaemon:
 
         checkout = _checkout_git_state()
         return {
-            "plan_dir": str(paths.PLAN_DIR),
+            "plan_dir": str(build_host_state().root()),
             "worktree_root": str(paths.WORKTREE_ROOT),
             "autonomy": config.PIPELINE_AUTONOMY,
             "dispatch_backend": os.environ.get("PIPELINE_BACKEND_DISPATCH")

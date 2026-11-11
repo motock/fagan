@@ -541,6 +541,29 @@ class RecordStore(Protocol):
         """Return ``plan_name``'s report, or ``None`` when it has none."""
         ...
 
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store the context snapshot ``digest`` addresses, once and for all.
+
+        A snapshot is a content-addressed, immutable blob: ``digest`` is
+        ``'sha256:' + sha256(content)``, a digest that addresses other content
+        is refused with :class:`ValueError`, a malformed one with
+        :class:`InvalidRecordKeyError`, and a second put of an existing digest
+        is a no-op that never overwrites the stored content or meta.  There is
+        no delete and no listing.
+        """
+        ...
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return ``{'content', 'meta'}`` for ``digest``, or ``None``.
+
+        ``None`` means the snapshot is not stored -- never an error -- so a
+        caller can refetch and re-store it; a malformed digest is refused with
+        :class:`InvalidRecordKeyError` instead of being looked up.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',

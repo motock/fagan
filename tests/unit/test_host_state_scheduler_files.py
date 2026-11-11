@@ -124,6 +124,14 @@ def test_host_state_exposes_the_host_local_scheduler_methods(host):
         assert hasattr(host, name), f"the host state has no {name}()"
 
 
+def test_reference_documents_the_host_local_files():
+    """REFERENCE.md still names the two host-local files."""
+    reference = Path(__file__).resolve().parents[2] / "REFERENCE.md"
+    text = reference.read_text(encoding="utf-8")
+    assert UI_STATE_FILE in text, f"REFERENCE.md must still document {UI_STATE_FILE}"
+    assert HEALTH_FILE in text, f"REFERENCE.md must still document {HEALTH_FILE}"
+
+
 # ---------------------------------------------------------------------------
 # Dashboard UI state
 # ---------------------------------------------------------------------------

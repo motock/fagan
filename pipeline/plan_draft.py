@@ -1,7 +1,7 @@
 """Read a staged plan draft through the record store (ADR 0012 decision 3).
 
 ``save_plan`` stages a plan draft with ``records.put_plan_draft``; ingest reads
-it back here, so neither the write nor the read composes a ``PLAN_DIR`` path.
+it back here, so neither the write nor the read composes a plans-directory path.
 The refusals are the ones :func:`pipeline.persistence.read_plan_file` has always
 answered with -- ``store_records.get_plan_draft`` carries that reader's own
 reason text on :class:`pipeline.store_records.UnreadableRecordError` -- so
@@ -15,19 +15,38 @@ from typing import Any
 from pipeline.store_records import DEFAULT_NAMESPACE, UnreadableRecordError
 
 
+def _records() -> Any:
+    """Return the live store's record view, or ``None`` when it has none.
+
+    The store is resolved per call on ``pipeline.server``, so a store or plans
+    directory patched there is the one read.  A partial store -- a test double
+    or a delegating wrapper that only carries the legacy file API -- has no
+    record view, and the draft is then read through its own ``manifest_path``,
+    which is the plans directory the record view would have used anyway.
+    """
+    from pipeline import server
+
+    store = server._store
+    records = getattr(store, 'records', None)
+    return records() if records is not None else None
+
+
 def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return ``(plan, refusal)`` for ``plan_name``'s staged draft.
 
     A draft that is missing, unreadable, malformed, or not a JSON object is a
     structured refusal rather than an exception, exactly as
     ``read_plan_file`` answers; only a plan staged through the record contract
-    is returned.  ``pipeline.server._store`` is resolved per call, so a store
-    or plans directory patched on that module is the one read.
+    is returned.
     """
-    from pipeline import server
+    records = _records()
+    if records is None:
+        from pipeline import persistence, server
 
+        path = server._store.manifest_path(plan_name).parent / f'{plan_name}.json'
+        return persistence.read_plan_file(path)
     try:
-        plan = server._store.records().get_plan_draft(DEFAULT_NAMESPACE, plan_name)
+        plan = records.get_plan_draft(DEFAULT_NAMESPACE, plan_name)
     except UnreadableRecordError as exc:
         return None, {'ok': False, 'error': str(exc)}
     if plan is None:

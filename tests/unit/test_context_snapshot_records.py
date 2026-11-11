@@ -314,7 +314,10 @@ def test_the_file_store_reads_a_snapshot_written_by_the_layout(store, plan_dir, 
     folder = plan_dir / 'context' / digest.removeprefix('sha256:')
     folder.mkdir(parents=True)
     (folder / 'content.txt').write_text(CONTENT, encoding='utf-8')
-    (folder / 'meta.json').write_text(json.dumps(META), encoding='utf-8')
+    (folder / 'meta.json').write_text(
+        json.dumps({**META, 'digest': digest, 'bytes': len(CONTENT.encode('utf-8'))}),
+        encoding='utf-8',
+    )
 
     found = store.get_context_snapshot(DEFAULT_NAMESPACE, digest)
 

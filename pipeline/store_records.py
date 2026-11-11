@@ -364,6 +364,19 @@ class RecordStore(Protocol):
 
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None: ...
 
+    def get_manifest_updated_at(self, namespace: str, plan_name: str) -> float | None:
+        """Return when ``plan_name``'s manifest was last written, or ``None``.
+
+        The answer is epoch seconds (a ``float``) of the manifest's most recent
+        :meth:`put_manifest`, and ``None`` when the plan has no manifest, which
+        is a plan never put.  It is monotonic non-decreasing across puts
+        of one plan, so a caller ordering plans by it never sees a manifest
+        appear older after a write.  A read, so it creates nothing.  The
+        namespace and plan name are validated and refused exactly as
+        :meth:`get_manifest` refuses them.
+        """
+        ...
+
     def list_plans(self, namespace: str) -> list[str]: ...
 
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]: ...
@@ -586,6 +599,7 @@ RECORD_STORE_METHODS = (
     'get_manifest',
     'get_manifests',
     'put_manifest',
+    'get_manifest_updated_at',
     'list_plans',
     'get_decisions',
     'append_decision',

@@ -208,11 +208,22 @@ class SqliteStore(
 
     def _write_row(self, plan_name: str, document: dict[str, Any]) -> None:
         self._conn.execute(
-            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?) "
+            "INSERT INTO story_manifests (plan_name, manifest_json, updated_at) "
+            "VALUES (?, ?, ?) "
             "ON CONFLICT(plan_name) DO UPDATE "
-            "SET manifest_json = excluded.manifest_json",
-            (plan_name, json.dumps(document, sort_keys=True)),
+            "SET manifest_json = excluded.manifest_json, "
+            "updated_at = excluded.updated_at",
+            (plan_name, json.dumps(document, sort_keys=True), time.time()),
         )
+
+    def _manifest_updated_at(self, plan_name: str) -> float | None:
+        """Return when the plan's row was last written, or ``None`` without one."""
+        with self._guard:
+            row = self._conn.execute(
+                "SELECT updated_at FROM story_manifests WHERE plan_name = ?",
+                (plan_name,),
+            ).fetchone()
+        return None if row is None else row[0]
 
     def _projected_document(self, plan_name: str) -> dict[str, Any] | None:
         """Return the manifest's projection, or ``None`` when there is none.
@@ -466,6 +477,19 @@ class SqliteRecords(
         self._namespace(namespace)
         validate_plan_name(plan_name)
         return self._store.get_manifest_or_none(plan_name)
+
+    def get_manifest_updated_at(self, namespace: str, plan_name: str) -> float | None:
+        """Return when the plan's manifest was last written, or ``None``.
+
+        The manifest is resolved first, so a projection another writer produced
+        is imported into its row before the row's stamp is read.  No manifest
+        is ``None``, and the stamp is the row's own ``updated_at``.
+        """
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        if self._store.get_manifest_or_none(plan_name) is None:
+            return None
+        return self._store._manifest_updated_at(plan_name)
 
     def get_manifests(self, namespace: str) -> dict[str, dict]:
         """Return every manifest recorded in ``namespace``, keyed by plan name."""

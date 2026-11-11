@@ -60,6 +60,8 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # commits another thread's writes.
         self._transactions = threading.local()
         self._manifests: dict[tuple[str, str], dict] = {}
+        # Epoch seconds of each plan's last put, keyed like ``_manifests``.
+        self._manifest_updated_at: dict[tuple[str, str], float] = {}
         # The transient plan drafts (ADR 0012 decision 3), per (namespace,
         # plan), held as a deep copy so a caller's later mutation of the dict
         # it passed never changes what is stored.
@@ -106,6 +108,13 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 return None
             return copy.deepcopy(manifest)
 
+    def get_manifest_updated_at(self, namespace: str, plan_name: str) -> float | None:
+        """Return the epoch seconds of the plan's last put, or ``None``."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            return self._manifest_updated_at.get((namespace, plan_name))
+
     def get_manifests(self, namespace: str) -> dict[str, dict]:
         """Return a deep copy of every manifest stored in ``namespace``."""
         validate_namespace(namespace)
@@ -127,8 +136,17 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # must leave no trace behind.
         json.dumps(manifest)
         with self._lock:
-            self._record_undo(self._manifests, (namespace, plan_name))
-            self._manifests[(namespace, plan_name)] = copy.deepcopy(manifest)
+            key = (namespace, plan_name)
+            self._record_undo(self._manifests, key)
+            self._record_undo(self._manifest_updated_at, key)
+            self._manifests[key] = copy.deepcopy(manifest)
+            # A high-water mark, as for journal activity: a clock that steps
+            # backwards never reports a manifest older than an earlier put.
+            previous = self._manifest_updated_at.get(key)
+            now = time.time()
+            self._manifest_updated_at[key] = (
+                now if previous is None else max(previous, now)
+            )
 
     def list_plans(self, namespace: str) -> list[str]:
         """Return the sorted plan names stored in ``namespace``."""

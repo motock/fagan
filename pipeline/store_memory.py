@@ -67,6 +67,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # restore them like every other structure.
         self._completed: dict[tuple[str, str], bool] = {}
         self._reports: dict[tuple[str, str], str] = {}
+        # The content-addressed context snapshots (ADR 0012 decision 11), per
+        # (namespace, digest), held as a deep copy: a snapshot is immutable, so
+        # a caller's later mutation of the meta it passed never reaches storage.
+        self._snapshots: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}

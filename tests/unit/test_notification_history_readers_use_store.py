@@ -390,7 +390,9 @@ class _PlanHarness:
         self.notify_calls = []
         self.summary_records = []
 
-        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
+        # The plan-completion module holds no PLAN_DIR binding any more: the
+        # once-only marker and the report are records of the store, which
+        # this stand-in serves in memory.
         # The plan-completion module builds its own store; point that lookup
         # at the same records the service would read, so the history comes
         # from one place whichever seam the reader reaches for.

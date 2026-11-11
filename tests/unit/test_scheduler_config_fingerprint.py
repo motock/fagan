@@ -17,6 +17,7 @@ import pytest
 
 from pipeline import config as pipeline_config
 from pipeline import paths as pipeline_paths
+from pipeline import server as pipeline_server
 from pipeline.scheduler_daemon import SchedulerDaemon
 
 # The exact key set pinned by tests/unit/test_scheduler_daemon.py::

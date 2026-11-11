@@ -404,3 +404,29 @@ def test_the_draft_is_no_longer_listed_after_a_full_ingest(
     assert p.ingest_plan("ap")["ok"] is True
 
     assert "ap" not in records.list_plan_drafts("default")
+
+
+# --------------------------------------------------------------------------- #
+# 8. A crash between the manifest write and the draft delete is recoverable.
+# --------------------------------------------------------------------------- #
+def test_reingesting_the_same_content_after_a_crash_is_idempotent(
+    plan_dir, provider, tmp_path
+):
+    """The same draft ingested twice yields the same manifest.
+
+    This is the property that makes a crash between the manifest write and
+    the draft delete safe: the next ingest re-applies identical content by
+    key, and nothing changes.
+    """
+    _stage(plan_dir, _plan_document(tmp_path))
+    assert p.ingest_plan("ap")["ok"] is True
+    first = _read_manifest(plan_dir)
+
+    # The draft survives (as it would after a crash) and is ingested again.
+    _stage(plan_dir, _plan_document(tmp_path))
+    assert p.ingest_plan("ap")["ok"] is True
+    second = _read_manifest(plan_dir)
+
+    assert second["stories"] == first["stories"]
+    assert second["epics"] == first["epics"]
+    assert set(second["stories"]) == {"S1"}

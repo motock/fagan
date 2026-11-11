@@ -799,11 +799,14 @@ class PlanCompletionRecords:
         return path.read_text(encoding='utf-8')
 
 
-class PlanRecords(PlanCompletionRecords, PlanDraftRecords):
+class PlanRecords(
+    PlanCompletionRecords, PlanDraftRecords, ContextSnapshotRecords
+):
     """The whole plan-side record view, mixed into the file record view.
 
     A composition of the plan-lifecycle record kinds -- the transient plan
-    draft and the plan-completion marker/report -- so ``pipeline/store.py``,
-    which sits on the 1000-line gate, names one base instead of one per kind.
+    draft, the plan-completion marker/report and the content-addressed
+    context snapshot -- so ``pipeline/store.py``, which sits on the
+    1000-line gate, names one base instead of one per kind.
     """
 

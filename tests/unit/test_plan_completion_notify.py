@@ -57,6 +57,7 @@ class _Harness:
         # resolves the plans directory through the server module, so that is
         # the binding to point at the scratch dir.
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
+        monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))

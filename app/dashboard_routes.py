@@ -32,6 +32,11 @@ from app.story_replay import build_replay_events
 from pipeline import config_provenance, remote_scope
 from pipeline.actor import current_principal
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
+from pipeline.workspace_reader import LocalWorkspaceReader
+
+# One reader for this module: the workspace reads are a seam (ADR 0012,
+# decision 12), and the dashboard never talks to the store for file content.
+_reader = LocalWorkspaceReader()
 
 # Same logger name as app.dashboard so log filtering and caplog are unchanged.
 logger = logging.getLogger("app.dashboard")
@@ -74,8 +79,8 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         # Parse progress for in_progress stories with a worktree
         progress = None
         if story.get("status") == "in_progress":
-            plan_file = _store.get_worktree_file(story, ".agent_plan.md")
-            scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
+            plan_file = _reader.read_worktree_file(story, ".agent_plan.md")
+            scratch_file = _reader.read_worktree_file(story, ".agent_scratchpad.md")
             if plan_file["available"] and scratch_file["available"]:
                 progress = _parse_progress(plan_file["text"], scratch_file["text"])
         decorated_stories[story_key] = {**story, "last_activity": last_activity}
@@ -201,7 +206,7 @@ def get_story_log(
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
+    return _reader.read_story_log(plan_name, story_key, manifest, lines=lines)
 
 
 def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -233,8 +238,8 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
     story = stories[story_key]
-    plan_file = _store.get_worktree_file(story, ".agent_plan.md")
-    scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
+    plan_file = _reader.read_worktree_file(story, ".agent_plan.md")
+    scratch_file = _reader.read_worktree_file(story, ".agent_scratchpad.md")
     progress = None
     if plan_file["available"] and scratch_file["available"]:
         progress = _parse_progress(plan_file["text"], scratch_file["text"])
@@ -295,7 +300,7 @@ def get_story_replay(
     log_sources: dict[str, list[str]] = {}
     source_flags = {"agent.log": False, "review.log": False}
     for name in ("agent.log", "review.log"):
-        res = _store.get_worktree_file(story, name)
+        res = _reader.read_worktree_file(story, name)
         if not res["available"]:
             continue
         tail = res["text"].splitlines()[-n:]
@@ -312,7 +317,7 @@ def get_story_replay(
             # a missing/short/corrupt sidecar (older worktree from
             # before this feature, or a story this format never
             # reached) leaves `tail` exactly as it is today.
-            ts_res = _store.get_worktree_file(story, "agent.log.ts")
+            ts_res = _reader.read_worktree_file(story, "agent.log.ts")
             if ts_res["available"]:
                 ts_lines = ts_res["text"].splitlines()
                 ts_tail = ts_lines[-len(tail):]

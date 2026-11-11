@@ -33,6 +33,7 @@ from pipeline.store_records import (
     validate_plan_name,
     validate_story_key,
     validate_usage_record,
+    verify_context_digest,
 )
 
 #: Sentinel recorded in the undo log for a key that held no value before the

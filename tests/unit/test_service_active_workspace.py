@@ -1,21 +1,18 @@
 """Tests for active-workspace accessors on PipelineService (pipeline/service.py).
 
-Story: add two thin delegators next to ``resolve_workspace`` /
-``list_workspaces`` (service.py lines 354-416):
+``PipelineService.get_active_workspace(self) -> str | None`` and
+``PipelineService.set_active_workspace(self, path: str | None) -> None`` are thin
+delegators to the module-level ``_host_state`` free variable -- the host-local
+state seam (``pipeline/host_state.py``) that owns the workspace records now that
+they are off the Store (ADR 0012, decision 4).
 
-- ``PipelineService.get_active_workspace(self) -> str | None`` returns
-  ``_store.get_active_workspace()`` — the module-level ``_store`` free
-  variable, the same seam ``resolve_workspace`` uses at line 373.
-- ``PipelineService.set_active_workspace(self, path: str | None) -> None``
-  delegates to ``_store.set_active_workspace(path)``.
-
-The persistence layer (``pipeline/store.py``) already landed in story 1 and is
-covered by ``tests/unit/test_store_active_workspace.py``; these tests cover the
+The persistence layer (``pipeline/host_state.py``) is covered by
+``tests/unit/test_store_active_workspace.py``; these tests cover the
 service-level delegation seam only. The shared ``plan_dir`` fixture from
 ``tests/unit/conftest.py`` patches ``pipeline.server.PLAN_DIR`` to a tmp
-directory, and ``pipeline.server._store`` (a ``FileStore``) resolves PLAN_DIR
-through that same binding at call time, so the round trips below exercise the
-real on-disk behavior without touching the operator's ``~/.claude/plans/``.
+directory, and ``FileHostState`` resolves that same binding at call time, so the
+round trips below exercise the real on-disk behavior without touching the
+operator's ``~/.claude/plans/``.
 """
 
 import hashlib

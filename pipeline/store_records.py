@@ -873,7 +873,7 @@ class ContextSnapshotRecords:
         named, so a refused put writes nothing at all.
         """
         verify_context_digest(digest, content)
-        folder = self._snapshot_folder(namespace, digest)
+        folder = self._put_snapshot_folder(namespace, digest)
         payload = snapshot_meta(meta, digest, content)
         folder.mkdir(parents=True, exist_ok=True)
         # ``O_CREAT|O_EXCL`` is the immutability: exactly one put of a digest

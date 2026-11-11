@@ -35,9 +35,9 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
-    # plan_completion binds its own PLAN_DIR; unpatched, the completion report
-    # and marker would land in the real plan directory.
-    monkeypatch.setattr(pcomp, "PLAN_DIR", d)
+    # plan_completion holds no PLAN_DIR binding any more: the completion
+    # marker and report are records of the store, which resolves the plans
+    # directory through the server binding patched above.
     return d
 
 

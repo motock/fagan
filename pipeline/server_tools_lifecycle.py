@@ -85,6 +85,37 @@ def request_decision(
     )
 
 
+def export_plan(plan_name: str) -> dict[str, Any]:
+    """
+    Export a plan's document, rendered from its ingested manifest.
+
+    Returns the plan document in the same shape `save_plan` accepts -
+    `{"repo_root", "role_config", "team", ["repo_url", "preflight_override",]
+    "epics": [{"summary", "stories": [...]}]}` - with each story's key,
+    summary, description, agent_instructions, dependencies, persona, model,
+    acceptance, risk, backend, tdd_split and (when set) files and
+    blocked_by. Dependencies are the plan's own story keys, not the
+    ticketing provider's issue ids, so the export can be edited and
+    re-ingested as a plan.
+
+    This is a render, not a stored copy (ADR 0012 decision 5: the document
+    is rendered from the manifest when an export is wanted). Runtime state -
+    status, attempts, pr_url, worktree, review verdicts and scores, logs,
+    approvals, owner, delegates, ingest provenance - is never exported; it
+    is not part of the plan. A plan that was never ingested answers
+    `{"ok": false, "error": "Plan not found"}`, and a plan the caller may
+    not see gets that same reply from the transport's plan-scoped check, so
+    the tool is no existence oracle.
+
+    plan_name: the plan's name, as passed to `save_plan`/`ingest_plan` and as
+        returned by `list_plans`.
+
+    Use this to review what a plan actually says, to hand it to another
+    tool or person, or as the starting point for a revised plan.
+    """
+    return _service.export_plan(plan_name)
+
+
 def list_decisions(plan_name: str) -> list[dict]:
     """
     Return the overlord's decision log for a plan: every ruling ever made
@@ -322,4 +353,5 @@ TOOLS = (
     reject_plan,
     verify_audit,
     record_decision,
+    export_plan,
 )

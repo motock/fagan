@@ -164,7 +164,7 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import plan_names, remote_scope, review_audit
+from . import plan_export, plan_names, remote_scope, review_audit
 from .actor import current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -195,7 +195,7 @@ def _decompose_context_root(workspace: str | None) -> str | None:
     return path
 
 
-class PipelineService(PlanApprovalMixin):
+class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     """Transport-agnostic pipeline operations.
 
     The ``@mcp.tool()`` functions below are one-line delegations to these

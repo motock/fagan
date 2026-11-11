@@ -102,6 +102,24 @@ _PATCH_PLAN_BULLET = (
     '  held it returns `{ok: true, skipped: "locked"}` without touching the manifest.'
 )
 
+# ADR 0012 decision 5 added the export_plan MCP tool (render a plan document
+# from its ingested manifest) and documented it in the "MCP tools reference"
+# section. The pre-split README at 2cca309~1 predates the tool, so the verbatim
+# guard for that section normalizes the new bullet away — and separately
+# requires it to be present, so the normalization can never mask its removal.
+_EXPORT_PLAN_BULLET = (
+    "- `export_plan(plan_name)` — render a plan's document from its ingested\n"
+    "  manifest, on demand (ADR 0012 decision 5: the document is rendered from the\n"
+    "  manifest when an export is wanted, never stored as a second copy). Returns\n"
+    "  `{\"ok\": true, \"plan\": {...}}` in the same shape `save_plan` accepts, so an\n"
+    "  export can be edited and re-ingested. Runtime state (status, attempts,\n"
+    "  `pr_url`, worktree, review verdicts/scores, logs, approvals, owner,\n"
+    "  delegates, ingest provenance) is never exported; only `origin: plan` context\n"
+    "  sources are included, because `repo` and `org` sources are re-merged at\n"
+    "  ingest. A plan that was never ingested answers `{\"ok\": false, \"error\": \"Plan\n"
+    "  not found\"}`."
+)
+
 # XP-3 added the `blocked_by` story field to the "Plan / story schema" section;
 # the pre-split README predates it, so the verbatim guard normalizes this line
 # away and separately requires it to be present.
@@ -744,6 +762,16 @@ def test_moved_section_body_is_verbatim(title):
             reference_body = reference_body.replace(
                 _GET_EFFECTIVE_CONFIG_BULLET, _GET_ROLE_CONFIG_BULLET
             )
+            # ADR 0012 decision 5 added the export_plan MCP tool and documented
+            # it beside list_plans. The pre-split README predates the tool, so
+            # require the new bullet to be present and then normalize it (plus
+            # the newline that starts it) away — the presence assertion means
+            # the normalization can never mask its removal.
+            assert _EXPORT_PLAN_BULLET in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must document the "
+                f"new export_plan(plan_name) tool."
+            )
+            reference_body = reference_body.replace("\n" + _EXPORT_PLAN_BULLET, "")
         if title == "Unattended operation & logs":
             # The launchd label was renamed com.claude.pipeline.* ->
             # com.fagan.pipeline.* (the plist/template files and generator

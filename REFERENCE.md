@@ -15,6 +15,16 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   if the model's response wasn't valid/shaped JSON.
 - `save_plan(plan_name, plan_json)` — save a plan JSON to `~/.claude/plans/`.
 - `list_plans()` — list saved plans.
+- `export_plan(plan_name)` — render a plan's document from its ingested
+  manifest, on demand (ADR 0012 decision 5: the document is rendered from the
+  manifest when an export is wanted, never stored as a second copy). Returns
+  `{"ok": true, "plan": {...}}` in the same shape `save_plan` accepts, so an
+  export can be edited and re-ingested. Runtime state (status, attempts,
+  `pr_url`, worktree, review verdicts/scores, logs, approvals, owner,
+  delegates, ingest provenance) is never exported; only `origin: plan` context
+  sources are included, because `repo` and `org` sources are re-merged at
+  ingest. A plan that was never ingested answers `{"ok": false, "error": "Plan
+  not found"}`.
 - `ingest_plan(plan_name, only_epics=None)` — push a plan into Plane (epics +
   issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. Carries each
   story's `persona`, `model`, `risk`, and `backend` into the manifest. A
@@ -3373,12 +3383,13 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `record_decision`, `record_security_audit`, `reject_plan`,
   `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
-- eight read-only tools — `check_story_status`, `check_usage`,
+- nine read-only tools — `check_story_status`, `check_usage`, `export_plan`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
   `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
   caller may see (`app.policy.can_view`): the plan-scoped tools
-  (`check_story_status`, `get_effective_config`, `get_story_diff`,
-  `list_decisions`, `list_ready_stories`) refuse before their handler runs
+  (`check_story_status`, `export_plan`, `get_effective_config`,
+  `get_story_diff`, `list_decisions`, `list_ready_stories`) refuse before their
+  handler runs
   unless the caller owns or is a delegate of the plan, and return one fixed
   refusal that is identical for a plan that does not exist and one the caller
   may not see, so the reply is no existence oracle; `list_plans` and
@@ -3387,8 +3398,24 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   principals' authentication attempts. `check_usage` stays host-level and
   unfiltered: it reports deployment-wide counters that belong to no plan.
 
-Every registered tool except `decompose_plan` is on the allowlist, so every
-one of them is remotely callable and decides through the policy.
+`export_plan(plan_name)` renders a plan's document from its ingested manifest and returns
+it as `{"ok": true, "plan": {...}}`, in the shape `save_plan` accepts: `repo_root`,
+`role_config`, `team`, optional `repo_url` and `preflight_override`, and the plan's
+`epics`/`stories` with their keys, descriptions, instructions, dependencies, persona,
+model, acceptance, risk, backend and TDD split. The document is rendered on demand
+(ADR 0012 decision 5), never stored as a second copy, and runtime state (status,
+attempts, `pr_url`, worktree, review verdicts, logs, approvals, owner, delegates) is
+never exported. Only `origin: plan` context sources are included: `repo` and `org`
+sources are re-merged at ingest. It takes the same `plan_name` and validation as
+the read tools above, and answers `{"ok": false, "error": "Plan not found"}` for
+a plan that was never ingested.
+
+`export_plan` is a read tool on the allowlist, scoped like the plan-scoped reads
+above: a remote caller who may not see the plan gets the same refusal it gets
+for a plan that does not exist, so the reply never reveals whether a plan is on
+disk. Every registered tool except `decompose_plan` is on the
+allowlist, so every one of them is remotely callable and decides through the
+policy.
 `decompose_plan` is refused outright, by default deny: it drafts a plan from
 text and has no plan to authorize, and the one host-scoped grant it could ask
 for, `plan:ingest`, is held by every authenticated caller on an ownerless

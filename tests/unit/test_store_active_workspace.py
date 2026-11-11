@@ -304,7 +304,7 @@ def test_active_workspace_storage_does_not_disturb_recent_workspaces(plan_dir):
     assert recents_on_disk == ["/abs/ws-a"]
 
 
-def test_store_protocol_declares_active_workspace_methods():
-    """Store Protocol must declare every public FileStore method (precedent: be1f72a / #476)."""
-    assert hasattr(Store, "get_active_workspace")
-    assert hasattr(Store, "set_active_workspace")
+def test_store_protocol_no_longer_declares_active_workspace_methods():
+    """The workspace records are host-local now (ADR 0012, decision 4)."""
+    assert not hasattr(Store, "get_active_workspace")
+    assert not hasattr(Store, "set_active_workspace")

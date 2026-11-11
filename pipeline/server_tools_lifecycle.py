@@ -102,8 +102,10 @@ def export_plan(plan_name: str) -> dict[str, Any]:
     is rendered from the manifest when an export is wanted). Runtime state -
     status, attempts, pr_url, worktree, review verdicts and scores, logs,
     approvals, owner, delegates, ingest provenance - is never exported; it
-    is not part of the plan. A plan the caller may not see is refused
-    exactly like a plan that does not exist.
+    is not part of the plan. A plan that was never ingested answers
+    `{"ok": false, "error": "Plan not found"}`, and a plan the caller may
+    not see gets that same reply from the transport's plan-scoped check, so
+    the tool is no existence oracle.
 
     plan_name: the plan's name, as passed to `save_plan`/`ingest_plan` and as
         returned by `list_plans`.

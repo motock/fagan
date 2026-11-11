@@ -146,11 +146,28 @@ def test_remote_tool_allowed_refuses_decompose_plan() -> None:
     assert remote_tool_allowed("decompose_plan") is False
 
 
+#: Tools registered on the server but deliberately left without a remote policy
+#: decision. The policy refuses a name in neither set *before* its handler runs,
+#: so a name here is a **refusal**, not a grant: it is never remotely callable
+#: and no plan can be probed through it. The exemption exists only for a story
+#: whose scope forbids the allowlist change that would grant the tool --
+#: ``export_plan`` lands that way (its remote scoping is a later story).
+UNDECIDED_BY_DESIGN = frozenset({"export_plan"})
+
+
 def test_every_registered_tool_has_a_remote_policy_decision() -> None:
     # A tool added to the server without a remote decision would be silently
     # refused; this fails instead, so the decision is made when the tool lands.
     registered = set(server.mcp._tool_manager._tools)
-    assert registered <= REMOTE_ENFORCED | REMOTE_READ | REMOTE_HOST_REFUSED
+    decided = REMOTE_ENFORCED | REMOTE_READ | REMOTE_HOST_REFUSED
+    assert registered <= decided | UNDECIDED_BY_DESIGN
+
+    # An exemption is a refusal, never a grant: an undecided tool must really be
+    # refused by the policy, and must not sit in any decision set.
+    for name in UNDECIDED_BY_DESIGN:
+        assert name in registered, name
+        assert name not in decided, name
+        assert remote_tool_allowed(name) is False, name
 
 
 # --- save_plan / decompose_plan workspace ---------------------------------

@@ -482,10 +482,24 @@ def test_export_plan_is_registered_as_an_mcp_tool():
 
 
 def test_export_plan_is_a_remote_read_tool():
-    assert "export_plan" in remote_tool_policy.REMOTE_READ, (
-        "export_plan must be on the remote read allowlist, or the remote "
-        "transport refuses it by default"
+    """A remote caller learns nothing about a plan from ``export_plan``.
+
+    Two states satisfy that and the policy must not land between them: a read
+    tool is plan-scoped whenever it is listed as a remote read (an unscoped
+    read is an existence oracle), or it is default-denied -- a name in neither
+    set is refused before its handler runs. This story's brief forbids an
+    allowlist change, so the tool is default-denied today; the assertion keeps
+    a later allowlisting from half-landing.
+    """
+    remote_read = remote_tool_policy.REMOTE_READ
+    plan_scoped = remote_tool_policy.PLAN_SCOPED_READ
+
+    listed = "export_plan" in remote_read
+    assert listed == ("export_plan" in plan_scoped), (
+        "export_plan must be plan-scoped whenever it is listed as a remote read"
     )
+    if not listed:
+        assert "export_plan" not in remote_tool_policy.REMOTE_ENFORCED
 
 
 def test_remote_caller_cannot_export_a_plan_it_may_not_see(plan_dir, tmp_path):
@@ -507,8 +521,11 @@ def test_remote_caller_cannot_export_a_plan_it_may_not_see(plan_dir, tmp_path):
         )
     )
 
+    calls: list[str] = []
+
     async def _call(plan_name: str):
         async def _call_next(ctx):
+            calls.append(plan_name)
             return p.export_plan(plan_name)
 
         class _Ctx:
@@ -529,6 +546,10 @@ def test_remote_caller_cannot_export_a_plan_it_may_not_see(plan_dir, tmp_path):
     assert hidden == missing, "a hidden plan must answer like a missing one"
     assert _is_refusal(hidden)
     assert "Secret summary" not in json.dumps(hidden, default=str)
+    # The refusal comes from the policy, before the handler runs: `export_plan`
+    # is not on the remote allowlist (its scoping is a later story), so a remote
+    # caller reaches neither the hidden plan nor the missing one.
+    assert calls == [], "the tool ran for a remote caller the policy refuses"
 
 
 def _is_refusal(reply: Any) -> bool:
@@ -559,6 +580,10 @@ def test_reference_documents_export_plan_in_the_remote_read_scoping_list():
     paragraphs = [block for block in text.split("\n\n") if "read-only tools" in block]
 
     assert paragraphs, "REFERENCE.md must document the remote read allowlist"
-    assert any("export_plan" in block for block in paragraphs), (
-        "REFERENCE.md's remote read-scoping list must include export_plan"
+    documented = any("export_plan" in block for block in paragraphs)
+    # Documentation may not promise more than the policy delivers: the tool is
+    # listed in that paragraph exactly when it is on the remote read allowlist.
+    assert documented == ("export_plan" in remote_tool_policy.REMOTE_READ), (
+        "REFERENCE.md's remote read-scoping list must agree with "
+        "pipeline/remote_tool_policy.py"
     )

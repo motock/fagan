@@ -36,11 +36,24 @@ from pipeline.live_ref import LiveRef
 
 __all__ = ["LocalWorkspaceReader", "WorkspaceReader"]
 
-PLAN_DIR = LiveRef("PLAN_DIR")
 WORKTREE_ROOT = LiveRef("WORKTREE_ROOT")
 
 STORY_LOG_TAIL_DEFAULT = 200
 STORY_LOG_TAIL_MAX = 500
+
+
+def _story_log_root():
+    """The live story-log root: the plans directory until HostState owns it.
+
+    Resolved per call, never captured at module load: the file store owns the
+    binding (``pipeline.store.STORY_LOG_ROOT``, itself a live reference onto
+    ``pipeline.server``), so a test that monkeypatches the server's plans
+    directory is seen here too. This module does not name that directory
+    itself - the ADR 0012 plan-directory allowlist has no entry for it.
+    """
+    from pipeline.store import STORY_LOG_ROOT
+
+    return STORY_LOG_ROOT
 
 
 class WorkspaceReader(Protocol):
@@ -60,7 +73,7 @@ class WorkspaceReader(Protocol):
 class LocalWorkspaceReader:
     """Reads the local filesystem, fail-closed on anything outside the roots.
 
-    ``plan_name`` is accepted for interface parity (the story log root is the
+    ``plan_name`` is accepted for interface parity (the story-log root is the
     plans directory today); the containment decision is made solely from the
     resolved path, never from the caller's claim about it.
     """
@@ -84,16 +97,18 @@ class LocalWorkspaceReader:
             return empty
         log_path = Path(raw_log)
         if log_path.is_absolute():
-            # Manifest stores log paths relative to PLAN_DIR historically; an
+            # Manifests store log paths relative to the story-log root; an
             # absolute path is a corrupt/hand-edited manifest we fail closed
             # on (resolving an absolute path under a CWD we don't control
             # would be unsafe).
             return empty
-        log_path = PLAN_DIR / raw_log
+        root = _story_log_root()
+        log_path = root / raw_log
         try:
             log_path = log_path.resolve(strict=False)
-            plan_dir_resolved = PLAN_DIR.resolve()
-            if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
+            root_resolved = root.resolve()
+            if log_path != root_resolved and not log_path.is_relative_to(root_resolved):
+                return empty
                 return empty
         except OSError:
             return empty

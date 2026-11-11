@@ -14,9 +14,10 @@ in practice.
 - Plans ingested before the manifest descriptive-fields story carry their
   authored `description`, `epic`, `plan_key`, `plan_epics`,
   `preflight_override` and `repo_url` only in their staged plan draft, not on
-  the manifest. Backfill them once, with `python -m
-  pipeline.tools.backfill_plan_source` (`--dry-run` first; see REFERENCE.md,
-  "Operator runbook: backfilling plans ingested before these fields existed").
+  the manifest. Backfill them once with
+  `python -m pipeline.tools.backfill_plan_source` (`--dry-run` first; see
+  REFERENCE.md, "Operator runbook: backfilling plans ingested before these
+  fields existed").
   Run it **before deploying the draft-consumption story** and **before the
   digest-version-2 build**: it refuses (and reports `skipped_digest`) any plan
   whose `canonical_digest` would change, and under digest version 1 those fields

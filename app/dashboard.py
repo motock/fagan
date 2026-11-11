@@ -106,6 +106,7 @@ from pipeline.actor import (
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
 from pipeline.health_freshness import health_extras, register_probes
+from pipeline.host_state import build_host_state
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import PipelineService

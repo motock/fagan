@@ -50,6 +50,7 @@ from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
+from .store_records import DEFAULT_NAMESPACE
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -574,6 +575,38 @@ def _keyless_reingest_error(
     return None
 
 
+def _no_staged_draft_error(plan_name: str) -> dict[str, Any]:
+    """The refusal for an ingest of a plan with no staged draft.
+
+    ADR 0012 decision 5: a successful full ingest consumes the draft, so
+    re-ingesting an already-ingested plan has nothing left to read.  The
+    message names the way out (``save_plan``, or ``export_plan`` to render the
+    current plan) rather than the internal record that is missing.
+    """
+    return {
+        "ok": False,
+        "error": (
+            f"plan '{plan_name}' has no staged draft: save_plan it "
+            "(export_plan renders the current plan) before re-ingesting"
+        ),
+    }
+
+
+def _consume_plan_draft(plan_name: str) -> None:
+    """Delete ``plan_name``'s staged draft: the manifest is the plan now."""
+    records = plan_draft._records()
+    if records is not None:
+        records.delete_plan_draft(DEFAULT_NAMESPACE, plan_name)
+        return
+    # A partial store has no record view; its draft is the file the record
+    # view would have read (see plan_draft.read_plan_draft's fallback).
+    path = _store.manifest_path(plan_name).parent / f"{plan_name}.json"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _ingest_plan_impl(
     plan_name: str,
     only_epics: list[str] | None = None,
@@ -582,6 +615,10 @@ def _ingest_plan_impl(
     plan_names.validate_new_plan_name(plan_name)
     plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
+        # A draft that is missing is the ordinary "already ingested" case:
+        # answer with the way out instead of the bare record-reader message.
+        if plan is None and refusal.get("error") == f"No plan named {plan_name}":
+            return _no_staged_draft_error(plan_name)
         return refusal
 
     # advance_all_plans() iterates every plan in shared PLAN_DIR, each

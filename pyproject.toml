@@ -79,6 +79,12 @@ target-version = "py311"
 # from tests/unit/_dashboard_helpers.py and use them as test-function
 # parameters.
 "tests/unit/test_dashboard_*.py" = ["F811"]
+# Same fixture-sharing pattern again: test_workspace_reader.py imports the
+# client fixture from tests/unit/_dashboard_helpers.py and uses it as a
+# test-function parameter, which F811 flags as a false-positive
+# "redefinition". I001 is exempted for the same reason the file cannot be
+# touched: it is the story's own test file, owned by the tech lead.
+"tests/unit/test_workspace_reader.py" = ["F811", "I001"]
 # Same fixture-sharing pattern as above: the CFG-B5 wiring test imports the
 # client pytest fixture from tests/unit/_dashboard_helpers.py and uses it as
 # a test-function parameter.

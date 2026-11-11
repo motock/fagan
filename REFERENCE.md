@@ -1483,6 +1483,32 @@ the manifest's runtime state (`status`, `pr_url`, attempts, ...).
 plan-defining: they are outside `canonical_digest`, so recording them cannot
 reset an approval (see `docs/specs/PLAN_APPROVAL.md` §3).
 
+### Operator runbook: backfilling plans ingested before these fields existed
+
+Plans ingested before the fields above shipped have a staged draft
+(`<plan>.json`, ADR 0012 decision 3) but nothing descriptive on their manifest.
+An operator copies the fields across, once, with:
+
+    python -m pipeline.tools.backfill_plan_source --dry-run
+
+`python -m pipeline.tools.backfill_plan_source` (without `--dry-run`) is the only
+production caller of the plan-draft records: it reads each plan's draft through
+`get_plan_draft`, builds the prospective manifest in memory, and writes only when
+the plan's `canonical_digest` is unchanged, so no approval record is touched and
+no re-approval is needed. It prints one JSON line per plan
+(`{"plan": ..., "outcome": ...}`) with an outcome of `backfilled`, `unchanged`,
+`skipped_no_draft`, `skipped_unreadable`, `skipped_digest` or `skipped_locked`;
+it is idempotent, and a second run reports `unchanged` for every plan.
+
+Run it **before deploying the draft-consumption story** — once drafts are
+consumed there is nothing left to copy — and **before the digest-version-2
+build**. Under digest version 1 `description` is not a digest member, so the
+copy leaves every digest and every approval intact. Run after that build
+instead, every plan whose draft carries a non-empty `description` reports
+`skipped_digest` and is left exactly as it was (fail closed, nothing written);
+such a plan can then only record its descriptions by `save_plan` + re-ingest,
+which resets its approval.
+
 ---
 
 ## Plan-level `context` block

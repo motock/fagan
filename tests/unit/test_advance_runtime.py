@@ -505,7 +505,10 @@ def test_run_daemon_runs_the_runtime_and_stops_it_after_the_loop(monkeypatch, tm
         "build_runtime",
         lambda bus, serial_fn: (fake_reconcile, fake_stop),
     )
-    monkeypatch.setattr(daemon_mod, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(daemon_mod, "PLAN_DIR"):
+        # Pre-migration the daemon held its own module-load copy of PLAN_DIR.
+        monkeypatch.setattr(daemon_mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(daemon_mod, "SchedulerDaemon", _FakeDaemon)
     monkeypatch.setattr(daemon_mod, "build_bus", lambda: RecordingBus())
     monkeypatch.setattr(daemon_mod, "scan_all_plans", lambda bus: None)

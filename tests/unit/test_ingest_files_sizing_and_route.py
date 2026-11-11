@@ -753,6 +753,7 @@ def test_ingest_never_routes_a_running_story_on_reingest(
 
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", _CLOUD_TAG)
     notices.clear()
+    (sizing_plan_dir / "route6.json").write_text(json.dumps(plan))
 
     result = p.ingest_plan("route6")
 

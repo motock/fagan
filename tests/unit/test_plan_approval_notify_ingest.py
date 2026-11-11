@@ -201,6 +201,7 @@ def test_should_not_emit_a_notice_for_an_identical_reingest(
     _write_plan(plan_dir, tmp_path)
     assert p.ingest_plan("ap")["ok"] is True
     assert len(_pending(notices)) == 1
+    _write_plan(plan_dir, tmp_path)
 
     assert p.ingest_plan("ap")["ok"] is True
 
@@ -238,6 +239,7 @@ def test_should_not_emit_a_notice_after_approval_and_an_identical_reingest(
     decided = PipelineService().approve_plan("ap")
     assert decided["ok"] is True
     assert decided["status"] == "approved"
+    _write_plan(plan_dir, tmp_path)
 
     assert p.ingest_plan("ap")["ok"] is True
 

@@ -528,8 +528,16 @@ def _reference_tool_lines(tool: str) -> str:
 
 
 def _reference_plan_tools() -> str:
-    """The REFERENCE.md ``save_plan`` and ``ingest_plan`` bullets together."""
-    return _reference_tool_lines("save_plan") + "\n" + _reference_tool_lines("ingest_plan")
+    """The REFERENCE.md "Draft consumption" section.
+
+    The "MCP tools reference" section is byte-pinned against the pre-split
+    README, so the draft-consumption behavior is documented beside the other
+    ``ingest_plan`` manifest notes instead of inside the tool bullet.
+    """
+    text = REFERENCE.read_text(encoding="utf-8")
+    start = text.index("### Draft consumption")
+    end = text.find("\n#", start + 1)
+    return text[start : end if end != -1 else None]
 
 
 def test_the_reference_says_the_draft_is_consumed():

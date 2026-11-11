@@ -31,7 +31,7 @@ def _records() -> Any:
     return records() if records is not None else None
 
 
-def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return ``(plan, refusal)`` for ``plan_name``'s staged draft.
 
     A draft that is missing, unreadable, malformed, or not a JSON object is a
@@ -52,6 +52,29 @@ def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, An
     if plan is None:
         return None, {'ok': False, 'error': f'No plan named {plan_name}'}
     return plan, None
+
+
+def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """:func:`_read_plan_draft`, naming the way out when a full ingest consumed the draft.
+
+    A plan that has a manifest but no draft was ingested and its draft consumed
+    (ADR 0012 decision 5), so re-ingesting needs a fresh ``save_plan``. A plan
+    with neither keeps the legacy ``No plan named`` refusal.
+    """
+    plan, refusal = _read_plan_draft(plan_name)
+    if plan is not None or refusal is None or refusal.get('error') != f'No plan named {plan_name}':
+        return plan, refusal
+    from pipeline import server
+
+    if not server._store.manifest_path(plan_name).exists():
+        return plan, refusal
+    return None, {
+        'ok': False,
+        'error': (
+            f"plan '{plan_name}' has no staged draft: save_plan it "
+            '(export_plan renders the current plan) before re-ingesting'
+        ),
+    }
 
 
 def list_plan_names(records: Any, namespace: str = DEFAULT_NAMESPACE) -> list[str]:

@@ -270,11 +270,13 @@ def test_a_locked_ingest_keeps_the_staged_draft(plan_dir, provider, tmp_path, mo
 # --------------------------------------------------------------------------- #
 # 5. An ingest with no staged draft is refused.
 # --------------------------------------------------------------------------- #
-def test_an_ingest_without_a_staged_draft_is_refused(plan_dir, provider, tmp_path):
+def test_an_ingest_of_a_plan_that_never_existed_keeps_the_legacy_refusal(
+    plan_dir, provider, tmp_path
+):
     result = p.ingest_plan("ap")
 
     assert result["ok"] is False
-    assert result["error"] == NO_DRAFT_ERROR
+    assert result["error"] == "No plan named ap"
 
 
 def test_a_reingest_without_a_staged_draft_is_refused(
@@ -293,6 +295,9 @@ def test_a_reingest_without_a_staged_draft_is_refused(
 def test_a_refused_ingest_without_a_staged_draft_names_the_plan(
     plan_dir, provider, tmp_path
 ):
+    _stage(plan_dir, _plan_document(tmp_path), name="other")
+    assert p.ingest_plan("other")["ok"] is True
+
     result = p.ingest_plan("other")
 
     assert result["ok"] is False

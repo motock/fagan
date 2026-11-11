@@ -135,7 +135,8 @@ def test_ingest_with_nothing_bound_stamps_local_operator(
 def test_reingest_refreshes_ingested_by_to_the_current_principal(
     actor_plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
 ) -> None:
-    _write_plan(actor_plan_dir, "refresh-plan", _repo_root(tmp_path))
+    repo_root = _repo_root(tmp_path)
+    _write_plan(actor_plan_dir, "refresh-plan", repo_root)
 
     with bind_principal(
         Principal(subject="alice", roles=frozenset({"author"}), auth_method="test")
@@ -144,6 +145,7 @@ def test_reingest_refreshes_ingested_by_to_the_current_principal(
     assert first["ok"] is True, f"first ingest failed: {first!r}"
     assert _manifest(actor_plan_dir, "refresh-plan")["ingested_by"] == "alice"
 
+    _write_plan(actor_plan_dir, "refresh-plan", repo_root)
     with bind_principal(
         Principal(subject="bob", roles=frozenset({"author"}), auth_method="test")
     ):
@@ -151,6 +153,7 @@ def test_reingest_refreshes_ingested_by_to_the_current_principal(
     assert second["ok"] is True, f"second ingest failed: {second!r}"
     assert _manifest(actor_plan_dir, "refresh-plan")["ingested_by"] == "bob"
 
+    _write_plan(actor_plan_dir, "refresh-plan", repo_root)
     with bind_principal(
         Principal(subject="alice", roles=frozenset({"author"}), auth_method="test")
     ):
@@ -168,7 +171,8 @@ def test_ingest_leaves_the_plan_source_file_byte_identical(
     with bind_principal(
         Principal(subject="alice", roles=frozenset({"author"}), auth_method="test")
     ):
-        result = ingest_mod._ingest_plan_impl("source-plan")
+        # only_epics keeps the draft; a full ingest consumes (deletes) it.
+        result = ingest_mod._ingest_plan_impl("source-plan", only_epics=["E1"])
 
     assert result["ok"] is True, f"ingest failed: {result!r}"
     after = plan_path.read_bytes()

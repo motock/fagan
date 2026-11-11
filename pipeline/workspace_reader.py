@@ -10,11 +10,16 @@ Every containment check is part of the contract, not an implementation
 detail:
 
 * the story log must resolve inside the plans directory (an absolute log path
-  in the manifest or a path that resolves outside it is unavailable),
+  in the manifest, or a path that resolves outside it, is unavailable),
 * the worktree file must resolve inside ``WORKTREE_ROOT`` (a relative
-  worktree, a traversal filename or a target that resolves - via ``..`` or a
+  worktree, a traversal filename, or a target that resolves - via ``..`` or a
   symlink - outside the root is unavailable),
 * any ``OSError`` degrades to the unavailable body instead of raising.
+
+Both reads are pure functions of their arguments plus the two roots, so they
+are ``staticmethod``s: the protocol describes what a reader must answer, not
+what state it carries, and a fake can be substituted at class or instance
+level without a binding dance.
 
 The roots are read through ``LiveRef`` bindings to ``pipeline.server`` so
 ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` still lands (a
@@ -41,25 +46,28 @@ STORY_LOG_TAIL_MAX = 500
 class WorkspaceReader(Protocol):
     """The two workspace reads the dashboard and the service perform."""
 
+    @staticmethod
     def read_story_log(
-        self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200
+        plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200
     ) -> dict[str, Any]: ...
 
+    @staticmethod
     def read_worktree_file(
-        self, story: dict[str, Any], filename: str
+        story: dict[str, Any], filename: str
     ) -> dict[str, Any]: ...
 
 
 class LocalWorkspaceReader:
     """Reads the local filesystem, fail-closed on anything outside the roots.
 
-    ``plan_name`` is accepted for interface parity (the story log root is
-    derived from the manifest today); the containment decision is made solely
-    from the resolved path, never from the caller's claim about it.
+    ``plan_name`` is accepted for interface parity (the story log root is the
+    plans directory today); the containment decision is made solely from the
+    resolved path, never from the caller's claim about it.
     """
 
+    @staticmethod
     def read_story_log(
-        self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200
+        plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200
     ) -> dict[str, Any]:
         empty = {"available": False, "lines": []}
         if not isinstance(lines, int) or lines < 1:
@@ -99,9 +107,8 @@ class LocalWorkspaceReader:
         tail = all_lines[-lines:]
         return {"available": True, "lines": tail}
 
-    def read_worktree_file(
-        self, story: dict[str, Any], filename: str
-    ) -> dict[str, Any]:
+    @staticmethod
+    def read_worktree_file(story: dict[str, Any], filename: str) -> dict[str, Any]:
         empty = {"available": False, "text": ""}
         if not isinstance(story, dict):
             return empty
@@ -132,4 +139,6 @@ class LocalWorkspaceReader:
         return {"available": True, "text": text}
 
 
+# The one reader every caller shares. Callers depend on the object, not the
+# class, so a different implementation can be injected at the seam.
 local_workspace_reader: WorkspaceReader = LocalWorkspaceReader()

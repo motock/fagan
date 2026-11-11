@@ -9,21 +9,6 @@ in practice.
 
 ## [Unreleased]
 
-### Upgrading
-
-- Plans ingested before the manifest descriptive-fields story carry their
-  authored `description`, `epic`, `plan_key`, `plan_epics`,
-  `preflight_override` and `repo_url` only in their staged plan draft, not on
-  the manifest. Backfill them once with
-  `python -m pipeline.tools.backfill_plan_source` (`--dry-run` first; see
-  REFERENCE.md, "Operator runbook: backfilling plans ingested before these
-  fields existed").
-  Run it **before deploying the draft-consumption story** and **before the
-  digest-version-2 build**: it refuses (and reports `skipped_digest`) any plan
-  whose `canonical_digest` would change, and under digest version 1 those fields
-  are not digest members, so no approval record is touched and no re-approval is
-  needed.
-
 ### Added
 
 - Added append-only usage records to the record store contract (ADR 0012 decision 3). Every `RecordStore` now offers exactly `append_usage(namespace, plan_name, record)` and `get_usage(namespace, plan_name)` — no update and no delete, so an accounting line is never rewritten — with `USAGE_RECORD_FIELDS` in `pipeline/store_records.py` as the single declaration of the telemetry contract's field set, which `pipeline.usage_record.USAGE_FIELDS` now aliases. A record is validated before anything is written: its keys must be exactly the contract's fields and every value must be one that field may hold (`InvalidUsageRecordError`, whose message names the offending field and never its value), so an extra field, a missing field, a plan that does not match the plan it is stored under, a negative or boolean token count, or a negative/non-finite cost or duration is refused and leaves the plan's history untouched. `FileRecords` appends through `persistence._write_usage_record` (same `<plan>.usage.jsonl` sidecar and rotation) and reads it back in file order, skipping a malformed line with one warning that carries no content; `SqliteRecords` delegates to that file view and `InMemoryRecordStore` keeps one list per `(namespace, plan)`.
@@ -124,6 +109,21 @@ in practice.
   messages at once.
 - The scheduler daemon now keeps retrying the NATS broker in the background when the broker is not up yet at start-up (the standalone stack starts `nats` a few milliseconds after the pipeline container), and starts the durable consumers when it answers. Before, those consumers stayed down until the container was restarted and their events piled up in the stream.
 - REFERENCE.md now documents `PIPELINE_PLAN_LOCK_SLOW_SECONDS`, `PIPELINE_COMMAND_LOCK_WAIT_SECONDS`, `PIPELINE_DASHBOARD_PUBLIC_URL`, `PIPELINE_APPROVAL_LINK_PATH` and `PIPELINE_DASHBOARD_PLUGINS`.
+
+### Upgrading
+
+- Plans ingested before the manifest descriptive-fields story carry their
+  authored `description`, `epic`, `plan_key`, `plan_epics`,
+  `preflight_override` and `repo_url` only in their staged plan draft, not on
+  the manifest. Backfill them once with
+  `python -m pipeline.tools.backfill_plan_source` (`--dry-run` first; see
+  REFERENCE.md, "Operator runbook: backfilling plans ingested before these
+  fields existed").
+  Run it **before deploying the draft-consumption story** and **before the
+  digest-version-2 build**: it refuses (and reports `skipped_digest`) any plan
+  whose `canonical_digest` would change, and under digest version 1 those fields
+  are not digest members, so no approval record is touched and no re-approval is
+  needed.
 
 ## [0.9.0] - 2026-11-03
 

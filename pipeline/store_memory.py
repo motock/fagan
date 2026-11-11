@@ -24,6 +24,7 @@ from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     UnknownNamespaceError,
+    UnreadableRecordError,
     validate_channel,
     validate_namespace,
     validate_notification_record,
@@ -128,6 +129,19 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             return sorted(names)
 
     # -- plan drafts (ADR 0012 decision 3) ------------------------------
+    def _draft_path(self, plan_name: str):
+        """Return ``PLAN_DIR/<plan>.json``, resolved per call.
+
+        The draft is a *transient file* the file store stages
+        (``save_plan``), not durable store state, so the reference store reads a
+        draft it does not hold itself from the plans directory the writers use,
+        through :mod:`pipeline.persistence` -- the reader ingest already refuses
+        with -- rather than constructing a file store of its own.
+        """
+        from pipeline import persistence
+
+        return persistence.PLAN_DIR / f'{plan_name}.json'
+
     def _draft_namespace(self, namespace: str) -> None:
         """Validate ``namespace`` and refuse anything but ``'default'``.
 
@@ -155,25 +169,46 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             self._drafts[(namespace, plan_name)] = copy.deepcopy(plan)
 
     def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
-        """Return a copy of ``plan_name``'s draft, or ``None`` when absent."""
+        """Return a copy of ``plan_name``'s draft, or ``None`` when absent.
+
+        A draft this store holds itself answers from memory.  A draft this store
+        does not hold is read from the plans directory through
+        :func:`pipeline.persistence.read_plan_file`, the reader ``save_plan``
+        stages it for and ingest refuses with -- the same transitional fallback
+        ``SqliteRecords`` makes until stage C.  A malformed file therefore raises
+        :class:`UnreadableRecordError` carrying that reader's reason text, never
+        a bare ``JSONDecodeError``.
+        """
         self._draft_namespace(namespace)
         validate_plan_name(plan_name)
         with self._lock:
             plan = self._drafts.get((namespace, plan_name))
-            if plan is None:
-                return None
-            return copy.deepcopy(plan)
+            if plan is not None:
+                return copy.deepcopy(plan)
+        path = self._draft_path(plan_name)
+        if not path.is_file():
+            return None
+        from pipeline import persistence
+
+        plan, refusal = persistence.read_plan_file(path)
+        if refusal is not None:
+            raise UnreadableRecordError(refusal['error'])
+        return plan
 
     def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
         """Delete ``plan_name``'s draft; return whether one was deleted."""
         self._draft_namespace(namespace)
         validate_plan_name(plan_name)
         with self._lock:
-            if (namespace, plan_name) not in self._drafts:
-                return False
-            self._record_undo(self._drafts, (namespace, plan_name))
-            del self._drafts[(namespace, plan_name)]
-            return True
+            if (namespace, plan_name) in self._drafts:
+                self._record_undo(self._drafts, (namespace, plan_name))
+                del self._drafts[(namespace, plan_name)]
+                return True
+        try:
+            self._draft_path(plan_name).unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def list_plan_drafts(self, namespace: str) -> list[str]:
         """Return the sorted plans in ``namespace`` that have an ingestable draft."""
@@ -184,6 +219,15 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 for (stored_namespace, plan_name), plan in self._drafts.items()
                 if stored_namespace == namespace and 'epics' in plan
             }
+        for path in self._draft_path('probe').parent.glob('*.json'):
+            if '.' in path.stem:
+                continue
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if isinstance(document, dict) and 'epics' in document:
+                names.add(path.stem)
         return sorted(names)
 
     # -- decisions -----------------------------------------------------

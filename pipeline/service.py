@@ -186,7 +186,7 @@ def _decompose_context_root(workspace: str | None) -> str | None:
     that fails the boundary check reads as unset, as in get_active_workspace."""
     if workspace is not None:
         return workspace
-    path = _store.get_active_workspace()
+    path = _host_state.get_active_workspace()
     if path is None:
         return None
     try:

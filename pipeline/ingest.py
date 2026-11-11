@@ -902,9 +902,9 @@ def _ingest_plan_impl(
             final_manifest["approval"] = on_ingest(final_manifest)
             notify_pending = pending_notice_due(previous_approval, final_manifest["approval"])
         _atomic_write_json(manifest_path, final_manifest)
-        # ADR 0012 decision 5: a full ingest consumes the draft. A crash
-        # between this write and the delete leaves the draft, and the next
-        # ingest re-applies identical content by explicit story key - idempotent.
+        # ADR 0012 decision 5: a full ingest consumes the draft. A crash between
+        # this write and the delete leaves it, and the next ingest re-applies
+        # identical content by explicit story key - which is idempotent.
         if only_epics is None:
             _consume_plan_draft(plan_name)
         if notify_pending:

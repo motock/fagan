@@ -42,6 +42,7 @@ from pipeline.store_records import (
     validate_story_key,
     validate_usage_record,
 )
+from pipeline.workspace_reader import local_workspace_reader
 
 logger = logging.getLogger(__name__)
 

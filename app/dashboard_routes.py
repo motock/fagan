@@ -32,6 +32,11 @@ from app.story_replay import build_replay_events
 from pipeline import config_provenance, remote_scope
 from pipeline.actor import current_principal
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
+from pipeline.workspace_reader import LocalWorkspaceReader
+
+# One reader for this module: the workspace reads are a seam (ADR 0012,
+# decision 12), and the dashboard never talks to the store for file content.
+_reader = LocalWorkspaceReader()
 
 # Same logger name as app.dashboard so log filtering and caplog are unchanged.
 logger = logging.getLogger("app.dashboard")

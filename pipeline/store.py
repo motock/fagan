@@ -33,7 +33,6 @@ from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
-    InvalidRecordKeyError,
     PlanRecords,
     UnknownNamespaceError,
     validate_channel,

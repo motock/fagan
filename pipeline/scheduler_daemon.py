@@ -9,7 +9,6 @@ lazily, inside a function: tests patch ``pipeline.server.advance_all_plans``,
 and a module-level binding would not see the patch.
 """
 import datetime as _dt
-import fcntl
 import json
 import logging
 import os

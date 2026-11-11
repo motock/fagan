@@ -25,12 +25,15 @@ from pipeline.store_records import (
     InvalidRecordKeyError,
     UnknownNamespaceError,
     UnreadableRecordError,
+    context_address,
+    snapshot_meta,
     validate_channel,
     validate_namespace,
     validate_notification_record,
     validate_plan_name,
     validate_story_key,
     validate_usage_record,
+    verify_context_digest,
 )
 
 #: Sentinel recorded in the undo log for a key that held no value before the
@@ -67,6 +70,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # restore them like every other structure.
         self._completed: dict[tuple[str, str], bool] = {}
         self._reports: dict[tuple[str, str], str] = {}
+        # The content-addressed context snapshots (ADR 0012 decision 11), per
+        # (namespace, digest), held as a deep copy: a snapshot is immutable, so
+        # a caller's later mutation of the meta it passed never reaches storage.
+        self._snapshots: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
@@ -239,6 +246,36 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             if isinstance(document, dict) and 'epics' in document:
                 names.add(path.stem)
         return sorted(names)
+
+    # -- context snapshots (ADR 0012 decision 11) -----------------------
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store ``content`` under ``digest`` once; never overwrite it.
+
+        The digest is checked against the content before any state is touched,
+        and a digest that is already stored is left exactly as it is -- content
+        and meta alike -- because a snapshot is immutable.
+        """
+        verify_context_digest(digest, content)
+        validate_namespace(namespace)
+        payload = snapshot_meta(meta, digest, content)
+        with self._lock:
+            key = (namespace, digest)
+            if key in self._snapshots:
+                return
+            self._record_undo(self._snapshots, key)
+            self._snapshots[key] = {'content': content, 'meta': payload}
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return a copy of ``{'content', 'meta'}`` for ``digest``, or ``None``."""
+        address = context_address(digest)
+        validate_namespace(namespace)
+        with self._lock:
+            found = self._snapshots.get((namespace, digest))
+            if found is None:
+                found = self._snapshots.get((namespace, address))
+            return None if found is None else copy.deepcopy(found)
 
     # -- plan completion marker and report (ADR 0012 decision 3) --------
     def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:

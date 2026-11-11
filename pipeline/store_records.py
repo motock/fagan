@@ -9,6 +9,7 @@ and its validators; the only implementation it carries is
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -149,6 +150,77 @@ def validate_story_key(value: str) -> str:
     ):
         raise InvalidRecordKeyError('invalid story key')
     return value
+
+
+# A context snapshot is content-addressed: its key is ``sha256:`` followed by
+# the lower-case hex SHA-256 of the content, and nothing else is a key.  A
+# digest is therefore never a path fragment and can never address anything but
+# its own blob -- a traversal attempt fails the format check, not a path check.
+_CONTEXT_DIGEST_RE = re.compile(r'^sha256:([0-9a-f]{64})$')
+
+
+def context_digest(content: str) -> str:
+    """Return the canonical digest of *content* (``sha256:<hex>``)."""
+    if not isinstance(content, str):
+        raise TypeError('context snapshot content must be a str')
+    return 'sha256:' + hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+
+def validate_context_digest(value: object) -> str:
+    """Return the hex part of a well-formed context digest, else raise.
+
+    Only ``sha256:`` + 64 lower-case hex characters is a digest: a bare hex
+    string, an uppercase or non-hex body, or anything carrying a path fragment
+    is refused with :class:`InvalidRecordKeyError` before any storage is
+    touched.
+    """
+    if not isinstance(value, str):
+        raise InvalidRecordKeyError('invalid context digest')
+    match = _CONTEXT_DIGEST_RE.fullmatch(value)
+    if match is None:
+        raise InvalidRecordKeyError('invalid context digest')
+    return match.group(1)
+
+
+def verify_context_digest(digest: str, content: str) -> str:
+    """Return the hex part of *digest* after checking it addresses *content*.
+
+    A malformed digest is refused with :class:`InvalidRecordKeyError`; a
+    well-formed digest that is not the SHA-256 of *content* is refused with
+    :class:`ValueError`, because the key would then name another blob.
+    """
+    hexdigest = validate_context_digest(digest)
+    if context_digest(content) != digest:
+        raise ValueError('context digest does not match the content')
+    return hexdigest
+
+
+def context_address(value: object) -> str:
+    """Return the folder name a *read* may look up, else raise.
+
+    Reads are deliberately more permissive than writes: a digest recorded
+    before the ``sha256:`` prefix was mandatory (or written by hand as a bare
+    hex string) is still a readable address, so the prefix is optional here.
+    What is refused is a key that is not an alphanumeric address at all -- a
+    path fragment, say -- which must never be used to build a path.
+    """
+    if not isinstance(value, str):
+        raise InvalidRecordKeyError('invalid context digest')
+    hexdigest = value.removeprefix('sha256:')
+    if not hexdigest.isalnum():
+        raise InvalidRecordKeyError('invalid context digest')
+    return hexdigest
+
+
+def snapshot_meta(meta: dict | None, digest: str, content: str) -> dict:
+    """Return the snapshot's stored meta: the caller's plus its address."""
+    if meta is not None and not isinstance(meta, dict):
+        raise TypeError('context snapshot meta must be a dict')
+    return {
+        **(meta or {}),
+        'digest': digest,
+        'bytes': len(content.encode('utf-8')),
+    }
 
 
 def _usage_number(value: object) -> bool:
@@ -486,6 +558,29 @@ class RecordStore(Protocol):
         """Return ``plan_name``'s report, or ``None`` when it has none."""
         ...
 
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store the context snapshot ``digest`` addresses, once and for all.
+
+        A snapshot is a content-addressed, immutable blob: ``digest`` is
+        ``'sha256:' + sha256(content)``, a digest that addresses other content
+        is refused with :class:`ValueError`, a malformed one with
+        :class:`InvalidRecordKeyError`, and a second put of an existing digest
+        is a no-op that never overwrites the stored content or meta.  There is
+        no delete and no listing.
+        """
+        ...
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return ``{'content', 'meta'}`` for ``digest``, or ``None``.
+
+        ``None`` means the snapshot is not stored -- never an error -- so a
+        caller can refetch and re-store it; a malformed digest is refused with
+        :class:`InvalidRecordKeyError` instead of being looked up.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -512,6 +607,8 @@ RECORD_STORE_METHODS = (
     'is_plan_completed',
     'put_plan_report',
     'get_plan_report',
+    'put_context_snapshot',
+    'get_context_snapshot',
     'transaction',
 )
 
@@ -719,11 +816,104 @@ class PlanCompletionRecords:
         return path.read_text(encoding='utf-8')
 
 
-class PlanRecords(PlanCompletionRecords, PlanDraftRecords):
+class ContextSnapshotRecords:
+    """Content-addressed context snapshots, mixed into the file record view.
+
+    A snapshot is the resolved text of a plan's external ``context`` source
+    (ADR 0012 decision 11): an immutable, content-addressed blob whose key is
+    the SHA-256 of its own content.  ``put`` refuses a digest that addresses
+    other content, a second put of a stored digest is a no-op that never
+    overwrites, and there is deliberately no delete and no listing -- a
+    snapshot is only ever added to and read back.
+
+    The file layout is unchanged (``context/<hex>/content.txt`` plus
+    ``meta.json`` in the plans directory), so an operator and the tools that
+    already read those two files keep working.  The implementation lives here,
+    next to the contract it satisfies, because ``pipeline/store.py`` sits on
+    the 1000-line gate.
+
+    The host class supplies ``_refuse_other_namespace`` (this view serves
+    :data:`DEFAULT_NAMESPACE`).
+    """
+
+    def _refuse_other_namespace(self, namespace: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def _snapshots_root(self) -> Path:
+        """Return the ``context`` directory, resolved per call.
+
+        The plans directory comes from the file store's own ``manifest_path``,
+        exactly as every other file-layout record kind resolves it: that call
+        re-reads the plans-directory binding on every access, so a directory
+        patched on the server module is the one the snapshot lands in.
+        """
+        return self._store.manifest_path('snapshot').parent / 'context'
+
+    def _snapshot_folder(self, namespace: str, digest: object) -> Path:
+        """Validate the keys and return the folder *digest* lives in for a read."""
+        validate_namespace(namespace)
+        hexdigest = context_address(digest)
+        self._refuse_other_namespace(namespace)
+        return self._snapshots_root() / hexdigest
+
+    def _put_snapshot_folder(self, namespace: str, digest: object) -> Path:
+        """Validate the keys for a write and return the folder to create."""
+        hexdigest = validate_context_digest(digest)
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        return self._snapshots_root() / hexdigest
+
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store ``content`` under ``digest`` once; never overwrite it.
+
+        The digest is checked against the content *before* the folder is even
+        named, so a refused put writes nothing at all.
+        """
+        verify_context_digest(digest, content)
+        folder = self._put_snapshot_folder(namespace, digest)
+        payload = snapshot_meta(meta, digest, content)
+        folder.mkdir(parents=True, exist_ok=True)
+        # ``O_CREAT|O_EXCL`` is the immutability: exactly one put of a digest
+        # can create its ``content.txt``, and every later put leaves it alone.
+        try:
+            fd = os.open(
+                folder / 'content.txt', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+            )
+        except FileExistsError:
+            return
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(content)
+        from pipeline import server
+
+        server._atomic_write_json(folder / 'meta.json', payload)
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return ``{'content', 'meta'}`` for ``digest``, or ``None``."""
+        folder = self._snapshot_folder(namespace, digest)
+        try:
+            content = (folder / 'content.txt').read_text(encoding='utf-8')
+        except OSError:
+            return None
+        meta: dict = {}
+        try:
+            stored = json.loads((folder / 'meta.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            stored = None
+        if isinstance(stored, dict):
+            meta = stored
+        return {'content': content, 'meta': meta}
+
+
+class PlanRecords(
+    PlanCompletionRecords, PlanDraftRecords, ContextSnapshotRecords
+):
     """The whole plan-side record view, mixed into the file record view.
 
     A composition of the plan-lifecycle record kinds -- the transient plan
-    draft and the plan-completion marker/report -- so ``pipeline/store.py``,
-    which sits on the 1000-line gate, names one base instead of one per kind.
+    draft, the plan-completion marker/report and the content-addressed
+    context snapshot -- so ``pipeline/store.py``, which sits on the
+    1000-line gate, names one base instead of one per kind.
     """
 

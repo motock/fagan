@@ -6,7 +6,7 @@ import pytest
 import pipeline.review as review_mod
 import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
-from pipeline import paths
+from pipeline import paths, persistence, server
 
 NAME = "ux"
 TEXT = "Always use the shared Button component."
@@ -14,6 +14,8 @@ TEXT = "Always use the shared Button component."
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     return tmp_path
 

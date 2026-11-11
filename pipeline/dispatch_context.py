@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from . import context_sources as ctxsrc
-from . import paths
 from .persona import _with_files_pointers
 from .service import _ServerRef
+from .store_records import DEFAULT_NAMESPACE
 
 _store = _ServerRef("_store")
 _notify_user = _ServerRef("_notify_user")
@@ -23,16 +23,13 @@ _notify_user = _ServerRef("_notify_user")
 def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
     """Return the snapshot for a previously recorded digest, verifying it."""
     digest = recorded["digest"]
-    hexdigest = digest.removeprefix("sha256:")
-    path = paths.PLAN_DIR / "context" / hexdigest / "content.txt"
-    try:
-        text = path.read_text(encoding="utf-8") if hexdigest.isalnum() else None
-    except OSError:
-        text = None
-    if text is None:
+    snapshot = _store.records().get_context_snapshot(DEFAULT_NAMESPACE, digest)
+    if snapshot is None:
         # Snapshot lost: refetch, but only accept byte-identical content.
         text = ctxsrc.resolve_dir_source(source)["text"]
         ctxsrc.snapshot_context(text)
+    else:
+        text = snapshot["content"]
     if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
         raise ctxsrc.ContextSourceError(
             f"source {source['name']!r}: context no longer matches recorded digest {digest}"

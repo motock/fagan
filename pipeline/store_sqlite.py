@@ -628,6 +628,27 @@ class SqliteRecords(
         validate_plan_name(plan_name)
         return self._draft_records().get_plan_report(namespace, plan_name)
 
+    # -- context snapshots (ADR 0012 decision 11) -----------------------
+    # A context snapshot is a content-addressed blob in the plans directory
+    # that this store does not own -- the same ``context/<hex>/`` files the
+    # context providers write -- so both operations delegate to the file
+    # record view, resolved per call, exactly as the kinds above do.  They
+    # move into a sqlite table of their own in the story that stores
+    # decisions, journals, plan drafts, completion records and snapshots.
+    def put_context_snapshot(
+        self, namespace: str, digest: str, content: str, meta: dict
+    ) -> None:
+        """Store the snapshot ``digest`` addresses, once and for all."""
+        self._namespace(namespace)
+        self._draft_records().put_context_snapshot(
+            namespace, digest, content, meta
+        )
+
+    def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
+        """Return ``{'content', 'meta'}`` for ``digest``, or ``None``."""
+        self._namespace(namespace)
+        return self._draft_records().get_context_snapshot(namespace, digest)
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.
 

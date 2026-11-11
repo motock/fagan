@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from pipeline import context_sources as cs
-from pipeline import paths
+from pipeline import paths, persistence, server
 
 
 def _git(cwd, *args):
@@ -29,7 +29,10 @@ def repo(tmp_path):
 
 @pytest.fixture(autouse=True)
 def plan_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path / "plans")
+    d = tmp_path / "plans"
+    monkeypatch.setattr(server, "PLAN_DIR", d)
+    monkeypatch.setattr(persistence, "PLAN_DIR", d)
+    monkeypatch.setattr(paths, "PLAN_DIR", d)
 
 
 def _head(repo):

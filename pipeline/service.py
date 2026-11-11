@@ -109,8 +109,7 @@ class _ServerRef:
 # Server-sourced names the class body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
-_store = _ServerRef("_store")
-_host_state = _ServerRef("_host_state")
+_store, _host_state = _ServerRef("_store"), _ServerRef("_host_state")
 _VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
 _notify_user = _ServerRef("_notify_user")
 PLAN_DIR = _ServerRef("PLAN_DIR")

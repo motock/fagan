@@ -19,7 +19,6 @@ import pytest
 import pipeline.server as p
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
-from pipeline import plan_completion as pcomp
 from tests.unit._pipeline_mcp_server_test_helpers import (
     _isolate_usage_state,  # noqa: F401
 )

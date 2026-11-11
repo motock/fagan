@@ -455,6 +455,36 @@ class RecordStore(Protocol):
         """
         ...
 
+    def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Create ``plan_name``'s once-only completion marker, atomically.
+
+        Returns ``True`` only for the call that created the marker, ``False``
+        when it was already there -- the create is a single atomic
+        ``O_CREAT|O_EXCL`` (or the backend's equivalent), so two racing ticks
+        cannot both report completion.
+
+        This is the durable record behind the legacy ``<plan>.plan_completed``
+        file in ``PLAN_DIR``: one marker, one notice (ADR 0012 decision 3).
+        """
+        ...
+
+    def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Whether ``plan_name``'s completion marker exists."""
+        ...
+
+    def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
+        """Store ``plan_name``'s report, replacing any previous one wholesale.
+
+        The report is the plan-completion summary retros read back; it is a
+        record, never the delivery.  A non-``str`` report is refused with
+        :class:`TypeError` before anything is written.
+        """
+        ...
+
+    def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
+        """Return ``plan_name``'s report, or ``None`` when it has none."""
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -477,6 +507,10 @@ RECORD_STORE_METHODS = (
     'get_plan_draft',
     'delete_plan_draft',
     'list_plan_drafts',
+    'mark_plan_completed',
+    'is_plan_completed',
+    'put_plan_report',
+    'get_plan_report',
     'transaction',
 )
 

@@ -167,7 +167,10 @@ def test_run_daemon_still_passes_advance_all_plans_as_reconcile_fn(
     def fake_advance_all_plans():
         return None
 
-    monkeypatch.setattr(daemon_mod, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(daemon_mod, "PLAN_DIR"):
+        # Pre-migration the daemon held its own module-load copy of PLAN_DIR.
+        monkeypatch.setattr(daemon_mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(daemon_mod, "SchedulerDaemon", FakeDaemon)
     monkeypatch.setattr(daemon_mod, "build_bus", lambda: object())
     monkeypatch.setattr(daemon_mod, "scan_all_plans", lambda bus: None)

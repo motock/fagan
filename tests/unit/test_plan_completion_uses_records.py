@@ -176,7 +176,6 @@ def test_a_failing_report_write_still_notifies_and_sets_the_marker(
     manifest = _manifest({'s1': 'done'})
     # A directory where the report file belongs makes the write raise
     # OSError (IsADirectoryError) without touching the notification path.
-    (harness.records and None)
     report_path = harness.plan_dir / f'{PLAN}.report.md'
     report_path.mkdir(parents=True, exist_ok=True)
 

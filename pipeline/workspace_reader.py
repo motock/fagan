@@ -109,7 +109,6 @@ class LocalWorkspaceReader:
             root_resolved = root.resolve()
             if log_path != root_resolved and not log_path.is_relative_to(root_resolved):
                 return empty
-                return empty
         except OSError:
             return empty
         if not log_path.exists() or not log_path.is_file():

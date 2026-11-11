@@ -265,7 +265,11 @@ class _FakeDaemon:
 
 def _wire_run_daemon(monkeypatch, tmp_path) -> None:
     _FakeDaemon.instances = []
-    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    # The daemon resolves the host-local root through the host state, which
+    # reads the live pipeline.server.PLAN_DIR binding -- patch that one.
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
+    if hasattr(mod, "PLAN_DIR"):
+        monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(mod, "SchedulerDaemon", _FakeDaemon)
     monkeypatch.setattr(mod, "build_bus", lambda: object())
     monkeypatch.setattr(mod, "scan_all_plans", lambda bus: None)

@@ -26,7 +26,7 @@ def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> 
     snapshot = _store.records().get_context_snapshot(DEFAULT_NAMESPACE, digest)
     if snapshot is None:
         # Snapshot lost: refetch, but only accept byte-identical content.
-        text = ctxsrc.snapshot_content(source, ctxsrc.resolve_dir_source(source)["text"])
+        text = ctxsrc.resolve_dir_source(source)["text"]
         ctxsrc.snapshot_context(text)
     else:
         text = snapshot["content"]
@@ -39,18 +39,17 @@ def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> 
 
 def _fetch_context(source: dict[str, Any], story: dict[str, Any], now: str) -> dict[str, Any]:
     resolved = ctxsrc.resolve_dir_source(source)
-    content = ctxsrc.snapshot_content(source, resolved["text"])
-    digest = ctxsrc.snapshot_context(content)
+    ctxsrc.snapshot_context(resolved["text"])
     story["context_digests"][source["name"]] = {
         "provider": source["provider"],
         "uri": source["uri"],
-        "digest": digest,
+        "digest": resolved["digest"],
         "bytes": resolved["bytes"],
         "files": resolved["files"],
         "truncated": resolved["truncated"],
         "fetched_at": now,
     }
-    return {**resolved, "text": content, "digest": digest}
+    return resolved
 
 
 def _step_resolve_context(

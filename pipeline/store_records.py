@@ -848,7 +848,7 @@ class ContextSnapshotRecords:
         The digest is checked against the content *before* the folder is even
         named, so a refused put writes nothing at all.
         """
-        hexdigest = verify_context_digest(digest, content)
+        verify_context_digest(digest, content)
         folder = self._snapshot_folder(namespace, digest)
         payload = snapshot_meta(meta, digest, content)
         folder.mkdir(parents=True, exist_ok=True)
@@ -862,7 +862,9 @@ class ContextSnapshotRecords:
             return
         with os.fdopen(fd, 'w', encoding='utf-8') as handle:
             handle.write(content)
-        _atomic_write_json(folder / 'meta.json', payload)
+        from pipeline import server
+
+        server._atomic_write_json(folder / 'meta.json', payload)
 
     def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
         """Return ``{'content', 'meta'}`` for ``digest``, or ``None``."""

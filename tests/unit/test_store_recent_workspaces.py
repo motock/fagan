@@ -21,7 +21,12 @@ import json
 
 import pytest
 
-from pipeline.server import FileStore
+from pipeline.host_state import FileHostState
+
+# These cases were written against ``FileStore`` while the recents list lived
+# on the store. The bodies moved verbatim onto ``FileHostState`` (ADR 0012,
+# decision 4), so the same expectations run against the new home.
+FileStore = FileHostState
 
 RECENTS_FILENAME = "recent_workspaces.json"
 

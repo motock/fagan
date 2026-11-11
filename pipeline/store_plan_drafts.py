@@ -41,9 +41,9 @@ class PlanDraftRecords:
         """Return ``<plans dir>/<plan>.json``, resolved per call.
 
         The plans directory comes from the file store's own ``manifest_path``,
-        which reads ``pipeline.server.PLAN_DIR`` through a :class:`LiveRef` at
-        call time, so a plans directory patched on that module is the one the
-        draft lands in.
+        which resolves the server module's plans-directory binding through a
+        :class:`LiveRef` at call time, so a plans directory patched on that
+        module is the one the draft lands in.
         """
         return self._store.manifest_path(plan_name).parent / f"{plan_name}.json"
 

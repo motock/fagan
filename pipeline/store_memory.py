@@ -130,17 +130,21 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
 
     # -- plan drafts (ADR 0012 decision 3) ------------------------------
     def _draft_path(self, plan_name: str):
-        """Return ``PLAN_DIR/<plan>.json``, resolved per call.
+        """Return ``<plans dir>/<plan>.json``, resolved per call.
 
-        The draft is a *transient file* the file store stages
-        (``save_plan``), not durable store state, so the reference store reads a
-        draft it does not hold itself from the plans directory the writers use,
-        through :mod:`pipeline.persistence` -- the reader ingest already refuses
-        with -- rather than constructing a file store of its own.
+        The draft is a *transient file* the file store stages (``save_plan``),
+        not durable store state, so the reference store reads a draft it does
+        not hold itself from the plans directory the writers use, through
+        :mod:`pipeline.persistence` -- the reader ingest already refuses with --
+        rather than constructing a file store of its own.  The directory comes
+        from the writer's own path helper, so a plans directory patched on that
+        module is the one that is read.
         """
         from pipeline import persistence
 
-        return persistence.PLAN_DIR / f'{plan_name}.json'
+        return persistence._journal_path(plan_name, 'story').parent / (
+            f'{plan_name}.json'
+        )
 
     def _draft_namespace(self, namespace: str) -> None:
         """Validate ``namespace`` and refuse anything but ``'default'``.

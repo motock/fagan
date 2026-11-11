@@ -3,8 +3,8 @@
 A plan's *description*, *epic* and authored *key* (and the plan-level
 ``plan_epics``, ``preflight_override`` and ``repo_url``) only started landing on
 the manifest when the manifest-fields story shipped.  Plans ingested before it
-carry the plan itself in their transient draft (``PLAN_DIR/<plan>.json``, ADR
-0012 decision 3) but nothing descriptive on the manifest, so an export built
+carry the plan itself in their transient draft (``<plan>.json`` in the plans
+directory, ADR 0012 decision 3) but nothing descriptive on the manifest, so an export built
 from the manifest would lose it.  This command copies those fields across.
 
 **Run this BEFORE deploying the draft-consumption story** (which deletes drafts

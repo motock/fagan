@@ -120,8 +120,10 @@ def test_the_marker_is_per_plan(stores):
     for backend, store in _all_stores(stores):
         print('DBG', backend,
               getattr(getattr(store, '_store', None), '_files', None),
-              getattr(getattr(getattr(store, '_store', None), '_files', None),
-                      'manifest_path', lambda n: None)('other-plan'))
+              sorted(p.name for p in (getattr(getattr(getattr(store, '_store', None),
+                                                          '_files', None), 'manifest_path',
+                                      lambda n: None)('other-plan')).parent.iterdir())
+              if getattr(store, '_store', None) is not None else None)
         store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN)
         assert store.is_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is False, backend
         assert store.mark_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN) is True, backend

@@ -27,11 +27,13 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.plugin_loader import SPEC_RE, load_plugin, plugin_spec, require_methods
 from pipeline.audit_file import FileAuditLog
 from pipeline.live_ref import LiveRef
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
+    RECORD_STORE_METHODS,
     InvalidRecordKeyError,
     PlanRecords,
     UnknownNamespaceError,
@@ -821,11 +823,13 @@ def store_kind(environ=None) -> str:
 
     ``PIPELINE_STORE`` unset, or exactly ``file``, selects the JSON-files file
     store; exactly ``sqlite`` selects the database store and requires an
-    absolute ``PIPELINE_STORE_PATH``. Every other value -- including the empty
-    string, and ``sqlite`` without a usable path -- raises, because a store
-    selection an operator cannot be given must never fall back silently to a
-    different one. Nothing is cached: the variable is read on every call, so a
-    later change is observed.
+    absolute ``PIPELINE_STORE_PATH``; exactly ``plugin`` selects the store
+    factory named by ``PIPELINE_STORE_PLUGIN`` and requires a well-formed
+    ``module:attr`` spec (the spec is shape-checked here, never imported). Every
+    other value -- including the empty string, and ``sqlite`` without a usable
+    path -- raises, because a store selection an operator cannot be given must
+    never fall back silently to a different one. Nothing is cached: the variable
+    is read on every call, so a later change is observed.
 
     ``environ`` defaults to the live process environment; passing a mapping
     reads that instead, which is how callers state a selection explicitly.
@@ -834,6 +838,17 @@ def store_kind(environ=None) -> str:
     raw = source.get("PIPELINE_STORE")
     if raw is None or raw == "file":
         return "file"
+    if raw == "plugin":
+        # Shape only: the spec is imported by build_store, never here, so a
+        # health probe runs no third-party code. The error names the variable,
+        # never the spec, which may be a path.
+        spec = plugin_spec("store", source)
+        if spec is None or not SPEC_RE.match(spec):
+            raise ValueError(
+                "PIPELINE_STORE_PLUGIN must name a 'module:attr' store factory "
+                "when PIPELINE_STORE=plugin"
+            )
+        return "plugin"
     if raw == "sqlite":
         # A selection that cannot name its database is not a usable selection:
         # two processes would otherwise each create their own file in whatever
@@ -848,7 +863,8 @@ def store_kind(environ=None) -> str:
             )
         return "sqlite"
     raise ValueError(
-        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file', 'sqlite')"
+        "PIPELINE_STORE must be unset or 'file' (allowed values: 'file', 'sqlite', "
+        "'plugin')"
     )
 
 
@@ -857,6 +873,12 @@ def build_store(environ=None) -> Store:
 
     The kind is resolved first, so a rejected configuration raises without
     constructing a store -- i.e. without touching the plan directory.
+
+    For ``PIPELINE_STORE=plugin`` the factory named by ``PIPELINE_STORE_PLUGIN``
+    is loaded through the plugin loader (ADR 0012 decision 7) and called with no
+    arguments; the object it returns must provide every name in
+    ``RECORD_STORE_METHODS``. Any loader error raises: nothing falls back to the
+    file store.
     """
     source = os.environ if environ is None else environ
     kind = store_kind(environ)
@@ -866,6 +888,11 @@ def build_store(environ=None) -> Store:
         from pipeline.store_sqlite import SqliteStore
 
         return SqliteStore(source["PIPELINE_STORE_PATH"])
+    if kind == "plugin":
+        factory = load_plugin("store", source)
+        built = factory()
+        require_methods(built, RECORD_STORE_METHODS, "store")
+        return built
     return FileStore()
 
 
@@ -877,7 +904,8 @@ def reported_store_kind(environ=None) -> str:
     unsupported value is reported as :data:`STORE_INVALID` instead of raising.
     The rejected value is never echoed -- it may be a path or a secret.
     :func:`build_store` remains fail-closed: the pipeline still refuses to run
-    with a selection it cannot honour; only the report degrades.
+    with a selection it cannot honour; only the report degrades. A plugin
+    selection is reported as ``plugin`` without loading the plugin.
     """
     try:
         return store_kind(environ)

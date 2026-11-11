@@ -20,7 +20,6 @@ this module global and the bare-name reads below resolve at call time.
 """
 
 import fcntl
-import json
 import logging
 import math
 import os
@@ -125,8 +124,7 @@ def _count_in_progress_agents() -> int:
     has a chance to grade it.
     """
     count = 0
-    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
-        manifest = json.loads(manifest_path.read_text())
+    for manifest in _store.records().get_manifests("default").values():
         for story in manifest.get("stories", {}).values():
             if _has_live_test_author_phase(story):
                 count += 1

@@ -52,11 +52,16 @@ class _Harness:
         self.records_to_serve = ([{"event": "story_done", "story_key": "s1"}], 0)
         self.history_reads = []
 
-        # The plan-completion module no longer holds a PLAN_DIR binding: the
-        # marker and the report are records of the store now.  The store
-        # resolves the plans directory through the server module, so that is
-        # the binding to point at the scratch dir.
+        # The plan-completion module holds no PLAN_DIR binding any more: the
+        # once-only marker and the durable report are records of the store now.
+        # The store resolves the plans directory through the server module
+        # (and, for the sidecars, through the persistence module), so those
+        # are the bindings to point at the scratch dir.  The module-level
+        # binding is patched only while it still exists, so no run ever
+        # writes into the real plans directory.
+        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
+        monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
         monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):

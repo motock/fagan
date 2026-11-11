@@ -108,7 +108,6 @@ def _match_story(draft_story: dict, stories: dict[str, dict]) -> str | None:
         for story_key, story in stories.items():
             if isinstance(story, dict) and story.get("plan_key") == key:
                 return story_key
-        return None
     summary = draft_story.get("summary")
     if not isinstance(summary, str):
         return None

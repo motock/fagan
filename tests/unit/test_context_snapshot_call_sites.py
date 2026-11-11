@@ -25,7 +25,7 @@ import pytest
 
 # pipeline.server must load before pipeline.service / pipeline.ingest (the
 # import-cycle note in tests/unit/test_ingest_keyless_reingest.py).
-import pipeline.server
+import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
 from pipeline import dispatch_context
 from pipeline import paths, persistence, server
@@ -63,7 +63,7 @@ def record_calls(monkeypatch):
     """Record every context-snapshot call made through the record API."""
     calls: list[tuple[str, tuple, dict]] = []
 
-    def _wrap(name: str):
+    def _wrap(name: str) -> None:
         original = getattr(FileRecords, name, None)
 
         def spy(self, *args, **kwargs):
@@ -79,7 +79,7 @@ def record_calls(monkeypatch):
     return calls
 
 
-def _field(call, index: int, *names: str):
+def _argument(call, index: int, *names: str):
     """Return the *index*-th positional argument of *call*, or a named one."""
     _name, args, kwargs = call
     if len(args) > index:
@@ -90,6 +90,32 @@ def _field(call, index: int, *names: str):
     raise AssertionError(f'no argument {names} in {call!r}')
 
 
+def _calls_named(calls, name):
+    """Return the recorded calls of *name*."""
+    return [call for call in calls if call[0] == name]
+
+
+def _refuse_refetch(monkeypatch):
+    """Make any refetch of the source fail the test."""
+
+    def no_refetch(source):
+        raise AssertionError('a stored snapshot must be served, not refetched')
+
+    monkeypatch.setattr(ctxsrc, 'resolve_dir_source', no_refetch)
+
+
+def _fake_source(text: str):
+    """Return a stand-in for ``resolve_dir_source`` serving *text*."""
+    digest = digest_of(text)
+    return {
+        'text': text,
+        'digest': digest,
+        'bytes': len(text.encode('utf-8')),
+        'files': 1,
+        'truncated': False,
+    }
+
+
 # -- the write call site -------------------------------------------------
 
 
@@ -97,11 +123,11 @@ def test_snapshot_context_writes_through_put_context_snapshot(plan_dir, record_c
     """``snapshot_context`` stores the snapshot through the record API."""
     digest = ctxsrc.snapshot_context(TEXT)
 
-    puts = [call for call in record_calls if call[0] == 'put_context_snapshot']
+    puts = _calls_named(record_calls, 'put_context_snapshot')
     assert puts, 'snapshot_context must write through put_context_snapshot'
-    assert _field(puts[0], 0) == DEFAULT_NAMESPACE
-    assert _field(puts[0], 1) == digest
-    assert _field(puts[0], 2, 'content', 'text') == TEXT
+    assert _argument(puts[0], 0, 'namespace') == DEFAULT_NAMESPACE
+    assert _argument(puts[0], 1, 'digest') == digest
+    assert _argument(puts[0], 2, 'content', 'text') == TEXT
 
 
 def test_snapshot_context_returns_the_digest_of_the_content(plan_dir, record_calls):
@@ -123,62 +149,41 @@ def test_snapshot_context_passes_the_caller_meta_through(plan_dir, record_calls)
     """The caller's meta reaches the record, not a copy of it."""
     ctxsrc.snapshot_context(TEXT, meta={'sha': 'abc123'})
 
-    puts = [call for call in record_calls if call[0] == 'put_context_snapshot']
+    puts = _calls_named(record_calls, 'put_context_snapshot')
     assert puts, 'snapshot_context must write through put_context_snapshot'
-    meta = _field(puts[0], 3, 'meta')
+    meta = _argument(puts[0], 3, 'meta')
     assert meta.get('sha') == 'abc123'
 
 
 # -- the read call site --------------------------------------------------
 
 
-def test_dispatch_serves_a_recorded_snapshot(plan_dir, record_calls):
+def test_dispatch_serves_a_recorded_snapshot(plan_dir, record_calls, monkeypatch):
     """A recorded digest is served from the snapshot, without a refetch."""
     digest = digest_of(TEXT)
     server._store.records().put_context_snapshot(DEFAULT_NAMESPACE, digest, TEXT, {})
+    _refuse_refetch(monkeypatch)
 
-    def no_refetch(source):
-        raise AssertionError('a stored snapshot must be served, not refetched')
-
-    original_resolve = ctxsrc.resolve_dir_source
-    import pipeline.dispatch_context as dc
-
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(ctxsrc, 'resolve_dir_source', no_refetch)
-    try:
-        loaded = dc._load_recorded_context(SOURCE, _recorded(digest))
-    finally:
-        monkey.undo()
+    loaded = dispatch_context._load_recorded_context(SOURCE, _recorded(digest))
 
     assert loaded['text'] == TEXT
     assert loaded['digest'] == digest
     assert loaded['bytes'] == len(TEXT.encode('utf-8'))
-    assert original_resolve is not None
 
 
 def test_dispatch_reads_the_recorded_digest_through_get_context_snapshot(
-    plan_dir, record_calls
+    plan_dir, record_calls, monkeypatch
 ):
     """The recorded digest is read through the record API."""
     digest = digest_of(TEXT)
     server._store.records().put_context_snapshot(DEFAULT_NAMESPACE, digest, TEXT, {})
+    _refuse_refetch(monkeypatch)
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(
-        ctxsrc,
-        'resolve_dir_source',
-        lambda source: (_ for _ in ()).throw(
-            AssertionError('a stored snapshot must be served, not refetched')
-        ),
-    )
-    try:
-        dispatch_context._load_recorded_context(SOURCE, _recorded(digest))
-    finally:
-        monkey.undo()
+    dispatch_context._load_recorded_context(SOURCE, _recorded(digest))
 
-    reads = [call for call in record_calls if call[0] == 'get_context_snapshot']
+    reads = _calls_named(record_calls, 'get_context_snapshot')
     assert reads, 'the recorded digest must be read through get_context_snapshot'
-    assert _field(reads[0], 1, 'digest') == digest
+    assert _argument(reads[0], 1, 'digest') == digest
 
 
 def test_a_missing_snapshot_is_refetched(plan_dir, record_calls, monkeypatch):
@@ -188,13 +193,7 @@ def test_a_missing_snapshot_is_refetched(plan_dir, record_calls, monkeypatch):
 
     def fake_resolve(source):
         refetched.append(source)
-        return {
-            'text': TEXT,
-            'digest': digest,
-            'bytes': len(TEXT.encode('utf-8')),
-            'files': 1,
-            'truncated': False,
-        }
+        return _fake_source(TEXT)
 
     monkeypatch.setattr(ctxsrc, 'resolve_dir_source', fake_resolve)
 
@@ -206,19 +205,9 @@ def test_a_missing_snapshot_is_refetched(plan_dir, record_calls, monkeypatch):
 
 
 def test_a_refetched_snapshot_is_stored_again(plan_dir, record_calls, monkeypatch):
-    """The refetched content is snapshotted again through the record API."""
+    """The refetched content is snapshotted again, through the record API."""
     digest = digest_of(TEXT)
-    monkeypatch.setattr(
-        ctxsrc,
-        'resolve_dir_source',
-        lambda source: {
-            'text': TEXT,
-            'digest': digest,
-            'bytes': len(TEXT.encode('utf-8')),
-            'files': 1,
-            'truncated': False,
-        },
-    )
+    monkeypatch.setattr(ctxsrc, 'resolve_dir_source', lambda source: _fake_source(TEXT))
 
     dispatch_context._load_recorded_context(SOURCE, _recorded(digest))
 
@@ -227,19 +216,13 @@ def test_a_refetched_snapshot_is_stored_again(plan_dir, record_calls, monkeypatc
     assert found['content'] == TEXT
 
 
-def test_a_refetched_snapshot_that_differs_is_refused(plan_dir, record_calls, monkeypatch):
+def test_a_refetched_snapshot_that_differs_is_refused(
+    plan_dir, record_calls, monkeypatch
+):
     """Refetched content that is not byte-identical is refused."""
     digest = digest_of(TEXT)
     monkeypatch.setattr(
-        ctxsrc,
-        'resolve_dir_source',
-        lambda source: {
-            'text': OTHER_TEXT,
-            'digest': digest_of(OTHER_TEXT),
-            'bytes': len(OTHER_TEXT.encode('utf-8')),
-            'files': 1,
-            'truncated': False,
-        },
+        ctxsrc, 'resolve_dir_source', lambda source: _fake_source(OTHER_TEXT)
     )
 
     with pytest.raises(ctxsrc.ContextSourceError) as excinfo:
@@ -250,20 +233,12 @@ def test_a_refetched_snapshot_that_differs_is_refused(plan_dir, record_calls, mo
     )
 
 
-def test_a_digest_that_is_not_alphanumeric_hex_is_refused(plan_dir, record_calls, monkeypatch):
+def test_a_digest_that_is_not_alphanumeric_hex_is_refused(
+    plan_dir, record_calls, monkeypatch
+):
     """A digest that is not hex is refused and never used as a path fragment."""
     malicious = 'sha256:../escape'
-    monkeypatch.setattr(
-        ctxsrc,
-        'resolve_dir_source',
-        lambda source: {
-            'text': TEXT,
-            'digest': digest_of(TEXT),
-            'bytes': len(TEXT.encode('utf-8')),
-            'files': 1,
-            'truncated': False,
-        },
-    )
+    monkeypatch.setattr(ctxsrc, 'resolve_dir_source', lambda source: _fake_source(TEXT))
 
     with pytest.raises((ctxsrc.ContextSourceError, InvalidRecordKeyError)):
         dispatch_context._load_recorded_context(SOURCE, _recorded(malicious, OTHER_TEXT))

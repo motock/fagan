@@ -42,9 +42,18 @@ import json
 import sqlite3
 from typing import Any
 
-from pipeline.audit_chain import canonical, link
+from pipeline.audit_chain import canonical, link, record_hash
 from pipeline.audit_log import HOST_CHAIN_ID, validate_chain
 from pipeline.store_records import validate_namespace
+
+
+class AuditChainConflictError(ValueError):
+    """An import refused because the chain already holds rows.
+
+    A ``ValueError`` so a caller that only asks "was this refused" needs no
+    special case; the subclass lets the importer tell a race from bad input.
+    """
+
 
 #: The phrase both append-only guards refuse with.
 APPEND_ONLY_MESSAGE = 'audit records are append-only'
@@ -92,6 +101,9 @@ _SELECT_TAIL_FIELDS = (
     'WHERE namespace = ? AND chain = ? ORDER BY seq DESC LIMIT 1'
 )
 _SELECT_CHAINS = 'SELECT DISTINCT chain FROM audit_records WHERE namespace = ?'
+_SELECT_ANY_ROW = (
+    'SELECT seq FROM audit_records WHERE namespace = ? AND chain = ? LIMIT 1'
+)
 _INSERT_ROW = (
     'INSERT INTO audit_records (namespace, chain, seq, prev_hash, record, hash) '
     'VALUES (?, ?, ?, ?, ?, ?)'
@@ -156,6 +168,27 @@ def _detached(record: dict) -> dict:
     change stored history through it.
     """
     return json.loads(canonical(record))
+
+
+def _check_importable(records: list[dict]) -> None:
+    """Refuse a chain that breaks the chain rules, before anything is written.
+
+    Each record must sit at its position (``seq`` counts from 0), link to the
+    hash before it (``prev_hash``) and carry the hash its own fields produce
+    (``hash``).  The messages name the position only, never the content.
+    """
+    previous_hash = ''
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise TypeError(f'audit record {index} is not an object')
+        seq = record.get('seq')
+        if type(seq) is not int or seq != index:
+            raise ValueError(f'audit record {index} is out of sequence')
+        if record.get('prev_hash') != previous_hash:
+            raise ValueError(f'audit record {index} does not link to its predecessor')
+        if record.get('hash') != record_hash(record):
+            raise ValueError(f'audit record {index} fails its own hash')
+        previous_hash = record['hash']
 
 
 class SqliteAuditLog:
@@ -297,6 +330,43 @@ class SqliteAuditLog:
         with self._store._guard:
             rows = self._rows(_SELECT_ROWS, namespace, chain)
         return [_decode(*row) for row in rows]
+
+    def import_chain(self, namespace: str, chain: str, records: list[dict]) -> None:
+        """Insert a whole chain, copied verbatim, into an empty chain.
+
+        This is the one-time import path (ADR 0012 decision 10): the rows are
+        the file's records as they are, never re-appended, so every hash is the
+        one the file anchor recorded.  The records are checked against the
+        chain rules before any statement runs; a chain that already holds a row
+        is refused.  The rows go in under one ``BEGIN IMMEDIATE`` -- all or none.
+        Nothing reaches this method through the ``AuditLog`` protocol.
+        """
+        validate_namespace(namespace)
+        validate_chain(chain)
+        _check_importable(records)
+        with self._store._guard:
+            if self._conn.in_transaction:
+                # Joins the caller's transaction, which owns the boundary.
+                self._import_rows(namespace, chain, records)
+                return
+            if not self._store._begin_immediate():
+                raise sqlite3.OperationalError(
+                    'database is locked: audit import could not acquire the '
+                    'write lock'
+                )
+            try:
+                self._import_rows(namespace, chain, records)
+                self._conn.execute('COMMIT')
+            except BaseException:
+                self._rollback()
+                raise
+
+    def _import_rows(self, namespace: str, chain: str, records: list[dict]) -> None:
+        """Insert *records* once the chain is confirmed empty.  Caller holds the lock."""
+        if self._rows(_SELECT_ANY_ROW, namespace, chain):
+            raise AuditChainConflictError('audit chain already holds records')
+        for record in records:
+            self._insert(namespace, chain, record)
 
     def head(self, namespace: str, chain: str) -> dict | None:
         """Return the newest record of the chain, or ``None`` when absent.

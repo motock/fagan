@@ -52,13 +52,17 @@ class FakeSchedulerDaemon:
 def daemon_env(tmp_path, monkeypatch):
     """Patch every collaborator run_daemon() wires up, plus PLAN_DIR."""
     FakeSchedulerDaemon.instances = []
-    # run_daemon() reads PLAN_DIR as its own module global (for the lock path
-    # and, after this story, the default health path); patch that binding.
+    # run_daemon() resolves the host-local root (for the lock path and, after
+    # this story, the default health path) through the host state, which
+    # reads the live pipeline.server.PLAN_DIR binding -- patch that one.
     # pipeline.paths.PLAN_DIR is patched too so the test is honest about the
     # brief ("pipeline.paths.PLAN_DIR patched to tmp_path") and so either
     # spelling of the default expression resolves to tmp_path.
-    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths_mod, "PLAN_DIR", tmp_path)
+    if hasattr(mod, "PLAN_DIR"):
+        # Pre-migration the daemon held its own module-load copy of PLAN_DIR.
+        monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(mod, "SchedulerDaemon", FakeSchedulerDaemon)
     monkeypatch.setattr(mod, "build_bus", lambda: object())
     monkeypatch.setattr(mod, "scan_all_plans", lambda bus: None)

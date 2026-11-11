@@ -73,10 +73,13 @@ class _Harness:
         # Snapshot of whether the report file existed when _notify_user ran.
         self.report_existed_at_notify = []
 
-        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
-        # The notification history now comes from the record store, so the
-        # store is the seam this harness serves the records through.
+        # The plan-completion module holds no PLAN_DIR binding any more: the
+        # once-only marker and the durable report are records of the store now.
+        # The store resolves the plans directory through the server module
+        # (and, for the sidecars, through the persistence module), so those
+        # are the bindings to point at the scratch dir.
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
+        monkeypatch.setattr(pipeline_persistence, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):
             self.notify_calls.append((plan_name, message, kwargs))

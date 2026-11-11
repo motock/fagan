@@ -342,7 +342,6 @@ from .rebrief import (
     detect_unsatisfiable_signal,
     diagnose_failure,
 )
-from .host_state import build_host_state
 from .review import (
     _run_reviewer,
     _run_security_reviewer,

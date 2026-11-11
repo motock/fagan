@@ -385,6 +385,56 @@ class RecordStore(Protocol):
         """
         ...
 
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Stage ``plan`` as the transient plan draft of ``plan_name``.
+
+        The draft is the plan document an operator hands the pipeline before
+        ingest (ADR 0012 decision 3, "Plan draft (transient)
+        ``<plan>.json``").  It replaces any previous draft *wholesale*: a
+        field absent from ``plan`` is absent from the draft afterwards, never
+        inherited from the document it replaced.
+
+        ``plan`` must be a dict and is serialised before anything is written,
+        so a document that cannot be stored leaves no trace behind.  The
+        namespace and plan name are validated first; an unknown namespace is
+        refused before storage is touched.
+        """
+        ...
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return ``plan_name``'s staged plan draft, or ``None`` when absent.
+
+        A read, so it creates nothing.  Missing is not unreadable: a plan with
+        no draft is ``None``, while a draft that exists but is malformed, is
+        not a JSON object, or cannot be read raises
+        :class:`UnreadableRecordError` whose ``reason`` is the refusal text
+        the legacy reader (:func:`pipeline.persistence.read_plan_file`)
+        produces for the same file.  A truncated write must never surface as a
+        bare ``JSONDecodeError``: ingest builds its refusal message from this
+        error and that message stays byte-identical.
+        """
+        ...
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s plan draft; return whether one was deleted.
+
+        ``False`` -- not an error -- when there was no draft to delete, so the
+        call is idempotent and a second delete reports ``False``.
+        """
+        ...
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plan names that have a staged draft.
+
+        Only ``<plan>.json`` files whose stem holds no ``'.'`` count, so a
+        plan's manifest, decisions and journal sidecars are not drafts, and
+        the file must hold a JSON object with an ``epics`` key -- the same
+        filter :meth:`pipeline.service.PipelineService.list_ingestable_plans`
+        applies.  A file that cannot be parsed is skipped, not raised: one bad
+        draft must not blind a caller that lists them all.
+        """
+        ...
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Serialise mutations of one ``(namespace, plan_name)`` pair.
 

@@ -195,6 +195,23 @@ def verify_context_digest(digest: str, content: str) -> str:
     return hexdigest
 
 
+def context_address(value: object) -> str:
+    """Return the folder name a *read* may look up, else raise.
+
+    Reads are deliberately more permissive than writes: a digest recorded
+    before the ``sha256:`` prefix was mandatory (or written by hand as a bare
+    hex string) is still a readable address, so the prefix is optional here.
+    What is refused is a key that is not an alphanumeric address at all -- a
+    path fragment, say -- which must never be used to build a path.
+    """
+    if not isinstance(value, str):
+        raise InvalidRecordKeyError('invalid context digest')
+    hexdigest = value.removeprefix('sha256:')
+    if not hexdigest.isalnum():
+        raise InvalidRecordKeyError('invalid context digest')
+    return hexdigest
+
+
 def snapshot_meta(meta: dict | None, digest: str, content: str) -> dict:
     """Return the snapshot's stored meta: the caller's plus its address."""
     if meta is not None and not isinstance(meta, dict):

@@ -230,12 +230,11 @@ def _plan_summary(
     *, include_notification_summary: bool = False,
 ) -> dict[str, Any]:
     stories = manifest.get("stories", {})
-    try:
-        updated_at = _store.manifest_path(plan_name).stat().st_mtime
-    except OSError:
-        # Manifest existed a moment ago (caller just read it) but vanished
-        # under a race with a concurrent write - sort it last rather than
-        # 500ing the whole list over one plan's timestamp.
+    updated_at = _store.records().get_manifest_updated_at("default", plan_name)
+    # A manifest that vanished under a race with a concurrent write has no
+    # timestamp - sort it last rather than 500ing the whole list over one
+    # plan's timestamp.
+    if updated_at is None:
         updated_at = 0.0
     latest_notification = None
     if include_notification_summary:

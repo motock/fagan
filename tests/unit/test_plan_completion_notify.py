@@ -50,9 +50,10 @@ class _Harness:
         self.records_to_serve = ([{"event": "story_done", "story_key": "s1"}], 0)
         self.history_reads = []
 
-        monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path)
-        # The notification history now comes from the record store, so the
-        # store is the seam this harness serves the records through.
+        # The plan-completion module no longer holds a PLAN_DIR binding: the
+        # marker and the report are records of the store now.  The store
+        # resolves the plans directory through the server module, so that is
+        # the binding to point at the scratch dir.
         monkeypatch.setattr(pipeline_server, "PLAN_DIR", tmp_path)
 
         def fake_notify(plan_name, message, **kwargs):

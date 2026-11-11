@@ -13,14 +13,25 @@ atomically (temp file plus ``os.replace``, temp file cleaned up on failure).
 
 import fcntl
 import json
+import math
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
+from pipeline.parsers import _validate_key
 
-__all__ = ["FileHostState", "HostState", "SchedulerPidLock", "build_host_state"]
+__all__ = [
+    "FileHostState",
+    "HostState",
+    "PlanLock",
+    "SchedulerPidLock",
+    "build_host_state",
+]
 
 # The root is the plans directory, resolved through the live ``pipeline.server``
 # binding on every access so ``monkeypatch.setattr(pipeline.server, ...)`` keeps
@@ -39,6 +50,53 @@ _RECENT_LIMIT = 20
 _UI_STATE_FILE = ".dashboard_ui_state.json"
 _HEALTH_FILE = ".scheduler_health.json"
 _LOCK_FILE = ".scheduler_daemon.lock"
+
+# Plan locks are ``<plan>.lock`` and the heavy-build lock is ``heavy.lock``, both
+# directly under the root. Retry cadence while a bounded plan-lock wait is open.
+_PLAN_LOCK_SUFFIX = ".lock"
+_HEAVY_LOCK_FILE = "heavy.lock"
+_PLAN_LOCK_RETRY_SECONDS = 0.05
+
+
+@dataclass(frozen=True)
+class PlanLock:
+    """One plan-lock attempt: ``acquired`` says whether the flock is held.
+
+    ``fd`` is the open lock-file descriptor. The owner of the hold may drop and
+    re-take the flock on it, but must not close it: the context manager does.
+    """
+
+    acquired: bool
+    fd: int
+
+
+@contextmanager
+def _open_lock_file(path: Path) -> Iterator[int]:
+    """Yield a descriptor on *path*, creating it, and close it on exit."""
+    fd = os.open(path, os.O_CREAT | os.O_RDWR)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _flock_within(fd: int, wait_seconds: float) -> bool:
+    """Take an exclusive flock on *fd*, retrying until *wait_seconds* elapses.
+
+    ``wait_seconds=0`` is a single non-blocking attempt. Non-finite or negative
+    budgets are treated as zero, so a bad value never waits forever.
+    """
+    budget = wait_seconds if math.isfinite(wait_seconds) and wait_seconds > 0 else 0.0
+    deadline = time.monotonic() + budget
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(_PLAN_LOCK_RETRY_SECONDS, remaining))
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -129,6 +187,12 @@ class HostState(Protocol):
     def scheduler_health_path(self) -> Path: ...
 
     def scheduler_pid_lock(self) -> SchedulerPidLock: ...
+
+    def plan_lock(
+        self, plan_name: str, wait_seconds: float = 0.0
+    ) -> AbstractContextManager[PlanLock]: ...
+
+    def heavy_lock(self) -> AbstractContextManager[None]: ...
 
 
 class FileHostState:
@@ -237,6 +301,37 @@ class FileHostState:
     def scheduler_pid_lock(self) -> SchedulerPidLock:
         """The daemon's single-instance lock, held under the host-local root."""
         return SchedulerPidLock(self._root() / _LOCK_FILE)
+
+    # -- plan and heavy locks ----------------------------------------------
+
+    @contextmanager
+    def plan_lock(self, plan_name: str, wait_seconds: float = 0.0) -> Iterator[PlanLock]:
+        """Hold the flock for *plan_name*, waiting at most *wait_seconds*.
+
+        The plan name is validated before any path is built, so an unsafe name
+        never creates a file outside the root. The yielded ``PlanLock.acquired``
+        is ``False`` when the lock stayed held for the whole budget. The flock is
+        dropped and the descriptor closed on exit, even when the body raises.
+        """
+        _validate_key(plan_name)
+        path = self._root() / f"{plan_name}{_PLAN_LOCK_SUFFIX}"
+        with _open_lock_file(path) as fd:
+            acquired = _flock_within(fd, wait_seconds)
+            try:
+                yield PlanLock(acquired=acquired, fd=fd)
+            finally:
+                if acquired:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+
+    @contextmanager
+    def heavy_lock(self) -> Iterator[None]:
+        """Blocking exclusive flock on ``heavy.lock``, serializing heavy builds."""
+        with _open_lock_file(self._root() / _HEAVY_LOCK_FILE) as fd:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
 
     # -- internals ---------------------------------------------------------
 

@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import plan_approval as pa
 from pipeline import server as p
@@ -124,7 +123,7 @@ def _gate_on_and_version_two(monkeypatch):
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     """Point every PLAN_DIR binding the command touches at ``tmp_path``."""
-    for module in (p, ppers, pcon):
+    for module in (p, ppers):
         monkeypatch.setattr(module, "PLAN_DIR", tmp_path)
     return tmp_path
 

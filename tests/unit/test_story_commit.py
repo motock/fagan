@@ -234,7 +234,7 @@ def test_commit_story_raises_when_plan_lock_never_acquired(plan_dir, monkeypatch
     )
     before = path.read_bytes()
     monkeypatch.setattr(pcon, "_plan_reacquire_timeout", lambda: 0.3)
-    lock_path = pcon.PLAN_DIR / f"{PLAN}.lock"
+    lock_path = plan_dir / f"{PLAN}.lock"
     holder = _hold_lock_in_subprocess(lock_path, 10)
     try:
         with pytest.raises(pcon.PlanLockReacquireTimeout):
@@ -257,7 +257,7 @@ def test_commit_story_is_reentrant_under_a_held_plan_lock(plan_dir, monkeypatch)
             },
         },
     )
-    lock_path = pcon.PLAN_DIR / f"{PLAN}.lock"
+    lock_path = plan_dir / f"{PLAN}.lock"
     errors: list[BaseException] = []
 
     def body() -> None:

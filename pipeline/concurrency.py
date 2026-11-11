@@ -6,27 +6,26 @@ flock-based per-plan mutation lock. _heavy_lock serializes heavy build/test
 invocations. _is_heavy classifies a command as heavy.
 
 _count_in_progress_agents / _is_heavy are patched via p.<name> by tests;
-server call sites use bare names -> re-export -> patch lands. PLAN_DIR is
-resolved at call time through the ``_ServerRef`` binding below (the same
-pattern pipeline/store.py uses) rather than imported from .paths at module
-load: a module-load copy freezes the real ~/.claude/plans path into every
-test run, so _plan_lock flocked the REAL plans directory even in a test
-that patched p.PLAN_DIR to a tmp_path — and any live process holding a
-lock there (e.g. a long-running MCP server) made dispatch silently return
-skipped:"locked" and mint nothing (root cause of the W4L-02
-test_w4l_dispatch_correlation failures). Patching
-pipeline_concurrency.PLAN_DIR directly also still works: setattr replaces
-this module global and the bare-name reads below resolve at call time.
+server call sites use bare names -> re-export -> patch lands. The lock files
+themselves live under the host-local root and are opened by
+pipeline/host_state.py (``FileHostState.plan_lock`` / ``heavy_lock``), which
+resolves that root at call time. A module-load copy of the root would freeze
+the real ~/.claude/plans path into every test run, so _plan_lock flocked the
+REAL plans directory even in a test that redirected the root to a tmp_path,
+and any live process holding a lock there (e.g. a long-running MCP server)
+made dispatch silently return skipped:"locked" and mint nothing (root cause
+of the W4L-02 test_w4l_dispatch_correlation failures).
 """
 
 import fcntl
-import json
 import logging
 import math
 import os
 import threading
 import time
 from contextlib import contextmanager
+
+from .host_state import build_host_state
 
 # Same convention as the rest of the package (pipeline/advance_pool.py,
 # pipeline/service.py, ...): module logger named after the module, structured
@@ -51,10 +50,9 @@ class _ServerRef:
     """Delegates to the *current* ``pipeline.server`` binding for a name.
 
     Mirrors the ``_ServerRef`` pattern already used by ``pipeline/store.py``
-    and ``pipeline/service.py``: the class body references server-sourced
-    names (``PLAN_DIR``) as bare module globals, and those names must be read
-    from the live ``pipeline.server`` value at call time so
-    ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` lands.
+    and ``pipeline/service.py``: server-sourced names are read as bare module
+    globals, and they must be read from the live ``pipeline.server`` value at
+    call time so ``monkeypatch.setattr(pipeline.server, "_store", ...)`` lands.
     """
 
     def __init__(self, name: str):
@@ -80,10 +78,14 @@ if _pre_reload_server_ref is not None:
     _ServerRef = _pre_reload_server_ref
 del _pre_reload_server_ref
 
-PLAN_DIR = _ServerRef("PLAN_DIR")
 # Same live-binding rule as above: the record store is read from the server
 # module at call time so monkeypatching the server's store lands.
 _store = _ServerRef("_store")
+
+
+def _host_state():
+    """The host-local state that owns the lock files (see pipeline/host_state.py)."""
+    return build_host_state()
 
 
 def _has_live_test_author_phase(story: dict) -> bool:
@@ -125,8 +127,7 @@ def _count_in_progress_agents() -> int:
     has a chance to grade it.
     """
     count = 0
-    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
-        manifest = json.loads(manifest_path.read_text())
+    for manifest in _store.records().get_manifests("default").values():
         for story in manifest.get("stories", {}).values():
             if _has_live_test_author_phase(story):
                 count += 1
@@ -274,14 +275,9 @@ def _plan_lock_once(plan_name: str):
         # exclusive flock on a new fd would fail.
         yield True
         return
-    lock_path = PLAN_DIR / f"{plan_name}.lock"
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            acquired = True
-        except BlockingIOError:
-            acquired = False
+    with _host_state().plan_lock(plan_name) as attempt:
+        fd = attempt.fd
+        acquired = attempt.acquired
         if not acquired and _contended_in_process(plan_name):
             # The flock is held by another thread of THIS process, which may
             # be about to open a _released_plan_lock window around a slow
@@ -338,8 +334,6 @@ def _plan_lock_once(plan_name: str):
                     _process_plan_holders.discard(plan_name)
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 _finish_plan_lock_hold(plan_name)
-    finally:
-        os.close(fd)
 
 
 _plan_lock_state = threading.local()
@@ -617,8 +611,8 @@ def _released_plan_lock(plan_name: str):
         body still re-acquires the lock before propagating.
 
     No new fd is opened here: the release and the re-acquire both act on the
-    fd recorded by the enclosing _plan_lock, which closes it in its own
-    finally — so a release/re-acquire cycle leaks no descriptor and the
+    fd recorded by the enclosing _plan_lock, which the host state closes when
+    that hold exits — so a release/re-acquire cycle leaks no descriptor and the
     outer exit still releases the flock for real.
     """
     held = _held_plan_locks()
@@ -709,16 +703,8 @@ def _heavy_lock():
       - backend.py reviewer bash (reviewer-invoked)
     Decide what counts as heavy with `_is_heavy()`.
     """
-    lock_path = PLAN_DIR / "heavy.lock"
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+    with _host_state().heavy_lock():
+        yield
 
 
 # Heavy build/test executables: these typically spend GB-seconds of memory

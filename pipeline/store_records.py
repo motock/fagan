@@ -702,7 +702,13 @@ class PlanCompletionRecords:
         path = self._plan_path(plan_name, '.report.md')
         tmp = path.with_name(f'{path.name}.tmp')
         tmp.write_text(text, encoding='utf-8')
-        os.replace(tmp, path)
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            # Leave nothing behind: a failed replace must not litter the plans
+            # directory with a half-written report.
+            tmp.unlink(missing_ok=True)
+            raise
 
     def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
         """Return ``plan_name``'s report, or ``None`` when it has none."""

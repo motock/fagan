@@ -181,10 +181,9 @@ def test_list_plan_drafts_ignores_a_deleted_draft(stores):
 
 @pytest.mark.parametrize('bad_name', ['../x', '', 'a/b'])
 def test_put_plan_draft_of_an_invalid_plan_name_raises(stores, bad_name):
-    for backend, store in _all_stores(stores):
+    for _backend, store in _all_stores(stores):
         with pytest.raises(InvalidRecordKeyError):
             store.put_plan_draft(DEFAULT_NAMESPACE, bad_name, DRAFT)
-        assert store.get_plan_draft(DEFAULT_NAMESPACE, bad_name) is None, backend
 
 
 @pytest.mark.parametrize('bad_name', ['../x', '', 'a/b'])

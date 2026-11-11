@@ -103,6 +103,16 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _worktree_root(plan_root) -> str:
+    """The worktree root the fixture pinned (the dashboard resolves it too)."""
+    return str(plan_root.parent / "worktrees")
+
+
+def _fingerprint_config(plan_root) -> dict:
+    """A scheduler config fingerprint that agrees with the dashboard."""
+    return {"plan_dir": str(plan_root), "worktree_root": _worktree_root(plan_root)}
+
+
 # ---------------------------------------------------------------------------
 # The host-state surface
 # ---------------------------------------------------------------------------

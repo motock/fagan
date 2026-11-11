@@ -109,10 +109,11 @@ _MISSING_TABLE = 'no such table'
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the audit table and its append-only guards on *conn*.
 
-    Called at store construction, outside any transaction: a table an append
-    inside the first transaction of a brand-new file writes to must not be
-    created by that transaction, where a rollback would take it away.  The DDL
-    is ``IF NOT EXISTS`` throughout, so opening a database that already has them
+    Called from the store's schema migration (``pipeline/store_sqlite_schema``)
+    before the store serves its first record: a table an append inside the
+    first transaction of a brand-new file writes to must already exist, and a
+    rollback would take a table created by that transaction away.  The DDL is
+    ``IF NOT EXISTS`` throughout, so opening a database that already has them
     is a no-op and does not touch the rows.
     """
     conn.execute(AUDIT_SCHEMA)

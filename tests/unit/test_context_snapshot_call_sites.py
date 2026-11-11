@@ -29,7 +29,9 @@ import pipeline.server  # noqa: F401
 from pipeline import context_sources as ctxsrc
 from pipeline import dispatch_context, paths, persistence, server
 from pipeline.store import FileRecords
+from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
+from pipeline.store_sqlite import SqliteRecords
 
 TEXT = '--- guide.md ---\nUSE-TABS-ALWAYS\n'
 OTHER_TEXT = '--- guide.md ---\nSOMETHING-ELSE\n'

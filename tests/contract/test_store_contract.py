@@ -399,7 +399,7 @@ def test_store_protocol_declares_no_workspace_read(store_factory):
         assert not hasattr(store, name), f"{type(store).__name__} still exposes {name}"
 
 
-def test_recent_workspaces_add_dedupes_and_prepends():
+def test_recent_workspaces_add_dedupes_and_prepends(monkeypatch, tmp_path):
     """The most recent workspace is first, and re-adding it does not duplicate.
 
     Moved off the store onto the host state (ADR 0012, decision 4); the store
@@ -407,6 +407,7 @@ def test_recent_workspaces_add_dedupes_and_prepends():
     """
     from pipeline.host_state import FileHostState
 
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     store = FileHostState()
 
     assert store.get_recent_workspaces() == []
@@ -418,7 +419,7 @@ def test_recent_workspaces_add_dedupes_and_prepends():
     assert store.get_recent_workspaces() == ["/repo/one", "/repo/two"]
 
 
-def test_active_workspace_round_trip_and_clear():
+def test_active_workspace_round_trip_and_clear(monkeypatch, tmp_path):
     """The active workspace persists, and clearing it reads back as None.
 
     Host-local record now (ADR 0012, decision 4), not part of the store
@@ -426,6 +427,7 @@ def test_active_workspace_round_trip_and_clear():
     """
     from pipeline.host_state import FileHostState
 
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     store = FileHostState()
 
     assert store.get_active_workspace() is None

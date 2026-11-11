@@ -281,6 +281,38 @@ def test_health_reports_the_fingerprint_when_the_snapshot_agrees(plan_root):
     assert body["config_mismatch"] == []
 
 
+def test_health_reports_the_host_state_root_as_the_plan_dir(plan_root):
+    """The endpoint's ``plan_dir`` is the root the host state resolves."""
+    body = _health_body(plan_root)
+    assert body["plan_dir"] == str(plan_root)
+
+
+def test_the_liveness_probe_reads_the_snapshot_from_the_host_state_root(
+    plan_root, monkeypatch
+):
+    """``/livez`` grades the snapshot the host state resolves.
+
+    A stale snapshot under the host-state root must make the probe report
+    the scheduler as stale -- the probe must not look somewhere else.
+    """
+    other = plan_root.parent / "shadow-plans"
+    other.mkdir()
+    monkeypatch.setattr(dashboard, "PLAN_DIR", other, raising=False)
+
+    stale = datetime.now(UTC) - timedelta(hours=1)
+    (plan_root / HEALTH_FILE).write_text(
+        json.dumps({"alive": True, "last_scan_ts": stale.isoformat()}),
+        encoding="utf-8",
+    )
+
+    res = TestClient(dashboard.app).get("/livez")
+    assert res.status_code == 503, (
+        "the liveness probe must grade the snapshot under the host-state "
+        f"root; got {res.status_code}: {res.text}"
+    )
+    assert "scheduler_stale" in res.text
+
+
 def test_health_reports_the_unavailable_shape_when_the_snapshot_is_missing(plan_root):
     """A missing snapshot degrades to "no fingerprint", never a 500."""
     assert not (plan_root / HEALTH_FILE).exists()

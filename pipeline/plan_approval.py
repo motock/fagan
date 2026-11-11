@@ -25,8 +25,9 @@ digest covers* bumps that version, and a record written under any other
 version — including a higher one, seen after a rollback — is not honoured: it
 cannot activate the plan and cannot be decided on, so an approval can never
 stay silently in force against a digest it was not made against. A record
-without the field reads as the legacy version 1, so shipping the field itself
-changes no plan's state.
+without the field reads as the legacy version 1; now that
+``APPROVAL_DIGEST_VERSION`` is 2, every such record is stale and fails closed
+until it is re-approved once against the version-2 digest.
 
 ``reset_if_changed`` applies the same digest rule to edits made through the
 patch tools (``patch_story`` / ``patch_plan``): an approval cannot outlive an
@@ -54,16 +55,16 @@ APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 #: digest covers* changes, so an approval recorded under another version can
 #: never stay silently in force: only a record written under this version is
 #: honoured.
-APPROVAL_DIGEST_VERSION = 1
+APPROVAL_DIGEST_VERSION = 2
 
 #: The version a record without a ``digest_version`` field reads as: records
-#: written before the field existed were made under version 1. While
-#: ``APPROVAL_DIGEST_VERSION`` is still 1 those records stay current, so no
-#: live plan changes state when this ships.
+#: written before the field existed were made under version 1. Now that
+#: ``APPROVAL_DIGEST_VERSION`` is 2 those records are stale, so every version-1
+#: approval fails closed and must be re-approved once.
 _LEGACY_DIGEST_VERSION = 1
 
 #: Authored, plan-level fields that participate in the content digest.
-_PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context")
+_PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context", "team")
 
 #: Authored, per-story fields that participate in the content digest. Runtime
 #: state (status, attempts, sizing_auto_routed, ...) is deliberately excluded:
@@ -80,6 +81,7 @@ _STORY_AUTHORED_FIELDS = (
     "tdd_split",
     "files",
     "blocked_by",
+    "description",
 )
 
 _TRUE_VALUES = frozenset({"on", "1", "true"})
@@ -128,10 +130,15 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
     """Return the sha256 digest of ``manifest``'s authored content.
 
     Only authored content is hashed: the plan-level ``repo_root``,
-    ``role_config`` and ``context``, plus each story's authored fields. The
-    ``approval`` block and runtime story state are excluded so that recording
-    or changing a decision never changes the digest. The manifest is not
-    mutated.
+    ``role_config``, ``context`` and ``team``, plus each story's authored
+    fields (``summary``, ``agent_instructions``, ``dependencies``,
+    ``persona``, ``model``, ``acceptance``, ``risk``, ``backend``,
+    ``tdd_split``, ``files``, ``blocked_by`` and ``description``).
+    ``team`` is read raw from the manifest, never defaulted from config, and a
+    story without a ``description`` hashes it as ``None`` — distinct from a
+    description of ``""``. The ``approval`` block and runtime story state are
+    excluded so that recording or changing a decision never changes the
+    digest. The manifest is not mutated.
     """
     payload: dict[str, Any] = {
         field: manifest.get(field) for field in _PLAN_AUTHORED_FIELDS
@@ -152,8 +159,10 @@ def digest_version_is_current(approval: dict[str, Any]) -> bool:
     """Return whether *approval* was recorded under the current digest version.
 
     A record without a ``digest_version`` field reads as
-    ``_LEGACY_DIGEST_VERSION``, so records written before the field existed
-    stay valid while the current version is still 1.
+    ``_LEGACY_DIGEST_VERSION`` (1). That was only valid while the current
+    version was 1: at the current version 2 every such record — including one
+    written before the field existed — is stale and fails closed until it is
+    re-approved once.
 
     Everything else fails closed — a bool (``True`` is an ``int`` subclass), a
     string, a float, ``None``, a lower version and, importantly, a *higher*
@@ -187,14 +196,18 @@ def outdated_reason(manifest: dict[str, Any]) -> dict[str, Any]:
 
     Spread into the refusal dicts of ``advance`` and ``dispatch`` so the
     operator learns *why* an approved plan stopped. Empty while the gate is
-    disabled (nothing is gated then), for a plan without a dict ``approval``
-    and for a record written under the current version — those keep exactly
-    the dicts they returned before this function existed.
+    disabled (nothing is gated then), for a plan without a dict ``approval``,
+    for a record whose ``status`` is not ``approved`` (an unapproved record is
+    not a stopped approval, so it keeps the refusal detail it had before this
+    function existed) and for a record written under the current version —
+    those keep exactly the dicts they returned before this function existed.
     """
     if not approval_enabled():
         return {}
     approval = manifest.get("approval")
     if not isinstance(approval, dict):
+        return {}
+    if approval.get("status") != "approved":
         return {}
     if digest_version_is_current(approval):
         return {}

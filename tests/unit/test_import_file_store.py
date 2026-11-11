@@ -19,12 +19,13 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import persistence, server, store_import_records
+from pipeline import persistence, server
 from pipeline.audit_file import SUFFIX, FileAuditLog
 from pipeline.audit_log import HOST_CHAIN_ID
 from pipeline.store import FileStore
 from pipeline.store_records import DEFAULT_NAMESPACE, context_digest
 from pipeline.store_sqlite import SqliteStore
+from pipeline.tools import import_file_store
 from pipeline.tools.import_file_store import main
 
 NS = DEFAULT_NAMESPACE
@@ -255,7 +256,7 @@ def test_a_manifest_whose_digest_changes_on_import_is_refused(plans, db, capsys,
     # whatever the manifest holds: the verification must refuse, not trust.
     fresh = itertools.count()
     monkeypatch.setattr(
-        store_import_records, "canonical_digest", lambda _m: f"sha256:{next(fresh)}"
+        import_file_store, "canonical_digest", lambda _m: f"sha256:{next(fresh)}"
     )
 
     code, summary = _run(["--db", db], capsys)

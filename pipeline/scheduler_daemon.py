@@ -23,7 +23,7 @@ from pipeline import config_provenance
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.events_nats_consumer import start_consumers, stop_consumers
-from pipeline.paths import PLAN_DIR
+from pipeline.host_state import build_host_state
 from pipeline.tick_checks import run_tick_checks
 from pipeline.watchers import scan_all_plans
 

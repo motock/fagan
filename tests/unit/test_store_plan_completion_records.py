@@ -39,6 +39,20 @@ MARK_METHODS = ('mark_plan_completed', 'is_plan_completed')
 REPORT_METHODS = ('put_plan_report', 'get_plan_report')
 
 
+@pytest.fixture(params=('file', 'sqlite', 'memory'))
+def backend(request):
+    """The implementation under test, one per run of every test below.
+
+    The backends are run one at a time, not side by side in one directory: a
+    plan-completion marker is *once-only*, so the second backend to look at a
+    shared plans directory would find the first backend's marker and never
+    report the ``True`` that creation must return.  Giving each backend its own
+    directory keeps the assertion (first mark ``True``, second ``False``) about
+    the implementation and not about test ordering.
+    """
+    return request.param
+
+
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     """An empty plans directory wired into both module-level bindings."""
@@ -50,15 +64,17 @@ def plan_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def stores(plan_dir, tmp_path):
-    """The three implementations under test, keyed by backend name."""
+def stores(plan_dir, tmp_path, backend):
+    """The implementation under test, keyed by backend name."""
+    if backend == 'memory':
+        yield {'memory': InMemoryRecordStore()}
+        return
+    if backend == 'file':
+        yield {'file': FileStore().records()}
+        return
     sqlite_store = SqliteStore(str(tmp_path / 'records.db'))
     try:
-        yield {
-            'file': FileStore().records(),
-            'sqlite': sqlite_store.records(),
-            'memory': InMemoryRecordStore(),
-        }
+        yield {'sqlite': sqlite_store.records()}
     finally:
         close = getattr(sqlite_store, 'close', None)
         if close is not None:

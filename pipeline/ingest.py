@@ -592,6 +592,15 @@ def _ingest_plan_impl(
     plan_names.validate_new_plan_name(plan_name)
     plan, refusal = plan_draft.read_plan_draft(plan_name)
     if refusal is not None:
+        # A plan with a manifest but no draft had it consumed by a full ingest
+        # (ADR 0012 decision 5), so name the way out; a plan with neither
+        # keeps the legacy refusal.
+        if plan is None and refusal.get("error") == f"No plan named {plan_name}" and (
+            _store.manifest_path(plan_name).exists()
+        ):
+            return {"ok": False, "error": (
+                f"plan '{plan_name}' has no staged draft: save_plan it "
+                "(export_plan renders the current plan) before re-ingesting")}
         return refusal
 
     # advance_all_plans() iterates every plan in shared PLAN_DIR, each

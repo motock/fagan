@@ -151,6 +151,60 @@ def validate_story_key(value: str) -> str:
     return value
 
 
+# A context snapshot is content-addressed: its key is ``sha256:`` followed by
+# the lower-case hex SHA-256 of the content, and nothing else is a key.  A
+# digest is therefore never a path fragment and can never address anything but
+# its own blob -- a traversal attempt fails the format check, not a path check.
+_CONTEXT_DIGEST_RE = re.compile(r'^sha256:([0-9a-f]{64})$')
+
+
+def context_digest(content: str) -> str:
+    """Return the canonical digest of *content* (``sha256:<hex>``)."""
+    if not isinstance(content, str):
+        raise TypeError('context snapshot content must be a str')
+    return 'sha256:' + hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+
+def validate_context_digest(value: object) -> str:
+    """Return the hex part of a well-formed context digest, else raise.
+
+    Only ``sha256:`` + 64 lower-case hex characters is a digest: a bare hex
+    string, an uppercase or non-hex body, or anything carrying a path fragment
+    is refused with :class:`InvalidRecordKeyError` before any storage is
+    touched.
+    """
+    if not isinstance(value, str):
+        raise InvalidRecordKeyError('invalid context digest')
+    match = _CONTEXT_DIGEST_RE.fullmatch(value)
+    if match is None:
+        raise InvalidRecordKeyError('invalid context digest')
+    return match.group(1)
+
+
+def verify_context_digest(digest: str, content: str) -> str:
+    """Return the hex part of *digest* after checking it addresses *content*.
+
+    A malformed digest is refused with :class:`InvalidRecordKeyError`; a
+    well-formed digest that is not the SHA-256 of *content* is refused with
+    :class:`ValueError`, because the key would then name another blob.
+    """
+    hexdigest = validate_context_digest(digest)
+    if context_digest(content) != digest:
+        raise ValueError('context digest does not match the content')
+    return hexdigest
+
+
+def snapshot_meta(meta: dict | None, digest: str, content: str) -> dict:
+    """Return the snapshot's stored meta: the caller's plus its address."""
+    if meta is not None and not isinstance(meta, dict):
+        raise TypeError('context snapshot meta must be a dict')
+    return {
+        **(meta or {}),
+        'digest': digest,
+        'bytes': len(content.encode('utf-8')),
+    }
+
+
 def _usage_number(value: object) -> bool:
     """Return whether ``value`` is a real number (``bool`` is not one)."""
     return not isinstance(value, bool) and isinstance(value, (int, float))

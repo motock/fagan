@@ -597,6 +597,37 @@ class SqliteRecords(
         self._namespace(namespace)
         return self._draft_records().list_plan_drafts(namespace)
 
+    # -- plan completion marker and report (ADR 0012 decision 3) --------
+    # Both are file sidecars in the plans directory that this store does not
+    # own -- the same ``<plan>.plan_completed`` and ``<plan>.report.md`` files
+    # the file record view writes -- so all four operations delegate to that
+    # view, exactly as the plan-draft kind above does.
+    def mark_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Create ``plan_name``'s completion marker; True only if created."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._draft_records().mark_plan_completed(namespace, plan_name)
+
+    def is_plan_completed(self, namespace: str, plan_name: str) -> bool:
+        """Whether ``plan_name``'s completion marker exists."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._draft_records().is_plan_completed(namespace, plan_name)
+
+    def put_plan_report(self, namespace: str, plan_name: str, text: str) -> None:
+        """Store ``plan_name``'s report, replacing the previous one wholesale."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(text, str):
+            raise TypeError('plan report must be a str')
+        self._draft_records().put_plan_report(namespace, plan_name, text)
+
+    def get_plan_report(self, namespace: str, plan_name: str) -> str | None:
+        """Return ``plan_name``'s report, or ``None`` when it has none."""
+        self._namespace(namespace)
+        validate_plan_name(plan_name)
+        return self._draft_records().get_plan_report(namespace, plan_name)
+
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.
 

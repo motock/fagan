@@ -21,7 +21,9 @@ import time
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
+    UnknownNamespaceError,
     validate_channel,
     validate_namespace,
     validate_notification_record,
@@ -54,6 +56,10 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # commits another thread's writes.
         self._transactions = threading.local()
         self._manifests: dict[tuple[str, str], dict] = {}
+        # The transient plan drafts (ADR 0012 decision 3), per (namespace,
+        # plan), held as a deep copy so a caller's later mutation of the dict
+        # it passed never changes what is stored.
+        self._drafts: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
@@ -120,6 +126,65 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
                 if stored_namespace == namespace
             }
             return sorted(names)
+
+    # -- plan drafts (ADR 0012 decision 3) ------------------------------
+    def _draft_namespace(self, namespace: str) -> None:
+        """Validate ``namespace`` and refuse anything but ``'default'``.
+
+        A plan draft is the staged document ``save_plan`` writes and ingest
+        consumes, and both core paths serve ``DEFAULT_NAMESPACE`` only: this
+        reference store therefore refuses any other namespace for the four
+        draft operations, before any state is touched, exactly as the file and
+        sqlite record views do.
+        """
+        validate_namespace(namespace)
+        if namespace != DEFAULT_NAMESPACE:
+            raise UnknownNamespaceError('unknown namespace')
+
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Store a copy of ``plan`` as ``plan_name``'s draft, wholesale."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        if not isinstance(plan, dict):
+            raise TypeError('plan must be a dict')
+        # Serialise before touching any state: a document that cannot be
+        # stored must leave no trace behind.
+        json.dumps(plan)
+        with self._lock:
+            self._record_undo(self._drafts, (namespace, plan_name))
+            self._drafts[(namespace, plan_name)] = copy.deepcopy(plan)
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return a copy of ``plan_name``'s draft, or ``None`` when absent."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            plan = self._drafts.get((namespace, plan_name))
+            if plan is None:
+                return None
+            return copy.deepcopy(plan)
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s draft; return whether one was deleted."""
+        self._draft_namespace(namespace)
+        validate_plan_name(plan_name)
+        with self._lock:
+            if (namespace, plan_name) not in self._drafts:
+                return False
+            self._record_undo(self._drafts, (namespace, plan_name))
+            del self._drafts[(namespace, plan_name)]
+            return True
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plans in ``namespace`` that have an ingestable draft."""
+        self._draft_namespace(namespace)
+        with self._lock:
+            names = {
+                plan_name
+                for (stored_namespace, plan_name), plan in self._drafts.items()
+                if stored_namespace == namespace and 'epics' in plan
+            }
+        return sorted(names)
 
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:

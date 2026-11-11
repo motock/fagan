@@ -808,7 +808,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         return workspace_reader.local_workspace_reader.read_story_log(plan_name, story_key, manifest, lines)
 
     def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
-        return local_workspace_reader.read_worktree_file(story, filename)
+        return workspace_reader.local_workspace_reader.read_worktree_file(story, filename)
 
     def get_story_diff(
         self, plan_name: str, story_key: str, manifest: dict[str, Any], path: str | None = None,

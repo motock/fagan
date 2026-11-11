@@ -14,8 +14,9 @@ atomically (temp file plus ``os.replace``, temp file cleaned up on failure).
 import fcntl
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from pipeline.live_ref import LiveRef
 

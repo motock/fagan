@@ -136,6 +136,9 @@ def _complete_plan(tmp_path, monkeypatch, journal: str | None) -> str:
     # the plans directory the store resolves them against is the server
     # module's binding.
     monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
+    # The module-level binding is patched only while it still exists, so no
+    # run ever writes into the real plans directory.
+    monkeypatch.setattr(plan_completion, "PLAN_DIR", tmp_path, raising=False)
     monkeypatch.setattr(plan_completion, "_notify_user", lambda *a, **k: None)
     if journal is not None:
         (tmp_path / f"p.{KEY}.journal.json").write_text(journal)

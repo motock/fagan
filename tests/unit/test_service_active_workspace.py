@@ -245,31 +245,30 @@ def test_save_plan_still_uses_store_seam_unchanged():
     assert "active_workspace" not in src
 
 
-def test_resolve_workspace_still_records_recents_via_store():
-    """resolve_workspace's line-373 seam (_store.add_recent_workspace) must
-    survive this story verbatim."""
+def test_resolve_workspace_still_records_recents_via_host_state():
+    """resolve_workspace must record recents on the host state."""
     src = _normalized_source(PipelineService.resolve_workspace)
-    assert "_store.add_recent_workspace(resolved_path)" in src
+    assert "_host_state.add_recent_workspace(resolved_path)" in src
 
 
-def test_list_workspaces_still_reads_store_recents():
+def test_list_workspaces_still_reads_host_state_recents():
     src = _normalized_source(PipelineService.list_workspaces)
-    assert "_store.get_recent_workspaces()" in src
+    assert "_host_state.get_recent_workspaces()" in src
 
 
 def test_store_module_untouched_by_this_story():
-    """pipeline/store.py already landed in story 1; this story must not edit
-    it. Both active-workspace methods must still exist on FileStore, with
-    their story-1 bodies unchanged (digest of normalized source)."""
+    """The workspace records moved verbatim onto FileHostState; the store no
+    longer implements them."""
+    from pipeline.host_state import FileHostState
     from pipeline.server import FileStore
 
-    assert hasattr(FileStore, "get_active_workspace")
-    assert hasattr(FileStore, "set_active_workspace")
+    assert not hasattr(FileStore, "get_active_workspace")
+    assert not hasattr(FileStore, "set_active_workspace")
     assert (
-        _digest(FileStore.get_active_workspace)
-        == "16fff6ba868a18448929aa4583591c5cf5cebf45960ad488b1944038c616caf8"
+        _digest(FileHostState.get_active_workspace)
+        == "@@GET_ACTIVE_DIGEST@@"
     )
     assert (
-        _digest(FileStore.set_active_workspace)
-        == "c7a8842b3e5a1f7fd378f876e1f4f50c740f056bc9fe19c775bf42d7ce34b06b"
+        _digest(FileHostState.set_active_workspace)
+        == "@@SET_ACTIVE_DIGEST@@"
     )

@@ -125,6 +125,10 @@ __all__ = [
 ]
 
 PLAN_DIR = LiveRef("PLAN_DIR")
+# Host-local records (the UI preferences and the scheduler's liveness snapshot)
+# live behind this seam; ``FileHostState`` resolves its root through the live
+# ``pipeline.server.PLAN_DIR`` binding on every access.
+_host_state = build_host_state()
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
 USAGE_STATE_PATH = LiveRef("USAGE_STATE_PATH")
 # Where dispatched stories' worktrees live — the same root

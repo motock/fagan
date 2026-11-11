@@ -29,7 +29,16 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   ingest. A plan that was never ingested answers `{"ok": false, "error": "Plan
   not found"}`.
 - `ingest_plan(plan_name, only_epics=None)` — push a plan into Plane (epics +
-  issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. Carries each
+  issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. A
+  successful full ingest consumes the staged draft: the draft is deleted once
+  the manifest is written, because the manifest is the only record of the plan
+  (ADR 0012 decision 5). An `only_epics` ingest keeps the draft, because the
+  epics it did not ingest exist nowhere else; so does a refused ingest and an
+  ingest skipped with `skipped: locked`, because nothing was written.
+  Re-ingesting a plan with no staged draft is refused with `plan '<name>' has
+  no staged draft: save_plan it (export_plan renders the current plan) before
+  re-ingesting`. Editing a story's description or the plan's team and re-ingesting resets plan approval to pending_approval.
+  Carries each
   story's `persona`, `model`, `risk`, and `backend` into the manifest. A
   story's `backend` (`claude` \| `local` \| `ollama` \| `lmstudio` \| `mlx` \|
   `litellm` \| `auto`) pins its dispatch provider from the plan itself, independent of the

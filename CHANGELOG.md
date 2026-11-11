@@ -124,6 +124,19 @@ in practice.
   whose `canonical_digest` would change, and under digest version 1 those fields
   are not digest members, so no approval record is touched and no re-approval is
   needed.
+- **BREAKING: the plan-approval digest now covers each story's `description`
+  and the plan's `team`**, so `APPROVAL_DIGEST_VERSION` is 2 and every approval
+  recorded under version 1 stops dispatching immediately (fail closed) until a
+  reviewer re-approves the plan once. Upgrade in this order: (1) deploy up to and
+  including the plan-draft record and backfill story and run
+  `python -m pipeline.tools.backfill_plan_source` *while descriptions are still
+  outside the digest*, so recording them on legacy manifests cannot change any
+  digest; (2) deploy the digest-version-2 build; (3) run
+  `python -m pipeline.tools.reset_outdated_approvals --dry-run`, then
+  `python -m pipeline.tools.reset_outdated_approvals` without `--dry-run`;
+  (4) reviewers re-approve each plan once, now seeing its descriptions and team
+  in the review payload. `patch_story` still refuses to edit `description`:
+  descriptions change by re-ingest only.
 
 ## [0.9.0] - 2026-11-03
 

@@ -566,6 +566,7 @@ def decision_plan(tmp_path, monkeypatch):
     manifest["approval"] = {
         "status": "pending_approval",
         "digest": pa.canonical_digest(manifest),
+        "digest_version": pa.APPROVAL_DIGEST_VERSION,
         "warnings_seen": ["w1"],
     }
     (tmp_path / f"{PLAN}.manifest.json").write_text(json.dumps(manifest))

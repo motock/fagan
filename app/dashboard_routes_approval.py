@@ -48,6 +48,7 @@ _NOT_FOUND_DETAIL = "plan not found"
 #: The per-story fields the payload carries, in order.
 _STORY_FIELDS = (
     "summary",
+    "description",
     "agent_instructions",
     "risk",
     "persona",
@@ -146,6 +147,9 @@ def _review_payload(plan_name: str, manifest: dict, principal: Any) -> dict[str,
         # principal compared against the plan's ingester by subject.
         "viewer_is_author": principal.subject == manifest.get("ingested_by"),
         "owner": manifest.get("owner"),
+        # Plan-level authored content: part of the approved digest, read raw
+        # (never defaulted) so the reviewer sees exactly what they approve.
+        "team": manifest.get("team"),
         "role_config": role_config,
         "stories": stories,
         "warnings": plan_review.review_warnings(manifest),

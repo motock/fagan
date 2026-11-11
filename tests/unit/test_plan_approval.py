@@ -206,7 +206,17 @@ def test_should_be_activatable_when_disabled_even_with_malformed_approval(
 def test_should_be_activatable_when_enabled_and_approved(monkeypatch):
     monkeypatch.setenv(pa.APPROVAL_ENV, "on")
 
-    assert pa.is_activatable(_manifest(approval={"status": "approved"})) is True
+    assert (
+        pa.is_activatable(
+            _manifest(
+                approval={
+                    "status": "approved",
+                    "digest_version": pa.APPROVAL_DIGEST_VERSION,
+                }
+            )
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(

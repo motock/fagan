@@ -54,16 +54,16 @@ APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
 #: digest covers* changes, so an approval recorded under another version can
 #: never stay silently in force: only a record written under this version is
 #: honoured.
-APPROVAL_DIGEST_VERSION = 1
+APPROVAL_DIGEST_VERSION = 2
 
 #: The version a record without a ``digest_version`` field reads as: records
-#: written before the field existed were made under version 1. While
-#: ``APPROVAL_DIGEST_VERSION`` is still 1 those records stay current, so no
-#: live plan changes state when this ships.
+#: written before the field existed were made under version 1. Now that
+#: ``APPROVAL_DIGEST_VERSION`` is 2 those records are stale, so every version-1
+#: approval fails closed and must be re-approved once.
 _LEGACY_DIGEST_VERSION = 1
 
 #: Authored, plan-level fields that participate in the content digest.
-_PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context")
+_PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context", "team")
 
 #: Authored, per-story fields that participate in the content digest. Runtime
 #: state (status, attempts, sizing_auto_routed, ...) is deliberately excluded:
@@ -80,6 +80,7 @@ _STORY_AUTHORED_FIELDS = (
     "tdd_split",
     "files",
     "blocked_by",
+    "description",
 )
 
 _TRUE_VALUES = frozenset({"on", "1", "true"})
@@ -195,6 +196,8 @@ def outdated_reason(manifest: dict[str, Any]) -> dict[str, Any]:
         return {}
     approval = manifest.get("approval")
     if not isinstance(approval, dict):
+        return {}
+    if approval.get("status") != "approved":
         return {}
     if digest_version_is_current(approval):
         return {}

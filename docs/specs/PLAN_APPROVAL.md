@@ -70,9 +70,10 @@ Every approval record carries a `digest` of the plan's authored content,
 computed by `canonical_digest(manifest)`:
 
 - It hashes **only authored content**: the plan-level `repo_root`,
-  `role_config` and `context`, plus each story's authored fields (`summary`,
-  `agent_instructions`, `dependencies`, `persona`, `model`, `acceptance`,
-  `risk`, `backend`, `tdd_split`, `files`, `blocked_by`).
+  `role_config`, `context` and `team`, plus each story's authored fields
+  (`summary`, `agent_instructions`, `dependencies`, `persona`, `model`,
+  `acceptance`, `risk`, `backend`, `tdd_split`, `files`, `blocked_by`,
+  `description`).
 - It **excludes** the `approval` block itself and all runtime story state
   (`status`, `attempts`, `sizing_auto_routed`, …). Recording or changing a
   decision therefore never invalidates the digest it was made against, and a
@@ -89,8 +90,9 @@ change between releases. So every approval record also carries a
 and the version the record's `digest` was computed under.
 
 - A record **without** the field reads as the legacy version `1`: records
-  written before the field existed were made under version 1, so while the
-  current version is still 1 no live plan changes state.
+  written before the field existed were made under version 1. The current
+  version is `2` (descriptions and the plan's team joined the digest), so a
+  version-1 record is stale and fails closed until it is re-approved once.
 - **Any non-current value fails closed** — a bool (`True` is an `int`
   subclass), a string, a float, `None`, a lower version and, importantly, a
   *higher* version: a rolled-back build must not honour a record written by a
@@ -183,6 +185,9 @@ An approval must not outlive the content it approved. Two paths enforce that:
 `save_plan` is covered by the source-digest check at the next ingest, while
 `set_plan_role_config` writes `role_config` directly and is not reset there —
 an approval can outlive such a change until the next ingest.
+
+Changing a story's `description` or the plan's `team` and re-ingesting resets
+the approval to `pending_approval`; `patch_story` cannot edit `description`.
 
 Both paths are **no-ops while the gate is off**, so the default-off path stays
 byte-identical to before the feature existed.
@@ -352,10 +357,12 @@ stored approval record (`status`, `digest`, `decided_by`, `at`,
 content as it is on disk right now — `digest_current` (whether the stored
 digest still matches it, i.e. whether the approval is stale), `viewer_is_author`
 (the viewer's subject compared with the manifest's `ingested_by`, the same
-comparison `_decide_plan` records as `self_approved`), `owner`, `role_config`,
-a field-by-field projection of each story, and `warnings` from
-`pipeline.plan_review.review_warnings`. The manifest itself is never returned
-and the route never writes.
+comparison `_decide_plan` records as `self_approved`), `owner`, `team` (the
+plan's stored team, part of the approved digest), `role_config`, a
+field-by-field projection of each story (including its `description` — the
+story content the digest now binds, returned as JSON text, never rendered as
+HTML), and `warnings` from `pipeline.plan_review.review_warnings`. The manifest
+itself is never returned and the route never writes.
 
 Visibility is `app.policy.can_view` over
 `pipeline.authorization.resource_for(manifest, plan_name, None)`: the plan's

@@ -7,6 +7,9 @@ from pipeline.store import FileStore
 from pipeline.store_records import DEFAULT_NAMESPACE
 from pipeline.store_sqlite import SqliteStore
 
+PLAN = 'plan-completion'
+OTHER_PLAN = 'other-plan'
+
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
@@ -30,15 +33,10 @@ def stores(plan_dir, tmp_path):
 
 
 def test_debug(stores, plan_dir):
-    sqlite_records = stores['sqlite']
-    delegate = sqlite_records._draft_records()
-    print('DELEGATE TYPE', type(delegate))
-    print('STOREDIR', delegate._store.manifest_path('plan-completion'))
-    print('SQLITE DIR', delegate._plan_path('plan-completion', '.plan_completed'))
-    print('SQLITE OTHER', delegate._plan_path('other-plan', '.plan_completed'))
-    print('MARK', sqlite_records.mark_plan_completed(DEFAULT_NAMESPACE, 'plan-completion'))
-    print('ISDONE OTHER', sqlite_records.is_plan_completed(
-        DEFAULT_NAMESPACE, 'other-plan'))
-    print('FILES', [p.name for p in plan_dir.iterdir()])
-    print('EXISTS PLANC', delegate._plan_path(
-        'plan-completion', '.plan_completed').exists())
+    for backend, store in stores.items():
+        print('START', backend, sorted(p.name for p in plan_dir.iterdir()))
+        store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN)
+        print('AFTER MARK', backend, sorted(p.name for p in plan_dir.iterdir()))
+        print('ISDONE OTHER', backend,
+              store.is_plan_completed(DEFAULT_NAMESPACE, OTHER_PLAN))
+        print('AFTER ISDONE', backend, sorted(p.name for p in plan_dir.iterdir()))

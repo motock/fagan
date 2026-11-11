@@ -5,7 +5,6 @@ import json
 import pytest
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import context_sources as cs
 from pipeline import paths
 from pipeline import persistence as ppers
@@ -17,7 +16,7 @@ from pipeline import ticketing as pt
 def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
-    for mod in (p, ppers, pcon, paths):
+    for mod in (p, ppers, paths):
         monkeypatch.setattr(mod, "PLAN_DIR", d)
     return d
 

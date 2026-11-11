@@ -29,7 +29,6 @@ import subprocess
 import pytest
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
@@ -70,7 +69,7 @@ def _dispatch_env(tmp_path, monkeypatch):
     """Point PLAN_DIR / WORKTREE_ROOT / AGENTS_DIR at throwaway dirs."""
     plans = tmp_path / "plans"
     plans.mkdir()
-    for mod in (p, ppers, pcon):
+    for mod in (p, ppers):
         monkeypatch.setattr(mod, "PLAN_DIR", plans)
 
     wts = tmp_path / "worktrees"

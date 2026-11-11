@@ -18,7 +18,6 @@ import logging
 import pytest
 
 from app import backend
-from pipeline import concurrency as pcon
 from pipeline import dispatch as pdispatch
 from pipeline import paths
 from pipeline import persistence as ppers
@@ -37,7 +36,7 @@ REJECTED_STORY = "_S1"
 def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
-    for mod in (p, ppers, pcon, paths):
+    for mod in (p, ppers, paths):
         monkeypatch.setattr(mod, "PLAN_DIR", d)
     return d
 

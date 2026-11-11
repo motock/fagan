@@ -2,7 +2,6 @@
 charging the rework budget; a marker-free no-commit turn still does."""
 import json
 
-from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline.no_progress import classify_no_progress
@@ -132,7 +131,7 @@ HEAD_SHA = "abc123"
 def _e2e(tmp_path, monkeypatch, done_text):
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
-    for mod in (p, ppers, pcon):
+    for mod in (p, ppers):
         monkeypatch.setattr(mod, "PLAN_DIR", plan_dir)
     worktree = plan_dir / "wt"
     worktree.mkdir()

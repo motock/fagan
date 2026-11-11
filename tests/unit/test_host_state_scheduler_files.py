@@ -255,7 +255,7 @@ def test_health_reads_the_scheduler_snapshot_from_the_host_state_root(
     other.mkdir()
     monkeypatch.setattr(dashboard, "PLAN_DIR", other, raising=False)
 
-    config = {"plan_dir": str(plan_root), "worktree_root": str(plan_root)}
+    config = _fingerprint_config(plan_root)
     (plan_root / HEALTH_FILE).write_text(
         json.dumps({"alive": True, "last_scan_ts": _now_iso(), "config": config}),
         encoding="utf-8",

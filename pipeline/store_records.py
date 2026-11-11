@@ -590,6 +590,8 @@ RECORD_STORE_METHODS = (
     'is_plan_completed',
     'put_plan_report',
     'get_plan_report',
+    'put_context_snapshot',
+    'get_context_snapshot',
     'transaction',
 )
 

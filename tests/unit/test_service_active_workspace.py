@@ -263,7 +263,7 @@ def test_store_module_untouched_by_this_story():
     assert not hasattr(FileStore, "set_active_workspace")
     assert (
         _digest(FileHostState.get_active_workspace)
-        == "@@GET_ACTIVE_DIGEST@@"
+        == "8935cd78800677f3230b1a42d0f1922bab05d2018b564532b0ee2e7604341275"
     )
     assert (
         _digest(FileHostState.set_active_workspace)

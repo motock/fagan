@@ -78,8 +78,8 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
     otherwise (plan not complete, already notified, or any failure).
     """
     try:
-        marker = PLAN_DIR / f"{plan_name}.plan_completed"
-        if marker.exists():
+        records = _server._store.records()
+        if records.is_plan_completed(_NAMESPACE, plan_name):
             return False
 
         stories = manifest.get("stories") or {}
@@ -93,19 +93,15 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
         ):
             return False
 
-        records = _server._store.records().get_notification_history(
-            _NAMESPACE, plan_name
-        )[0]
+        history = records.get_notification_history(_NAMESPACE, plan_name)[0]
         summary = format_plan_summary(
-            plan_name, _with_journals(plan_name, manifest), records
+            plan_name, _with_journals(plan_name, manifest), history
         )
         # A durable copy for retros; the notification is the delivery, this
-        # file is the record. Never blocks the notification.
+        # record is the file. Never blocks the notification.
         try:
-            (PLAN_DIR / f"{plan_name}.report.md").write_text(
-                summary + "\n", encoding="utf-8"
-            )
-        except OSError:
+            records.put_plan_report(_NAMESPACE, plan_name, summary + "\n")
+        except Exception:
             logger.warning("plan report write failed for %s", plan_name, exc_info=True)
         _notify_user(
             plan_name,
@@ -114,7 +110,9 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
             severity="info",
             dedup_key=f"plan_completed:{plan_name}",
         )
-        marker.touch()
+        # Only after the notice: a failed emission must stay retryable, and the
+        # atomic create is what makes exactly one caller announce the plan.
+        records.mark_plan_completed(_NAMESPACE, plan_name)
         return True
     except Exception:
         logger.exception("plan_completed check failed for %s", plan_name)

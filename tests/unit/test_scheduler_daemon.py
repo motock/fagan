@@ -770,7 +770,7 @@ def test_run_daemon_health_path_defaults_to_plan_dir_when_env_unset(run_daemon_e
     daemon = FakeSchedulerDaemon.instances[0]
     passed = daemon.kwargs["health_path"]
     assert passed is not None
-    assert pathlib.Path(passed) == pathlib.Path(mod.PLAN_DIR) / ".scheduler_health.json"
+    assert pathlib.Path(passed) == pathlib.Path(server_mod.PLAN_DIR) / ".scheduler_health.json"
 
 
 def test_run_daemon_health_path_set_from_env(run_daemon_env, monkeypatch):

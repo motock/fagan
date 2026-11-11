@@ -150,7 +150,7 @@ def _fixture_epics() -> list[dict]:
                     dependencies=["B1"],
                     persona="software-engineer",
                     model="opus",
-                    acceptance=[{"path": "tests/test_alpha.py", "source": "passes"}],
+                    acceptance=[{"path": "tests/test_alpha.py", "source": "def test_alpha():\n    assert True\n"}],
                     risk="medium",
                     backend="claude",
                     tdd_split=True,
@@ -207,7 +207,7 @@ def test_render_produces_a_save_plan_shaped_document(plan_dir, provider, tmp_pat
     assert first["agent_instructions"].startswith(_PREFLIGHT)
     assert first["persona"] == "software-engineer"
     assert first["model"] == "opus"
-    assert first["acceptance"] == [{"path": "tests/test_alpha.py", "source": "passes"}]
+    assert first["acceptance"] == [{"path": "tests/test_alpha.py", "source": "def test_alpha():\n    assert True\n"}]
     assert first["risk"] == "medium"
     assert first["backend"] == "claude"
     assert first["tdd_split"] is True

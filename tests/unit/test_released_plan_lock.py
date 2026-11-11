@@ -32,8 +32,9 @@ Contract pinned by this suite (the implementer must satisfy exactly this):
   (membership only — ``__all__`` is cumulative; later stories append more
   entries, so its exact contents/length must never be asserted).
 
-Every test points ``pipeline.concurrency.PLAN_DIR`` at a per-test
-``tmp_path`` so nothing ever flocks the real ~/.claude/plans directory.
+Every test points ``pipeline.server.PLAN_DIR`` (via the ``p`` alias) at a
+per-test ``tmp_path`` so nothing ever flocks the real ~/.claude/plans
+directory.
 """
 
 import importlib

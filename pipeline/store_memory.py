@@ -269,10 +269,12 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
 
     def get_context_snapshot(self, namespace: str, digest: str) -> dict | None:
         """Return a copy of ``{'content', 'meta'}`` for ``digest``, or ``None``."""
-        validate_context_digest(digest)
+        address = context_address(digest)
         validate_namespace(namespace)
         with self._lock:
             found = self._snapshots.get((namespace, digest))
+            if found is None:
+                found = self._snapshots.get((namespace, address))
             return None if found is None else copy.deepcopy(found)
 
     # -- plan completion marker and report (ADR 0012 decision 3) --------

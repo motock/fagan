@@ -287,33 +287,17 @@ def _dashboard_ui_state_path() -> Path:
 def _read_archived_plans() -> set[str]:
     """Which plan names the user has archived/dismissed from the sidebar.
 
-    Fails open (treats a missing or corrupt state file as "nothing
-    archived") rather than 500ing the plan list over a non-critical
-    preference file - the same tolerance _parse_iso already applies to
-    malformed timestamps elsewhere in this module."""
-    path = _dashboard_ui_state_path()
-    if not path.exists():
-        return set()
-    try:
-        data = json.loads(path.read_text())
-        return set(data.get("archived", []))
-    except (json.JSONDecodeError, OSError, AttributeError):
-        return set()
+    Read through the host state (ADR 0012 open question 3: the preference file
+    is host-local, not per-plan) and fail open -- a missing or corrupt file
+    reads as "nothing archived" rather than 500ing the plan list over a
+    non-critical preference file, the same tolerance _parse_iso applies to
+    malformed timestamps in this module."""
+    return set(_host_state.get_dashboard_ui_state().get("archived", []))
 
 
 def _write_archived_plans(archived: set[str]) -> None:
-    """Atomically persist the archived-plan set via a same-directory temp
-    file + os.replace, so a crash or concurrent read never observes a
-    partial write (same pattern pipeline_mcp_server._atomic_write_json
-    uses for manifest.json)."""
-    path = _dashboard_ui_state_path()
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        tmp.write_text(json.dumps({"archived": sorted(archived)}, indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    """Persist the archived-plan set atomically through the host state."""
+    _host_state.put_dashboard_ui_state({"archived": sorted(archived)})
 
 
 @app.get("/api/health")

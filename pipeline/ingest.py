@@ -547,18 +547,16 @@ def _story_extra_fields(story: dict) -> dict:
 
 
 def _consume_plan_draft(plan_name: str) -> None:
-    """Delete ``plan_name``'s staged draft: the manifest is the plan now."""
+    """Delete the staged draft: after a full ingest the manifest is the plan."""
     records = plan_draft._records()
     if records is not None:
-        records.delete_plan_draft(DEFAULT_NAMESPACE, plan_name)
-        return
-    # A partial store has no record view; its draft is the file the record
-    # view would have read (see plan_draft.read_plan_draft's fallback).
-    path = _store.manifest_path(plan_name).parent / f"{plan_name}.json"
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+        records.delete_plan_draft(plan_draft.DEFAULT_NAMESPACE, plan_name)
+    else:
+        # A partial store has no record view; delete the file it would read.
+        try:
+            (_store.manifest_path(plan_name).parent / f"{plan_name}.json").unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _keyless_reingest_error(

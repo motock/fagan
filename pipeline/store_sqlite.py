@@ -479,17 +479,9 @@ class SqliteStore(store_sqlite_notifications.NotificationHistoryMixin):
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
         return self._files.get_journal_final_ts(plan_name, story_key)
 
-    def get_recent_workspaces(self) -> list[str]:
-        return self._files.get_recent_workspaces()
-
-    def add_recent_workspace(self, path: str) -> None:
-        self._files.add_recent_workspace(path)
-
-    def get_active_workspace(self) -> str | None:
-        return self._files.get_active_workspace()
-
-    def set_active_workspace(self, path: str | None) -> None:
-        self._files.set_active_workspace(path)
+    # get_recent_workspaces / add_recent_workspace / get_active_workspace /
+    # set_active_workspace moved to pipeline.host_state (ADR 0012, decision 4):
+    # host-local records, never namespaced and never replicated.
 
 
 class SqliteRecords(

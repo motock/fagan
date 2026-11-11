@@ -31,7 +31,6 @@ import pipeline.server as p
 from pipeline import concurrency as pcon
 from pipeline import paths, plan_approval, wake
 from pipeline import persistence as ppers
-from pipeline import plan_completion as pcomp
 from pipeline.actor import ANONYMOUS, bind_principal
 from pipeline.plan_approval import canonical_digest
 from pipeline.service import PipelineService

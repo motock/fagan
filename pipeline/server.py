@@ -514,7 +514,7 @@ def _repo_root_for(plan_name: str) -> Path:
     else falls back to the server's global REPO_ROOT for older manifests
     ingested before this field existed.
     """
-    if _store.manifest_path(plan_name).exists():
+    if plan_name in _store.records().list_plans("default"):
         repo_root = _store.get_manifest(plan_name).get("repo_root")
         if repo_root:
             return Path(repo_root)

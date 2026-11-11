@@ -92,11 +92,8 @@ def _plan_names(store: Any) -> list[str]:
     if callable(lister):
         names = list(lister())
     else:
-        names = [
-            name
-            for name in store.list_plans()
-            if store.manifest_path(name).exists()
-        ]
+        recorded = set(store.records().list_plans("default"))
+        names = [name for name in store.list_plans() if name in recorded]
     return sorted(set(names))
 
 

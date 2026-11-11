@@ -156,6 +156,9 @@ class _RecordingRecords:
     def get_manifest(self, namespace, plan_name):
         return self._store.inner.records().get_manifest(namespace, plan_name)
 
+    def list_plans(self, namespace):
+        return self._store.inner.records().list_plans(namespace)
+
     def get_manifests(self, namespace):
         return self._store.inner.records().get_manifests(namespace)
 

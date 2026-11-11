@@ -695,7 +695,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     def list_ready_stories(self, plan_name: str) -> list[dict]:
         _validate_key(plan_name)
-        if not _store.manifest_path(plan_name).exists():
+        if plan_name not in _store.records().list_plans("default"):
             return []
 
         # keep reference to PLAN_DIR for free variable test

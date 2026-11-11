@@ -338,7 +338,8 @@ def test_list_manifests_and_list_plans(store_factory):
     store.save_manifest("alpha", EMPTY)
 
     assert store.list_manifests() == ["alpha", "beta"]
-    assert "alpha.manifest" in store.list_plans()
+    assert "alpha" in store.list_plans()
+    assert "alpha.manifest" not in store.list_plans()
 
 
 def test_notifications_missing_and_appended(store_factory):

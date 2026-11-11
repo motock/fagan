@@ -381,13 +381,12 @@ def test_bookkeeping_files_are_never_listed(plan_dir, records):
     _stage(records, "p1", _PLAN)
     (plan_dir / "p1.decisions.json").write_text("[]")
     (plan_dir / "p1.issue-1.journal.json").write_text("[]")
-    (plan_dir / "recent_workspaces.json").write_text(json.dumps({"workspaces": []}))
+    (plan_dir / "p1.notifications.jsonl").write_text("")
 
     listed = PipelineService().list_plans()
     assert listed == ["p1"]
     assert "p1.decisions" not in listed
     assert "p1.issue-1.journal" not in listed
-    assert "recent_workspaces" not in listed
     assert PipelineService().list_ingestable_plans() == ["p1"]
 
 
@@ -428,7 +427,7 @@ def _reference_entry(tool: str) -> str:
             continue
         entry = [line]
         for follow in lines[index + 1:]:
-            if not follow.strip() or follow.startswith("- ") or follow.startswith("#"):
+            if not follow.strip() or follow.startswith(("- ", "#")):
                 break
             entry.append(follow)
         return "\n".join(entry)

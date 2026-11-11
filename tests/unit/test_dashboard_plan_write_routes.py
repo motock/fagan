@@ -92,7 +92,11 @@ def test_save_plan_valid_payload_returns_200_and_persists_file(client, plan_dir)
     assert body["ok"] is True
     assert body["epic_count"] == 1
     assert body["story_count"] == 1
-    assert body["path"] == str(plan_dir / "newplan.json")
+    assert body["plan"] == "newplan"
+    assert body["staged"] is True
+    assert "path" not in body
+    staged = p._store.records().get_plan_draft("default", "newplan")
+    assert staged == plan
     saved = json.loads((plan_dir / "newplan.json").read_text())
     assert saved == plan
 

@@ -337,10 +337,15 @@ def test_filestore_implements_the_five_new_methods():
         assert hasattr(p.FileStore, method), f"FileStore must define {method}"
 
 
-def test_list_plans_includes_both_plan_stem_and_manifest_stem(plan_dir):
+def test_list_plans_returns_plan_names_not_file_stems(plan_dir):
+    """A plan is listed once, by name -- not once per file in the directory.
+
+    The listing reads records now, so a plan's manifest no longer surfaces as
+    a separate ``'<name>.manifest'`` stem.
+    """
     (plan_dir / "demo.json").write_text("{}")
     _write_manifest(plan_dir, "demo", {"stories": {}})
-    assert sorted(p._store.list_plans()) == ["demo", "demo.manifest"]
+    assert sorted(p._store.list_plans()) == ["demo"]
 
 
 def test_list_plans_empty_dir_returns_empty_list(plan_dir):

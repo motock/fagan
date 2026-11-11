@@ -233,9 +233,15 @@ def test_list_workspaces_unchanged():
 
 
 def test_save_plan_still_uses_store_seam_unchanged():
-    """save_plan's _store usage must be untouched by this story."""
+    """save_plan stages the plan through the record store, not a file write.
+
+    The plan draft is a record now (ADR 0012), so ``save_plan`` no longer
+    writes ``<plan>.json`` itself: it goes through the record store's
+    ``put_plan_draft``.  The active-workspace seam stays untouched.
+    """
     src = _normalized_source(PipelineService.save_plan)
-    assert "_atomic_write_json(path, plan)" in src
+    assert "_atomic_write_json" not in src
+    assert "plan_draft" in src
     assert "active_workspace" not in src
 
 

@@ -184,9 +184,9 @@ def scheduler_health_path(
 def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     """Return the freshness extras for ``/api/health``.
 
-    *plan_dir* defaults to :data:`pipeline.paths.PLAN_DIR` -- imported lazily so
-    the module stays importable without the full runtime configuration, and so
-    a caller (or a test) can point the probe at any plan directory.
+    *plan_dir* defaults to the host state's root -- the host-local record the
+    scheduler writes, resolved at call time so a rebound plan dir is honoured --
+    while an explicit *plan_dir* still points the probe at any plan directory.
 
     The scheduler snapshot is read from ``<plan_dir>/.scheduler_health.json``;
     any failure to read or parse it means "no payload", which is graded by

@@ -238,8 +238,8 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
     story = stories[story_key]
-    plan_file = _store.get_worktree_file(story, ".agent_plan.md")
-    scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
+    plan_file = _reader.read_worktree_file(story, ".agent_plan.md")
+    scratch_file = _reader.read_worktree_file(story, ".agent_scratchpad.md")
     progress = None
     if plan_file["available"] and scratch_file["available"]:
         progress = _parse_progress(plan_file["text"], scratch_file["text"])

@@ -16,7 +16,9 @@ stored.
 
 Each test declares the protocol names it exercises with ``@covers``;
 ``test_every_protocol_method_is_covered_by_a_contract_test`` asserts that the
-declarations cover every name in ``RECORD_STORE_METHODS``.
+declarations cover every name in ``RECORD_STORE_METHODS``, and
+``test_every_covered_name_is_a_protocol_method`` asserts that no declaration
+names anything the Protocol lacks.
 
 This module must stay importable without the repo's ``tests/`` tree and without
 loading ``pipeline.server``.

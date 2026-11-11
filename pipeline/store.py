@@ -687,6 +687,84 @@ class FileRecords(OutboxContract, OutboxSummaryContract):
         self._refuse_other_namespace(namespace)
         return sorted(self._store.list_manifests())
 
+    # -- plan drafts (ADR 0012 decision 3) ------------------------------
+    def _draft_path(self, plan_name: str) -> Path:
+        """Return the draft path ``PLAN_DIR/<plan>.json``, resolved per call."""
+        return PLAN_DIR / f"{plan_name}.json"
+
+    def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
+        """Stage ``plan`` as ``plan_name``'s transient plan draft.
+
+        The layout is the one ingest already reads -- ``PLAN_DIR/<plan>.json``
+        -- so a plan handed over by hand and a plan handed over by ``save_plan``
+        land in the same place.  The write goes through ``_atomic_write_json``
+        resolved on :mod:`pipeline.server` at *call* time (see :class:`LiveRef`),
+        so a patched writer is the one the write goes through.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        if not isinstance(plan, dict):
+            raise TypeError('plan must be a dict')
+        # Serialise before touching storage: a document that cannot be stored
+        # must leave no trace behind, not even a half-written draft.
+        json.dumps(plan)
+        _atomic_write_json(self._draft_path(plan_name), plan)
+
+    def get_plan_draft(self, namespace: str, plan_name: str) -> dict | None:
+        """Return ``plan_name``'s plan draft, or ``None`` when it has none.
+
+        Read through :func:`pipeline.persistence.read_plan_file`, the reader
+        ingest already refuses with, so a malformed or unreadable draft raises
+        :class:`UnreadableRecordError` carrying that reader's own reason text:
+        ingest's refusal messages stay byte-identical.  Nothing is cached, so a
+        draft rewritten on disk is read afresh on the next call.
+        """
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        path = self._draft_path(plan_name)
+        if not path.is_file():
+            return None
+        plan, refusal = _persistence().read_plan_file(path)
+        if refusal is not None:
+            raise UnreadableRecordError(refusal['error'])
+        return plan
+
+    def delete_plan_draft(self, namespace: str, plan_name: str) -> bool:
+        """Delete ``plan_name``'s plan draft; return whether one was deleted."""
+        validate_namespace(namespace)
+        validate_plan_name(plan_name)
+        self._refuse_other_namespace(namespace)
+        try:
+            self._draft_path(plan_name).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def list_plan_drafts(self, namespace: str) -> list[str]:
+        """Return the sorted plan names that have an ingestable draft.
+
+        Only ``<plan>.json`` files count -- a stem holding a ``'.'`` is a
+        manifest, decisions or journal sidecar -- and the file must hold a JSON
+        object with an ``epics`` key, the same filter
+        ``PipelineService.list_ingestable_plans`` applies.  A file that cannot
+        be read or parsed is skipped rather than raised.
+        """
+        validate_namespace(namespace)
+        self._refuse_other_namespace(namespace)
+        drafts = []
+        for path in PLAN_DIR.glob('*.json'):
+            if '.' in path.stem:
+                continue
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if isinstance(document, dict) and 'epics' in document:
+                drafts.append(path.stem)
+        return sorted(drafts)
+
     # -- transactions --------------------------------------------------
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.

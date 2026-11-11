@@ -17,7 +17,9 @@ def test_run_daemon_configures_logging_before_reading_interval_env():
 def test_run_daemon_configures_logging_before_acquiring_the_lock():
     src = inspect.getsource(run_daemon)
     call_idx = src.index("configure_logging_from_env()")
-    lock_idx = src.index("fcntl.flock(")
+    # The flock moved into host_state.SchedulerPidLock; the lock is acquired at
+    # this statement, so the ordering assertion is unchanged in intent.
+    lock_idx = src.index("scheduler_pid_lock()")
     assert call_idx < lock_idx
 
 

@@ -80,8 +80,6 @@ def test_the_store_surface_keeps_its_other_reads():
         "get_journal_final_ts",
         "get_decisions",
         "get_notifications",
-        "get_recent_workspaces",
-        "get_active_workspace",
     ):
         assert hasattr(Store, name), f"Store lost {name}"
         assert hasattr(FileStore, name), f"FileStore lost {name}"

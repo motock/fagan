@@ -360,7 +360,7 @@ def test_should_persist_an_escalation_fallback_through_the_record_store(
 
     escalate = _DispatchRecorder()
 
-    def _escalate_to_fallback(manifest, plan_name, key, manifest_path, fallback_model):
+    def _escalate_to_fallback(manifest, plan_name, key, fallback_model):
         escalate.calls.append(json.loads(json.dumps(manifest)))
         story = manifest["stories"][key]
         story["model"] = fallback_model

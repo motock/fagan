@@ -17,6 +17,19 @@ from pipeline import server as p
 from pipeline import ticketing as pt
 
 
+class _CiForgeStub:
+    def has_ci_config(self, repo_root):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _scoped_survives_dispatch(monkeypatch):
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(
+        "pipeline.test_scope_dispatch.get_forge", lambda root: _CiForgeStub()
+    )
+
+
 @pytest.fixture
 def agents_dir(tmp_path, monkeypatch):
     d = tmp_path / "agents"

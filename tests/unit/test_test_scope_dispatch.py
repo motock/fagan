@@ -15,6 +15,19 @@ from pipeline import test_scope_dispatch as tsd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+class _CiForgeStub:
+    def has_ci_config(self, repo_root):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _scoped_survives_dispatch(monkeypatch):
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(
+        "pipeline.test_scope_dispatch.get_forge", lambda root: _CiForgeStub()
+    )
+
+
 @pytest.fixture
 def settings_calls(monkeypatch):
     calls = []
@@ -43,7 +56,8 @@ def notifications(monkeypatch):
 
 
 def _stamp(manifest=None, story=None):
-    return tsd.stamp_test_scope("plan-a", "S1", manifest or {}, story if story is not None else {})
+    manifest = {"repo_root": str(REPO_ROOT), **(manifest or {})}
+    return tsd.stamp_test_scope("plan-a", "S1", manifest, story if story is not None else {})
 
 
 # ---------- stamping: resolution and source ----------

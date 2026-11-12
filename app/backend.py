@@ -89,6 +89,7 @@ class Backend(Protocol):
         resume_append_content: str | None = None,
         rework_full_suite: bool = False,
         review_feedback_rework: bool = False,
+        test_scope_spec: dict | None = None,
     ) -> AgentHandle:
         """Spawn a non-blocking agentic run, streaming output to log_path."""
         ...

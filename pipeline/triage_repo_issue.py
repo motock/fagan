@@ -20,7 +20,7 @@ REPO_ISSUE_HEADER = "=== REPO ISSUE FILED BY TRIAGE ==="
 _SUMMARY_RULING_LIMIT = 120
 
 
-def _execute_repo_issue(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _execute_repo_issue(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ``repo_issue`` ruling by filing one follow-up story.
 
     Guards, in order:

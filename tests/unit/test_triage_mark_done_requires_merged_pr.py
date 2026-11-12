@@ -88,7 +88,6 @@ def _run(harness, story):
         story,
         {"action": "mark_done", "rationale": "stale bookkeeping"},
         {"stories": {story["key"]: story}},
-        Path("/tmp/plan-a.manifest.json"),
     )
 
 

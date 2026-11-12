@@ -11,8 +11,7 @@ Contract under test
 * ``DEFERRED_ACTIONS`` no longer contains ``split_story``; ``repo_issue`` stays
   deferred and its park-loudly behaviour is unchanged.
 * ``execute_ruling`` routes ``split_story`` to
-  ``_execute_split_story(plan_name, story_key, story, ruling, manifest,
-  manifest_path)``.
+  ``_execute_split_story(plan_name, story_key, story, ruling, manifest)``.
 * Guards, in order:
 
     1. ``ruling["split"]`` must be exactly two non-empty summaries, else park
@@ -178,10 +177,10 @@ def _deferred_actions_comment_block() -> str:
     return "\n".join(reversed(block))
 
 
-def _split(plan_name, story_key, story, ruling, manifest, manifest_path):
+def _split(plan_name, story_key, story, ruling, manifest):
     """Call the executor under test (fails loudly if it does not exist)."""
     return triage_mod._execute_split_story(
-        plan_name, story_key, story, ruling, manifest, manifest_path
+        plan_name, story_key, story, ruling, manifest
     )
 
 
@@ -237,7 +236,6 @@ class TestExecutorSurface:
             "story",
             "ruling",
             "manifest",
-            "manifest_path",
         ]
 
 
@@ -254,18 +252,17 @@ class TestExecuteRulingRouting:
         monkeypatch.setattr(triage_mod, "_execute_split_story", _fake_execute, raising=False)
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         assert len(calls) == 1, "execute_ruling must route split_story to _execute_split_story"
         args, kwargs = calls[0]
-        assert args == ("cap1", "S1", parent_story, split_ruling, manifest, manifest_path) or (
+        assert args == ("cap1", "S1", parent_story, split_ruling, manifest) or (
             kwargs.get("plan_name") == "cap1"
             and kwargs.get("story_key") == "S1"
             and kwargs.get("story") is parent_story
             and kwargs.get("ruling") is split_ruling
             and kwargs.get("manifest") is manifest
-            and kwargs.get("manifest_path") == manifest_path
         )
         assert result == "split_story"
 
@@ -281,7 +278,7 @@ class TestExecuteRulingRouting:
         )
 
         pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
+            "cap1", "S2", parent_story, repo_ruling, manifest
         )
 
         assert calls == []
@@ -296,14 +293,14 @@ class TestSplitHappyPath:
     def test_creates_exactly_two_children_with_deterministic_keys(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert set(manifest["stories"]) == {"S1-split-1", "S1-split-2"}
 
     def test_child_summaries_come_from_the_split_payload(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["stories"]["S1-split-1"]["summary"] == "first half of the widget"
         assert manifest["stories"]["S1-split-2"]["summary"] == "second half of the widget"
@@ -311,7 +308,7 @@ class TestSplitHappyPath:
     def test_children_are_todo(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["stories"]["S1-split-1"]["status"] == "todo"
         assert manifest["stories"]["S1-split-2"]["status"] == "todo"
@@ -322,7 +319,7 @@ class TestSplitHappyPath:
         # The parent carries acceptance fixtures; the children must NOT inherit
         # them (they cannot be mechanically halved).
         assert parent_story["acceptance"]
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert "acceptance" not in manifest["stories"]["S1-split-1"]
         assert "acceptance" not in manifest["stories"]["S1-split-2"]
@@ -330,7 +327,7 @@ class TestSplitHappyPath:
     def test_children_have_no_interdependency(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         c1 = manifest["stories"]["S1-split-1"]
         c2 = manifest["stories"]["S1-split-2"]
@@ -342,7 +339,7 @@ class TestSplitHappyPath:
     def test_child_instructions_extend_the_parents(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         for key in _child_keys("S1"):
             instructions = manifest["stories"][key]["agent_instructions"]
@@ -352,7 +349,7 @@ class TestSplitHappyPath:
     def test_child_instructions_carry_rationale_and_sibling_note(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         for key in _child_keys("S1"):
             instructions = manifest["stories"][key]["agent_instructions"]
@@ -363,7 +360,7 @@ class TestSplitHappyPath:
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
         parent_story.pop("agent_instructions")
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         for key in _child_keys("S1"):
             instructions = manifest["stories"][key]["agent_instructions"]
@@ -373,7 +370,7 @@ class TestSplitHappyPath:
     def test_persona_risk_backend_copied_from_parent(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         for key in _child_keys("S1"):
             child = manifest["stories"][key]
@@ -386,7 +383,7 @@ class TestSplitHappyPath:
     ):
         for field in ("persona", "risk", "backend"):
             parent_story.pop(field)
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         for key in _child_keys("S1"):
             child = manifest["stories"][key]
@@ -397,7 +394,7 @@ class TestSplitHappyPath:
     def test_parent_parked_with_provenance_reason(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert parent_story["status"] == "parked"
         assert parent_story["parked_reason"] == "split into S1-split-1, S1-split-2 by triage"
@@ -406,7 +403,7 @@ class TestSplitHappyPath:
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
         manifest["triage_created_stories"] = 1
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["triage_created_stories"] == 3
 
@@ -414,7 +411,7 @@ class TestSplitHappyPath:
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
         assert "triage_created_stories" not in manifest
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["triage_created_stories"] == 2
 
@@ -423,7 +420,7 @@ class TestSplitHappyPath:
     ):
         # Mirrors _coerce_int, which plan_triage_budget_exhausted reads.
         manifest["triage_created_stories"] = "not-a-number"
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["triage_created_stories"] == 2
 
@@ -431,7 +428,7 @@ class TestSplitHappyPath:
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
         assert not manifest_path.exists()
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert not manifest_path.exists(), (
             "the executor must not persist the manifest; run_triage_sweep does that"
@@ -440,7 +437,7 @@ class TestSplitHappyPath:
     def test_parent_is_not_marked_as_a_deferred_action(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert "triage_deferred_action" not in parent_story
 
@@ -451,7 +448,7 @@ class TestSplitHappyPath:
         split_ruling["split"] = []
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         msgs = _notify_messages(patched)
@@ -461,7 +458,7 @@ class TestSplitHappyPath:
     def test_returns_a_string(
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
-        result = _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        result = _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert isinstance(result, str)
 
@@ -469,7 +466,7 @@ class TestSplitHappyPath:
         self, parent_story, split_ruling, manifest, manifest_path, patched
     ):
         pipeline.triage.execute_ruling(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         assert set(manifest["stories"]) == {"S1-split-1", "S1-split-2"}
@@ -503,7 +500,7 @@ class TestSplitInvalidPayload:
     ):
         split_ruling["split"] = payload
 
-        result = _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        result = _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert result == "park_for_human"
         assert parent_story["status"] == "parked"
@@ -514,7 +511,7 @@ class TestSplitInvalidPayload:
     ):
         split_ruling["split"] = []
 
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         msgs = _notify_messages(patched)
         assert any("S1" in m and INVALID_PAYLOAD_REASON in m for m in msgs), (
@@ -526,7 +523,7 @@ class TestSplitInvalidPayload:
     ):
         split_ruling["split"] = ["only one summary"]
 
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["stories"] == {}
         assert manifest.get("triage_created_stories", 0) == 0
@@ -536,7 +533,7 @@ class TestSplitInvalidPayload:
     ):
         split_ruling.pop("split")
 
-        result = _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        result = _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert result == "park_for_human"
         assert parent_story["parked_reason"] == INVALID_PAYLOAD_REASON
@@ -548,7 +545,7 @@ class TestSplitInvalidPayload:
         split_ruling["split"] = ["a", "b", "c"]
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -568,7 +565,7 @@ class TestSplitBudgetExhausted:
         manifest["triage_created_stories"] = triage_mod.TRIAGE_MAX_CREATED_STORIES
         assert triage_mod.plan_triage_budget_exhausted(manifest)
 
-        result = _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        result = _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert result == "park_for_human"
         assert parent_story["status"] == "parked"
@@ -579,7 +576,7 @@ class TestSplitBudgetExhausted:
     ):
         manifest["triage_created_stories"] = triage_mod.TRIAGE_MAX_CREATED_STORIES
 
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         msgs = _notify_messages(patched)
         assert any("S1" in m and BUDGET_REASON in m for m in msgs), (
@@ -591,7 +588,7 @@ class TestSplitBudgetExhausted:
     ):
         manifest["triage_created_stories"] = triage_mod.TRIAGE_MAX_CREATED_STORIES
 
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert manifest["stories"] == {}
         assert manifest["triage_created_stories"] == triage_mod.TRIAGE_MAX_CREATED_STORIES
@@ -602,7 +599,7 @@ class TestSplitBudgetExhausted:
         manifest["triage_created_stories"] = triage_mod.TRIAGE_MAX_CREATED_STORIES
         split_ruling["split"] = []
 
-        _split("cap1", "S1", parent_story, split_ruling, manifest, manifest_path)
+        _split("cap1", "S1", parent_story, split_ruling, manifest)
 
         assert parent_story["parked_reason"] == INVALID_PAYLOAD_REASON
 
@@ -612,7 +609,7 @@ class TestSplitBudgetExhausted:
         manifest["triage_created_stories"] = triage_mod.TRIAGE_MAX_CREATED_STORIES
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -630,7 +627,7 @@ class TestRepoIssueUnchanged:
         self, parent_story, repo_ruling, manifest, manifest_path, patched
     ):
         pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
+            "cap1", "S2", parent_story, repo_ruling, manifest
         )
 
         assert patched["claude_calls"] == []
@@ -660,7 +657,7 @@ class TestExecutionRecordChildren:
         calls = _capture_appends(monkeypatch)
 
         triage_mod._apply_ruling_for_mode(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         assert len(calls) == 1
@@ -674,7 +671,7 @@ class TestExecutionRecordChildren:
         calls = _capture_appends(monkeypatch)
 
         triage_mod._apply_ruling_for_mode(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
+            "cap1", "S2", parent_story, repo_ruling, manifest
         )
 
         assert len(calls) == 1
@@ -688,7 +685,7 @@ class TestExecutionRecordChildren:
         calls = _capture_appends(monkeypatch)
 
         triage_mod._apply_ruling_for_mode(
-            "cap1", "S1", parent_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", parent_story, split_ruling, manifest
         )
 
         record = calls[0][1]

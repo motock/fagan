@@ -128,7 +128,7 @@ class TestEscalateModelNotice:
         }
 
         result = triage_mod.execute_ruling(
-            "plan-x", "story-1", story, escalate_ruling, manifest, manifest_path
+            "plan-x", "story-1", story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -147,7 +147,7 @@ class TestEscalateModelNotice:
         story = {"status": "failed", "backend": "local", "model": "m1"}
 
         result = triage_mod.execute_ruling(
-            "plan-x", "story-1", story, escalate_ruling, manifest, manifest_path
+            "plan-x", "story-1", story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -172,7 +172,7 @@ class TestEscalateModelNotice:
         }
 
         result = triage_mod.execute_ruling(
-            "plan-x", "story-1", story, escalate_ruling, manifest, manifest_path
+            "plan-x", "story-1", story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -186,7 +186,7 @@ class TestEscalateModelNotice:
         story = {"status": "failed", "backend": "local", "model": "m1"}
 
         result = triage_mod.execute_ruling(
-            "plan-x", "story-1", story, escalate_ruling, manifest, manifest_path
+            "plan-x", "story-1", story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -229,7 +229,7 @@ class TestParkAttribution:
         ruling = {"action": "park_for_human", "rationale": "r"}
 
         result = triage_mod.execute_ruling(
-            "plan-x", "story-1", story, ruling, {"stories": {}}, manifest_path
+            "plan-x", "story-1", story, ruling, {"stories": {}}
         )
 
         assert result == "park_for_human"

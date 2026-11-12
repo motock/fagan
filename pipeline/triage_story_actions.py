@@ -19,7 +19,7 @@ _park = _ModuleRef("pipeline.triage", "_park")
 plan_triage_budget_exhausted = _ModuleRef("pipeline.triage", "plan_triage_budget_exhausted")
 
 
-def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _execute_split_story(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ``split_story`` ruling by creating two child stories.
 
     Guards, in order:
@@ -151,7 +151,7 @@ def _pr_is_merged(handle: str) -> bool:
         return False
 
 
-def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _execute_mark_done(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ``mark_done`` ruling by correcting the story record.
 
     Fail-closed corroboration comes FIRST, before any mutation: an

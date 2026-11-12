@@ -43,10 +43,10 @@ def test_amend_scope_ruling_reaches_executor_with_arguments(monkeypatch):
     story, manifest = _story(), {"stories": {}}
     ruling = {"action": "amend_scope", "rationale": "needed"}
 
-    result = triage.execute_ruling(PLAN, KEY, story, ruling, manifest, "m.json")
+    result = triage.execute_ruling(PLAN, KEY, story, ruling, manifest)
 
     assert result == "amend_scope"
-    assert seen["args"] == (PLAN, KEY, story, ruling, manifest, "m.json")
+    assert seen["args"] == (PLAN, KEY, story, ruling, manifest)
 
 
 def test_dry_run_does_not_execute_amend_scope(monkeypatch, records):
@@ -57,7 +57,7 @@ def test_dry_run_does_not_execute_amend_scope(monkeypatch, records):
     story = _story()
 
     result = triage._apply_ruling_for_mode(
-        PLAN, KEY, story, {"action": "amend_scope", "rationale": "x"}, {}, "m.json"
+        PLAN, KEY, story, {"action": "amend_scope", "rationale": "x"}, {}
     )
 
     assert result == "dry-run"
@@ -69,7 +69,7 @@ def test_unknown_action_still_parks(monkeypatch):
     monkeypatch.setattr(triage, "_park", lambda *a: parked.append(a) or "parked")
 
     result = triage.execute_ruling(
-        PLAN, KEY, _story(), {"action": "frobnicate", "rationale": "x"}, {}, "m.json"
+        PLAN, KEY, _story(), {"action": "frobnicate", "rationale": "x"}, {}
     )
 
     assert result == "parked"
@@ -95,13 +95,11 @@ def test_amend_scope_writes_exactly_one_record_with_mode_and_paths(
     monkeypatch.setattr(
         "pipeline.triage_scope_actions._is_green_at_head", lambda story: False
     )
-    manifest_path = tmp_path / "m.json"
     story = _story()
     manifest = {"stories": {KEY: story}}
 
     result = triage._apply_ruling_for_mode(
         PLAN, KEY, story, {"action": "amend_scope", "rationale": "x"}, manifest,
-        manifest_path,
     )
 
     assert result == "amend_scope"

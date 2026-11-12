@@ -150,7 +150,7 @@ class TestLocalFallbackBranch:
         # model != fallback, tried_fallback_model absent, backend local.
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -171,7 +171,7 @@ class TestLocalFallbackBranch:
         base_story["model"] = "devstral"
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         # Falls through to Claude (auto escalation on by default in fixture).
@@ -186,7 +186,7 @@ class TestLocalFallbackBranch:
         base_story["tried_fallback_model"] = True
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -202,7 +202,7 @@ class TestLocalFallbackBranch:
         base_story["backend"] = "claude"
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         # Local-fallback branch is NOT taken.
@@ -216,7 +216,7 @@ class TestLocalFallbackBranch:
     ):
         # No local_model_fallback key at all.
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert patched["fallback_calls"] == []
@@ -235,7 +235,7 @@ class TestClaudeBranch:
         patched["auto_escalation"] = True
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -253,7 +253,7 @@ class TestClaudeBranch:
         # No fallback configured.
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -269,7 +269,7 @@ class TestClaudeBranch:
         # No fallback configured.
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -289,7 +289,7 @@ class TestParkBranch:
         patched["auto_escalation"] = False
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -306,7 +306,7 @@ class TestParkBranch:
         patched["auto_escalation"] = True
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -323,7 +323,7 @@ class TestParkBranch:
         patched["auto_escalation"] = True
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -357,7 +357,7 @@ class TestErrorHandling:
 
         # No fallback configured so we reach the Claude branch.
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -387,7 +387,7 @@ class TestErrorHandling:
 
         manifest["local_model_fallback"] = "devstral"
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -407,7 +407,7 @@ class TestParkForHumanRegression:
         patched["auto_escalation"] = True
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, park_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, park_ruling, manifest
         )
 
         assert result == "park_for_human"

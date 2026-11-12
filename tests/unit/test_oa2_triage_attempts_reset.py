@@ -173,7 +173,6 @@ def _apply(harness, story, manifest=None):
         story,
         _ruling(),
         manifest if manifest is not None else _manifest(story),
-        harness.manifest_path,
     )
 
 

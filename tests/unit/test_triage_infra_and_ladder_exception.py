@@ -127,7 +127,7 @@ def sweep(monkeypatch):
 
     monkeypatch.setattr(triage_mod, "rule_on_story", _fake_rule)
 
-    def _fake_apply(plan_name, story_key, story, ruling, manifest, manifest_path):
+    def _fake_apply(plan_name, story_key, story, ruling, manifest):
         state["applied"].append(story_key)
         return ruling["action"]
 
@@ -260,7 +260,7 @@ def _drive_escalate(monkeypatch, story, ruling, exc):
 
     monkeypatch.setattr(triage_mod, "_escalate_to_claude", _boom)
     return pipeline.triage.execute_ruling(
-        PLAN_NAME, "s1", story, ruling, {"stories": {"s1": story}}, None
+        PLAN_NAME, "s1", story, ruling, {"stories": {"s1": story}}
     )
 
 

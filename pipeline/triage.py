@@ -112,7 +112,7 @@ def _notify_escalate_model(plan_name, story_key, story, message, event) -> None:
         pass
 
 
-def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ruling in this slice.
 
     The current implementation is intentionally minimal – every action
@@ -122,25 +122,15 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     action = ruling.get("action", "unknown")
     rationale = ruling.get("rationale", "")[:300]
     if action == "split_story":
-        return _execute_split_story(
-            plan_name, story_key, story, ruling, manifest, manifest_path
-        )
+        return _execute_split_story(plan_name, story_key, story, ruling, manifest)
     if action == "mark_done":
-        return _execute_mark_done(
-            plan_name, story_key, story, ruling, manifest, manifest_path
-        )
+        return _execute_mark_done(plan_name, story_key, story, ruling, manifest)
     if action == "patch_acceptance":
-        return _execute_patch_acceptance(
-            plan_name, story_key, story, ruling, manifest, manifest_path
-        )
+        return _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest)
     if action == "repo_issue":
-        return _execute_repo_issue(
-            plan_name, story_key, story, ruling, manifest, manifest_path
-        )
+        return _execute_repo_issue(plan_name, story_key, story, ruling, manifest)
     if action == "amend_scope":
-        return _execute_amend_scope(
-            plan_name, story_key, story, ruling, manifest, manifest_path
-        )
+        return _execute_amend_scope(plan_name, story_key, story, ruling, manifest)
     if action == "park_for_human":
         # A park_for_human ruling means "a human must look at this, keep it
         # parked".  If the story already carries a reason, that reason is what
@@ -261,7 +251,7 @@ def _record_execution(plan_name, story_key, action, result, mode,
         )
 
 
-def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str:
     """Dispatch a ruling based on the current autonomy mode.
 
     * ``dry-run`` – the executor is disabled.  The story is left untouched and a
@@ -288,7 +278,7 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manife
                           prior_status, prior_parked_reason)
         return "dry-run"
     # Any other mode – execute the ruling
-    result = execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
+    result = execute_ruling(plan_name, story_key, story, ruling, manifest)
     extra = {}
     children = story.pop("_split_children", None)
     if children:
@@ -403,8 +393,7 @@ def run_triage_sweep(plan_name: str) -> dict:
         return {"ok": True, "skipped": "disabled"}
     try:
         from .server import _store
-        manifest_path = _store.manifest_path(plan_name)
-        manifest = _store.records().get_manifest("default", plan_name)
+        manifest =_store.records().get_manifest("default", plan_name)
         if manifest is None:
             return {"ok": True, "skipped": "no_manifest"}
         if manifest.get("paused"):
@@ -474,7 +463,7 @@ def run_triage_sweep(plan_name: str) -> dict:
             if action_already_tried(story, ruling["action"]):
                 ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
             record_triage_attempt(story, ruling["action"])
-            action = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest, manifest_path)
+            action = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest)
             triaged_keys.append(key)
             actions[key] = ruling["action"]
             changed = True

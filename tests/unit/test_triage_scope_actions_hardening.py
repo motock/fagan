@@ -74,7 +74,7 @@ def test_should_amend_nothing_when_protected_path_among_allowed(monkeypatch, tmp
     monkeypatch.setattr(tsa, "_park", lambda *a, **k: "park_for_human")
     story = _story(scope_conflict={"paths": ["pipeline/helper_a.py", "pipeline/scope_gate.py"]})
     result = _execute_amend_scope(
-        "plan", "S", story, {"action": "amend_scope"}, {"stories": {"S": story}}, tmp_path / "m.json"
+        "plan", "S", story, {"action": "amend_scope"}, {"stories": {"S": story}}
     )
     assert result == "park_for_human"
     assert story["files"] == ["pipeline/foo.py", "REFERENCE.md"]
@@ -88,7 +88,7 @@ def test_should_set_amended_paths_and_not_record_execution(monkeypatch, tmp_path
     monkeypatch.setattr(tsa, "_record_execution", lambda *a, **k: records.append(a), raising=False)
     story = _story(scope_conflict={"paths": ["pipeline/helper_a.py"]})
     result = _execute_amend_scope(
-        "plan", "S", story, {"action": "amend_scope"}, {"stories": {"S": story}}, tmp_path / "m.json"
+        "plan", "S", story, {"action": "amend_scope"}, {"stories": {"S": story}}
     )
     assert result == "amend_scope"
     assert story["_amended_paths"] == ["pipeline/helper_a.py"]

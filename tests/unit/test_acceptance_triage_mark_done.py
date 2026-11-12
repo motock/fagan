@@ -50,7 +50,6 @@ _EXECUTOR_PARAMS = (
     "story",
     "ruling",
     "manifest",
-    "manifest_path",
 )
 
 # OPSA-2's parked-story matrix + autonomy ladder: sibling content this story
@@ -165,7 +164,7 @@ def _story(harness, **over):
     return story
 
 
-def _run(harness, story, ruling=None, manifest=None, manifest_path=None):
+def _run(harness, story, ruling=None, manifest=None):
     return triage._execute_mark_done(
         "plan-a",
         story["key"],
@@ -174,9 +173,6 @@ def _run(harness, story, ruling=None, manifest=None, manifest_path=None):
         if ruling is not None
         else {"action": "mark_done", "rationale": "stale bookkeeping"},
         manifest if manifest is not None else {"stories": {story["key"]: story}},
-        manifest_path
-        if manifest_path is not None
-        else Path("/tmp/plan-a.manifest.json"),
     )
 
 
@@ -408,7 +404,6 @@ def test_execution_record_captures_prior_state_before_mutation(harness, monkeypa
         story,
         {"action": "mark_done", "rationale": "stale bookkeeping"},
         {"stories": {story["key"]: story}},
-        Path("/tmp/plan-a.manifest.json"),
     )
 
     assert len(harness.calls["decisions"]) == 1
@@ -434,7 +429,6 @@ def test_execution_record_is_written_for_the_pr_url_path(harness, monkeypatch):
         story,
         {"action": "mark_done", "rationale": "stale bookkeeping"},
         {"stories": {story["key"]: story}},
-        Path("/tmp/plan-a.manifest.json"),
     )
 
     assert len(harness.calls["decisions"]) == 1
@@ -457,7 +451,6 @@ def test_execute_ruling_routes_mark_done_to_the_executor(harness):
         story,
         {"action": "mark_done", "rationale": "stale bookkeeping"},
         manifest,
-        Path("/tmp/plan-a.manifest.json"),
     )
 
     assert result == "mark_done"
@@ -476,7 +469,6 @@ def test_execute_ruling_does_not_bypass_the_corroboration_gate(harness):
         story,
         {"action": "mark_done", "rationale": "stale bookkeeping"},
         manifest,
-        Path("/tmp/plan-a.manifest.json"),
     )
 
     assert result == "park_for_human"

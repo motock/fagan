@@ -95,7 +95,6 @@ def _run(monkeypatch, story, ruling=None, mode="gated"):
         story,
         dict(BASE_RULING if ruling is None else ruling),
         {},
-        None,
     )
     return result, calls
 
@@ -204,7 +203,7 @@ def test_prior_state_is_snapshotted_before_the_executor_mutates_the_story(monkey
     """The snapshot must be taken BEFORE the executor touches the story dict."""
     story = {"status": "parked", "parked_reason": "old reason"}
 
-    def fake_execute(plan_name, story_key, story_dict, ruling, manifest, manifest_path):
+    def fake_execute(plan_name, story_key, story_dict, ruling, manifest):
         story_dict["status"] = "in_progress"
         story_dict["parked_reason"] = "new reason"
         return "escalate_model"
@@ -223,7 +222,7 @@ def test_prior_state_is_snapshotted_before_the_executor_mutates_the_story(monkey
 def test_executed_park_records_the_park_result_and_prior_state(monkeypatch):
     story = {"status": "in_progress"}
 
-    def fake_execute(plan_name, story_key, story_dict, ruling, manifest, manifest_path):
+    def fake_execute(plan_name, story_key, story_dict, ruling, manifest):
         story_dict["status"] = "parked"
         story_dict["parked_reason"] = "unhandled ruling action"
         return "park_for_human"
@@ -251,7 +250,7 @@ def test_record_is_appended_after_the_executor_returns(monkeypatch):
     monkeypatch.setattr(triage, "execute_ruling", fake_execute, raising=False)
 
     triage._apply_ruling_for_mode(
-        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}, None
+        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}
     )
 
     assert seen == [0], "the execution record must be appended only after the executor returns"
@@ -266,11 +265,11 @@ def test_mode_reflects_the_autonomy_value_at_call_time(monkeypatch):
 
     _set_mode(monkeypatch, "gated")
     triage._apply_ruling_for_mode(
-        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}, None
+        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}
     )
     _set_mode(monkeypatch, "dry-run")
     triage._apply_ruling_for_mode(
-        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}, None
+        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}
     )
 
     assert [record["mode"] for _, record in calls] == ["gated", "dry-run"]
@@ -331,7 +330,7 @@ def test_append_failure_does_not_propagate_from_the_executor_path(monkeypatch, c
 
     with caplog.at_level(logging.WARNING, logger="pipeline"):
         result = triage._apply_ruling_for_mode(
-            PLAN, STORY_KEY, story, dict(BASE_RULING), {}, None
+            PLAN, STORY_KEY, story, dict(BASE_RULING), {}
         )
 
     assert result == "escalate_model"
@@ -357,7 +356,7 @@ def test_append_failure_does_not_propagate_from_the_dry_run_branch(monkeypatch):
     monkeypatch.setattr(triage, "_append_decision", raising_append, raising=False)
 
     result = triage._apply_ruling_for_mode(
-        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}, None
+        PLAN, STORY_KEY, {"status": "parked"}, dict(BASE_RULING), {}
     )
 
     assert result == "dry-run"
@@ -384,7 +383,7 @@ def test_execute_ruling_dispatch_is_unchanged_for_deferred_actions(monkeypatch):
     story = {"status": "in_progress"}
 
     result = triage.execute_ruling(
-        PLAN, STORY_KEY, story, {"action": "split_story", "rationale": "too big"}, {}, None
+        PLAN, STORY_KEY, story, {"action": "split_story", "rationale": "too big"}, {}
     )
 
     assert result == "park_for_human"
@@ -396,7 +395,7 @@ def test_execute_ruling_dispatch_is_unchanged_for_unhandled_actions(monkeypatch)
     story = {"status": "in_progress"}
 
     result = triage.execute_ruling(
-        PLAN, STORY_KEY, story, {"action": "frobnicate", "rationale": "?"}, {}, None
+        PLAN, STORY_KEY, story, {"action": "frobnicate", "rationale": "?"}, {}
     )
 
     assert result == "park_for_human"

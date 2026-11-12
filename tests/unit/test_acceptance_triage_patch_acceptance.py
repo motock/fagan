@@ -58,7 +58,6 @@ _EXECUTOR_PARAMS = (
     "story",
     "ruling",
     "manifest",
-    "manifest_path",
 )
 
 # OPSA-2's parked-story matrix + autonomy ladder and OPSA-6's mark_done
@@ -238,7 +237,7 @@ def _manifest(story):
     return {"stories": {story["key"]: story}}
 
 
-def _run(harness, story, ruling=None, manifest=None, manifest_path=None):
+def _run(harness, story, ruling=None, manifest=None):
     return triage._execute_patch_acceptance(
         "plan-a",
         story["key"],
@@ -247,9 +246,6 @@ def _run(harness, story, ruling=None, manifest=None, manifest_path=None):
         if ruling is not None
         else {"action": "patch_acceptance", "rationale": "born-broken oracle"},
         manifest if manifest is not None else _manifest(story),
-        manifest_path
-        if manifest_path is not None
-        else Path("/tmp/plan-a.manifest.json"),
     )
 
 
@@ -339,7 +335,6 @@ def test_patch_acceptance_is_not_a_deferred_action():
 def test_execute_ruling_dispatches_patch_acceptance(harness, monkeypatch):
     story = _story(harness)
     manifest = _manifest(story)
-    manifest_path = Path("/tmp/plan-a.manifest.json")
     ruling = {"action": "patch_acceptance", "rationale": "born-broken oracle"}
     seen = []
 
@@ -350,7 +345,7 @@ def test_execute_ruling_dispatches_patch_acceptance(harness, monkeypatch):
     monkeypatch.setattr(triage, "_execute_patch_acceptance", fake_exec)
 
     result = triage.execute_ruling(
-        "plan-a", story["key"], story, ruling, manifest, manifest_path
+        "plan-a", story["key"], story, ruling, manifest
     )
 
     assert result == "patch_acceptance"
@@ -361,7 +356,6 @@ def test_execute_ruling_dispatches_patch_acceptance(harness, monkeypatch):
     assert "OPSA-7" in passed
     assert story in passed
     assert manifest in passed
-    assert manifest_path in passed
     assert ruling in passed
 
 

@@ -122,7 +122,7 @@ def env(monkeypatch, tmp_path):
 def _run(story, path, rationale="because"):
     manifest = {"stories": {"S": story}}
     return _execute_amend_scope(
-        "plan", "S", story, {"action": "amend_scope", "rationale": rationale}, manifest, path
+        "plan", "S", story, {"action": "amend_scope", "rationale": rationale}, manifest
     ), manifest
 
 

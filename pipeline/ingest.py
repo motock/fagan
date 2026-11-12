@@ -42,6 +42,7 @@ from .ingest_manifest import (
     plan_level_fields,
     validate_story_descriptions,
 )
+from .ingest_plan_fields import _TEAM_RE, _team_error, _test_scope_error  # noqa: F401
 from .ownership import resolve_ownership
 from .plan_approval import approval_enabled, on_ingest
 from .plan_approval_notice import notify_approval_event, pending_notice_due
@@ -292,22 +293,6 @@ def _blocked_by_error(story: dict) -> str | None:
                 f"story {summary!r}: `blocked_by` entry must be "
                 f"'<plan>:<story_key>', got {entry!r}"
             )
-    return None
-
-
-_TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-
-
-def _team_error(plan: dict) -> str | None:
-    """Return an error string when the plan's optional ``team`` is malformed."""
-    team = plan.get("team")
-    if team is None:
-        return None
-    if not isinstance(team, str) or not _TEAM_RE.match(team):
-        return (
-            "plan field 'team' must be a lowercase slug matching "
-            "^[a-z0-9][a-z0-9-]{0,31}$"
-        )
     return None
 
 
@@ -616,7 +601,7 @@ def _ingest_plan_impl(
     # against (ADR 0009: principal -> team -> repo -> plan -> story). Validate
     # it here, with the other plan-level fields and before any file is
     # written, so a typo'd slug fails closed instead of landing on disk.
-    team_error = _team_error(plan)
+    team_error = _team_error(plan) or _test_scope_error(plan)
     if team_error is not None:
         return {"ok": False, "error": team_error}
 
@@ -862,6 +847,8 @@ def _ingest_plan_impl(
         final_manifest["owner"] = ownership["owner"]
         final_manifest["delegates"] = ownership["delegates"]
         final_manifest["team"] = plan.get("team") or prior.get("team") or DEFAULT_TEAM
+        if plan.get("test_scope", prior.get("test_scope")) is not None:
+            final_manifest["test_scope"] = plan.get("test_scope", prior.get("test_scope"))
         if plan_context is not None:
             final_manifest["context"] = plan_context
 

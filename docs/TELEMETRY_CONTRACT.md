@@ -106,11 +106,17 @@ instruments carry model, role, backend and token metadata, so they are
 registered only under `harness` and a `customer` deployment emits no series for
 them.
 
+The two test-scope instruments carry only the bounded `fagan.test_scope` and
+`fagan.rework` labels, so rework rate (`rework` != `none` over all dispatches)
+and time-to-done can be compared by scope.
+
 | Metric | Unit | Attributes | Profile |
 | --- | --- | --- | --- |
 | `fagan.story.dispatch_to_pr.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
 | `fagan.story.pr_to_ci.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
 | `fagan.story.pr_to_done.duration` | `s` | none — label-free, resource attributes only | `customer` and `harness` |
+| `fagan.story.dispatches` | `{dispatch}` | `fagan.test_scope` (`full`, `scoped`), `fagan.rework` (`none`, `ci`, `review`) | `customer` and `harness` |
+| `fagan.story.dispatch_to_done.duration` | `s` | `fagan.test_scope` (`full`, `scoped`) — scope at the story's first dispatch | `customer` and `harness` |
 | `fagan.usage.tokens` | `{token}` | `kind` (`input`, `output`, `cache_creation`, `cache_read`), `role`, `backend`, `model` | `harness` only |
 | `fagan.usage.cost` | `USD` | `role`, `backend`, `model` | `harness` only |
 | `fagan.usage.call.duration` | `ms` | `role`, `backend` | `harness` only |

@@ -333,7 +333,9 @@ def main(argv: list[str] | None = None) -> int:
         # heavy modules, and this module must stay importable on its own.
         from pipeline import server
 
-        manifest = json.loads(server._store.manifest_path(plan_name).read_text())
+        manifest = server._store.records().get_manifest("default", plan_name)
+        if manifest is None:
+            raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
         story = manifest["stories"][story_key]
         result["sha"] = subprocess.run(
             ["git", "rev-parse", "HEAD"],

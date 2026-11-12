@@ -35,7 +35,6 @@ predicate.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
@@ -165,10 +164,8 @@ def blocks_reclaim(story, worktree) -> bool:
 
 
 def _read_story(store, plan_name: str, story_key: str) -> dict:
-    """Re-read one story straight from the persisted manifest."""
-    path = store.manifest_path(plan_name)
-    with open(path, encoding="utf-8") as handle:
-        manifest = json.load(handle)
+    """Re-read one story straight from the persisted record (never cached)."""
+    manifest = store.records().get_manifest("default", plan_name) or {}
     stories = manifest.get("stories") or {}
     return stories.get(story_key) or {}
 

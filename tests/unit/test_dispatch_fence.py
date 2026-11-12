@@ -989,13 +989,21 @@ def test_a_lease_owned_by_this_process_still_spawns(
 
 
 class _PathStore:
-    """Just enough store for ``executor_fence``: the persisted manifest path."""
+    """Just enough store for ``executor_fence``: one manifest file, read via records()."""
 
     def __init__(self, path):
         self._path = path
 
     def manifest_path(self, plan_name):
         return self._path
+
+    def records(self):
+        return self
+
+    def get_manifest(self, namespace, plan_name):
+        if not self._path.exists():
+            return None
+        return json.loads(self._path.read_text())
 
 
 def test_executor_fence_proceeds_when_the_story_has_no_lease(
@@ -1103,3 +1111,72 @@ def test_executor_fence_aborts_for_an_abandoned_worker(plan_dir):
     assert box.get("result") == {"ok": False, "error": "dispatch abandoned"}, (
         box.get("result")
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. The fence re-reads the story from the record store, not a manifest file.
+#
+# Stage C of ADR 0012 removes ``manifest_path`` from the Store Protocol, so a
+# SqliteStore with no manifest file on disk must still give the fence the
+# persisted story (and a vanished plan must read as an empty story).
+# ---------------------------------------------------------------------------
+
+
+def _sqlite_store(tmp_path, plan_name, stories):
+    from pipeline.store_sqlite import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "plans.db"))
+    store.save_manifest(plan_name, {"epics": {}, "stories": stories})
+    # SqliteStore mirrors every save to a manifest file; drop it so only the
+    # record store can answer the read.
+    store.manifest_path(plan_name).unlink(missing_ok=True)
+    return store
+
+
+def test_read_story_reads_the_record_store_when_there_is_no_manifest_file(
+    plan_dir, tmp_path
+):
+    fence = _fence()
+    owner = _live_foreign_pid()
+    store = _sqlite_store(
+        tmp_path,
+        "fence-record",
+        {"S1": _fresh_story(dispatch_lease_owner_pid=owner)},
+    )
+    assert not store.manifest_path("fence-record").exists()
+
+    story = fence._read_story(store, "fence-record", "S1")
+
+    assert story.get("dispatch_lease_owner_pid") == owner, (
+        f"the story must come from the record store: {story}"
+    )
+
+
+def test_read_story_of_a_vanished_plan_is_an_empty_story(plan_dir, tmp_path):
+    fence = _fence()
+    store = _sqlite_store(tmp_path, "fence-other", {"S1": _fresh_story()})
+
+    assert fence._read_story(store, "fence-vanished", "S1") == {}
+
+
+def test_executor_fence_reads_the_live_foreign_lease_from_the_record_store(
+    plan_dir, monkeypatch, tmp_path
+):
+    """The lease lives only in the record: the fence must still refuse."""
+    fence = _fence()
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    store = _sqlite_store(
+        tmp_path,
+        "fence-record-lease",
+        {
+            "S1": _fresh_story(
+                dispatch_lease_expires_at=_iso_in(600),
+                dispatch_lease_owner_pid=_live_foreign_pid(),
+            )
+        },
+    )
+
+    assert fence.executor_fence("fence-record-lease", "S1", store) == {
+        "ok": False,
+        "error": "dispatch lease lost",
+    }

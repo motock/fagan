@@ -34,8 +34,8 @@ def _setup(tmp_path, monkeypatch, log, **story_extra):
     return story, manifest, path, worktree, notes
 
 
-def _run(story, worktree, manifest, path):
-    return classify_no_progress("plan", "S1", story, str(worktree), manifest, path)
+def _run(story, worktree, manifest):
+    return classify_no_progress("plan", "S1", story, str(worktree), manifest)
 
 
 def _record_cooldown(monkeypatch):
@@ -86,7 +86,7 @@ def test_capacity_wait_does_not_charge_rework_or_transport(tmp_path, monkeypatch
     story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    result = _run(story, wt, manifest, path)
+    result = _run(story, wt, manifest)
     assert result == {"status": "changes_requested", "reason": "usage_capacity"}
     assert story["status"] == "changes_requested"
     assert story["rework_attempts"] == 0
@@ -97,10 +97,10 @@ def test_capacity_wait_does_not_charge_rework_or_transport(tmp_path, monkeypatch
 
 
 def test_capacity_wait_trips_cooldown_and_announces(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
     trips = _record_cooldown(monkeypatch)
     announces = _record_announce(monkeypatch)
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     assert len(trips) == 1
     assert len(announces) == 1
     assert announces[0][0][0] is True
@@ -108,37 +108,37 @@ def test_capacity_wait_trips_cooldown_and_announces(tmp_path, monkeypatch):
 
 
 def test_capacity_wait_notifies_once_with_event(tmp_path, monkeypatch):
-    story, manifest, path, wt, notes = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
+    story, manifest, _path, wt, notes = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     assert len(notes) == 1
     assert notes[0][1]["event"] == "usage_capacity_hit"
 
 
 def test_banner_after_tool_step_is_not_capacity(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS + CAP_BANNER)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS + CAP_BANNER)
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    assert _run(story, wt, manifest, path) is None
+    assert _run(story, wt, manifest) is None
     assert "capacity_waits" not in story
 
 
 def test_no_banner_is_unchanged_behaviour(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS)
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    assert _run(story, wt, manifest, path) is None
+    assert _run(story, wt, manifest) is None
     assert "capacity_waits" not in story
 
 
 def test_twentieth_wait_parks_with_accurate_reason(tmp_path, monkeypatch):
-    story, manifest, path, wt, notes = _setup(
+    story, manifest, _path, wt, notes = _setup(
         tmp_path, monkeypatch, BOOT + CAP_BANNER, capacity_waits=19
     )
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    result = _run(story, wt, manifest, path)
+    result = _run(story, wt, manifest)
     assert result == {"status": "parked", "reason": "usage_capacity_exhausted"}
     assert story["status"] == "parked"
     assert story["capacity_waits"] == 20
@@ -148,12 +148,12 @@ def test_twentieth_wait_parks_with_accurate_reason(tmp_path, monkeypatch):
 
 
 def test_nineteenth_wait_still_redispatches(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(
+    story, manifest, _path, wt, _ = _setup(
         tmp_path, monkeypatch, BOOT + CAP_BANNER, capacity_waits=18
     )
     _record_cooldown(monkeypatch)
     _record_announce(monkeypatch)
-    assert _run(story, wt, manifest, path) == {
+    assert _run(story, wt, manifest) == {
         "status": "changes_requested",
         "reason": "usage_capacity",
     }
@@ -161,14 +161,14 @@ def test_nineteenth_wait_still_redispatches(tmp_path, monkeypatch):
 
 
 def test_failing_cooldown_trip_does_not_stop_status_change(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + CAP_BANNER)
     _record_announce(monkeypatch)
 
     def _boom(*a, **k):
         raise RuntimeError("cooldown unavailable")
 
     monkeypatch.setattr(no_progress.usage_cooldown, "trip", _boom)
-    result = _run(story, wt, manifest, path)
+    result = _run(story, wt, manifest)
     assert result == {"status": "changes_requested", "reason": "usage_capacity"}
     assert story["status"] == "changes_requested"
     assert story["capacity_waits"] == 1

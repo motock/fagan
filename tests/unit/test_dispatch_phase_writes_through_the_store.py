@@ -107,10 +107,10 @@ def test_should_persist_wait_for_capacity_through_the_record_store(
         tmp_path, monkeypatch, fake_store,
         "[boot] model=x\nClaude usage limit reached. Reset at 3pm.\n",
     )
-    story, manifest, path, worktree = case
+    story, manifest, _path, worktree = case
 
     result = no_progress.classify_no_progress(
-        "wait-plan", "S1", story, worktree, manifest, path
+        "wait-plan", "S1", story, worktree, manifest
     )
 
     assert result == {"status": "changes_requested", "reason": "usage_capacity"}
@@ -128,10 +128,10 @@ def test_should_persist_retry_transport_through_the_record_store(
         tmp_path, monkeypatch, fake_store,
         "[boot] model=x\nLLM call failed: ConnectError: connection refused\n",
     )
-    story, manifest, path, worktree = case
+    story, manifest, _path, worktree = case
 
     result = no_progress.classify_no_progress(
-        "retry-plan", "S1", story, worktree, manifest, path
+        "retry-plan", "S1", story, worktree, manifest
     )
 
     assert result == {"status": "changes_requested", "reason": "transport_failure"}
@@ -149,10 +149,10 @@ def test_should_persist_scope_conflict_park_through_the_record_store(
         tmp_path, monkeypatch, fake_store, "",
         done_text="SCOPE-CONFLICT: pipeline/a.py :: needs a change here",
     )
-    story, manifest, path, worktree = case
+    story, manifest, _path, worktree = case
 
     result = no_progress.classify_no_progress(
-        "conflict-plan", "S1", story, worktree, manifest, path
+        "conflict-plan", "S1", story, worktree, manifest
     )
 
     assert result == {"status": "parked", "reason": "scope_conflict"}

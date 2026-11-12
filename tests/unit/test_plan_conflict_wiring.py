@@ -116,7 +116,7 @@ def test_intercept_verdict_returned_and_no_failed_attempt_charged(
     calls = []
 
     def fake(plan_name, story_key, story, test_result, worktree, manifest,
-             manifest_path, pid):
+             pid):
         calls.append((plan_name, story_key, pid))
         return {
             "status": "changes_requested",
@@ -194,7 +194,7 @@ def test_conflict_verdict_still_records_the_test_run(plan_dir, monkeypatch):
     seen = {}
 
     def fake(plan_name, story_key, story, test_result, worktree, manifest,
-             manifest_path, pid):
+             pid):
         seen["last_test_check"] = story.get("last_test_check")
         seen["streaks"] = {
             k: story[k]
@@ -279,7 +279,6 @@ def _call(tmp_path, story, manifest, *, stdout=CONFLICT_STDOUT, worktree="/wt",
         _result(stdout),
         worktree,
         manifest,
-        tmp_path / "pc.manifest.json",
         pid,
     )
 

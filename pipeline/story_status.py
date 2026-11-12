@@ -84,7 +84,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = _store.manifest_path(plan_name)  # noqa: F821
     manifest = _store.records().get_manifest("default", plan_name)  # noqa: F821
     if manifest is None:
         return {"ok": False, "error": "Plan not found"}
@@ -733,7 +732,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if _intercept is not None:
             _conflict = _intercept(
                 plan_name, story_key, story, test_result, worktree,
-                manifest, manifest_path, pid,
+                manifest, pid,
             )
             if _conflict is not None:
                 return _conflict
@@ -813,7 +812,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         if head_res.stdout.strip() == story["last_reviewed_sha"]:
             parked = classify_no_progress(
-                plan_name, story_key, story, worktree, manifest, manifest_path)
+                plan_name, story_key, story, worktree, manifest)
             if parked is not None:
                 return parked
             attempts = story.get("rework_attempts", 0) + 1

@@ -231,7 +231,6 @@ def test_should_persist_a_plan_conflict_ruling_through_the_record_store(
         _Result(),
         "/wt",
         {"stories": {"S": story}, "role_config": {"overlord": "m"}},
-        Path("/nonexistent-plans/demo.manifest.json"),
         4242,
     )
 
@@ -290,7 +289,6 @@ def test_should_fail_closed_on_an_invalid_plan_name(fake_store, monkeypatch):
             _Result(),
             "/wt",
             {"stories": {}, "role_config": {}},
-            Path("/nonexistent-plans/-plan.manifest.json"),
             4242,
         )
         is None

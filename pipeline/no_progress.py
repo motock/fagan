@@ -53,7 +53,6 @@ def _wait_for_capacity(
     story_key: str,
     story: dict[str, Any],
     manifest: dict[str, Any],
-    manifest_path: Path,
 ) -> dict[str, str]:
     """Redispatch without charging rework; park after MAX_CAPACITY_WAITS."""
     waits = int(story.get("capacity_waits", 0)) + 1
@@ -112,7 +111,6 @@ def _retry_transport(
     story_key: str,
     story: dict[str, Any],
     manifest: dict[str, Any],
-    manifest_path: Path,
 ) -> dict[str, str]:
     """Redispatch without charging rework; park after MAX_TRANSPORT_RETRIES."""
     retries = int(story.get("transport_retries", 0)) + 1
@@ -150,7 +148,6 @@ def classify_no_progress(
     story: dict[str, Any],
     worktree: str,
     manifest: dict[str, Any],
-    manifest_path: Path,
 ) -> dict[str, str] | None:
     """Park the story if the last DONE summary carries SCOPE-CONFLICT markers.
 
@@ -169,9 +166,9 @@ def classify_no_progress(
     if not conflicts:
         log_tail = _read_log(worktree)
         if is_capacity_failure(log_tail):
-            return _wait_for_capacity(plan_name, story_key, story, manifest, manifest_path)
+            return _wait_for_capacity(plan_name, story_key, story, manifest)
         if is_transport_failure(log_tail):
-            return _retry_transport(plan_name, story_key, story, manifest, manifest_path)
+            return _retry_transport(plan_name, story_key, story, manifest)
         return None
     paths = [c.path for c in conflicts]
     story["scope_conflict"] = {

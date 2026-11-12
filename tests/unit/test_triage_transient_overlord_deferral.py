@@ -55,7 +55,7 @@ def applied(monkeypatch):
     monkeypatch.setattr(triage, "classify_repo_health", lambda story, checkout, *a, **k: [])
     monkeypatch.setattr(triage, "collect_triage_evidence", lambda *a, **k: EVIDENCE)
 
-    def _fake_apply(plan_name, story_key, story, ruling, manifest, manifest_path):
+    def _fake_apply(plan_name, story_key, story, ruling, manifest):
         calls.append(story_key)
         return ruling["action"]
 

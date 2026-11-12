@@ -152,7 +152,7 @@ def apply_calls(monkeypatch):
     """Stub the ruling executor boundary and record each invocation."""
     calls = []
 
-    def fake_apply(plan_name, story_key, story, ruling, manifest, manifest_path):
+    def fake_apply(plan_name, story_key, story, ruling, manifest):
         calls.append(
             {
                 "plan_name": plan_name,

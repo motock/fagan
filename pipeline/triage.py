@@ -393,7 +393,7 @@ def run_triage_sweep(plan_name: str) -> dict:
         return {"ok": True, "skipped": "disabled"}
     try:
         from .server import _store
-        manifest =_store.records().get_manifest("default", plan_name)
+        manifest = _store.records().get_manifest("default", plan_name)
         if manifest is None:
             return {"ok": True, "skipped": "no_manifest"}
         if manifest.get("paused"):

@@ -317,7 +317,6 @@ def _fresh_manifest(plan_name: str) -> dict[str, Any]:
 
 
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
-    manifest_path = _store.manifest_path(plan_name)
     validate_plan_name(plan_name)
     if plan_name not in _store.records().list_plans("default"):
         return {"ok": False, "error": f"No manifest for {plan_name}"}
@@ -923,7 +922,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     fresh_story["status"] == "tests_passed"
                     or fresh_story.get("review_job")
                 ):
-                    review_or_collect(plan_name, key, fresh_story, manifest_path, summary)
+                    review_or_collect(plan_name, key, fresh_story, summary)
                     continue
                 if fresh_story["status"] != "tests_passed":
                     continue

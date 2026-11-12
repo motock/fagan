@@ -314,7 +314,6 @@ def _merge_reverify_gate(
     story: dict[str, Any],
     worktree: str,
     pushed_sha: str,
-    manifest_path: Path,
     summary: dict[str, Any],
 ) -> tuple[str, bool]:
     """Gate one story's merge on a re-verify of ``pushed_sha``.
@@ -423,7 +422,6 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         rebind_after_pipeline_push,
     )
 
-    manifest_path = _store.manifest_path(plan_name)
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
     manifest = _store.records().get_manifest("default", plan_name)
     if manifest is None:
@@ -680,7 +678,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             continue
         if not gate_error:
             gate_error, reverify_wait = _merge_reverify_gate(
-                plan_name, key, story, worktree, pushed_sha, manifest_path, summary
+                plan_name, key, story, worktree, pushed_sha, summary
             )
             if reverify_wait:
                 # The detached re-verify is still running: nothing is merged

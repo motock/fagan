@@ -34,7 +34,6 @@ import logging
 import math
 import os
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from . import review_job
@@ -63,7 +62,6 @@ def review_or_collect(
     plan_name: str,
     story_key: str,
     story: dict[str, Any],
-    manifest_path: Path,
     summary: dict[str, Any],
 ) -> None:
     """Advance one story's review by a tick: start it, or collect its result.
@@ -85,7 +83,7 @@ def review_or_collect(
         # reviewed, so stop it rather than let it burn a model call.
         review_job.cancel_review_job(job)
         story.pop("review_job", None)
-        _drop_job(plan_name, manifest_path, story_key)
+        _drop_job(plan_name, story_key)
         log.info(
             "review job cancelled: story moved on",
             extra={"plan": plan_name, "story": story_key},
@@ -93,7 +91,7 @@ def review_or_collect(
         return
 
     if not job:
-        _start(plan_name, story_key, story, manifest_path, summary)
+        _start(plan_name, story_key, story, summary)
         return
 
     result = review_job.collect_review_job(job, _timeout(plan_name, story_key))
@@ -101,7 +99,7 @@ def review_or_collect(
         summary.setdefault("review_pending", []).append(story_key)
         return
 
-    _apply(plan_name, story_key, story, manifest_path, summary, result)
+    _apply(plan_name, story_key, story, summary, result)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +110,6 @@ def _start(
     plan_name: str,
     story_key: str,
     story: dict[str, Any],
-    manifest_path: Path,
     summary: dict[str, Any],
 ) -> None:
     """Spawn the detached job and record its handle on the story."""
@@ -134,7 +131,7 @@ def _start(
     def _set(stored: dict[str, Any]) -> None:
         stored["review_job"] = job
 
-    _persist(plan_name, manifest_path, story_key, _set)
+    _persist(plan_name, story_key, _set)
     summary.setdefault("review_started", []).append(story_key)
 
 
@@ -142,13 +139,12 @@ def _apply(
     plan_name: str,
     story_key: str,
     story: dict[str, Any],
-    manifest_path: Path,
     summary: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
     """Apply a finished job's result: the handle goes, the verdict is reported."""
     story.pop("review_job", None)
-    _drop_job(plan_name, manifest_path, story_key)
+    _drop_job(plan_name, story_key)
     if result.get("state") != "done":
         # A harness error, never a verdict: the review did not run to a
         # conclusion, so the story keeps whatever status the child left and the
@@ -208,16 +204,15 @@ def _timeout(plan_name: str, story_key: str) -> float:
     return REVIEW_JOB_TIMEOUT_DEFAULT
 
 
-def _drop_job(plan_name: str, manifest_path: Path, story_key: str) -> None:
+def _drop_job(plan_name: str, story_key: str) -> None:
     def _unset(stored: dict[str, Any]) -> None:
         stored.pop("review_job", None)
 
-    _persist(plan_name, manifest_path, story_key, _unset)
+    _persist(plan_name, story_key, _unset)
 
 
 def _persist(
     plan_name: str,
-    manifest_path: Path,
     story_key: str,
     mutate: Callable[[dict[str, Any]], None],
 ) -> None:

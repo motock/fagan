@@ -120,13 +120,18 @@ def test_wrapper_swallows_exceptions_from_sweep():
     )
 
 
-def test_impl_body_starts_with_manifest_path_and_is_not_the_wrapper():
-    """The renamed body must begin with the original first line, verbatim."""
+def test_impl_body_starts_with_validate_plan_name_and_is_not_the_wrapper():
+    """The renamed body must begin with the original first line, verbatim.
+
+    The original first line was ``manifest_path = _store.manifest_path(...)``;
+    removing that vestigial local (ADR 0012 stage C) makes the first statement
+    ``validate_plan_name(plan_name)``. The pin moves with it.
+    """
     src = inspect.getsource(p._advance_pipeline_locked_impl)
     # strip the leading def line + docstring-free body
     first_body_line = src.splitlines()[1]
-    assert "manifest_path" in first_body_line, (
-        "impl body must start with the original manifest_path line, "
+    assert first_body_line.strip() == "validate_plan_name(plan_name)", (
+        "impl body must start with the original validate_plan_name line, "
         f"got: {first_body_line!r}"
     )
     # The impl must NOT itself call run_triage_sweep (the sweep lives only in

@@ -72,7 +72,7 @@ def test_should_persist_a_started_review_job_through_the_record_store(
 ):
     """``_start`` records the job handle with ``put_manifest``."""
     plan_name, key = "p1", "s1"
-    path = _seed(
+    _seed(
         tmp_path,
         plan_name,
         {"plan": plan_name, "stories": {key: {"status": "tests_passed"}}},
@@ -83,7 +83,7 @@ def test_should_persist_a_started_review_job_through_the_record_store(
     summary: dict = {}
 
     advance_review.review_or_collect(
-        plan_name, key, {"status": "tests_passed"}, path, summary
+        plan_name, key, {"status": "tests_passed"}, summary
     )
 
     assert store.writes == [("default", plan_name)]
@@ -97,7 +97,7 @@ def test_should_drop_a_finished_job_through_the_record_store(
 ):
     """``_apply`` drops the handle with ``put_manifest``, once."""
     plan_name, key = "p2", "s1"
-    path = _seed(
+    _seed(
         tmp_path,
         plan_name,
         {
@@ -115,7 +115,7 @@ def test_should_drop_a_finished_job_through_the_record_store(
     summary: dict = {}
     story = {"status": "tests_passed", "review_job": {"pid": 4242}}
 
-    advance_review.review_or_collect(plan_name, key, story, path, summary)
+    advance_review.review_or_collect(plan_name, key, story, summary)
 
     assert store.writes == [("default", plan_name)]
     stored = p._store.records().get_manifest("default", plan_name)
@@ -149,7 +149,7 @@ def test_should_raise_and_not_write_when_the_manifest_disappeared_between_reads(
         stored["status"] = "done"
 
     with pytest.raises(FileNotFoundError):
-        advance_review._persist(plan_name, path, "s1", _mutate)
+        advance_review._persist(plan_name, "s1", _mutate)
 
     assert store.writes == []
     assert p._store.records().get_manifest("default", plan_name) is None
@@ -163,7 +163,7 @@ def test_should_fail_closed_on_a_plan_name_the_store_rejects(tmp_path, store):
     path = tmp_path / "-plan.manifest.json"
 
     with pytest.raises(InvalidRecordKeyError) as excinfo:
-        advance_review._persist("-plan", path, "s1", lambda stored: None)
+        advance_review._persist("-plan", "s1", lambda stored: None)
 
     assert isinstance(excinfo.value, ValueError)
     assert store.writes == []

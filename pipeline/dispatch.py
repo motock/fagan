@@ -40,6 +40,7 @@ from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_
 from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
 from .story_fields import record_dispatch_baseline
+from .test_scope_dispatch import stamp_test_scope, test_scope_event_fields
 from .trace_context import agent_traceparent
 
 logger = logging.getLogger("pipeline")
@@ -361,6 +362,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
+        stamp_test_scope(plan_name, story_key, manifest, story)
 
         # BASELINE-1: on a story's FIRST dispatch, run the detected test
         # command ONCE against the freshly created, still-unmodified worktree
@@ -979,6 +981,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     "attempt": story.get("dispatch_attempts", 0),
                     "pid": handle.pid,
                     "branch": branch,
+                    **test_scope_event_fields(story),
                 },
                 correlation_id=story.get("correlation_id"),
             )

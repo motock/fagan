@@ -1534,6 +1534,21 @@ A story-level `test_scope` (`full` or `scoped`) is a request that ranks below th
 plan-level value and above `PIPELINE_TEST_SCOPE`. Re-ingest refreshes it and
 removes it when absent.
 
+Resolution, highest first: team override, org default (both from the
+`PIPELINE_SETTINGS_PLUGIN` provider; core ships none), plan-level `test_scope`,
+story-level `test_scope`, `PIPELINE_TEST_SCOPE`, then `full`. The org record's
+`allow_team_loosen` (default false; only the boolean `true` unlocks) lets a team
+loosen an org `full` to `scoped`; otherwise a team may only tighten. Plan, story
+and environment may always ask for `full`; their `scoped` request is refused when
+the org or team says `full`. The value is resolved at every dispatch and recorded
+on the story as `test_scope_resolution` (`test_scope`, `source`,
+`lock_rejections`, `invalid_layers`, `resolved_at`); the `agent_dispatched` event
+carries `test_scope`, `test_scope_source`, `test_scope_lock_rejected` and
+`rework`. A refused request is notified as event `test_scope_lock_rejected`. If the
+settings provider fails (raises or answers with the wrong shape) the policy is
+treated as restrictive: `test_scope` resolves to `full` with `source`
+`settings_provider_error`, and any `scoped` request is recorded as refused.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling
@@ -2455,6 +2470,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_FORGE_PLUGIN` | *(unset → off)* | `module:attr` factory `(repo_root) -> Forge` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_SETTINGS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> provider` returning org/team policy settings — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_TEST_SCOPE` | `full` | `full` \| `scoped` — the lowest-precedence `test_scope` request; see "Test scope". Unknown values resolve to `full`. |
 | `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CREDENTIALS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> CredentialProvider` (its `get(ref) -> Credential \| None` resolves `env`, `model` and `notification` credentials) — see the "Credentials (operator-supplied provider)" section. A bad plugin raises and never falls back to ambient values |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |

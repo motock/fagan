@@ -1530,6 +1530,10 @@ The plan-level `test_scope` field (a sibling of `epics`, like `role_config`) is
 optional: `full` (the default) or `scoped`. `ingest_plan` rejects any other
 value, and omitting it on re-ingest keeps the prior value.
 
+A story-level `test_scope` (`full` or `scoped`) is a request that ranks below the
+plan-level value and above `PIPELINE_TEST_SCOPE`. Re-ingest refreshes it and
+removes it when absent.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

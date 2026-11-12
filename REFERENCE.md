@@ -2160,6 +2160,7 @@ who is authenticated or allowed without saying so.
 | Event bus | `PIPELINE_EVENT_BUS_PLUGIN` | `factory() -> EventBus` | `/api/health` reports the selection as `plugin` under `runtime.event_bus`. `PIPELINE_EVENT_BUS` must stay at its `inprocess` default. |
 | Forge | `PIPELINE_FORGE_PLUGIN` | `factory(repo_root) -> Forge` | An instance is cached per repository root. `PIPELINE_FORGE` must stay at its `auto` default. |
 | Ticket provider | `PIPELINE_TICKET_PROVIDER_PLUGIN` | `factory() -> TicketProvider` | `PIPELINE_TICKET_PROVIDER` must stay at its `auto` default. |
+| Policy settings | `PIPELINE_SETTINGS_PLUGIN` | `factory() -> provider` with `policy_settings(namespace, team) -> {"org": {...}, "team": {...}}` | Read-only org/team policy keys (e.g. `test_scope`, `allow_team_loosen`). Core passes namespace `default` and the plan's `team`. No plugin means no org/team layer. A provider call that raises or returns the wrong shape fails closed: the seam returns `{"error": "settings_provider_error"}` (logged at WARNING with the exception type only) and every policy key is treated as restrictive - `test_scope` resolves to `full`. A provider answering `{}` means no org/team layer. A malformed spec raises like every other seam. |
 | Notification channels | `PIPELINE_CHANNEL_PLUGINS` | comma list of `module:attr` registrars | Each registrar is called once with `register_channel_type`; the channel types it registers are ordinary channel types. |
 
 **Spec format.** `module:attr` — a dotted Python module path, one colon, and a
@@ -2437,6 +2438,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_EVENT_BUS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> EventBus` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_FORGE_PLUGIN` | *(unset → off)* | `module:attr` factory `(repo_root) -> Forge` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
+| `PIPELINE_SETTINGS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> provider` returning org/team policy settings — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CREDENTIALS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> CredentialProvider` (its `get(ref) -> Credential \| None` resolves `env`, `model` and `notification` credentials) — see the "Credentials (operator-supplied provider)" section. A bad plugin raises and never falls back to ambient values |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |

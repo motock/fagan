@@ -214,12 +214,10 @@ class TestFirstTickStartsJob:
         self, plan_dir, tmp_path, monkeypatch
     ):
         seams = _install_seams(monkeypatch)
-        unrelated = tmp_path / "unrelated" / f"{PLAN}.manifest.json"
-        unrelated.parent.mkdir()
         monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
 
         advance_merge._merge_reverify_gate(
-            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", unrelated, _summary()
+            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", _summary()
         )
 
         args, _kwargs = seams["start"].calls[0]
@@ -235,7 +233,7 @@ class TestFirstTickStartsJob:
         monkeypatch.chdir(unrelated.parent)
 
         advance_merge._merge_reverify_gate(
-            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", unrelated, _summary()
+            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", _summary()
         )
 
         args, _kwargs = seams["start"].calls[0]

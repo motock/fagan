@@ -306,7 +306,7 @@ class TestStartJob:
         )
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert started == [(_PLAN, _KEY, tmp_path)]
         assert summary["review_started"] == [_KEY]
@@ -339,7 +339,7 @@ class TestStartJob:
         else:
             monkeypatch.setenv("PIPELINE_STATE_DIR", env_value)
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, {})
+        advance_review.review_or_collect(_PLAN, _KEY, story, {})
 
         want = tmp_path / "state" if expected == "RELATIVE" else expected
         if expected == "MANIFEST_DIR":
@@ -355,8 +355,6 @@ class TestStartJob:
     ):
         path = _write_manifest(tmp_path)
         story = _stories(path)[_KEY]
-        unrelated = tmp_path / "unrelated" / f"{_PLAN}.manifest.json"
-        unrelated.parent.mkdir()
         started = []
         monkeypatch.setattr(
             review_job,
@@ -365,7 +363,7 @@ class TestStartJob:
         )
         monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, unrelated, {})
+        advance_review.review_or_collect(_PLAN, _KEY, story, {})
 
         assert started == [tmp_path]
 
@@ -385,7 +383,7 @@ class TestStartJob:
         monkeypatch.setenv("PIPELINE_STATE_DIR", "state")
         monkeypatch.chdir(unrelated.parent)
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, unrelated, {})
+        advance_review.review_or_collect(_PLAN, _KEY, story, {})
 
         assert started == [tmp_path / "state"]
 
@@ -403,7 +401,7 @@ class TestStartJob:
         summary = {}
 
         with caplog.at_level(logging.WARNING, logger="pipeline.advance_review"):
-            advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+            advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert path.read_text() == before
         assert "review_job" not in _stories(path)[_KEY]
@@ -428,7 +426,7 @@ class TestCollect:
         monkeypatch.setattr(review_job, "collect_review_job", lambda job, timeout: None)
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert summary["review_pending"] == [_KEY]
         assert "review_started" not in summary
@@ -457,7 +455,7 @@ class TestCollect:
         )
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert summary["advanced"] == [{_KEY: "pr_open"}]
         assert summary.get("review_deferred", []) == []
@@ -482,7 +480,7 @@ class TestCollect:
         monkeypatch.setattr(advance_module, "_notify_user", lambda *a, **k: None)
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert summary["skipped"] == [_KEY]
         assert summary.get("advanced", []) == []
@@ -510,7 +508,7 @@ class TestCollect:
         monkeypatch.setattr(advance_module, "_notify_user", lambda *a, **k: None)
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert summary["skipped"] == [_KEY]
         assert summary.get("advanced", []) == []
@@ -533,7 +531,7 @@ class TestCollect:
         monkeypatch.setattr(advance_module, "_notify_user", lambda *a, **k: None)
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert summary["advanced"] == [{_KEY: "tests_passed"}]
         assert summary["review_deferred"] == [_KEY]
@@ -560,7 +558,7 @@ class TestCollect:
         )
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert len(notifications) == 1
         message, kwargs = notifications[0]
@@ -592,7 +590,7 @@ class TestCollect:
         monkeypatch.setattr(review_job, "collect_review_job", _never)
         summary = {}
 
-        advance_review.review_or_collect(_PLAN, _KEY, story, path, summary)
+        advance_review.review_or_collect(_PLAN, _KEY, story, summary)
 
         assert cancelled == [_job()]
         assert "review_job" not in _stories(path)[_KEY]
@@ -615,7 +613,7 @@ class TestTimeout:
         monkeypatch.setenv("PIPELINE_REVIEW_JOB_TIMEOUT_SECONDS", raw)
 
         with caplog.at_level(logging.WARNING, logger="pipeline.advance_review"):
-            advance_review.review_or_collect(_PLAN, _KEY, story, path, {})
+            advance_review.review_or_collect(_PLAN, _KEY, story, {})
 
         assert seen == [900]
         records = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -637,7 +635,7 @@ class TestTimeout:
         monkeypatch.setenv("PIPELINE_REVIEW_JOB_TIMEOUT_SECONDS", "120")
 
         with caplog.at_level(logging.WARNING, logger="pipeline.advance_review"):
-            advance_review.review_or_collect(_PLAN, _KEY, story, path, {})
+            advance_review.review_or_collect(_PLAN, _KEY, story, {})
 
         assert seen == [120]
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

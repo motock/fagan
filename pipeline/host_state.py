@@ -175,6 +175,8 @@ class HostState(Protocol):
 
     def root(self) -> Path: ...
 
+    def job_state_root(self) -> Path: ...
+
     def get_recent_workspaces(self) -> list[str]: ...
 
     def add_recent_workspace(self, path: str) -> None: ...
@@ -266,6 +268,22 @@ class FileHostState:
     def root(self) -> Path:
         """The host-local root these records live under."""
         return self._root()
+
+    def job_state_root(self) -> Path:
+        """Where detached job state (review, re-verify, grading) lives.
+
+        ``PIPELINE_STATE_DIR`` is read on every call. Unset or empty means the
+        plans directory; a relative override resolves against that directory,
+        never the process CWD. Nothing is created: callers own the directories
+        they write under the returned root, and their containment checks.
+        """
+        override = os.environ.get("PIPELINE_STATE_DIR")
+        if not override:
+            return self.root()
+        state_root = Path(override)
+        if state_root.is_absolute():
+            return state_root
+        return self.root() / state_root
 
     # -- the dashboard's UI preferences -----------------------------------
 

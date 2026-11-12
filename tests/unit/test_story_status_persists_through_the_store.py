@@ -371,9 +371,9 @@ def test_grading_transitions_are_written_through_the_store(plan_dir, monkeypatch
         seen.append(manifest_path)
         return {"started": True}
 
-    def _lifecycle(story, story_key, pid, worktree, manifest, manifest_path,
+    def _lifecycle(story, story_key, pid, worktree, manifest, plan_name,
                    *a, **k):
-        seen.append(manifest_path)
+        seen.append(plan_name)
         return None, None
 
     monkeypatch.setattr(p, "start_detached_grade", _start, raising=False)
@@ -383,12 +383,12 @@ def test_grading_transitions_are_written_through_the_store(plan_dir, monkeypatch
     p.check_story_status(PLAN, STORY)
 
     # Whatever branch ran, all manifest writes went through the store and none
-    # bypassed it. If the grader was started, it received the plan's path.
+    # bypassed it. The grader is handed the plan name, not a manifest path.
     assert store.puts, "expected at least one store write"
     for _ns, _plan, written in store.puts:
         assert len(_stories(written)) == 2
-    for path in seen:
-        assert Path(path).name == f"{PLAN}.manifest.json"
+    for plan in seen:
+        assert plan == PLAN
 
 
 def test_every_manifest_write_in_the_module_goes_through_the_store():

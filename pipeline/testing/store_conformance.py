@@ -322,6 +322,9 @@ def test_malformed_or_reserved_plan_name_is_refused(backend, plan_name):
     assert backend.store.list_plans(DEFAULT_NAMESPACE) == []
 
 
+_MTIME_CLOCK_SLACK = 0.05
+
+
 @covers('get_manifest_updated_at', 'put_manifest')
 def test_manifest_updated_at_is_a_float_between_the_put_and_its_surroundings(backend):
     before = time.time()
@@ -331,7 +334,9 @@ def test_manifest_updated_at_is_a_float_between_the_put_and_its_surroundings(bac
     updated_at = backend.store.get_manifest_updated_at(DEFAULT_NAMESPACE, PLAN)
 
     assert isinstance(updated_at, float)
-    assert before <= updated_at <= after
+    # A file store reads this from the file's mtime, which the kernel stamps
+    # from a coarse clock that can trail time.time() by a few milliseconds.
+    assert before - _MTIME_CLOCK_SLACK <= updated_at <= after
 
 
 @covers('get_manifest_updated_at', 'put_manifest')

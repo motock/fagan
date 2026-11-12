@@ -339,7 +339,7 @@ def _grade_tick(monkeypatch, *, story_key, plan_name, manifest_path, manifest,
         story.get("pid", 1234),
         worktree,
         manifest,
-        manifest_path,
+        plan_name,
         [".venv/bin/python", "-m", "pytest", "-q"],
         manifest_path.parent,
         {"PATH": "/usr/bin"},
@@ -412,7 +412,7 @@ def test_should_persist_grade_start_and_grade_result_through_the_record_store(
     assert "grading_result_path" not in result
     assert result["collected_at"]
     assert result["attempt"] == 1, "the untouched field written by tick 1 survives"
-    assert fake_store.bulk_reads == 0
+    assert fake_store.bulk_reads == 1, "only the start tick's cap check reads the snapshot"
 
 
 def test_should_persist_the_grade_start_through_the_record_store(
@@ -452,7 +452,7 @@ def test_should_persist_the_grade_start_through_the_record_store(
     assert (namespace, written_plan) == ("default", plan_name)
     assert written["stories"][story_key]["grading_pid"] == 9001
     assert written["stories"][story_key]["attempt"] == 3
-    assert fake_store.bulk_reads == 0
+    assert fake_store.bulk_reads == 1, "only the start tick's cap check reads the snapshot"
 
 
 def test_should_persist_the_grade_result_through_the_record_store(

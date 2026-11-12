@@ -633,7 +633,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     #                        bookkeeping is consumed so a future re-grade
     #                        starts clean.
     _early, test_result = _detached_grade_lifecycle(
-        story, story_key, pid, worktree, manifest, manifest_path,
+        story, story_key, pid, worktree, manifest, plan_name,
         test_cmd, test_dir, test_env,
     )
     if _early is not None:

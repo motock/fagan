@@ -2,42 +2,46 @@
 
 The process boundary is monkeypatched: ``_is_pid_alive`` stands in for the
 ``os.kill(pid, 0)`` + ``ps -o stat=`` probe, so no real process is spawned or
-signalled here. The manifest directory is a real temp dir on disk so the
-glob/parse behaviour (and "no manifest write on a blocked tick") is exercised
-for real.
+signalled here. Manifests live in a real ``SqliteStore`` under a temp
+database, so the record-store count (``records().get_manifests``) and the
+"no manifest write on a blocked tick" check are exercised for real.
 """
-
-import json
 
 import pytest
 
+# Must precede every other ``pipeline`` import: a pre-existing import cycle
+# requires ``pipeline.server`` to be imported first.
+import pipeline.server
 from pipeline import detached_grade
+from pipeline.store_sqlite import SqliteStore
 
 
-def _write_json(path, payload):
-    path.write_text(json.dumps(payload), encoding="utf-8")
+def _install_store(tmp_path, monkeypatch):
+    """Point the server's record store at a fresh SqliteStore and its plans dir at tmp."""
+    plans = tmp_path / "plans"
+    plans.mkdir(exist_ok=True)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", plans)
+    monkeypatch.setattr("pipeline.persistence.PLAN_DIR", plans)
+    store = SqliteStore(str(tmp_path / "s.db"))
+    monkeypatch.setattr(pipeline.server, "_store", store)
+    return store
 
 
 def _make_tick(tmp_path, monkeypatch, *, live_pids, env=None, others=None,
                story_key="mine", test_cmd=None):
     """Build one scheduler-tick invocation of the real lifecycle.
 
-    Returns (story, manifest_path, calls, run_tick); ``run_tick()`` performs a
+    Returns (story, plan_name, calls, run_tick); ``run_tick()`` performs a
     single tick and returns the lifecycle's (early_result, test_result) tuple.
-    ``others`` maps a manifest filename to either a dict payload or raw text.
+    ``others`` maps a plan name to its stored manifest payload.
     """
-    manifest_dir = tmp_path / "manifests"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_dir / f"{story_key}.manifest.json"
+    store = _install_store(tmp_path, monkeypatch)
+    plan_name = "mine-plan"
     story = {"status": "in_progress", "pid": 1234}
     manifest = {"stories": {story_key: story}}
-    _write_json(manifest_path, manifest)
-    for name, payload in (others or {}).items():
-        target = manifest_dir / name
-        if isinstance(payload, str):
-            target.write_text(payload, encoding="utf-8")
-        else:
-            _write_json(target, payload)
+    store.records().put_manifest("default", plan_name, manifest)
+    for other_plan, payload in (others or {}).items():
+        store.records().put_manifest("default", other_plan, payload)
 
     calls = []
 
@@ -84,13 +88,13 @@ def _make_tick(tmp_path, monkeypatch, *, live_pids, env=None, others=None,
             story["pid"],
             worktree,
             manifest,
-            manifest_path,
+            plan_name,
             cmd,
             tmp_path,
             {"PATH": "/usr/bin"},
         )
 
-    return story, manifest_path, calls, run_tick
+    return story, plan_name, calls, run_tick
 
 
 # --------------------------------------------------------------------------
@@ -108,13 +112,14 @@ def test_cap_one_with_a_live_grade_queues_instead_of_starting(tmp_path, monkeypa
     only then do the grading fields appear.
     """
     live = {4242}
-    story, manifest_path, calls, run_tick = _make_tick(
+    story, plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids=live,
         others={"other.manifest.json": {"grading_pid": 4242}},
     )
-    before = manifest_path.read_bytes()
+    store = pipeline.server._store
+    before = store.records().get_manifest("default", plan_name)
 
     early, test_result = run_tick()
 
@@ -125,8 +130,10 @@ def test_cap_one_with_a_live_grade_queues_instead_of_starting(tmp_path, monkeypa
     assert "grading_started_at" not in story
     assert "grading_result_path" not in story
     assert story["status"] == "in_progress"
-    assert manifest_path.read_bytes() == before, "blocked tick rewrote the manifest"
-    assert not (tmp_path / "manifests" / "grading").exists()
+    assert store.records().get_manifest("default", plan_name) == before, (
+        "blocked tick rewrote the manifest"
+    )
+    assert not (tmp_path / "plans" / "grading").exists()
 
     # Tick 2: 4242 has exited (probe returns False), so the cap lifts.
     live.clear()
@@ -173,14 +180,14 @@ def test_cap_two_allows_one_live_grade(tmp_path, monkeypatch):
 
 
 def test_malformed_manifest_is_skipped_and_does_not_raise(tmp_path, monkeypatch):
-    """A broken manifest in the directory neither raises nor counts."""
-    _story, _manifest_path, calls, run_tick = _make_tick(
+    """A malformed stored manifest neither raises nor counts."""
+    _story, _plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids={4242},
         others={
-            "broken.manifest.json": "{not json",
-            "other.manifest.json": {"grading_pid": 4242},
+            "broken-plan": {"stories": ["not", "a", "mapping"]},
+            "other-plan": {"grading_pid": 4242},
         },
     )
 
@@ -236,7 +243,7 @@ def test_invalid_cap_warns_once_per_distinct_value(caplog):
 
 
 def test_xdist_workers_appended_to_pytest_command(tmp_path, monkeypatch):
-    _story, _manifest_path, calls, run_tick = _make_tick(
+    _story, _plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids=set(),
@@ -281,7 +288,7 @@ def test_xdist_workers_unset_leaves_command_unchanged_and_does_not_mutate(
 
 
 def test_xdist_workers_ignored_for_non_pytest_command(tmp_path, monkeypatch):
-    _story, _manifest_path, calls, run_tick = _make_tick(
+    _story, _plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids=set(),
@@ -296,7 +303,7 @@ def test_xdist_workers_ignored_for_non_pytest_command(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("bad", ["0", "not-a-number"])
 def test_invalid_xdist_workers_ignored_with_warning(tmp_path, monkeypatch, caplog, bad):
-    _story, _manifest_path, calls, run_tick = _make_tick(
+    _story, _plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids=set(),
@@ -343,41 +350,73 @@ def test_non_pytest_command_unchanged(other_cmd):
 # --------------------------------------------------------------------------
 
 
-def test_live_grade_count_counts_live_top_level_manifests_only(tmp_path, monkeypatch):
-    """a(live)=1, b(dead)=0, broken(skip), e(zombie -> dead)=0, sub/d(ignored).
+def test_cap_one_with_a_live_grade_under_sqlite_store_queues(tmp_path, monkeypatch):
+    """The cap reads other plans' grades from the store, not from files.
+
+    The other plan's manifest exists only in the SqliteStore: its projection
+    files are deleted before the tick, so a directory glob would count
+    nothing. The live grade must still cap the new one.
+    """
+    story, _plan_name, calls, run_tick = _make_tick(
+        tmp_path,
+        monkeypatch,
+        live_pids={4242},
+        others={"other-plan": {"grading_pid": 4242}},
+    )
+    for projection in (tmp_path / "plans").glob("*.manifest.json"):
+        projection.unlink()
+
+    early, test_result = run_tick()
+
+    assert calls == [], "starter ran although the store holds a live grade"
+    assert early == {"status": "grading_queued", "pid": 1234}
+    assert test_result is None
+    assert "grading_pid" not in story
+
+
+def test_live_grade_count_counts_live_plans_in_the_store_only(tmp_path, monkeypatch):
+    """a(live)=1, b(dead)=0, broken(skip), e(zombie -> dead)=0, own(excluded).
 
     The zombie pid is absent from the patched live set because the real probe
     reports a ``Z``/``Z+`` stat as dead; ``test_is_pid_alive_*`` below pins
-    that probe semantics directly. ``sub/d.manifest.json`` must never be seen:
-    the glob is non-recursive. Only 1 counts.
+    that probe semantics directly. Only 1 counts.
     """
-    root = tmp_path / "manifests"
-    root.mkdir()
-    sub = root / "sub"
-    sub.mkdir()
-    _write_json(root / "a.manifest.json", {"grading_pid": 4242})  # live
-    _write_json(root / "b.manifest.json", {"grading_pid": 5555})  # dead
-    (root / "broken.manifest.json").write_text("{not json", encoding="utf-8")
-    _write_json(root / "e.manifest.json", {"grading_pid": 7777})  # zombie -> dead
-    _write_json(sub / "d.manifest.json", {"grading_pid": 6666})  # not top-level
-    _write_json(root / "own.manifest.json", {"grading_pid": 9999})  # current story
+    store = _install_store(tmp_path, monkeypatch)
+    store.records().put_manifest("default", "a-plan", {"stories": {"s": {"grading_pid": 4242}}})
+    store.records().put_manifest("default", "b-plan", {"stories": {"s": {"grading_pid": 5555}}})
+    store.records().put_manifest("default", "broken-plan", {"stories": ["not", "a", "mapping"]})
+    store.records().put_manifest("default", "e-plan", {"stories": {"s": {"grading_pid": 7777}}})
+    store.records().put_manifest("default", "own-plan", {"stories": {"s": {"grading_pid": 9999}}})
 
     monkeypatch.setattr(
-        detached_grade, "_is_pid_alive", lambda pid: pid in {4242, 6666, 9999}
+        detached_grade, "_is_pid_alive", lambda pid: pid in {4242, 9999}
     )
 
-    assert (
-        detached_grade.live_grade_count(
-            root, exclude=root / "own.manifest.json"
-        )
-        == 1
-    )
-    # Without the exclusion the current story's own live pid would count too.
-    assert detached_grade.live_grade_count(root) == 2
+    assert detached_grade.live_grade_count(exclude_plan="own-plan") == 1
+    # Without the exclusion the current plan's own live pid would count too.
+    assert detached_grade.live_grade_count() == 2
 
 
-def test_live_grade_count_missing_directory_is_zero(tmp_path):
-    assert detached_grade.live_grade_count(tmp_path / "does-not-exist") == 0
+def test_live_grade_count_empty_store_is_zero(tmp_path, monkeypatch):
+    _install_store(tmp_path, monkeypatch)
+
+    assert detached_grade.live_grade_count() == 0
+
+
+def test_live_grade_count_unknown_exclude_plan_excludes_nothing(tmp_path, monkeypatch):
+    store = _install_store(tmp_path, monkeypatch)
+    store.records().put_manifest("default", "a-plan", {"stories": {"s": {"grading_pid": 4242}}})
+    monkeypatch.setattr(detached_grade, "_is_pid_alive", lambda pid: True)
+
+    assert detached_grade.live_grade_count(exclude_plan="no-such-plan") == 1
+
+
+def test_live_grade_count_skips_manifest_without_grading_pid(tmp_path, monkeypatch):
+    store = _install_store(tmp_path, monkeypatch)
+    store.records().put_manifest("default", "plain-plan", {"stories": {"s": {"status": "in_progress"}}})
+    monkeypatch.setattr(detached_grade, "_is_pid_alive", lambda pid: True)
+
+    assert detached_grade.live_grade_count() == 0
 
 
 def test_is_pid_alive_treats_zombie_and_missing_as_dead(monkeypatch):

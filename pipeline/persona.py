@@ -67,6 +67,33 @@ def _with_files_pointers(context_block: str, pointers: list[dict[str, Any]]) -> 
     return "\n".join(part for part in [context_block, *sections] if part)
 
 
+def _test_scope_instruction(story: dict[str, Any]) -> str:
+    resolution = story.get("test_scope_resolution")
+    if not isinstance(resolution, dict) or resolution.get("test_scope") != "scoped":
+        return ""
+    from .test_scope_run import ci_failure_targets
+
+    parts = []
+    acceptance = [a["path"] for a in story.get("acceptance") or [] if a.get("path")]
+    if acceptance:
+        parts.append("the acceptance tests " + ", ".join(f"`{path}`" for path in acceptance))
+    if story.get("ci_rework"):
+        failed = ci_failure_targets(story.get("review_feedback"))
+        if failed:
+            parts.append("the tests that failed in CI " + ", ".join(f"`{node_id}`" for node_id in failed))
+    if parts:
+        run_only = f"Run only: {', '.join(parts)}, plus the test files you add or change."
+    else:
+        run_only = "Run only: the test files you add or change."
+    return (
+        "Test scope: this story runs with test_scope=scoped. Do NOT run the "
+        "repository's full test suite; the full suite runs in remote CI after "
+        "the PR opens, and any CI failure comes back to you as rework. This "
+        f"overrides any instruction to run the full suite. {run_only} Run lint "
+        "before committing.\n\n"
+    )
+
+
 def _build_dispatch_command(
     story: dict[str, Any], story_key: str,
     plan_name: str | None = None,
@@ -110,6 +137,7 @@ def _build_dispatch_command(
         "them to finish in this same turn) and do not end your turn until your "
         "work is committed.\n\n"
     )
+    test_scope_instruction = _test_scope_instruction(story)
     rework_instruction = ""
     if review_feedback:
         rework_attempts = story.get("rework_attempts", 0)
@@ -135,6 +163,7 @@ def _build_dispatch_command(
             f"You are RESUMING issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"
             f"{context_section}"
+            f"{test_scope_instruction}"
             f"This story was previously interrupted. The following steps are "
             f"already completed and committed — do not redo them:\n{completed}\n\n"
             f"Continue from here: {next_hint}\n\n"
@@ -151,6 +180,7 @@ def _build_dispatch_command(
             f"You are completing issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"
             f"{context_section}"
+            f"{test_scope_instruction}"
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"{no_wakeup_instruction}"

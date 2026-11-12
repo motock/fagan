@@ -417,7 +417,7 @@ def _stream_for(chain: str) -> Path:
     """
     if chain.startswith("decisions:"):
         return decision_records.decision_stream_path(chain.removeprefix("decisions:"))
-    log = audit._file_log()
+    log = audit._audit_log()
     return log.stream_path(HOST_CHAIN_ID if chain == HOST_CHAIN else chain)
 
 
@@ -431,7 +431,7 @@ def _chain_streams() -> Iterator[tuple[str, Path]]:
     ``decisions:<plan>`` for a decisions chain - byte-compatible with the anchor
     log this module has always written.
     """
-    log = audit._file_log()
+    log = audit._audit_log()
     try:
         chains = log.list_chains(DEFAULT_NAMESPACE)
     except OSError as exc:  # pragma: no cover - a store that cannot be listed
@@ -464,7 +464,7 @@ def _chain_streams() -> Iterator[tuple[str, Path]]:
 
 def _chain_heads() -> Iterator[tuple[str, tuple[int, str]]]:
     """Yield ``(anchor key, (seq, hash))`` for every chain with a usable head."""
-    log = audit._file_log()
+    log = audit._audit_log()
     for chain, path in _chain_streams():
         if chain == HOST_CHAIN:
             head = _head(lambda: log.head(DEFAULT_NAMESPACE, HOST_CHAIN_ID), chain)
@@ -598,7 +598,7 @@ def _chain_records(chain: str) -> Iterator[dict[str, Any] | None]:
         return
     stored = HOST_CHAIN_ID if chain == HOST_CHAIN else chain
     try:
-        yield from audit._file_log().read_chain(DEFAULT_NAMESPACE, stored)
+        yield from audit._audit_log().read_chain(DEFAULT_NAMESPACE, stored)
     except (OSError, InvalidRecordKeyError) as exc:
         logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
 

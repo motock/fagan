@@ -74,7 +74,7 @@ def host_audit_path() -> Path:
     return persistence.PLAN_DIR / HOST_AUDIT_FILE
 
 
-def _file_log() -> Any:
+def _audit_log() -> Any:
     """Return the one append/read implementation: the file-backed log.
 
     Imported inside the call rather than at module scope because
@@ -128,7 +128,7 @@ def append_audit(
     path is built: the name becomes part of a file name, and ``../x`` would
     otherwise put the chain outside the plan directory.
     """
-    return _file_log().append(
+    return _audit_log().append(
         DEFAULT_NAMESPACE,
         plan_name,
         _body(action=action, outcome=outcome, target=target, detail=detail),
@@ -143,7 +143,7 @@ def append_host_audit(
     detail: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one record to the host-scoped chain (no plan exists to scope it)."""
-    return _file_log().append(
+    return _audit_log().append(
         DEFAULT_NAMESPACE,
         HOST_CHAIN_ID,
         _body(action=action, outcome=outcome, target=target, detail=detail),
@@ -184,7 +184,7 @@ def record_audit(
 def verify_audit_chain(plan_name: str) -> int | None:
     """Return the seq of the first altered record, or ``None`` when intact."""
     return audit_chain.verify_entries(
-        _file_log().read_chain(DEFAULT_NAMESPACE, plan_name)
+        _audit_log().read_chain(DEFAULT_NAMESPACE, plan_name)
     )
 
 
@@ -196,7 +196,7 @@ def verify_audit_log() -> tuple[dict[str, int | None], int | None]:
     ``None`` when it is intact), and *host* is the same verdict for the
     host-scoped chain, which belongs to no plan.
     """
-    log = _file_log()
+    log = _audit_log()
     plans: dict[str, int | None] = {}
     for chain in log.list_chains(DEFAULT_NAMESPACE):
         if chain == HOST_CHAIN_ID:
@@ -213,7 +213,7 @@ def verify_audit_log() -> tuple[dict[str, int | None], int | None]:
 def verify_host_audit_chain() -> int | None:
     """Return the seq of the first altered host record, or ``None`` when intact."""
     return audit_chain.verify_entries(
-        _file_log().read_chain(DEFAULT_NAMESPACE, HOST_CHAIN_ID)
+        _audit_log().read_chain(DEFAULT_NAMESPACE, HOST_CHAIN_ID)
     )
 
 

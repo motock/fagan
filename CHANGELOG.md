@@ -114,6 +114,7 @@ in practice.
 
 ### Upgrading
 
+- `ingest_plan` no longer returns `manifest_path`. The manifest is a record in the store, not a file with a path, so the response carries only the manifest fields. Callers that read that key must read the manifest through `get_manifest` instead.
 - A `PIPELINE_STORE=sqlite` deployment does not import its file-store history
   by itself. Before pointing the store at the database, run once, as the
   operator, `python -m pipeline.tools.import_file_store --db <absolute path> [--dry-run]`

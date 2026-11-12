@@ -297,7 +297,7 @@ def test_smoke_plan_ingests_cleanly_through_the_real_pipeline(
 
     manifest_path = plan_dir / f"{PLAN_NAME}.manifest.json"
     assert manifest_path.exists(), f"no manifest written to the scratch dir: {plan_dir}"
-    assert Path(ingested["manifest_path"]) == manifest_path, ingested["manifest_path"]
+    assert "manifest_path" not in ingested, ingested["manifest_path"]
 
     manifest = json.loads(manifest_path.read_text())
     stories = manifest["stories"]

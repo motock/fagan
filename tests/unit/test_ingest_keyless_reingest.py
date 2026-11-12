@@ -260,11 +260,11 @@ def test_only_epics_naming_no_epic_is_safe() -> None:
 # --------------------------------------------------------------------------- #
 def test_check_is_wired_after_manifest_path_and_before_the_transaction() -> None:
     src = inspect.getsource(ingest_mod._ingest_plan_impl)
-    manifest_at = src.index("manifest_path = _store.manifest_path(plan_name)")
+    manifest_at = src.index("already_ingested = plan_name in _store.records().list_plans(")
     call_at = src.index("_keyless_reingest_error(")
     txn_at = src.index("with _store.transaction(")
     assert manifest_at < call_at < txn_at
-    assert "manifest_path.exists()" in src[call_at:txn_at]
+    assert "already_ingested" in src[call_at:txn_at]
     assert '{"ok": False, "error": keyless_error}' in src[call_at:txn_at]
 
 
@@ -418,10 +418,13 @@ def test_keyless_reingest_error_is_reported_before_the_lock_is_taken(
     assert _ingest("kp")["ok"] is True
 
     class _NoTransactionStore:
-        """Delegates manifest_path, refuses to open a transaction."""
+        """Delegates the record view and manifest_path, refuses a transaction."""
 
         def __init__(self, inner):
             self._inner = inner
+
+        def records(self):
+            return self._inner.records()
 
         def manifest_path(self, plan_name):
             return self._inner.manifest_path(plan_name)

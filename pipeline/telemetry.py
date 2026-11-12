@@ -71,7 +71,12 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote
 
-from . import telemetry_durations, telemetry_profile, telemetry_usage
+from . import (
+    telemetry_durations,
+    telemetry_profile,
+    telemetry_test_scope,
+    telemetry_usage,
+)
 from .events import EVENT_TYPES
 from .trace_context import ATTEMPT_ROOT_SPAN_ID, attempt_trace_id, parse_traceparent
 
@@ -542,6 +547,7 @@ def record_lifecycle_event(event: dict) -> None:
     output) never reaches a span or a metric on either profile.
     """
     telemetry_durations.observe(event)
+    telemetry_test_scope.observe(event)
     tracer = _tracer()
     if tracer is None:
         return
@@ -662,6 +668,7 @@ def configure_metrics(provider: Any | None = None) -> bool:
     _METER = meter
     _METER_PROVIDER = provider
     telemetry_durations.register(meter)
+    telemetry_test_scope.register(meter)
     if telemetry_profile.is_harness():
         telemetry_usage.register(meter)
     return True
@@ -676,6 +683,7 @@ def reset_metrics() -> None:
     global _METER, _METER_PROVIDER, _SNAPSHOT
     _COUNTERS.clear()
     telemetry_durations.reset()
+    telemetry_test_scope.reset()
     telemetry_usage.reset()
     _METER = None
     _METER_PROVIDER = None

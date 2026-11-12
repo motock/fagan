@@ -1568,6 +1568,12 @@ or the runner cannot be scoped to files, no tests run on the host and
 `test_scope_grade.no_tests` is recorded on the story; the full suite never runs
 locally.
 
+Local-family dispatches of a `scoped` story receive `LOCAL_AGENT_TEST_SCOPE`
+(JSON: acceptance paths, CI failing ids on a `ci_rework`, base branch), so the
+agent's own done-gate runs the same scope instead of the full suite. The
+dispatch baseline snapshot runs only the acceptance paths (none: skipped), and
+a reviewer self-fix is verified on the same scope.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

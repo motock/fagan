@@ -42,6 +42,7 @@ from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
 from .story_fields import record_dispatch_baseline
 from .test_scope_dispatch import stamp_test_scope, test_scope_event_fields
+from .test_scope_run import local_scope_kwargs
 from .trace_context import agent_traceparent
 
 logger = logging.getLogger("pipeline")
@@ -770,6 +771,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("review_feedback"):
             dispatch_kwargs["review_feedback_rework"] = True
 
+        dispatch_kwargs.update(local_scope_kwargs(story, dispatch_backend, worktree_path))
         if resume_via_transcript:
             dispatch_kwargs["resume_transcript_path"] = transcript_path
             # Same tech-lead-decomposition logic as the initial checklist,

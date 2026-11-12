@@ -426,7 +426,7 @@ class PlanApprovalMixin:
                     "skipped": "locked",
                     "retry_after_seconds": wait_seconds,
                 }
-            if not _store.manifest_path(plan_name).exists():
+            if plan_name not in _store.records().list_plans("default"):
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)
             digest = canonical_digest(manifest)

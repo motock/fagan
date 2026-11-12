@@ -42,6 +42,7 @@ from .rebrief import (
 )
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
 from .stall_scan import run_stall_scan
+from .store_records import validate_plan_name
 from .wedge_io import run_wedge_scan
 
 # MERGEATTR-1: ``_merge_mod``'s story-key adjudication context is bound around
@@ -317,7 +318,8 @@ def _fresh_manifest(plan_name: str) -> dict[str, Any]:
 
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     manifest_path = _store.manifest_path(plan_name)
-    if not manifest_path.exists():
+    validate_plan_name(plan_name)
+    if plan_name not in _store.records().list_plans("default"):
         return {"ok": False, "error": f"No manifest for {plan_name}"}
     manifest = _store.get_manifest(plan_name)
     stories = manifest["stories"]

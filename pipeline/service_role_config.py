@@ -58,7 +58,7 @@ def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | 
     with _store.transaction(plan_name) as acquired:
         if not acquired:
             return {"ok": True, "skipped": "locked"}
-        if not _store.manifest_path(plan_name).exists():
+        if plan_name not in _store.records().list_plans("default"):
             return {"ok": False, "error": f"No such plan {plan_name!r}"}
         manifest = _store.get_manifest(plan_name)
         new_role_config = {
@@ -152,7 +152,7 @@ def _patch_plan_impl(self, plan_name: str, fields: dict[str, Any]):
                 "retry_after_seconds": wait_seconds,
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
-        if not _store.manifest_path(plan_name).exists():
+        if plan_name not in _store.records().list_plans("default"):
             return {"ok": False, "error": f"No such plan {plan_name!r}"}
         manifest = _store.get_manifest(plan_name)
         manifest.update(fields)

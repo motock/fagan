@@ -184,6 +184,9 @@ class _FakeStore:
     def records(self):
         return self
 
+    def list_plans(self, namespace):
+        return [PLAN] if self.manifest_path(PLAN).exists() else []
+
     def get_manifests(self, namespace):
         return {}
 

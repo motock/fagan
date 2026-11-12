@@ -34,6 +34,10 @@ class _FakeRecordStore:
     def records(self):
         return self
 
+    def list_plans(self, namespace):
+        assert namespace == "default"
+        return sorted(self._manifests)
+
     def get_manifests(self, namespace):
         self.requested_namespaces.append(namespace)
         assert namespace == "default"

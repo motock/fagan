@@ -1,11 +1,11 @@
 """``SqliteStore``: the single-host database ``Store`` (ADR 0008 stage 2a).
 
-The database holds the store's records -- manifests as JSON in a ``TEXT``
-column, and the per-channel notification outbox as one row per queued record --
-while everything that is natively a filesystem object (the story log, worktree
-files, the recent/active workspace records and the manifest's on-disk
-projection) is delegated to an internal file store. ``build_store`` selects it
-with ``PIPELINE_STORE`` and ``PIPELINE_STORE_PATH``.
+The database is the only record: manifests as JSON in a ``TEXT`` column, the
+per-channel outbox, journals, decisions and every other record as rows of its
+tables. The store keeps no file store and writes no plan file; the one-time
+import tool (``pipeline.tools.import_file_store``) is the only path from files
+into the database. ``build_store`` selects it with ``PIPELINE_STORE`` and
+``PIPELINE_STORE_PATH``.
 
 Because the outbox is a table written on the store's own connection, an append
 made inside :meth:`SqliteStore.transaction` joins the open ``BEGIN IMMEDIATE``
@@ -39,7 +39,6 @@ from pipeline import (
     store_sqlite_usage,
 )
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
-from pipeline.store import build_store
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
@@ -91,32 +90,20 @@ class SqliteStore(
     whether it was acquired, so a contended writer is refused rather than
     blocked forever.
 
-    The pipeline also writes each manifest to its plan's manifest file, and
-    some writers write that file without going through this store. The
-    database therefore reconciles on read: a projection the database has not
-    recorded -- or that differs from its row -- is imported before it is
-    served, so a plan authored by such a writer is never lost and the next save
-    cannot write a stale row back over the file. That import is best-effort --
-    it is retried only within the store's bounded busy timeout and skipped when
-    another process holds the write lock -- so a read always serves the
-    projection whether or not the row could be updated, and the row is imported
-    by a later read.
+    A plan file a writer leaves in the plans directory is not a record of this
+    store: it is never read, adopted or rewritten. Only the one-time import
+    tool (``python -m pipeline.tools.import_file_store``) copies file-store data
+    into the database.
 
-    Reads that are natively filesystem objects are delegated to an internal
-    file store: the recent and active workspace records, and the manifest's
-    on-disk projection (``manifest_path``, refreshed when a save commits).
-    The workspace reads themselves -- the story log and the worktree files --
-    are not store methods at all: they go through the ``WorkspaceReader`` seam
+    The workspace reads -- the story log and the worktree files -- are not
+    store methods at all: they go through the ``WorkspaceReader`` seam
     (``pipeline/workspace_reader.py``, ADR 0012 decision 1), so no
     control-plane method here returns or reads a filesystem path.
 
-    The notification and journal sidecar files remain on disk under ``PLAN_DIR``
-    and are not represented in the database. The audit chain is a table in it
-    (``audit_records``, served by :meth:`audit_log`), but nothing writes the
-    pipeline's audit history through it yet: the facade still appends to the
-    audit sidecar files, and this store imports nothing. ``SqliteStore``
-    performs no migration from file-store data: plans that are already on disk
-    are adopted as they are read, and nothing else is imported.
+    The audit chain is a table in the database (``audit_records``, served by
+    :meth:`audit_log`), but nothing writes the pipeline's audit history through
+    it yet: the facade still appends to the ``<plan>.audit.jsonl`` sidecar
+    files in the plans directory, and that move is a later story.
     """
 
     def __init__(self, path: str):
@@ -142,10 +129,7 @@ class SqliteStore(
             self._conn.execute(f"PRAGMA busy_timeout={_BUSY_ATTEMPT_TIMEOUT_MS}")
             # WAL lets a plain reader in another process (the dashboard) read a
             # consistent snapshot while this store holds the write lock, so
-            # serving a recorded row never waits for a writer. A read that has
-            # to import a new projection is itself a write and can lose the
-            # race; that import is best-effort (see ``_import_row``), so the
-            # served document never depends on winning it. In-process callers
+            # serving a recorded row never waits for a writer. In-process callers
             # serialize on ``self._guard`` for the length of a transaction,
             # which matches SQLite allowing one writer per database. The mode
             # must be set outside any transaction.
@@ -161,12 +145,6 @@ class SqliteStore(
                 # file and its write lock held by a store that will never serve.
                 self._conn.close()
                 raise
-        # The filesystem half is always the file store, whatever PIPELINE_STORE
-        # selects for this process.
-        self._files = build_store({"PIPELINE_STORE": "file"})
-        # Manifests written inside a transaction are projected to disk when it
-        # commits, so a rolled-back transaction leaves no trace on disk.
-        self._pending_projection: dict[str, dict[str, Any]] = {}
         # Journals, decisions, drafts, completion records and snapshots are
         # rows of this store's database, so a write made inside a transaction
         # is part of it and commits or rolls back with the manifest row.
@@ -193,7 +171,16 @@ class SqliteStore(
 
     # -- manifests: the database is the record -----------------------------
     def manifest_path(self, plan_name: str) -> Path:
-        return self._files.manifest_path(plan_name)
+        """Refuse: this store keeps no manifest file to name.
+
+        The manifest is a row of the database. Callers read and write it through
+        ``get_manifest`` and ``save_manifest``; ``manifest_path`` is removed from
+        the Store Protocol in a later story.
+        """
+        raise NotImplementedError(
+            "SqliteStore keeps manifests in its database, not in a plan file; "
+            "use get_manifest / save_manifest"
+        )
 
     def _stored_document(self, plan_name: str) -> dict[str, Any] | None:
         """Return the database row's document, or ``None`` when it has none."""
@@ -225,78 +212,14 @@ class SqliteStore(
             ).fetchone()
         return None if row is None else row[0]
 
-    def _projected_document(self, plan_name: str) -> dict[str, Any] | None:
-        """Return the manifest's projection, or ``None`` when there is none.
-
-        A projection that exists but does not parse raises ``JSONDecodeError``:
-        the document was damaged outside this store, and neither reader may
-        report a record the filesystem contradicts.
-        """
-        try:
-            return self._files.get_manifest(plan_name)
-        except FileNotFoundError:
-            return None
-
-    def _import_row(self, plan_name: str, document: dict[str, Any]) -> None:
-        """Record a projection in the database, or give up within the timeout.
-
-        The import is a write, and another process may hold the database's write
-        lock for as long as its own ``transaction()`` runs. It is therefore
-        best-effort rather than part of the read's contract: the caller serves
-        the projection either way, and a later read imports the row. Retrying
-        past ``BUSY_TIMEOUT_MS`` would make a dashboard read as slow as the
-        slowest writer, and letting the lock error escape would turn a readable
-        deployment into a failing read.
-        """
-        deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
-        while True:
-            try:
-                self._write_row(plan_name, document)
-                return
-            except sqlite3.OperationalError as exc:
-                if not _is_lock_conflict(exc):
-                    raise
-                if time.monotonic() >= deadline:
-                    return
-            time.sleep(_BUSY_RETRY_S)
-
-    def _resolved_document(self, plan_name: str) -> dict[str, Any] | None:
-        """Return the manifest this store serves, reconciling the two records.
-
-        Writers that do not go through this store update only the projection,
-        so the projection wins when it differs from the database row and is
-        imported, which keeps ``get_manifest``, ``get_manifest_or_none`` and
-        ``list_manifests`` reporting one deployment. With no projection the
-        row is complete on its own. ``None`` means neither record exists.
-
-        A stored row that does not parse is not a record either: a projection
-        that reads is still served, and it replaces the damaged row, so damage
-        outside this store cannot hide a document the filesystem can.
-
-        A manifest that this store saved inside the current transaction is the
-        exception: its row is newer than the file, which is only projected when
-        the transaction commits, so importing the file there would silently
-        revert the caller's own write.
-        """
-        with self._guard:
-            # A damaged projection raises here, before either reader can serve
-            # a record the filesystem contradicts.
-            projected = self._projected_document(plan_name)
-            try:
-                stored = self._stored_document(plan_name)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                if projected is None:
-                    raise
-                stored = None
-            if plan_name in self._pending_projection or projected is None:
-                return stored
-            if projected != stored:
-                self._import_row(plan_name, projected)
-            return projected
-
     def get_manifest(self, plan_name: str) -> dict[str, Any]:
-        """Return the plan's manifest, failing when neither record has it."""
-        document = self._resolved_document(plan_name)
+        """Return the plan's manifest, failing when the database has no row.
+
+        A stored row that does not parse raises ``JSONDecodeError``: the row was
+        damaged outside this store, and the reader must not report a document
+        it cannot read.
+        """
+        document = self._stored_document(plan_name)
         if document is None:
             raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
         return document
@@ -304,19 +227,14 @@ class SqliteStore(
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
         with self._guard:
             self._write_row(plan_name, manifest)
-            if self._conn.in_transaction:
-                self._pending_projection[plan_name] = manifest
-            else:
-                self._files.save_manifest(plan_name, manifest)
 
     def list_manifests(self) -> list[str]:
-        """List every plan either record knows, so an ingest is never lost."""
+        """List the plans the database records."""
         with self._guard:
             rows = self._conn.execute(
                 "SELECT plan_name FROM story_manifests ORDER BY plan_name"
             ).fetchall()
-        recorded = {row[0] for row in rows}
-        return sorted(recorded | set(self._files.list_manifests()))
+        return [row[0] for row in rows]
 
     def update_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
@@ -330,20 +248,21 @@ class SqliteStore(
         return story
 
     def list_plans(self) -> list[str]:
-        return self._files.list_plans()
+        """List the plans with a manifest or a staged plan draft, sorted."""
+        return sorted(
+            set(self.list_manifests()) | set(self._draft_plans(DEFAULT_NAMESPACE))
+        )
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
-        """Fail-open manifest read, served from the same records as the strict one.
+        """Fail-open manifest read, served from the same record as the strict one.
 
         The dashboard's manifest reads go through here, so it must agree with
-        ``get_manifest`` about which plans exist: a plan the database records is
-        present even when its projection was never written. It fails open only
-        where a document is not safely readable -- no row and no projection, or
-        a stored document or projection that is not valid JSON text -- because
-        those callers treat an unreadable manifest as "no manifest".
+        ``get_manifest`` about which plans exist. It fails open only where the
+        stored document is not valid JSON text, because those callers treat an
+        unreadable manifest as "no manifest".
         """
         try:
-            return self._resolved_document(plan_name)
+            return self._stored_document(plan_name)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
@@ -427,15 +346,11 @@ class SqliteStore(
                 yield True
             except BaseException:
                 self._depth = 0
-                self._pending_projection.clear()
                 self._conn.execute("ROLLBACK")
                 raise
             else:
-                pending, self._pending_projection = self._pending_projection, {}
                 self._depth = 0
                 self._conn.execute("COMMIT")
-                for plan, manifest in pending.items():
-                    self._files.save_manifest(plan, manifest)
         finally:
             self._guard.release()
 
@@ -481,9 +396,8 @@ class SqliteRecords(
     def get_manifest_updated_at(self, namespace: str, plan_name: str) -> float | None:
         """Return when the plan's manifest was last written, or ``None``.
 
-        The manifest is resolved first, so a projection another writer produced
-        is imported into its row before the row's stamp is read.  No manifest
-        is ``None``, and the stamp is the row's own ``updated_at``.
+        No manifest row is ``None``, and the stamp is the row's own
+        ``updated_at``.
         """
         self._namespace(namespace)
         validate_plan_name(plan_name)
@@ -826,4 +740,3 @@ class SqliteRecords(
         self._namespace(namespace)
         with self._store._guard:
             return store_sqlite_outbox.list_queues(self._store._conn, namespace)
-        return self._store._files.records().list_outboxes(namespace)

@@ -35,7 +35,6 @@
  "pipeline/setup/schema.py": 1,
  "pipeline/setup/wizard.py": 5,
  "pipeline/store.py": 16,
- "pipeline/store_sqlite.py": 1,
  "pipeline/tick_checks.py": 2,
  "pipeline/topology_identity.py": 3,
  "pipeline/unpark.py": 1,

@@ -846,9 +846,6 @@ def _sqlite_store(tmp_path: Path, story: dict | None):
     store = SqliteStore(str(tmp_path / "plans.db"))
     if story is not None:
         store.save_manifest("P", {"epics": {}, "stories": {"S-1": story}})
-        # SqliteStore mirrors every save to a manifest file; drop it so only
-        # the record store can answer the read.
-        store.manifest_path("P").unlink(missing_ok=True)
     return store
 
 
@@ -859,7 +856,6 @@ def test_main_reads_the_story_from_the_record_store_without_a_manifest_file(
         tmp_path,
         {"status": "merging", "last_test_check": "2026-10-01T00:00:00Z"},
     )
-    assert not store.manifest_path("P").exists()
     monkeypatch.setattr(server, "_store", store)
     worktree = tmp_path / "wt"
     worktree.mkdir()

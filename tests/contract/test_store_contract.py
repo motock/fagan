@@ -77,6 +77,8 @@ def store_factory(tmp_path, monkeypatch, request):
 def test_manifest_path_locates_plan_manifest(store_factory):
     """``manifest_path`` is a pure path computation for the plan's manifest."""
     store = store_factory()
+    if isinstance(store, SqliteStore):
+        pytest.skip("SqliteStore keeps no manifest file (ADR 0012 decision 7)")
 
     path = store.manifest_path(PLAN)
 
@@ -110,7 +112,8 @@ def test_manifest_save_get_round_trip(store_factory):
     assert first == M1
     assert second == M1
     assert first == second, "a repeated read must return the same document"
-    assert store.manifest_path(PLAN).exists()
+    if isinstance(store, FileStore):
+        assert store.manifest_path(PLAN).exists()
 
 
 def test_manifest_save_replaces_previous(store_factory):
@@ -455,6 +458,8 @@ def test_store_contract_declares_no_workspace_records(store_factory):
 def test_get_manifest_or_none_reads_saved_and_swallows_corrupt(store_factory):
     """The fail-open manifest reader returns the document, or None on damage."""
     store = store_factory()
+    if isinstance(store, SqliteStore):
+        pytest.skip("a damaged SqliteStore row is covered in test_store_sqlite.py")
     store.save_manifest(PLAN, M1)
 
     assert store.get_manifest_or_none(PLAN) == M1

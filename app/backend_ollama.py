@@ -639,6 +639,7 @@ class OllamaDriver:
         resume_append_content: str | None = None,
         rework_full_suite: bool = False,
         review_feedback_rework: bool = False,
+        test_scope_spec: dict | None = None,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
@@ -744,6 +745,8 @@ class OllamaDriver:
         # usually already green when such a round starts.
         if review_feedback_rework:
             env["LOCAL_AGENT_REVIEW_FEEDBACK_REWORK"] = "1"
+        if test_scope_spec is not None:
+            env["LOCAL_AGENT_TEST_SCOPE"] = json.dumps(test_scope_spec, sort_keys=True)
         # Always persist the transcript so a later rework redispatch can
         # resume the prior message history instead of rebuilding a cold-start
         # prompt. The path is deterministic and lives inside the worktree (cwd)

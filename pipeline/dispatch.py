@@ -23,6 +23,7 @@ from .dispatch_baseline import (
     _BASELINE_TEST_TIMEOUT_S,  # noqa: F401
     _baseline_test_env,  # noqa: F401
     _run_baseline_test_snapshot,
+    baseline_snapshot_for,
 )
 
 # Context resolution and the remote-branch guard live in their own modules to
@@ -395,7 +396,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 story,
                 worktree_path,
                 marker=worktree_path / ".dispatch_baseline_test_checked",
-                snapshot=_run_baseline_test_snapshot,
+                snapshot=baseline_snapshot_for(story, _run_baseline_test_snapshot),
                 rerun=not resuming,
             )
 

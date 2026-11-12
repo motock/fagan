@@ -175,7 +175,6 @@ def test_should_persist_an_amended_scope_through_the_record_store(
         story,
         {"action": "amend_scope", "rationale": "because"},
         {"stories": {"S": story}},
-        tmp_path / "demo.manifest.json",
     )
 
     assert result == "amend_scope"
@@ -279,7 +278,6 @@ def test_should_fail_closed_on_an_invalid_plan_name(fake_store, monkeypatch):
             story,
             {"action": "amend_scope", "rationale": "because"},
             {"stories": {"S": story}},
-            Path("/nonexistent-plans/-plan.manifest.json"),
         )
     assert records.put_calls == []
 

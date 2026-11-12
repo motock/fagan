@@ -90,7 +90,7 @@ def _acceptance_with_source(acceptance, source) -> list:
     return rewritten
 
 
-def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ``patch_acceptance`` ruling by rewriting a born-broken
     acceptance fixture through validation.
 

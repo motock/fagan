@@ -37,7 +37,7 @@ def _triage_notice(calls):
 def test_an_invalid_split_payload_notice_is_attributed(notices):
     ruling = {"action": "split_story", "rationale": RATIONALE, "split": ["only one"]}
 
-    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}}, None)
+    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}})
 
     kwargs = _triage_notice(notices)
     assert kwargs["event"] == "triage_ruling"
@@ -49,7 +49,7 @@ def test_a_split_over_the_plan_ceiling_notice_is_attributed(notices):
     ruling = {"action": "split_story", "rationale": RATIONALE, "split": ["a", "b"]}
     manifest = {"stories": {}, "triage_created_stories": triage.TRIAGE_MAX_CREATED_STORIES}
 
-    triage.execute_ruling("plan-x", "S-1", _story(), ruling, manifest, None)
+    triage.execute_ruling("plan-x", "S-1", _story(), ruling, manifest)
 
     kwargs = _triage_notice(notices)
     assert kwargs["event"] == "triage_ruling"
@@ -59,7 +59,7 @@ def test_a_split_over_the_plan_ceiling_notice_is_attributed(notices):
 def test_an_uncorroborated_mark_done_notice_is_attributed(notices):
     ruling = {"action": "mark_done", "rationale": RATIONALE}
 
-    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}}, None)
+    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}})
 
     kwargs = _triage_notice(notices)
     assert kwargs["event"] == "triage_ruling"
@@ -70,7 +70,7 @@ def test_a_deferred_action_notice_is_attributed(notices, monkeypatch):
     monkeypatch.setattr(triage, "DEFERRED_ACTIONS", frozenset({"future_action"}))
     ruling = {"action": "future_action", "rationale": RATIONALE}
 
-    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}}, None)
+    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}})
 
     kwargs = _triage_notice(notices)
     assert kwargs["event"] == "triage_ruling"
@@ -82,7 +82,7 @@ def test_a_story_without_a_correlation_id_omits_the_field(notices):
     story = _story()
     del story["correlation_id"]
 
-    triage.execute_ruling("plan-x", "S-1", story, ruling, {"stories": {}}, None)
+    triage.execute_ruling("plan-x", "S-1", story, ruling, {"stories": {}})
 
     assert "correlation_id" not in _triage_notice(notices)
 
@@ -90,7 +90,7 @@ def test_a_story_without_a_correlation_id_omits_the_field(notices):
 def test_the_notice_text_is_unchanged(notices):
     ruling = {"action": "mark_done", "rationale": RATIONALE}
 
-    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}}, None)
+    triage.execute_ruling("plan-x", "S-1", _story(), ruling, {"stories": {}})
 
     texts = [a[1] for a, _ in notices if len(a) > 1 and RATIONALE in a[1]]
     assert texts == [f"S-1 triage: mark_done – {RATIONALE}"]

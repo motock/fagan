@@ -120,7 +120,7 @@ def _is_green_at_head(story: dict) -> bool:
     return check.get("returncode") == 0 and head is not None and check.get("sha") == head
 
 
-def _execute_amend_scope(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+def _execute_amend_scope(plan_name, story_key, story, ruling, manifest) -> str:
     """Apply an ``amend_scope`` ruling if, and only if, every path passes the guardrail."""
     conflict = story.get("scope_conflict")
     if not conflict:

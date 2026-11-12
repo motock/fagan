@@ -79,7 +79,7 @@ def _ruling(action="park_for_human", rationale=RATIONALE):
 def _run(story, ruling=None):
     """Call the real ``execute_ruling`` with the production argument order."""
     return triage.execute_ruling(
-        "plan-x", "story-1", story, ruling or _ruling(), {"stories": {}}, None
+        "plan-x", "story-1", story, ruling or _ruling(), {"stories": {}}
     )
 
 

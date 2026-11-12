@@ -414,7 +414,7 @@ def test_triage_escalate_model_same_target_parks_ladder_exhausted(
     result = ptriage.execute_ruling(
         "plan", "S1", story,
         {"action": "escalate_model", "rationale": "local tier cannot finish"},
-        manifest, manifest_path,
+        manifest,
     )
 
     assert result == "park_for_human"

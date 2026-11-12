@@ -187,7 +187,6 @@ def _apply(harness, story, manifest=None):
         story,
         _ruling(),
         manifest if manifest is not None else _manifest(story),
-        harness.manifest_path,
     )
 
 
@@ -265,7 +264,7 @@ def test_execute_ruling_directly_leaves_no_sentinel_on_a_park_path(harness):
     manifest = _manifest(story)
 
     triage.execute_ruling(
-        PLAN, story["key"], story, _ruling(), manifest, harness.manifest_path
+        PLAN, story["key"], story, _ruling(), manifest
     )
 
     assert "_patch_acceptance_recorded" not in story, (

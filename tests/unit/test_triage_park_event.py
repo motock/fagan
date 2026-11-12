@@ -140,7 +140,7 @@ def test_park_via_execute_ruling_unhandled_action_is_stamped(notify_calls):
     ruling = {"action": "totally_unknown", "rationale": "no idea what to do"}
 
     result = triage.execute_ruling(
-        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+        "plan-x", "story-1", story, ruling, {"stories": {}}
     )
 
     assert result == "park_for_human"
@@ -156,7 +156,7 @@ def test_park_via_exhausted_escalation_ladder_is_stamped(notify_calls, monkeypat
     ruling = {"action": "escalate_model", "rationale": "needs a bigger model"}
 
     result = triage.execute_ruling(
-        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+        "plan-x", "story-1", story, ruling, {"stories": {}}
     )
 
     assert result == "park_for_human"
@@ -182,7 +182,7 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     ruling = {"action": "split_story", "rationale": "too big for one implementer"}
 
     result = triage.execute_ruling(
-        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+        "plan-x", "story-1", story, ruling, {"stories": {}}
     )
 
     assert result == "park_for_human"
@@ -225,7 +225,7 @@ def test_dry_run_notification_is_not_stamped(notify_calls, monkeypatch):
     ruling = {"action": "escalate_model", "rationale": "needs a bigger model"}
 
     result = triage._apply_ruling_for_mode(
-        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+        "plan-x", "story-1", story, ruling, {"stories": {}}
     )
 
     assert result == "dry-run"
@@ -339,7 +339,7 @@ def test_park_survives_a_raising_notify_user_through_execute_ruling(monkeypatch)
     ruling = {"action": "unhandled_action", "rationale": "whatever"}
 
     result = triage.execute_ruling(
-        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+        "plan-x", "story-1", story, ruling, {"stories": {}}
     )
 
     assert result == "park_for_human"

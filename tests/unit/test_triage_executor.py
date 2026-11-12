@@ -118,7 +118,7 @@ class TestExecuteRuling:
         ruling["action"] = "escalate_model"
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -130,7 +130,7 @@ class TestExecuteRuling:
         ruling["action"] = "do_something_weird"
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -141,7 +141,7 @@ class TestExecuteRuling:
         ruling["action"] = "park_for_human"
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -153,7 +153,7 @@ class TestExecuteRuling:
         ruling["action"] = "escalate_model"
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         reason = story["parked_reason"]
@@ -168,7 +168,7 @@ class TestExecuteRuling:
         ruling["rationale"] = "the build is broken"
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         reason = story["parked_reason"]
@@ -196,7 +196,7 @@ class TestApplyRulingForMode:
         monkeypatch.setattr(triage_mod, "execute_ruling", _must_not_call)
 
         result = pipeline.triage._apply_ruling_for_mode(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert result == "dry-run"
@@ -212,7 +212,7 @@ class TestApplyRulingForMode:
         ruling["rationale"] = "the suite is red"
 
         pipeline.triage._apply_ruling_for_mode(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         # At least one notification carrying the recommended action + rationale.
@@ -230,14 +230,14 @@ class TestApplyRulingForMode:
 
         calls = []
 
-        def _stub_execute(plan_name, story_key, s, r, m, mp):
-            calls.append((plan_name, story_key, s, r, m, mp))
+        def _stub_execute(plan_name, story_key, s, r, m):
+            calls.append((plan_name, story_key, s, r, m))
             return "park_for_human"
 
         monkeypatch.setattr(triage_mod, "execute_ruling", _stub_execute)
 
         result = pipeline.triage._apply_ruling_for_mode(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert len(calls) == 1
@@ -254,14 +254,14 @@ class TestApplyRulingForMode:
 
         calls = []
 
-        def _stub_execute(plan_name, story_key, s, r, m, mp):
+        def _stub_execute(plan_name, story_key, s, r, m):
             calls.append((plan_name, story_key))
             return "park_for_human"
 
         monkeypatch.setattr(triage_mod, "execute_ruling", _stub_execute)
 
         result = pipeline.triage._apply_ruling_for_mode(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert len(calls) == 1
@@ -282,7 +282,7 @@ class TestApplyRulingForMode:
         monkeypatch.setattr(triage_mod, "execute_ruling", _must_not_call)
 
         result = pipeline.triage._apply_ruling_for_mode(
-            "cap1", "S1", story, ruling, manifest, manifest_path
+            "cap1", "S1", story, ruling, manifest
         )
 
         assert result == "dry-run"

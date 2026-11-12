@@ -204,7 +204,7 @@ class TestSplitStoryBranch:
         split_ruling["split"] = ["first half", "second half"]
 
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         assert isinstance(result, str)
@@ -219,7 +219,7 @@ class TestSplitStoryBranch:
         split_ruling["split"] = ["first half", "second half"]
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         # Parking the parent is loud: at least one notification names the
@@ -234,7 +234,7 @@ class TestSplitStoryBranch:
         split_ruling["split"] = ["first half", "second half"]
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         reason = base_story["parked_reason"]
@@ -249,7 +249,7 @@ class TestSplitStoryBranch:
         split_ruling["split"] = ["first half", "second half"]
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         assert patched["claude_calls"] == []
@@ -265,7 +265,7 @@ class TestRepoIssueBranch:
         self, base_story, repo_ruling, manifest, manifest_path, patched
     ):
         pipeline.triage.execute_ruling(
-            "cap1", "S2", base_story, repo_ruling, manifest, manifest_path
+            "cap1", "S2", base_story, repo_ruling, manifest
         )
 
         assert patched["claude_calls"] == []
@@ -282,7 +282,7 @@ class TestRationaleTruncation:
     ):
         split_ruling["rationale"] = "the story is too large for one implementer"
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         msgs = [c["message"] for c in patched["notify_calls"]]
@@ -295,7 +295,7 @@ class TestRationaleTruncation:
         long_rationale = "A" * 5000
         split_ruling["rationale"] = long_rationale
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         msgs = [c["message"] for c in patched["notify_calls"]]
@@ -314,7 +314,7 @@ class TestParkForHumanNoDeferred:
         self, base_story, park_ruling, manifest, manifest_path, patched
     ):
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, park_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, park_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -332,7 +332,7 @@ class TestEscalateModelRegression:
     ):
         # No fallback configured; auto escalation on -> Claude branch taken.
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, escalate_ruling, manifest
         )
 
         assert result == "escalate_model"
@@ -361,7 +361,7 @@ class TestUnrecognizedAction:
 
         # Must not raise.
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, bogus_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, bogus_ruling, manifest
         )
 
         assert result == "park_for_human"
@@ -381,7 +381,7 @@ class TestUnrecognizedAction:
         }
 
         pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, bogus_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, bogus_ruling, manifest
         )
 
         reason = base_story["parked_reason"]
@@ -410,7 +410,7 @@ class TestNotificationFailure:
 
         # Must not propagate; story still parked and marked deferred.
         result = pipeline.triage.execute_ruling(
-            "cap1", "S1", base_story, split_ruling, manifest, manifest_path
+            "cap1", "S1", base_story, split_ruling, manifest
         )
 
         assert result == "park_for_human"

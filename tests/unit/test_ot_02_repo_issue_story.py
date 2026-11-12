@@ -220,7 +220,7 @@ def test_filing_into_the_plan_manifest_is_an_idempotent_upsert(repo_root, monkey
     manifest = {"stories": {}}
     parent = {"key": "OT-02", "summary": "OT-02", "status": "failed"}
     for _ in range(2):
-        execute("observability-otel", "OT-02", parent, {"ruling": "hold"}, manifest, repo_root / "m.json")
+        execute("observability-otel", "OT-02", parent, {"ruling": "hold"}, manifest)
 
     assert list(manifest["stories"]) == [STORY_KEY]
     child = manifest["stories"][STORY_KEY]

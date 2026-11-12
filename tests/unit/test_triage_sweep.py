@@ -392,7 +392,7 @@ class TestActionAlreadyTried:
 
         applied = []
 
-        def _capture_apply(pn, key, story, ruling, man, mpath):
+        def _capture_apply(pn, key, story, ruling, man):
             applied.append(ruling["action"])
             return "park_for_human"
 

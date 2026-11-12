@@ -77,11 +77,11 @@ def test_should_keep_disk_write_made_by_ruling_executor_for_triaged_story(
     _write(manifest_path, {"stories": {"A": _parked()}})
     _stub_ruling(monkeypatch)
 
-    def _apply(plan_name, key, story, ruling, manifest, path):
+    def _apply(plan_name, key, story, ruling, manifest):
         # An executor helper persists its own change straight to disk.
-        on_disk = _read(path)
+        on_disk = _read(manifest_path)
         on_disk["stories"][key]["helper_note"] = "written-by-executor"
-        _write(path, on_disk)
+        _write(manifest_path, on_disk)
         story["triage_attempts"] = 1
         return ruling["action"]
 
@@ -138,7 +138,7 @@ def test_should_persist_split_children_and_counter_added_by_sweep(
     _write(manifest_path, {"stories": {"A": _parked()}, "triage_created_stories": 0})
     _stub_ruling(monkeypatch)
 
-    def _apply(plan_name, key, story, ruling, manifest, path):
+    def _apply(plan_name, key, story, ruling, manifest):
         manifest["stories"]["A-split-1"] = {"status": "todo", "summary": "child"}
         manifest["triage_created_stories"] = 1
         return ruling["action"]
@@ -156,7 +156,7 @@ def test_should_strip_patch_acceptance_sentinel_on_write(monkeypatch, manifest_p
     _write(manifest_path, {"stories": {"A": _parked()}})
     _stub_ruling(monkeypatch)
 
-    def _apply(plan_name, key, story, ruling, manifest, path):
+    def _apply(plan_name, key, story, ruling, manifest):
         story["_patch_acceptance_recorded"] = True
         return ruling["action"]
 

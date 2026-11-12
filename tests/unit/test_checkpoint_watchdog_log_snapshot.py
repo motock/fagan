@@ -66,9 +66,8 @@ def _make_story(worktree, *, log_bytes=None):
 
 def _terminate(env, story, *, step):
     manifest = {"name": env.plan_name, "stories": {env.story_key: story}}
-    manifest_path = env.plan_dir / f"{env.plan_name}.manifest.json"
     return checkpoint._terminate_and_checkpoint(
-        manifest, manifest_path, env.plan_name, env.story_key, story,
+        manifest, env.plan_name, env.story_key, story,
         pid=12345, step=step, summary="watchdog",
     )
 
@@ -153,11 +152,20 @@ def test_should_not_block_termination_when_snapshot_write_fails(
     not_a_dir = tmp_path / "not_a_dir"
     not_a_dir.write_text("i am a file", encoding="utf-8")
     monkeypatch.setattr(p, "PLAN_DIR", not_a_dir)
+    # The manifest is now saved through the store, which projects into the same
+    # PLAN_DIR; keep it in memory so only the snapshot write is broken here.
+    saved_manifests = []
+    real_store = p._store
+    monkeypatch.setattr(p, "_store", SimpleNamespace(records=lambda: SimpleNamespace(
+        put_manifest=lambda ns, plan, manifest: saved_manifests.append(manifest),
+        append_journal=real_store.records().append_journal,
+    )))
     story = _make_story(tmp_path / "wt", log_bytes=b"hung\n")
 
     _terminate(watchdog_env, story, step="dispatch_watchdog_timeout")
 
     assert story["status"] == "interrupted"
+    assert saved_manifests and saved_manifests[0]["stories"][watchdog_env.story_key]["status"] == "interrupted"
     record = _journal_record(watchdog_env)
     assert "log_snapshot" not in record, f"record: {record!r}"
 

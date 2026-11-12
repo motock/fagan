@@ -137,7 +137,7 @@ def test_terminate_and_checkpoint_survives_permission_error(tmp_path, monkeypatc
 
     # Must not raise — before the fix, PermissionError propagated from here.
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S1", manifest["stories"]["S1"],
+        manifest, "P1", "S1", manifest["stories"]["S1"],
         pid=111, step="dispatch_watchdog_timeout",
         summary="ci pid owned by another user",
     )
@@ -170,7 +170,7 @@ def test_terminate_and_checkpoint_process_lookup_error_still_checkpoints(
     calls = _patch_kill(monkeypatch, ProcessLookupError(3, "No such process"))
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S2", manifest["stories"]["S2"],
+        manifest, "P1", "S2", manifest["stories"]["S2"],
         pid=222, step="interrupted", summary="pid already gone",
     )
 
@@ -198,13 +198,13 @@ def test_terminate_and_checkpoint_missing_worktree_raises_keyerror(
     worktree.mkdir()
     _init_repo(worktree)
 
-    manifest, manifest_path = _make_manifest(plan_dir, "P1", "S9", str(worktree), pid=222)
+    manifest, _ = _make_manifest(plan_dir, "P1", "S9", str(worktree), pid=222)
     del manifest["stories"]["S9"]["worktree"]
     _patch_kill(monkeypatch, ProcessLookupError(3, "No such process"))
 
     with pytest.raises(KeyError, match="worktree"):
         _terminate_and_checkpoint(
-            manifest, manifest_path, "P1", "S9", manifest["stories"]["S9"],
+            manifest, "P1", "S9", manifest["stories"]["S9"],
             pid=222, step="interrupted", summary="malformed story",
         )
     # Nothing was journaled for the failed checkpoint.

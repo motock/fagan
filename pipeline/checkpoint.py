@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from .git_ops import _commit_wip
-from .parsers import _atomic_write_json
 from .store_records import InvalidRecordKeyError
 
 logger = logging.getLogger(__name__)
@@ -184,7 +183,7 @@ def _pid_started_after_dispatch(pid: int, dispatched_at: str | None) -> bool:
 
 
 def _terminate_and_checkpoint(
-    manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
+    manifest: dict[str, Any], plan_name: str, story_key: str,
     story: dict[str, Any], *, pid: int, step: str, summary: str,
 ) -> str:
     """SIGTERM the dispatched process, checkpoint its worktree, journal the
@@ -236,7 +235,9 @@ def _terminate_and_checkpoint(
     story["status"] = "interrupted"
     story["last_commit"] = sha
     story["interrupted_at"] = interrupted_at
-    _atomic_write_json(manifest_path, manifest)
+    from .server import _store
+
+    _store.records().put_manifest("default", plan_name, manifest)
     return sha
 
 

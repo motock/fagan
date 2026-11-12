@@ -226,7 +226,7 @@ def watchdog_env(oa2_plan_dir, monkeypatch):
 
     terminate_calls = []
 
-    def _spy_terminate(manifest, manifest_path, plan_name, story_key, story,
+    def _spy_terminate(manifest, plan_name, story_key, story,
                        *, pid=None, step=None, summary=None):
         terminate_calls.append({"step": step, "summary": summary, "pid": pid})
         # Mimic the real _terminate_and_checkpoint's state mutation (it marks
@@ -235,7 +235,7 @@ def watchdog_env(oa2_plan_dir, monkeypatch):
         story["status"] = "interrupted"
         story["last_commit"] = "deadbeef"
         story["interrupted_at"] = datetime.now(UTC).isoformat()
-        manifest_path.write_text(json.dumps(manifest))
+        p._store.records().put_manifest("default", plan_name, manifest)
         return "deadbeef"
 
     monkeypatch.setattr(p, "_terminate_and_checkpoint", _spy_terminate)

@@ -33,6 +33,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from pipeline.test_scope_run import agent_scoped_test_argv
+
 
 def git_impl(origin, *args):
     return subprocess.run(["git", *args], check=False, cwd=origin["CWD"], capture_output=True, text=True)
@@ -83,7 +85,8 @@ def _full_suite_result_impl(origin) -> tuple[bool, str, str | None]:
     test_dir, test_cmd = origin["p"].detect_test_command(origin["CWD"])
     if not test_cmd:
         return True, "", None
-    argv = test_cmd
+    scoped = agent_scoped_test_argv(origin["CWD"], test_dir, test_cmd, os.environ.get("LOCAL_AGENT_TEST_SCOPE"))
+    argv = test_cmd if scoped is None else scoped
     needs_heavy = bool(argv) and origin["p"]._is_heavy(argv)
 
     def _run_once():

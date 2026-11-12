@@ -116,7 +116,7 @@ def test_should_clear_the_journal_when_escalating_to_claude(store):
     assert _journal(store, STORY_KEY), "the journal must exist before the escalation"
 
     escalation._escalate_to_claude(
-        _manifest(), PLAN, STORY_KEY, store.manifest_path(PLAN)
+        _manifest(), PLAN, STORY_KEY
     )
 
     assert store.cleared == [("default", PLAN, STORY_KEY)], (
@@ -132,7 +132,7 @@ def test_should_clear_the_journal_when_escalating_to_the_fallback_model(store):
     assert _journal(store, STORY_KEY), "the journal must exist before the escalation"
 
     escalation._escalate_to_local_fallback_model(
-        _manifest(), PLAN, STORY_KEY, store.manifest_path(PLAN), FALLBACK_MODEL
+        _manifest(), PLAN, STORY_KEY, FALLBACK_MODEL
     )
 
     assert store.cleared == [("default", PLAN, STORY_KEY)], (
@@ -147,7 +147,7 @@ def test_should_escalate_when_no_journal_exists(store):
     assert _journal(store, STORY_KEY) == [], "no journal is seeded for this test"
 
     escalation._escalate_to_claude(
-        _manifest(), PLAN, STORY_KEY, store.manifest_path(PLAN)
+        _manifest(), PLAN, STORY_KEY
     )
 
     stored = store.records().get_manifest("default", PLAN)
@@ -160,7 +160,7 @@ def test_should_not_clear_another_story_journal(store):
     _seed_journal(store, OTHER_STORY_KEY)
 
     escalation._escalate_to_claude(
-        _manifest(), PLAN, STORY_KEY, store.manifest_path(PLAN)
+        _manifest(), PLAN, STORY_KEY
     )
     assert _journal(store, OTHER_STORY_KEY), (
         "another story's journal must survive the escalation"
@@ -170,7 +170,7 @@ def test_should_not_clear_another_story_journal(store):
     # cleared - a swapped key or a hardcoded plan name would silently clear
     # nothing here while the first call looked correct.
     escalation._escalate_to_claude(
-        _manifest(), PLAN, OTHER_STORY_KEY, store.manifest_path(PLAN)
+        _manifest(), PLAN, OTHER_STORY_KEY
     )
 
     assert store.cleared == [

@@ -126,9 +126,7 @@ def _escalation_repo_root(manifest: dict) -> Path:
     return Path(manifest.get("repo_root") or REPO_ROOT)
 
 
-def _escalate_to_claude(
-    manifest: dict, plan_name: str, story_key: str, manifest_path: Path
-) -> None:
+def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     """Flip a failed local story to Claude and start clean.
 
     Tears down the local worktree+branch (the local agent left it dirty/broken;
@@ -199,8 +197,7 @@ def _escalate_to_claude(
 
 
 def _escalate_to_local_fallback_model(
-    manifest: dict, plan_name: str, story_key: str, manifest_path: Path,
-    fallback_model: str,
+    manifest: dict, plan_name: str, story_key: str, fallback_model: str,
 ) -> None:
     """Flip a failed local story to a different local model and start clean.
 

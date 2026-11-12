@@ -213,7 +213,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             and not story.get("escalated")
                             and _escalation_target() != (story.get("backend"), story.get("model"))
                         ):
-                            _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+                            _escalate_to_claude(manifest, plan_name, story_key)
                             _notify_user(  # noqa: F821
                                 plan_name,
                                 f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
@@ -371,7 +371,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             and _escalation_target() != (story.get("backend"), story.get("model"))
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
-            _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+            _escalate_to_claude(manifest, plan_name, story_key)
             _notify_user(  # noqa: F821
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
@@ -479,7 +479,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["step_cap_streak"] = 1
                 story["step_cap_streak_model"] = current_model
             if story["step_cap_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
-                _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+                _escalate_to_claude(manifest, plan_name, story_key)
                 _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "

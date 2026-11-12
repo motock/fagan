@@ -82,7 +82,7 @@ def test_claude_escalation_ignores_the_sentinel_global_repo_root(
     story = manifest["stories"]["ACC-1"]
 
     esc._escalate_to_claude(
-        manifest, "acc-plan", "ACC-1", tmp_path / "acc-plan.manifest.json"
+        manifest, "acc-plan", "ACC-1"
     )
 
     assert fake_git.calls, "escalation must still run its git teardown"
@@ -102,7 +102,6 @@ def test_fallback_model_escalation_ignores_the_sentinel_global_repo_root(
         manifest,
         "acc-plan",
         "ACC-2",
-        tmp_path / "acc-plan.manifest.json",
         "gpt-oss-20b-high:latest",
     )
 
@@ -119,7 +118,7 @@ def test_legacy_manifest_without_repo_root_falls_back_to_the_process_global(
     manifest = _manifest(None, "ACC-3")
 
     esc._escalate_to_claude(
-        manifest, "acc-plan", "ACC-3", tmp_path / "acc-plan.manifest.json"
+        manifest, "acc-plan", "ACC-3"
     )
 
     assert fake_git.calls
@@ -133,7 +132,7 @@ def test_empty_repo_root_falls_back_instead_of_yielding_an_empty_cwd(
     manifest = _manifest("", "ACC-4")
 
     esc._escalate_to_claude(
-        manifest, "acc-plan", "ACC-4", tmp_path / "acc-plan.manifest.json"
+        manifest, "acc-plan", "ACC-4"
     )
 
     assert fake_git.calls

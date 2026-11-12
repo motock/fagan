@@ -36,7 +36,7 @@ def test_story_instructions_are_updated_in_place(tmp_path, monkeypatch):
     monkeypatch.setattr("pipeline.server._atomic_write_json", lambda *a, **k: None)
 
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x", "worktree": str(tmp_path)}}}
-    escalation._escalate_to_claude(manifest, "plan", "S1", tmp_path / "m.json")
+    escalation._escalate_to_claude(manifest, "plan", "S1")
     assert "root cause here" in manifest["stories"]["S1"]["agent_instructions"]
 
 
@@ -47,5 +47,5 @@ def test_failed_diagnosis_leaves_instructions_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr("pipeline.server._atomic_write_json", lambda *a, **k: None)
 
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x", "worktree": str(tmp_path)}}}
-    escalation._escalate_to_claude(manifest, "plan", "S1", tmp_path / "m.json")
+    escalation._escalate_to_claude(manifest, "plan", "S1")
     assert manifest["stories"]["S1"]["agent_instructions"] == "GOAL: x"

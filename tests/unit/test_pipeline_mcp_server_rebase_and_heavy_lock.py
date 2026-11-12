@@ -735,7 +735,7 @@ def test_escalate_to_claude_pops_infra_failure_streak_fields(
     manifest_path.write_text(json.dumps(manifest))
     monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
 
-    p._escalate_to_claude(manifest, "escih", "S1", manifest_path)
+    p._escalate_to_claude(manifest, "escih", "S1")
 
     story = manifest["stories"]["S1"]
     assert "infra_failure_streak" not in story

@@ -44,21 +44,21 @@ def _setup(tmp_path, monkeypatch, done_text):
     return story, manifest, path, worktree, notes
 
 
-def _run(story, worktree, manifest, path):
-    return classify_no_progress("plan", "S1", story, str(worktree), manifest, path)
+def _run(story, worktree, manifest):
+    return classify_no_progress("plan", "S1", story, str(worktree), manifest)
 
 
 def test_marker_parks_story_with_reason(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
-    result = _run(story, wt, manifest, path)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
+    result = _run(story, wt, manifest)
     assert result == {"status": "parked", "reason": "scope_conflict"}
     assert story["status"] == "parked"
     assert story["parked_reason"] == "scope conflict: pipeline/a.py"
 
 
 def test_marker_records_scope_conflict(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
-    _run(story, wt, manifest, path)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
+    _run(story, wt, manifest)
     rec = story["scope_conflict"]
     assert rec["paths"] == ["pipeline/a.py"]
     assert rec["reasons"] == {"pipeline/a.py": "needs a change here"}
@@ -66,60 +66,60 @@ def test_marker_records_scope_conflict(tmp_path, monkeypatch):
 
 
 def test_marker_leaves_rework_attempts_unchanged(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
     story["rework_attempts"] = 1
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     assert story["rework_attempts"] == 1
 
 
 def test_marker_writes_manifest(tmp_path, monkeypatch):
     story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     on_disk = json.loads(path.read_text())["stories"]["S1"]
     assert on_disk["status"] == "parked"
 
 
 def test_marker_notifies_once(tmp_path, monkeypatch):
-    story, manifest, path, wt, notes = _setup(tmp_path, monkeypatch, MARKER_A)
+    story, manifest, _path, wt, notes = _setup(tmp_path, monkeypatch, MARKER_A)
     story["correlation_id"] = "cid-1"
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     assert len(notes) == 1
     assert notes[0][1]["event"] == "story_parked"
     assert notes[0][1]["correlation_id"] == "cid-1"
 
 
 def test_two_markers_in_one_summary_record_both(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, None)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, None)
     from pipeline import no_progress
     monkeypatch.setattr(
         no_progress, "_last_done_summary", lambda _p: MARKER_A + "\n" + MARKER_B)
-    _run(story, wt, manifest, path)
+    _run(story, wt, manifest)
     assert story["scope_conflict"]["paths"] == ["pipeline/a.py", "pipeline/b.py"]
     assert story["parked_reason"] == "scope conflict: pipeline/a.py, pipeline/b.py"
 
 
 def test_no_marker_returns_none_and_touches_nothing(tmp_path, monkeypatch):
-    story, manifest, path, wt, notes = _setup(tmp_path, monkeypatch, "all finished")
-    assert _run(story, wt, manifest, path) is None
+    story, manifest, _path, wt, notes = _setup(tmp_path, monkeypatch, "all finished")
+    assert _run(story, wt, manifest) is None
     assert story == {"summary": "s", "status": "tests_passed", "rework_attempts": 0}
     assert notes == []
 
 
 def test_missing_log_returns_none(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, None)
-    assert _run(story, wt, manifest, path) is None
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, None)
+    assert _run(story, wt, manifest) is None
     assert "scope_conflict" not in story
 
 
 def test_unreadable_log_returns_none(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, MARKER_A)
     from pipeline import no_progress
 
     def boom(_p):
         raise PermissionError("denied")
 
     monkeypatch.setattr(no_progress, "_last_done_summary", boom)
-    assert _run(story, wt, manifest, path) is None
+    assert _run(story, wt, manifest) is None
     assert story["status"] == "tests_passed"
 
 

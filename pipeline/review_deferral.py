@@ -48,7 +48,6 @@ def park_rate_limited_review(
     story_key: str,
     story: dict[str, Any],
     manifest: dict[str, Any],
-    manifest_path: Any,
     **cid_kwargs: Any,
 ) -> dict[str, Any]:
     """Park a story whose review has been rate-limited too many times running.

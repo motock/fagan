@@ -462,7 +462,6 @@ def _plan_conflict_intercept(
     test_result,
     worktree: str,
     manifest: dict,
-    manifest_path,
     pid: int,
 ) -> dict | None:
     """Rule on a red grade that is a plan conflict, or return ``None``.

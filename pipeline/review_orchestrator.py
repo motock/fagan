@@ -136,7 +136,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = _store.manifest_path(plan_name)
     manifest = _store.get_manifest(plan_name)
     story = manifest["stories"].get(story_key)
     if not story:
@@ -312,7 +311,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _defer_limit = review_defer_park_after()
             if 0 < _defer_limit <= story["review_deferred_count"]:
                 return park_rate_limited_review(
-                    plan_name, story_key, story, manifest, manifest_path, **_cid_kwargs
+                    plan_name, story_key, story, manifest, **_cid_kwargs
                 )
             _notify_user(
                 plan_name,
@@ -403,7 +402,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _defer_limit = review_defer_park_after()
             if 0 < _defer_limit <= story["review_deferred_count"]:
                 return park_rate_limited_review(
-                    plan_name, story_key, story, manifest, manifest_path, **_cid_kwargs
+                    plan_name, story_key, story, manifest, **_cid_kwargs
                 )
             _notify_user(
                 plan_name,

@@ -81,7 +81,7 @@ def _park(plan_dir, monkeypatch):
     # arbitrary path.
     path = plan_dir / "plan.manifest.json"
     path.write_text(json.dumps(manifest))
-    result = rd.park_rate_limited_review("plan", "S1", story, manifest, path)
+    result = rd.park_rate_limited_review("plan", "S1", story, manifest)
     return result, story
 
 

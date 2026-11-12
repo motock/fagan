@@ -32,8 +32,8 @@ def _setup(tmp_path, monkeypatch, log, **story_extra):
     return story, manifest, path, worktree, notes
 
 
-def _run(story, worktree, manifest, path):
-    return classify_no_progress("plan", "S1", story, str(worktree), manifest, path)
+def _run(story, worktree, manifest):
+    return classify_no_progress("plan", "S1", story, str(worktree), manifest)
 
 
 def test_is_transport_failure_true_for_429_at_step_zero():
@@ -67,7 +67,7 @@ def test_is_transport_failure_false_for_empty_log():
 
 def test_retry_does_not_charge_rework(tmp_path, monkeypatch):
     story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + FAIL_429)
-    result = _run(story, wt, manifest, path)
+    result = _run(story, wt, manifest)
     assert result == {"status": "changes_requested", "reason": "transport_failure"}
     assert story["rework_attempts"] == 0
     assert story["transport_retries"] == 1
@@ -76,31 +76,31 @@ def test_retry_does_not_charge_rework(tmp_path, monkeypatch):
 
 
 def test_retry_notifies_once_without_url(tmp_path, monkeypatch):
-    story, manifest, path, wt, notes = _setup(tmp_path, monkeypatch, BOOT + FAIL_429)
-    _run(story, wt, manifest, path)
+    story, manifest, _path, wt, notes = _setup(tmp_path, monkeypatch, BOOT + FAIL_429)
+    _run(story, wt, manifest)
     assert len(notes) == 1
     assert notes[0][1]["event"] == "transport_retry"
     assert "http" not in notes[0][0][1]
 
 
 def test_real_steps_after_failure_not_transport(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + FAIL_429 + TOOL_STEPS)
-    assert _run(story, wt, manifest, path) is None
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + FAIL_429 + TOOL_STEPS)
+    assert _run(story, wt, manifest) is None
     assert "transport_retries" not in story
 
 
 def test_prior_segment_failure_not_transport(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(
+    story, manifest, _path, wt, _ = _setup(
         tmp_path, monkeypatch, BOOT + FAIL_429 + BOOT + TOOL_STEPS
     )
-    assert _run(story, wt, manifest, path) is None
+    assert _run(story, wt, manifest) is None
 
 
 def test_fifth_retry_parks_with_accurate_reason(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(
+    story, manifest, _path, wt, _ = _setup(
         tmp_path, monkeypatch, BOOT + FAIL_429, transport_retries=4
     )
-    result = _run(story, wt, manifest, path)
+    result = _run(story, wt, manifest)
     assert result == {"status": "parked", "reason": "transport_failure_exhausted"}
     assert story["status"] == "parked"
     assert story["parked_reason"] == (
@@ -111,11 +111,11 @@ def test_fifth_retry_parks_with_accurate_reason(tmp_path, monkeypatch):
 
 def test_scope_conflict_takes_precedence(tmp_path, monkeypatch):
     log = BOOT + FAIL_429 + "[step 4] DONE: SCOPE-CONFLICT: pipeline/a.py :: why\n"
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, log)
-    assert _run(story, wt, manifest, path) == {"status": "parked", "reason": "scope_conflict"}
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, log)
+    assert _run(story, wt, manifest) == {"status": "parked", "reason": "scope_conflict"}
     assert "transport_retries" not in story
 
 
 def test_clean_log_returns_none(tmp_path, monkeypatch):
-    story, manifest, path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS)
-    assert _run(story, wt, manifest, path) is None
+    story, manifest, _path, wt, _ = _setup(tmp_path, monkeypatch, BOOT + TOOL_STEPS)
+    assert _run(story, wt, manifest) is None

@@ -67,6 +67,7 @@ from .story_status_records import (
     _clear_failure_streaks,
     _record_test_check,
 )
+from .test_scope_run import grade_test_cmd
 from .wedge_io import collect_story_wedge_signals
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
@@ -516,7 +517,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             "tampered": tampered,
         }
 
-    test_dir, test_cmd = detect_test_command(worktree)  # noqa: F821
+    test_dir, test_cmd = detected = detect_test_command(worktree)  # noqa: F821
 
     # FM-A: when the story carries an acceptance block, gate on only those
     # oracle test files rather than the full worktree suite. The model's own
@@ -588,6 +589,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if hidden_paths:
             test_cmd = [*test_cmd, *(str(worktree / p) for p in hidden_paths)]
 
+    test_cmd = grade_test_cmd(story, story_key, worktree, test_dir, detected[1], test_cmd)
     # Grade in a clean dev env, not the MCP server's operational one. The
     # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,
     # model defaults) so advance_pipeline/check_usage see the real config —
@@ -975,6 +977,7 @@ def bind_to_server(_server: Any) -> None:
     # its test run and clear its streaks on every outcome, including a
     # plan-conflict verdict.
     _server._record_test_check = _record_test_check
+    _server.grade_test_cmd = grade_test_cmd
     _server._clear_failure_streaks = _clear_failure_streaks
     _server.classify_no_progress = classify_no_progress
 

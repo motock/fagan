@@ -1561,6 +1561,13 @@ treated as restrictive: `test_scope` resolves to `full` with `source`
 
 The event `test_scope_degraded` is notified with the reason.
 
+In `scoped` mode `check_story_status` grades the story on its acceptance paths
+plus the test files it added or changed (and, on a `ci_rework`, the failing test
+ids parsed from the CI log); the lint gate still runs. When nothing is in scope,
+or the runner cannot be scoped to files, no tests run on the host and
+`test_scope_grade.no_tests` is recorded on the story; the full suite never runs
+locally.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

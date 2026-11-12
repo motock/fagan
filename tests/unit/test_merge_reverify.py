@@ -86,13 +86,18 @@ def _job(tmp_path: Path, started: str = "2026-10-28T12:00:00+00:00", pid: int = 
 
 
 class _Store:
-    """Minimal ``FileStore`` stand-in: only ``manifest_path`` is used."""
+    """Minimal store stand-in: only ``records().get_manifest`` is used."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def manifest_path(self, plan_name: str) -> Path:
-        return self._path
+    def records(self):
+        return self
+
+    def get_manifest(self, namespace: str, plan_name: str) -> dict | None:
+        if not self._path.exists():
+            return None
+        return json.loads(self._path.read_text())
 
 
 def _write_manifest(tmp_path: Path, story: dict | None = None, key: str = "S-1") -> Path:
@@ -828,3 +833,73 @@ def test_main_reports_a_missing_manifest_as_an_error(tmp_path, monkeypatch):
     assert result["state"] == "error"
     assert result["error"].startswith("merge re-verify raised ")
     assert str(tmp_path) not in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Record-store reads: the job reads the story through records(), not a file
+# ---------------------------------------------------------------------------
+
+
+def _sqlite_store(tmp_path: Path, story: dict | None):
+    from pipeline.store_sqlite import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "plans.db"))
+    if story is not None:
+        store.save_manifest("P", {"epics": {}, "stories": {"S-1": story}})
+        # SqliteStore mirrors every save to a manifest file; drop it so only
+        # the record store can answer the read.
+        store.manifest_path("P").unlink(missing_ok=True)
+    return store
+
+
+def test_main_reads_the_story_from_the_record_store_without_a_manifest_file(
+    tmp_path, monkeypatch
+):
+    store = _sqlite_store(
+        tmp_path,
+        {"status": "merging", "last_test_check": "2026-10-01T00:00:00Z"},
+    )
+    assert not store.manifest_path("P").exists()
+    monkeypatch.setattr(server, "_store", store)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    result_path = tmp_path / "result.json"
+    _patch_git(monkeypatch, sha="cafe1234")
+    seen: dict = {}
+
+    def _acceptance(story, path, key):
+        seen["story"] = dict(story)
+        story["last_test_check"] = "2026-10-28T12:00:00Z"
+        return {"state": "pass", "error": ""}
+
+    monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
+    monkeypatch.setattr(
+        server, "_reverify_build", lambda path: {"state": "pass", "error": ""}
+    )
+
+    rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
+
+    assert rc == 0
+    assert seen["story"]["status"] == "merging", (
+        "the story must be read from the record store"
+    )
+    result = json.loads(result_path.read_text())
+    assert result["state"] == "pass"
+    assert result["last_test_check"] == "2026-10-28T12:00:00Z"
+
+
+def test_main_reports_a_vanished_plan_as_an_error_without_raising(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server, "_store", _sqlite_store(tmp_path, None))
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    result_path = tmp_path / "result.json"
+    _patch_git(monkeypatch, sha="cafe1234")
+
+    rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
+
+    assert rc == 1
+    result = json.loads(result_path.read_text())
+    assert result["state"] == "error"
+    assert result["error"].startswith("merge re-verify raised ")

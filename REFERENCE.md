@@ -1518,6 +1518,18 @@ which resets its approval.
 
 A successful full `ingest_plan` consumes the staged draft: the draft is deleted once the manifest is written, because the manifest is the only record of the plan (ADR 0012 decision 5). An `only_epics` ingest keeps the draft, because the epics it did not ingest exist nowhere else; so does a refused ingest and an ingest skipped with `skipped: locked`, because nothing was written. Re-ingesting a plan with no staged draft is refused with `plan '<name>' has no staged draft: save_plan it (export_plan renders the current plan) before re-ingesting`. Editing a story's description or the plan's team and re-ingesting resets plan approval to pending_approval.
 
+## Test scope (`test_scope`)
+
+`test_scope` controls how much of a repo's test suite the pipeline host runs per
+story. `full` (the default) keeps today's behaviour. `scoped` runs only the
+story's acceptance paths plus the test files the story adds or changes, and
+leaves the full suite to the repo's remote CI at PR open; CI failures come back
+through the `ci_rework` loop. An unknown value anywhere resolves to `full`.
+
+The plan-level `test_scope` field (a sibling of `epics`, like `role_config`) is
+optional: `full` (the default) or `scoped`. `ingest_plan` rejects any other
+value, and omitting it on re-ingest keeps the prior value.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

@@ -240,12 +240,12 @@ def test_terminate_and_checkpoint_pure_deletion_not_committed(
     (worktree / "foo.txt").unlink()
     assert not (worktree / "foo.txt").exists()
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S1", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S1",
+        manifest, "P1", "S1",
         manifest["stories"]["S1"],
         pid=999999, step="dispatch_watchdog_timeout",
         summary="watchdog killed mid-write",
@@ -284,12 +284,12 @@ def test_terminate_and_checkpoint_real_wip_still_committed(
     (worktree / "foo.txt").write_text("changed\n")
     (worktree / "new.txt").write_text("new work\n")
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S2", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S2",
+        manifest, "P1", "S2",
         manifest["stories"]["S2"],
         pid=999999, step="interrupted",
         summary="manual interrupt with real WIP",
@@ -321,12 +321,12 @@ def test_terminate_and_checkpoint_empty_worktree_noop(
     worktree.mkdir()
     head = _init_repo(worktree)
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S3", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S3",
+        manifest, "P1", "S3",
         manifest["stories"]["S3"],
         pid=999999, step="dispatch_watchdog_timeout",
         summary="watchdog on clean worktree",
@@ -353,12 +353,12 @@ def test_terminate_and_checkpoint_multiple_deletions_all_preserved(
     (worktree / "foo.txt").unlink()
     (worktree / "bar.txt").unlink()
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S4", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S4",
+        manifest, "P1", "S4",
         manifest["stories"]["S4"],
         pid=999999, step="dispatch_watchdog_timeout",
         summary="watchdog killed mid-write, multiple files",
@@ -391,12 +391,12 @@ def test_terminate_and_checkpoint_deletion_plus_addition_is_real_wip(
     (worktree / "foo.txt").unlink()
     (worktree / "replacement.txt").write_text("replaced\n")
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S5", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S5",
+        manifest, "P1", "S5",
         manifest["stories"]["S5"],
         pid=999999, step="interrupted",
         summary="interrupt mid-rename",
@@ -431,12 +431,12 @@ def test_resume_after_clean_checkpoint(tmp_path, monkeypatch):
 
     (worktree / "progress.txt").write_text("half done\n")
 
-    manifest, manifest_path = _make_manifest(
+    manifest, _ = _make_manifest(
         plan_dir, "P1", "S6", str(worktree),
     )
 
     sha = _terminate_and_checkpoint(
-        manifest, manifest_path, "P1", "S6",
+        manifest, "P1", "S6",
         manifest["stories"]["S6"],
         pid=999999, step="dispatch_watchdog_timeout",
         summary="watchdog with real progress",

@@ -674,7 +674,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                     "retry_after_seconds": wait_seconds,
                     "reason": "another dispatch/interrupt is in progress for this plan",
                 }
-            manifest_path = _store.manifest_path(plan_name)
             manifest = _store.get_manifest(plan_name)
             story = manifest["stories"].get(story_key)
             if not story:
@@ -683,7 +682,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 return {"ok": False, "error": "Story not dispatched"}
             sha = _terminate_and_checkpoint(
                 manifest,
-                manifest_path,
                 plan_name,
                 story_key,
                 story,

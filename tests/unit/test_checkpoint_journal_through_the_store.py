@@ -178,7 +178,6 @@ def test_should_append_the_watchdog_record_through_the_record_store(
     """The dispatch-watchdog entry (evidence included) is the store's record."""
     manifest = _manifest()
     store, committed = _install(monkeypatch, plan_dir, manifest)
-    manifest_path = plan_dir / f"{PLAN}.manifest.json"
 
     # A reused pid would skip the kill entirely; take the real path but never
     # signal a live process from a unit test.
@@ -192,7 +191,6 @@ def test_should_append_the_watchdog_record_through_the_record_store(
 
     sha = checkpoint._terminate_and_checkpoint(
         manifest,
-        manifest_path,
         PLAN,
         STORY,
         manifest["stories"][STORY],
@@ -251,8 +249,6 @@ def test_should_still_terminate_when_the_watchdog_journal_write_is_rejected(
     story_key = REJECTED_KEYS[0]
     manifest = _manifest(story_key)
     store, _committed = _install(monkeypatch, plan_dir, manifest)
-    manifest_path = plan_dir / f"{PLAN}.manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
 
     monkeypatch.setattr(checkpoint, "_pid_started_after_dispatch", lambda *a: False)
     killed: list[tuple] = []
@@ -263,7 +259,6 @@ def test_should_still_terminate_when_the_watchdog_journal_write_is_rejected(
     with caplog.at_level(logging.WARNING, logger="pipeline.checkpoint"):
         sha = checkpoint._terminate_and_checkpoint(
             manifest,
-            manifest_path,
             PLAN,
             story_key,
             manifest["stories"][story_key],
@@ -276,8 +271,7 @@ def test_should_still_terminate_when_the_watchdog_journal_write_is_rejected(
     assert sha == "deadbeef"
     assert manifest["stories"][story_key]["status"] == "interrupted"
     assert manifest["stories"][story_key]["last_commit"] == "deadbeef"
-    on_disk = json.loads(manifest_path.read_text())
-    assert on_disk["stories"][story_key]["status"] == "interrupted"
+    assert store.data[PLAN]["stories"][story_key]["status"] == "interrupted"
     assert store.journals == []
     assert _journal_files(plan_dir) == []
 

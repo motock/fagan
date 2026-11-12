@@ -75,7 +75,7 @@ def _setup(tmp_path, monkeypatch, plan, story_key, journal_age_seconds):
 
     terminations = []
 
-    def fake_terminate(manifest, manifest_path, plan_name, skey, st, *,
+    def fake_terminate(manifest, plan_name, skey, st, *,
                        pid, step, summary):
         terminations.append(step)
         return "fakesha"

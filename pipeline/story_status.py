@@ -158,7 +158,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     story["watchdog_streak"] = story.get("watchdog_streak", 0) + 1
                     _terminate_and_checkpoint(
                         manifest,
-                        manifest_path,
                         plan_name,
                         story_key,
                         story,

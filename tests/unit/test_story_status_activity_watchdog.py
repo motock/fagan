@@ -157,7 +157,7 @@ def watchdog_env(tmp_path, monkeypatch):
 
     terminate_calls = []
 
-    def _spy_terminate(manifest, manifest_path, plan_name, story_key, story,
+    def _spy_terminate(manifest, plan_name, story_key, story,
                        pid=None, step=None, summary=None):
         terminate_calls.append({
             "plan_name": plan_name,

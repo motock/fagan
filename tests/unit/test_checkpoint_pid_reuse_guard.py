@@ -85,7 +85,7 @@ def harness(plan_dir, monkeypatch):
 
 def _run(h) -> str:
     return _terminate_and_checkpoint(
-        h.manifest, h.manifest_path, PLAN_NAME, STORY_KEY, h.story,
+        h.manifest, PLAN_NAME, STORY_KEY, h.story,
         pid=PID, step=h.step, summary=SUMMARY,
     )
 

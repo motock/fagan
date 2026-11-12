@@ -1574,6 +1574,10 @@ agent's own done-gate runs the same scope instead of the full suite. The
 dispatch baseline snapshot runs only the acceptance paths (none: skipped), and
 a reviewer self-fix is verified on the same scope.
 
+`get_effective_config` reports a `test_scope` block: the plan-level resolution
+(without any story's own request) with its `source`, `lock_rejections` and
+`invalid_layers`.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

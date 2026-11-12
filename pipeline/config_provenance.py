@@ -214,6 +214,7 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"),
     EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"),
     EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_NO_COMMIT", "2"),
+    EnvVarSpec("PIPELINE_TEST_SCOPE", "full"),
     EnvVarSpec("PIPELINE_REVIEW_INCONCLUSIVE_MAX", "2"),
     EnvVarSpec("PIPELINE_PLANE_MAX_ATTEMPTS", "3"),
     # Reviewer auto-fix vars

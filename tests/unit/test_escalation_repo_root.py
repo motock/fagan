@@ -159,9 +159,8 @@ def test_claude_escalation_uses_the_plan_repo_root_not_the_sentinel_global(
     monkeypatch.setattr(server, "REPO_ROOT", SENTINEL)
     manifest = _manifest(str(tmp_path), "S1")
     story = manifest["stories"]["S1"]
-    manifest_path = tmp_path / "plan.S1.manifest.json"
 
-    esc._escalate_to_claude(manifest, "plan", "S1", manifest_path)
+    esc._escalate_to_claude(manifest, "plan", "S1")
 
     assert fake_git.calls, "escalation must still run its git teardown"
     assert _cwds(fake_git) == {str(tmp_path)}, (
@@ -179,10 +178,9 @@ def test_fallback_model_escalation_uses_the_plan_repo_root_not_the_sentinel_glob
     monkeypatch.setattr(server, "REPO_ROOT", SENTINEL)
     manifest = _manifest(str(tmp_path), "S2")
     story = manifest["stories"]["S2"]
-    manifest_path = tmp_path / "plan.S2.manifest.json"
 
     esc._escalate_to_local_fallback_model(
-        manifest, "plan", "S2", manifest_path, "gpt-oss-20b-high:latest"
+        manifest, "plan", "S2", "gpt-oss-20b-high:latest"
     )
 
     assert fake_git.calls, "escalation must still run its git teardown"
@@ -207,7 +205,7 @@ def test_legacy_manifest_without_repo_root_uses_the_process_global(
     manifest = _manifest(None, "S3")
     assert "repo_root" not in manifest
 
-    esc._escalate_to_claude(manifest, "plan", "S3", tmp_path / "plan.S3.manifest.json")
+    esc._escalate_to_claude(manifest, "plan", "S3")
 
     assert fake_git.calls
     assert _cwds(fake_git) == {str(tmp_path)}, (
@@ -222,7 +220,7 @@ def test_empty_repo_root_falls_back_and_never_yields_an_empty_cwd(
     monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
     manifest = _manifest("", "S4")
 
-    esc._escalate_to_claude(manifest, "plan", "S4", tmp_path / "plan.S4.manifest.json")
+    esc._escalate_to_claude(manifest, "plan", "S4")
 
     assert fake_git.calls
     cwds = _cwds(fake_git)
@@ -441,11 +439,10 @@ def test_claude_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_path
     story = manifest["stories"]["S5"]
     # The reset is persisted through the plan's record store, which derives its
     # target from PLAN_DIR (the autouse fixture pins that at tmp_path). The
-    # caller's manifest_path argument is still threaded, and the store's path
-    # for this plan is exactly that file.
+    # store's path for this plan is the file the assertions below read.
     manifest_path = server._store.manifest_path("plan")
 
-    esc._escalate_to_claude(manifest, "plan", "S5", manifest_path)
+    esc._escalate_to_claude(manifest, "plan", "S5")
 
     for key in ("pid", "worktree", "dispatch_attempts", "dispatch_error"):
         assert key not in story, f"{key} must still be popped by the teardown"
@@ -463,7 +460,7 @@ def test_fallback_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_pa
     manifest_path = server._store.manifest_path("plan")
 
     esc._escalate_to_local_fallback_model(
-        manifest, "plan", "S6", manifest_path, "gpt-oss-20b-high:latest"
+        manifest, "plan", "S6", "gpt-oss-20b-high:latest"
     )
 
     for key in ("pid", "worktree", "dispatch_attempts", "dispatch_error"):

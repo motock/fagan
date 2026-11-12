@@ -736,7 +736,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     and _escalation_target() != (story.get("backend"), story.get("model"))
                 ):
                     manifest = _fresh_manifest(plan_name)
-                    _escalate_to_claude(manifest, plan_name, key, manifest_path)
+                    _escalate_to_claude(manifest, plan_name, key)
                     _notify_user(
                         plan_name,
                         f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
@@ -766,7 +766,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         or "default"
                     )
                     _escalate_to_local_fallback_model(
-                        manifest, plan_name, key, manifest_path, fallback_model
+                        manifest, plan_name, key, fallback_model
                     )
                     _notify_user(
                         plan_name,

@@ -75,7 +75,7 @@ def test_escalate_to_claude_retargets_to_env_backend_and_model(
     monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
     monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "deepseek-v4-flash:cloud")
 
-    p._escalate_to_claude(manifest, "escesc", "S1", manifest_path)
+    p._escalate_to_claude(manifest, "escesc", "S1")
 
     story = manifest["stories"]["S1"]
     assert story["backend"] == "ollama"
@@ -108,7 +108,7 @@ def test_escalate_to_claude_default_leaves_model_untouched(
     monkeypatch.delenv("PIPELINE_ESCALATION_BACKEND", raising=False)
     monkeypatch.delenv("PIPELINE_ESCALATION_MODEL", raising=False)
 
-    p._escalate_to_claude(manifest, "escdef", "S1", manifest_path)
+    p._escalate_to_claude(manifest, "escdef", "S1")
 
     story = manifest["stories"]["S1"]
     assert story["backend"] == "claude"
@@ -731,7 +731,7 @@ def test_escalate_to_claude_pops_step_cap_streak_fields(
     manifest_path.write_text(json.dumps(manifest))
     monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
 
-    p._escalate_to_claude(manifest, "escg", "S1", manifest_path)
+    p._escalate_to_claude(manifest, "escg", "S1")
 
     story = manifest["stories"]["S1"]
     assert "step_cap_streak" not in story

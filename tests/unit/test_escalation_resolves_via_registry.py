@@ -132,7 +132,7 @@ def _escalate(plan_dir_path, tmp_path, monkeypatch, plan_name, manifest):
     manifest_path = plan_dir_path / f"{plan_name}.manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
-    p._escalate_to_claude(manifest, plan_name, "S1", manifest_path)
+    p._escalate_to_claude(manifest, plan_name, "S1")
     return manifest["stories"]["S1"]
 
 

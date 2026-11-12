@@ -87,25 +87,23 @@ def patched(monkeypatch):
         "auto_escalation": True,
     }
 
-    def _fake_escalate_to_claude(manifest, plan_name, story_key, manifest_path):
+    def _fake_escalate_to_claude(manifest, plan_name, story_key):
         state["claude_calls"].append(
             {
                 "manifest": manifest,
                 "plan_name": plan_name,
                 "story_key": story_key,
-                "manifest_path": manifest_path,
             }
         )
 
     def _fake_escalate_to_local_fallback_model(
-        manifest, plan_name, story_key, manifest_path, fallback_model
+        manifest, plan_name, story_key, fallback_model
     ):
         state["fallback_calls"].append(
             {
                 "manifest": manifest,
                 "plan_name": plan_name,
                 "story_key": story_key,
-                "manifest_path": manifest_path,
                 "fallback_model": fallback_model,
             }
         )
@@ -163,7 +161,6 @@ class TestLocalFallbackBranch:
         assert call["fallback_model"] == "devstral"
         assert call["plan_name"] == "cap1"
         assert call["story_key"] == "S1"
-        assert call["manifest_path"] == manifest_path
         # The SAME manifest dict object is passed through (no stale copy).
         assert call["manifest"] is manifest
 
@@ -247,7 +244,6 @@ class TestClaudeBranch:
         call = patched["claude_calls"][0]
         assert call["plan_name"] == "cap1"
         assert call["story_key"] == "S1"
-        assert call["manifest_path"] == manifest_path
         assert call["manifest"] is manifest
 
     def test_claude_not_taken_when_auto_escalation_disabled(
@@ -354,7 +350,7 @@ class TestErrorHandling:
             triage_mod, "_escalate_to_local_fallback_model", lambda *a, **k: None
         )
 
-        def _raising_claude(manifest, plan_name, story_key, manifest_path):
+        def _raising_claude(manifest, plan_name, story_key):
             raise OSError("git worktree remove failed")
 
         monkeypatch.setattr(triage_mod, "_escalate_to_claude", _raising_claude)
@@ -381,7 +377,7 @@ class TestErrorHandling:
         )
 
         def _raising_fallback(
-            manifest, plan_name, story_key, manifest_path, fallback_model
+            manifest, plan_name, story_key, fallback_model
         ):
             raise OSError("git branch -D failed")
 

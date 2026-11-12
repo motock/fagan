@@ -133,9 +133,8 @@ def test_dispatch_escalation_stamps_the_local_tier_before_overwriting_it(
     story = manifest["stories"]["S1"]
     # The reset is persisted through the plan's record store, which derives its
     # target from PLAN_DIR (the autouse fixture pins that at tmp_path).
-    manifest_path = server._store.manifest_path("plan")
 
-    esc._escalate_to_claude(manifest, "plan", "S1", manifest_path)
+    esc._escalate_to_claude(manifest, "plan", "S1")
 
     assert story["pre_escalation_backend"] == "local"
     assert story["pre_escalation_model"] == "gpt-oss-20b-high"
@@ -177,7 +176,6 @@ def test_review_escalation_stamps_the_local_tier_before_overwriting_it(fake_git)
 def test_a_second_escalation_does_not_overwrite_the_first_stamp(fake_git, tmp_path):
     manifest = _manifest("S3")
     story = manifest["stories"]["S3"]
-    manifest_path = tmp_path / "plan.json"
 
     _stamp()(story)
     assert story["pre_escalation_backend"] == "local"
@@ -188,7 +186,7 @@ def test_a_second_escalation_does_not_overwrite_the_first_stamp(fake_git, tmp_pa
     story["model"] = "deepseek-v4-flash:cloud"
     story["dispatched_model"] = "deepseek-v4-flash:cloud"
 
-    esc._escalate_to_claude(manifest, "plan", "S3", manifest_path)
+    esc._escalate_to_claude(manifest, "plan", "S3")
 
     assert story["pre_escalation_backend"] == "local"
     assert story["pre_escalation_model"] == "gpt-oss-20b-high"
@@ -226,10 +224,9 @@ def test_stamp_of_a_story_with_no_tier_fields_is_none_not_missing():
 def test_local_fallback_model_escalation_does_not_stamp(fake_git, tmp_path):
     manifest = _manifest("S6")
     story = manifest["stories"]["S6"]
-    manifest_path = tmp_path / "plan.json"
 
     esc._escalate_to_local_fallback_model(
-        manifest, "plan", "S6", manifest_path, "gemma4:26b-a4b-it-qat"
+        manifest, "plan", "S6", "gemma4:26b-a4b-it-qat"
     )
 
     assert "pre_escalation_backend" not in story
@@ -268,10 +265,10 @@ def test_survivor_bookkeeping_still_happens(fake_git, tmp_path):
     story = manifest["stories"]["S8"]
     # The reset is persisted through the plan's record store, which derives its
     # target from PLAN_DIR (the autouse fixture pins that at tmp_path); the
-    # caller's manifest_path argument is still threaded and names that file.
+    # the store's path for this plan is the file the assertions below read.
     manifest_path = server._store.manifest_path("plan")
 
-    esc._escalate_to_claude(manifest, "plan", "S8", manifest_path)
+    esc._escalate_to_claude(manifest, "plan", "S8")
 
     assert "pid" not in story
     assert "worktree" not in story

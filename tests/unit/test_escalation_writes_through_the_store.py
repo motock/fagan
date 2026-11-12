@@ -118,7 +118,7 @@ def test_should_persist_the_claude_reset_through_the_record_store(store, tmp_pat
     manifest = _manifest()
 
     escalation._escalate_to_claude(
-        manifest, PLAN, STORY_KEY, store.manifest_path(PLAN)
+        manifest, PLAN, STORY_KEY
     )
 
     assert [w[:2] for w in store.writes] == [("default", PLAN)], (
@@ -139,7 +139,7 @@ def test_should_persist_the_fallback_reset_through_the_record_store(
     manifest = _manifest()
 
     escalation._escalate_to_local_fallback_model(
-        manifest, PLAN, STORY_KEY, store.manifest_path(PLAN), FALLBACK_MODEL
+        manifest, PLAN, STORY_KEY, FALLBACK_MODEL
     )
 
     assert [w[:2] for w in store.writes] == [("default", PLAN)], (
@@ -159,7 +159,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(store, tmp_path):
     manifest["plan_name"] = plan_name
 
     with pytest.raises(ValueError):
-        escalation._escalate_to_claude(manifest, plan_name, STORY_KEY, manifest_path)
+        escalation._escalate_to_claude(manifest, plan_name, STORY_KEY)
 
     # InvalidRecordKeyError is raised before any bytes are written: the caller's
     # fabricated path stays absent, and the store's own path is the same file.
@@ -168,7 +168,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(store, tmp_path):
 
     # A later, valid escalation still persists, and the rejected plan stays absent.
     escalation._escalate_to_claude(
-        _manifest(), PLAN, STORY_KEY, tmp_path / f"{plan_name}.manifest.json"
+        _manifest(), PLAN, STORY_KEY
     )
     stored = store.records().get_manifest("default", PLAN)
     assert stored is not None

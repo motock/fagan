@@ -117,25 +117,23 @@ def patched(monkeypatch):
         "auto_escalation": True,
     }
 
-    def _fake_escalate_to_claude(manifest, plan_name, story_key, manifest_path):
+    def _fake_escalate_to_claude(manifest, plan_name, story_key):
         state["claude_calls"].append(
             {
                 "manifest": manifest,
                 "plan_name": plan_name,
                 "story_key": story_key,
-                "manifest_path": manifest_path,
             }
         )
 
     def _fake_escalate_to_local_fallback_model(
-        manifest, plan_name, story_key, manifest_path, fallback_model
+        manifest, plan_name, story_key, fallback_model
     ):
         state["fallback_calls"].append(
             {
                 "manifest": manifest,
                 "plan_name": plan_name,
                 "story_key": story_key,
-                "manifest_path": manifest_path,
                 "fallback_model": fallback_model,
             }
         )

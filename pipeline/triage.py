@@ -191,7 +191,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                 and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             ):
                 _escalate_to_local_fallback_model(
-                    manifest, plan_name, story_key, manifest_path, fallback
+                    manifest, plan_name, story_key, fallback
                 )
                 _notify_escalate_model(
                     plan_name, story_key, story,
@@ -206,7 +206,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                 and _escalation_target() != (story.get("backend"), story.get("model"))
             ):
                 _escalate_to_claude(
-                    manifest, plan_name, story_key, manifest_path
+                    manifest, plan_name, story_key
                 )
                 _notify_escalate_model(
                     plan_name, story_key, story,

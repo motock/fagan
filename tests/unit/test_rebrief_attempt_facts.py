@@ -437,7 +437,7 @@ def test_escalation_folds_facts_in_even_without_a_diagnosis(monkeypatch, tmp_pat
     monkeypatch.setattr("pipeline.server._atomic_write_json", lambda *a, **k: None)
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x",
                                    "worktree": str(tmp_path)}}}
-    escalation._escalate_to_claude(manifest, "plan", "S1", tmp_path / "m.json")
+    escalation._escalate_to_claude(manifest, "plan", "S1")
     assert "MEASURED" in manifest["stories"]["S1"]["agent_instructions"]
 
 
@@ -451,7 +451,7 @@ def test_local_fallback_escalation_folds_facts_in(monkeypatch, tmp_path):
     manifest = {"stories": {"S1": {"agent_instructions": "GOAL: x",
                                    "worktree": str(tmp_path)}}}
     escalation._escalate_to_local_fallback_model(
-        manifest, "plan", "S1", tmp_path / "m.json", "other-model")
+        manifest, "plan", "S1", "other-model")
     assert "MEASURED" in manifest["stories"]["S1"]["agent_instructions"]
 
 

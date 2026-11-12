@@ -57,7 +57,6 @@ def _step_resolve_context(
     story_key: str,
     story: dict[str, Any],
     manifest: dict[str, Any],
-    manifest_path: Path,
 ) -> tuple[str, dict[str, Any] | None]:
     """Resolve the plan's dispatch-phase context sources for a story.
 

@@ -178,11 +178,10 @@ def test_should_persist_context_pin_through_the_record_store(
         "context": {"sources": [_source(tmp_path / "missing-dir")]},
         "stories": {"S1": {}},
     }
-    path = tmp_path / "plan.manifest.json"
     story = {"context_digests": {}}
 
     block, blocked = dispatch_context._step_resolve_context(
-        "context-plan", "S1", story, manifest, path
+        "context-plan", "S1", story, manifest
     )
 
     assert block == ""
@@ -208,7 +207,6 @@ def test_should_persist_phase_transition_through_the_record_store(
     marker = worktree / ".tdd_split_test_author_done"
     story = {"test_author_phase": {"pid": 1}}
     manifest = {"stories": {"S1": story}}
-    path = tmp_path / "plan.manifest.json"
 
     outcome = dispatch_phases._step_detached_test_author(
         story,
@@ -219,7 +217,6 @@ def test_should_persist_phase_transition_through_the_record_store(
         plan_name="phase-plan",
         plan_role_config=None,
         manifest=manifest,
-        manifest_path=path,
         marker_path=marker,
         resuming=True,
     )
@@ -250,10 +247,9 @@ def test_should_persist_worktree_record_through_the_record_store(
     _install_worktree_guard(monkeypatch, tmp_path)
     story: dict = {}
     manifest = {"stories": {"S1": story}}
-    path = tmp_path / "plan.manifest.json"
 
     block = dispatch_worktree._refuse_if_remote_branch_taken(
-        "branch-plan", "S1", story, "agent/setup-01", path, manifest
+        "branch-plan", "S1", story, "agent/setup-01", manifest
     )
 
     assert block is not None
@@ -270,11 +266,10 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(
     _install_worktree_guard(monkeypatch, tmp_path)
     story: dict = {}
     manifest = {"phase": "wait", "capacity": 3}
-    path = tmp_path / "plan.manifest.json"
 
     with pytest.raises(InvalidRecordKeyError):
         dispatch_worktree._refuse_if_remote_branch_taken(
-            "a..b", "S1", story, "agent/setup-01", path, manifest
+            "a..b", "S1", story, "agent/setup-01", manifest
         )
 
     assert isinstance(InvalidRecordKeyError("x"), ValueError)
@@ -284,7 +279,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(
     good_story: dict = {}
     good_manifest = {"phase": "wait", "capacity": 4}
     dispatch_worktree._refuse_if_remote_branch_taken(
-        "good-plan", "S1", good_story, "agent/setup-01", path, good_manifest
+        "good-plan", "S1", good_story, "agent/setup-01", good_manifest
     )
 
     assert fake_store.persisted == {

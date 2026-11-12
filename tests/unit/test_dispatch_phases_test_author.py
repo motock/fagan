@@ -79,7 +79,6 @@ def _setup(tmp_path, story, *, backend="ollama", resuming=False, marker=False):
         "plan_name": "plan-x",
         "plan_role_config": None,
         "manifest": manifest,
-        "manifest_path": manifest_path,
         "marker_path": marker_path,
         "resuming": resuming,
     }

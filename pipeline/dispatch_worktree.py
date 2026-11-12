@@ -266,7 +266,6 @@ def _refuse_if_remote_branch_taken(
     story_key: str,
     story: dict[str, Any],
     branch: str,
-    manifest_path: Path,
     manifest: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Fail-closed guard for a FRESH dispatch: block when origin already holds

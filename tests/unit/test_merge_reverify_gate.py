@@ -210,6 +210,38 @@ class TestFirstTickStartsJob:
         assert Path(args[3]) == Path(plan_dir) / "state"
 
 
+    def test_job_state_root_ignores_the_manifest_location(
+        self, plan_dir, tmp_path, monkeypatch
+    ):
+        seams = _install_seams(monkeypatch)
+        unrelated = tmp_path / "unrelated" / f"{PLAN}.manifest.json"
+        unrelated.parent.mkdir()
+        monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
+
+        advance_merge._merge_reverify_gate(
+            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", unrelated, _summary()
+        )
+
+        args, _kwargs = seams["start"].calls[0]
+        assert Path(args[3]) == Path(plan_dir)
+
+    def test_relative_state_dir_ignores_the_process_cwd(
+        self, plan_dir, tmp_path, monkeypatch
+    ):
+        seams = _install_seams(monkeypatch)
+        unrelated = tmp_path / "unrelated" / f"{PLAN}.manifest.json"
+        unrelated.parent.mkdir()
+        monkeypatch.setenv("PIPELINE_STATE_DIR", "state")
+        monkeypatch.chdir(unrelated.parent)
+
+        advance_merge._merge_reverify_gate(
+            PLAN, KEY, {}, str(tmp_path / "wt"), "abc123", unrelated, _summary()
+        )
+
+        args, _kwargs = seams["start"].calls[0]
+        assert Path(args[3]) == Path(plan_dir) / "state"
+
+
 # ---------------------------------------------------------------------------
 # A2 - a running job is polled, never re-rebased and never merged.
 # ---------------------------------------------------------------------------

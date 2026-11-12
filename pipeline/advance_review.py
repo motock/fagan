@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from . import review_job
+from .host_state import build_host_state
 from .module_ref import _ModuleRef
 
 __all__ = ["review_or_collect"]
@@ -117,7 +118,7 @@ def _start(
     """Spawn the detached job and record its handle on the story."""
     try:
         job = review_job.start_review_job(
-            plan_name, story_key, _state_root(manifest_path)
+            plan_name, story_key, build_host_state().job_state_root()
         )
     except (ValueError, OSError) as exc:
         # Class name only: the exception's text can carry a path. The story is
@@ -207,24 +208,6 @@ def _timeout(plan_name: str, story_key: str) -> float:
     return REVIEW_JOB_TIMEOUT_DEFAULT
 
 
-def _state_root(manifest_path: Path) -> Path:
-    """Where the job's result file lives - the merge re-verify rule.
-
-    ``PIPELINE_STATE_DIR`` wins when set; a relative override resolves against
-    the manifest's directory, never the process CWD, because the collect tick
-    may run somewhere else entirely. Without an override the manifest's own
-    directory is used, so a plan keeps its state next to itself.
-    """
-    base = Path(manifest_path).parent
-    env_dir = os.environ.get("PIPELINE_STATE_DIR")
-    if not env_dir:
-        return base
-    state_root = Path(env_dir)
-    if not state_root.is_absolute():
-        return base / state_root
-    return state_root
-
-
 def _drop_job(plan_name: str, manifest_path: Path, story_key: str) -> None:
     def _unset(stored: dict[str, Any]) -> None:
         stored.pop("review_job", None)
@@ -249,8 +232,7 @@ def _persist(
     ``get_manifests`` snapshot; the returned document is what goes back. A
     manifest that vanished between the tick's read and now returns ``None`` from
     the store: that raises rather than writing, because re-creating the plan
-    would resurrect a deleted one. ``manifest_path`` is still threaded through
-    for the host-local job state directory (:func:`_state_root`).
+    would resurrect a deleted one.
     """
     manifest = _store.records().get_manifest("default", plan_name)
     if manifest is None:

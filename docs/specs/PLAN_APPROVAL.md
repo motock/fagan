@@ -73,7 +73,8 @@ computed by `canonical_digest(manifest)`:
   `role_config`, `context` and `team`, plus each story's authored fields
   (`summary`, `agent_instructions`, `dependencies`, `persona`, `model`,
   `acceptance`, `risk`, `backend`, `tdd_split`, `files`, `blocked_by`,
-  `description`).
+  `description`), and `test_scope` at plan and story level only when the key is
+  present, so manifests without it keep their existing digest.
 - It **excludes** the `approval` block itself and all runtime story state
   (`status`, `attempts`, `sizing_auto_routed`, …). Recording or changing a
   decision therefore never invalidates the digest it was made against, and a

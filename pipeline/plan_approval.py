@@ -138,7 +138,9 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
     story without a ``description`` hashes it as ``None`` — distinct from a
     description of ``""``. The ``approval`` block and runtime story state are
     excluded so that recording or changing a decision never changes the
-    digest. The manifest is not mutated.
+    digest. ``test_scope`` (plan and story level) is hashed only when its key
+    is present, so a manifest without it keeps its existing digest. The
+    manifest is not mutated.
     """
     payload: dict[str, Any] = {
         field: manifest.get(field) for field in _PLAN_AUTHORED_FIELDS
@@ -148,9 +150,12 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
         stories = {}
     payload["stories"] = {
         key: {field: story.get(field) for field in _STORY_AUTHORED_FIELDS}
+        | ({"test_scope": story["test_scope"]} if "test_scope" in story else {})
         for key, story in stories.items()
         if isinstance(story, dict)
     }
+    if "test_scope" in manifest:
+        payload["test_scope"] = manifest["test_scope"]
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

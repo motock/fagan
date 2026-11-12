@@ -1127,9 +1127,6 @@ def _sqlite_store(tmp_path, plan_name, stories):
 
     store = SqliteStore(str(tmp_path / "plans.db"))
     store.save_manifest(plan_name, {"epics": {}, "stories": stories})
-    # SqliteStore mirrors every save to a manifest file; drop it so only the
-    # record store can answer the read.
-    store.manifest_path(plan_name).unlink(missing_ok=True)
     return store
 
 
@@ -1143,8 +1140,6 @@ def test_read_story_reads_the_record_store_when_there_is_no_manifest_file(
         "fence-record",
         {"S1": _fresh_story(dispatch_lease_owner_pid=owner)},
     )
-    assert not store.manifest_path("fence-record").exists()
-
     story = fence._read_story(store, "fence-record", "S1")
 
     assert story.get("dispatch_lease_owner_pid") == owner, (

@@ -59,9 +59,8 @@ def db_path(tmp_path):
 def store(db_path, monkeypatch):
     """A ``SqliteStore`` on a fresh database, with the plans dir isolated.
 
-    ``PLAN_DIR`` is pinned because the store keeps each manifest's on-disk
-    projection (see ``manifest_path``) there; without it a test would write
-    into the operator's real plans directory.
+    ``PLAN_DIR`` is pinned so that a regression which writes a plan file would
+    land in a temporary directory, not the operator's real plans directory.
     """
     plan_dir = db_path + ".plans"
     Path(plan_dir).mkdir()
@@ -320,8 +319,8 @@ def test_two_processes_never_both_acquire(store, db_path):
     assert store.get_manifest(PLAN) == {"after": "contention"}
 
 
-# -- manifest authority: the database and the projection are one record -----
-# A reader in another process must serve the projection even while a writer
+# -- the database is the only manifest record -------------------------------
+# A reader in another process must serve the manifest even while a writer
 # holds the write lock. The holder keeps it past the store's bounded busy
 # timeout on purpose, so an import attempted without a retry (or with sqlite's
 # own five-second timeout) shows up as either a lock error or a long block.
@@ -329,18 +328,14 @@ _HOLD_FOR_READ_S = 1.0
 _READ_DEADLINE_S = 0.9
 
 
-def _hold_write_lock(db_path, plan_dir, entered, release):
+def _hold_write_lock(db_path, entered, release):
     """Hold the plan's write transaction until the parent has read once.
 
     Module level on purpose: ``spawn`` pickles the target by reference. The
-    child opens its own store (a connection cannot cross processes) and points
-    ``pipeline.server.PLAN_DIR`` at the shared plans directory, because the file
-    store resolves that name at call time.
+    child opens its own store, because a connection cannot cross processes.
     """
-    import pipeline.server
     from pipeline.store_sqlite import SqliteStore
 
-    pipeline.server.PLAN_DIR = Path(plan_dir)
     child_store = SqliteStore(db_path)
     try:
         with child_store.transaction(PLAN) as acquired:
@@ -351,22 +346,20 @@ def _hold_write_lock(db_path, plan_dir, entered, release):
         child_store.close()
 
 
-def test_read_under_contention_serves_the_projection(store, db_path):
+def test_read_under_contention_serves_the_row(store, db_path):
     """A read taken during another process's transaction still returns.
 
-    The reconciling import is a write, so it can lose the race for the database
-    lock. It is best-effort: the served document is the projection regardless,
-    and the row is imported by a later read.
+    A read is a plain select on a WAL snapshot, so it never waits for the
+    holder's write lock.
     """
     ctx = multiprocessing.get_context("spawn")
     entered = ctx.Event()
     release = ctx.Event()
-    plan_dir = str(store.manifest_path(PLAN).parent)
     manifest = {"stories": {"S1": {"status": "parked"}}}
-    _write_projection(store, manifest)
+    store.save_manifest(PLAN, manifest)
 
     holder = ctx.Process(
-        target=_hold_write_lock, args=(db_path, plan_dir, entered, release)
+        target=_hold_write_lock, args=(db_path, entered, release)
     )
     holder.start()
     try:
@@ -375,7 +368,7 @@ def test_read_under_contention_serves_the_projection(store, db_path):
         started = time.monotonic()
         served = store.get_manifest(PLAN)
         elapsed = time.monotonic() - started
-        assert served == manifest, "the projection must be served under contention"
+        assert served == manifest, "the row must be served under contention"
 
         started = time.monotonic()
         assert store.get_manifest_or_none(PLAN) == manifest
@@ -392,93 +385,12 @@ def test_read_under_contention_serves_the_projection(store, db_path):
     assert not holder.is_alive(), "the holding process hung"
     assert holder.exitcode == 0, "the holding process failed"
 
-    # The failed import must not have poisoned the connection: a later read
-    # imports the projection the writer was blocking.
     assert store.get_manifest(PLAN) == manifest
-    with _probe(db_path) as probe:
-        row = probe.execute(
-            "SELECT manifest_json FROM story_manifests WHERE plan_name = ?", (PLAN,)
-        ).fetchone()
-    assert row is not None and json.loads(row[0]) == manifest
 
 
-def test_a_readable_projection_survives_a_damaged_row(store, db_path):
-    """A row damaged outside the store must not hide a projection that reads.
-
-    The projection is the record a writer outside the store updated, so it is
-    still servable; the read repairs the row instead of raising.
-    """
-    manifest = {"stories": {"S1": {"status": "parked"}}}
-    _write_projection(store, manifest)
-    with _probe(db_path) as probe:
-        probe.execute(
-            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?) "
-            "ON CONFLICT(plan_name) DO UPDATE "
-            "SET manifest_json = excluded.manifest_json",
-            (PLAN, "{not json"),
-        )
-
-    assert store.get_manifest(PLAN) == manifest
-    assert store.get_manifest_or_none(PLAN) == manifest
-
-
-def _write_projection(store, manifest, plan=PLAN):
-    """Write a plan's manifest file the way a writer that skips the store does.
-
-    ``pipeline/ingest.py``, ``pipeline/merge.py`` and
-    ``pipeline/review_orchestrator.py`` persist a manifest with
-    ``_atomic_write_json(manifest_path, manifest)``, so the projection can move
-    on without the store seeing it. The store must adopt that document rather
-    than serve a row the filesystem has left behind.
-    """
-    path = store.manifest_path(plan)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    return path
-
-
-def test_manifest_written_outside_the_store_is_served_and_listed(store, db_path):
-    """A plan that only exists as a projection is adopted, not reported absent."""
-    manifest = {"schema_version": 1, "stories": {"S1": {"status": "parked"}}}
-    _write_projection(store, manifest)
-
-    assert store.get_manifest(PLAN) == manifest
-    assert store.get_manifest_or_none(PLAN) == manifest
-    assert PLAN in store.list_manifests(), (
-        "an ingested plan must not be missing from the store's plan list"
-    )
-
-    with _probe(db_path) as probe:
-        row = probe.execute(
-            "SELECT manifest_json FROM story_manifests WHERE plan_name = ?", (PLAN,)
-        ).fetchone()
-
-    assert row is not None, "the projection must be imported into the database"
-    assert json.loads(row[0]) == manifest
-
-
-def test_a_save_does_not_write_a_stale_row_back_over_the_projection(store):
-    """The next save extends the projection instead of reverting it."""
-    store.save_manifest(PLAN, {"stories": {"S1": {"status": "parked"}}})
-    _write_projection(
-        store, {"stories": {"S1": {"status": "parked", "review_verdict": "APPROVE"}}}
-    )
-
-    store.update_story(PLAN, "S1", {"status": "merged"})
-
-    served = store.get_manifest(PLAN)["stories"]["S1"]
-    assert served["review_verdict"] == "APPROVE", (
-        "a write that bypassed the store must survive the next save"
-    )
-    assert served["status"] == "merged"
-    projected = json.loads(store.manifest_path(PLAN).read_text())["stories"]["S1"]
-    assert projected == served, "the projection must agree with the database"
-
-
-def test_get_manifest_or_none_reads_the_row_when_the_projection_is_absent(store):
+def test_get_manifest_or_none_and_get_manifest_read_the_same_row(store):
     """Both readers agree that a plan the database records is present."""
     store.save_manifest(PLAN, {"a": 1})
-    store.manifest_path(PLAN).unlink()
 
     assert store.get_manifest_or_none(PLAN) == {"a": 1}
     assert store.get_manifest(PLAN) == {"a": 1}
@@ -509,10 +421,13 @@ def test_read_inside_a_transaction_sees_the_uncommitted_save(store):
     assert store.get_manifest(PLAN)["stories"]["S1"]["status"] == "running"
 
 
-def test_get_manifest_or_none_fails_open_on_undecodable_projection(store):
+def test_get_manifest_or_none_fails_open_on_undecodable_row(store, db_path):
     """Bytes that are not text read as absent, like any other damage."""
-    store.save_manifest(PLAN, {"a": 1})
-    store.manifest_path(PLAN).write_bytes(b"\xff\xfe\x00")
+    with _probe(db_path) as probe:
+        probe.execute(
+            "INSERT INTO story_manifests (plan_name, manifest_json) VALUES (?, ?)",
+            (PLAN, b"\xff\xfe\x00"),
+        )
 
     assert store.get_manifest_or_none(PLAN) is None
 
@@ -531,7 +446,7 @@ def test_get_manifest_or_none_fails_open_on_a_damaged_row(store, db_path):
 
 
 def test_rollback_leaves_no_readable_manifest(store):
-    """A rolled-back save is gone from the row and from the projection."""
+    """A rolled-back save is gone from the row."""
     with pytest.raises(RuntimeError), store.transaction(PLAN) as acquired:
         assert acquired is True
         store.save_manifest(PLAN, {"a": 1})
@@ -540,9 +455,6 @@ def test_rollback_leaves_no_readable_manifest(store):
     with pytest.raises(FileNotFoundError):
         store.get_manifest(PLAN)
     assert store.get_manifest_or_none(PLAN) is None
-    assert not store.manifest_path(PLAN).exists(), (
-        "a rolled-back save must not project anything to disk"
-    )
 
 
 # -- configuration boundaries ----------------------------------------------

@@ -122,7 +122,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 "skipped": "locked",
                 "reason": "another dispatch/interrupt is in progress for this plan",
             }
-        manifest_path = _store.manifest_path(plan_name)
         manifest = _store.get_manifest(plan_name)
         story = manifest["stories"].get(story_key)
         if not story:
@@ -200,7 +199,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         if not resuming:
             block = _refuse_if_remote_branch_taken(
-                plan_name, story_key, story, branch, manifest_path, manifest
+                plan_name, story_key, story, branch, manifest
             )
             if block is not None:
                 return block
@@ -347,7 +346,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Resolve external context BEFORE the ticket moves to in-progress so a
         # required-source failure leaves the story's status untouched.
         context_block, blocked = _step_resolve_context(
-            plan_name, story_key, story, manifest, manifest_path
+            plan_name, story_key, story, manifest
         )
         if blocked is not None:
             return blocked
@@ -653,7 +652,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             plan_name=plan_name,
             plan_role_config=_plan_role_config(plan_name),
             manifest=manifest,
-            manifest_path=manifest_path,
             marker_path=test_author_marker,
             resuming=resuming,
         )

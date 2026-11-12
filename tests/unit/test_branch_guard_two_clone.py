@@ -85,7 +85,7 @@ def _call(story_key: str, branch: str):
     story: dict = {}
     manifest = {"stories": {story_key: story}}
     result = dispatch._refuse_if_remote_branch_taken(
-        "plan", story_key, story, branch, Path("manifest.json"), manifest
+        "plan", story_key, story, branch, manifest
     )
     return result, story
 

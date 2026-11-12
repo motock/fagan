@@ -192,7 +192,6 @@ def _step_detached_test_author(
     plan_name: str,
     plan_role_config: dict | None,
     manifest: dict[str, Any],
-    manifest_path: Path,
     marker_path: Path,
     resuming: bool,
 ) -> str:

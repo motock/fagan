@@ -1549,6 +1549,18 @@ settings provider fails (raises or answers with the wrong shape) the policy is
 treated as restrictive: `test_scope` resolves to `full` with `source`
 `settings_provider_error`, and any `scoped` request is recorded as refused.
 
+`scoped` depends on remote CI and on the `ci_rework` loop. A story resolved to
+`scoped` runs as `full` instead when any of these holds, and
+`test_scope_resolution` records `degraded_from: scoped` and `degraded_reason`:
+
+- `ci_gate_disabled` — `PIPELINE_MERGE_CI_GATE=0`;
+- `rework_on_ci_fail_off` — `PIPELINE_REWORK_ON_CI_FAIL` is not `1` (its
+  default), so a CI failure would fail the story instead of reworking it;
+- `no_ci_config` — the repo declares no CI (the forge adapter's
+  `has_ci_config` is false or unreadable).
+
+The event `test_scope_degraded` is notified with the reason.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling

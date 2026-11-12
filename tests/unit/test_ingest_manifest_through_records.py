@@ -206,3 +206,12 @@ def test_read_plan_draft_raises_when_store_has_no_record_view(monkeypatch) -> No
 
     with pytest.raises(RuntimeError, match="record view"):
         plan_draft.read_plan_draft(PLAN)
+
+
+def test_ingest_modules_hold_no_manifest_path_reference() -> None:
+    # SqliteStore keeps an on-disk manifest projection of its own, so the plans
+    # directory cannot show that ingest stayed off the path; check ingest's code.
+    import inspect
+
+    for module in (ingest_mod, plan_draft):
+        assert "manifest_path" not in inspect.getsource(module), module.__name__

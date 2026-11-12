@@ -175,11 +175,13 @@ def test_method_body_keeps_validate_key_as_free_name():
 
 
 def test_method_body_keeps_globals_as_free_names():
-    """R1: PLAN_DIR, get_ticket_provider, _atomic_write_json stay bare names."""
+    """R1: get_ticket_provider stays a bare name.
+
+    PLAN_DIR and _atomic_write_json left the body when the manifest moved behind
+    the store, so they are no longer pinned here.
+    """
     src = inspect.getsource(p.PipelineService.mark_story_in_progress)
-    assert "PLAN_DIR" in src
     assert "get_ticket_provider()" in src
-    assert "_atomic_write_json" in src
     for g in ["self.PLAN_DIR", "self.get_ticket_provider", "self._atomic_write_json"]:
         assert g not in src, f"{g!r} must not appear in the method body"
 

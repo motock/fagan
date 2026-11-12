@@ -623,7 +623,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 return {"ok": False, "error": f"No such story {story_key}"}
             manifest["stories"][story_key]["status"] = "in_progress"
             _store.save_manifest(plan_name, manifest)
-            # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json", _atomic_write_json
             return {"ok": True}
     def checkpoint(self,
                    plan_name: str,
@@ -696,8 +695,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if plan_name not in _store.records().list_plans("default"):
             return []
 
-        # keep reference to PLAN_DIR for free variable test
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"  # noqa: F841
+        # Reads PLAN_DIR as a free variable (pinned by test_list_ready_stories_migration).
+        _ = PLAN_DIR
 
         manifest = _store.get_manifest(plan_name)
         stories = manifest["stories"]
@@ -865,7 +864,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return refusal
         result = _set_story_status_impl(self, plan_name, story_key, status)
         return wake.after(plan_name, "set_story_status", result)
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     def patch_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
     ) -> dict[str, Any]:

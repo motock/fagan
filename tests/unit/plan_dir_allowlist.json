@@ -31,7 +31,7 @@
  "pipeline/scheduler_daemon.py": 6,
  "pipeline/server.py": 15,
  "pipeline/server_tools_lifecycle.py": 1,
- "pipeline/service.py": 8,
+ "pipeline/service.py": 6,
  "pipeline/setup/schema.py": 1,
  "pipeline/setup/wizard.py": 5,
  "pipeline/store.py": 16,

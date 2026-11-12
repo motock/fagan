@@ -169,7 +169,7 @@ def _manifests(source: Any, target: Any, plans: list[str], dry_run: bool) -> dic
         if manifest is None:
             # ``get_manifest`` answers None for a damaged file too, so a
             # manifest file that exists but reads as nothing is unreadable.
-            if source.manifest_path(plan).exists():
+            if plan in source.records().list_plans("default"):
                 _refuse(tally, plan, "unreadable")
             continue
         stored = target._stored_document(plan)

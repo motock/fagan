@@ -17,6 +17,7 @@ import pytest
 import pipeline.server as p
 from pipeline import ingest as ingest_mod
 from pipeline import plan_draft
+from pipeline.store_records import UnreadableRecordError
 from pipeline.store_sqlite import SqliteStore
 
 PLAN = "plan-records"
@@ -84,6 +85,20 @@ def _ingest(plan_name: str = PLAN, overwrite: bool = False) -> dict:
     return ingest_mod._ingest_plan_impl(plan_name, None, overwrite)
 
 
+def _stub_records_get_manifest(monkeypatch, store, get_manifest) -> None:
+    """Replace only ``records().get_manifest``; every other view call is real."""
+    real_records = store.records()
+
+    class _View:
+        def __getattr__(self, name):
+            return getattr(real_records, name)
+
+        def get_manifest(self, namespace, plan_name):
+            return get_manifest(namespace, plan_name)
+
+    monkeypatch.setattr(store, "records", lambda: _View())
+
+
 # --------------------------------------------------------------------------- #
 # positive: first ingest and re-ingest through the record store
 # --------------------------------------------------------------------------- #
@@ -105,14 +120,52 @@ def test_re_ingest_with_explicit_story_key_merges_into_the_stored_manifest(
 ) -> None:
     _stage(sqlite_store, _plan(repo_root))
     assert _ingest()["ok"] is True
+    # Seed runtime state the re-ingest must keep: the stored story is in progress.
+    stored = sqlite_store.records().get_manifest("default", PLAN)
+    stored["stories"]["S-1"]["status"] = "in_progress"
+    sqlite_store.records().put_manifest("default", PLAN, stored)
     # A full ingest consumes the draft; the operator stages it again.
     _stage(sqlite_store, _plan(repo_root))
 
     result = _ingest()
 
     assert result["ok"] is True, result
-    stored = sqlite_store.records().get_manifest("default", PLAN)
-    assert list(stored["stories"]) == ["S-1"]
+    merged = sqlite_store.records().get_manifest("default", PLAN)
+    assert merged["stories"]["S-1"]["status"] == "in_progress"
+
+
+def test_re_ingest_refuses_when_the_stored_manifest_is_unreadable(
+    sqlite_store, monkeypatch, repo_root: Path
+) -> None:
+    _stage(sqlite_store, _plan(repo_root))
+    assert _ingest()["ok"] is True
+    reader = sqlite_store.records()
+    before = reader.get_manifest("default", PLAN)
+    _stage(sqlite_store, _plan(repo_root))
+
+    def _unreadable(namespace, plan_name):
+        raise UnreadableRecordError(f"plan {plan_name!r} is unreadable: boom")
+
+    _stub_records_get_manifest(monkeypatch, sqlite_store, _unreadable)
+    result = _ingest()
+
+    assert result == {"ok": False, "error": f"plan {PLAN!r} is unreadable: boom"}
+    assert reader.get_manifest("default", PLAN) == before
+
+
+def test_re_ingest_refuses_when_the_plan_is_listed_but_its_manifest_is_unreadable(
+    sqlite_store, monkeypatch, repo_root: Path
+) -> None:
+    _stage(sqlite_store, _plan(repo_root))
+    assert _ingest()["ok"] is True
+    _stage(sqlite_store, _plan(repo_root))
+
+    # The store lists the plan yet returns no readable document (fail-open read).
+    _stub_records_get_manifest(monkeypatch, sqlite_store, lambda ns, name: None)
+    result = _ingest()
+
+    assert result["ok"] is False, result
+    assert PLAN in result["error"] and "unreadable" in result["error"], result
 
 
 def test_ingest_response_has_no_manifest_path_key(

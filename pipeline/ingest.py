@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, persistence, plan_draft, plan_names, testfiles
+from . import cross_plan, plan_draft, plan_names, testfiles
 from .actor import actor_id
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
@@ -50,6 +50,7 @@ from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
+from .store_records import UnreadableRecordError
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -781,11 +782,14 @@ def _ingest_plan_impl(
 
         # Any caller can rewrite a plan file, so resolve ownership against the
         # manifest on disk even when overwriting, before any provider call.
-        manifest_path = _store.manifest_path(plan_name)
-        saved_manifest, manifest_refusal = persistence.read_plan_file(manifest_path)
-        # A missing manifest is a first ingest; a present one must be readable.
-        if manifest_refusal is not None and manifest_path.exists():
-            return manifest_refusal
+        try:
+            stored = _store.records().get_manifest(plan_draft.DEFAULT_NAMESPACE, plan_name)
+        except UnreadableRecordError as exc:
+            return {"ok": False, "error": str(exc)}
+        # A listed plan with no readable manifest refuses rather than resets as new.
+        if stored is None and already_ingested:
+            return {"ok": False, "error": f"plan {plan_name!r} is unreadable"}
+        saved_manifest: dict[str, Any] = stored or {}
         try:
             ownership = resolve_ownership(plan_name, plan, saved_manifest, actor_id())
         except ValueError as exc:

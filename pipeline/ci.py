@@ -547,12 +547,16 @@ def _get_effective_config_impl(
         "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
     }
 
+    from .persistence import _plan_manifest
+    from .test_scope_dispatch import effective_test_scope
+
     return {
         "ok": True,
         "roles": roles,
         "env": env,
         "ignored_env_vars": ignored_env_vars,
         "sources": sources,
+        "test_scope": effective_test_scope(_plan_manifest(plan_name) if plan_name else None),
     }
 
 

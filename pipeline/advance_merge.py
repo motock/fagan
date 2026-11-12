@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import merge_reverify
+from .host_state import build_host_state
 from .merge_reverify import (
     cancel_merge_reverify,
     collect_merge_reverify,
@@ -356,17 +357,7 @@ def _merge_reverify_gate(
         story.pop("merge_reverify", None)
         job = None
     if not job:
-        base = Path(manifest_path).parent
-        env_dir = os.environ.get("PIPELINE_STATE_DIR")
-        if env_dir:
-            state_root = Path(env_dir)
-            if not state_root.is_absolute():
-                # Relative overrides resolve against the manifest's directory,
-                # never the scheduler's CWD: the collect tick may run
-                # somewhere else entirely.
-                state_root = base / state_root
-        else:
-            state_root = base
+        state_root = build_host_state().job_state_root()
         try:
             job = start_merge_reverify(plan_name, key, worktree, state_root)
         except (ValueError, OSError) as exc:

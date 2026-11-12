@@ -350,6 +350,45 @@ class TestStartJob:
             want = Path(expected)
         assert started == [want]
 
+    def test_job_state_root_ignores_the_manifest_location(
+        self, monkeypatch, tmp_path
+    ):
+        path = _write_manifest(tmp_path)
+        story = _stories(path)[_KEY]
+        unrelated = tmp_path / "unrelated" / f"{_PLAN}.manifest.json"
+        unrelated.parent.mkdir()
+        started = []
+        monkeypatch.setattr(
+            review_job,
+            "start_review_job",
+            lambda plan, key, root: started.append(root) or _job(),
+        )
+        monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
+
+        advance_review.review_or_collect(_PLAN, _KEY, story, unrelated, {})
+
+        assert started == [tmp_path]
+
+    def test_relative_state_dir_ignores_the_process_cwd(
+        self, monkeypatch, tmp_path
+    ):
+        path = _write_manifest(tmp_path)
+        story = _stories(path)[_KEY]
+        unrelated = tmp_path / "unrelated" / f"{_PLAN}.manifest.json"
+        unrelated.parent.mkdir()
+        started = []
+        monkeypatch.setattr(
+            review_job,
+            "start_review_job",
+            lambda plan, key, root: started.append(root) or _job(),
+        )
+        monkeypatch.setenv("PIPELINE_STATE_DIR", "state")
+        monkeypatch.chdir(unrelated.parent)
+
+        advance_review.review_or_collect(_PLAN, _KEY, story, unrelated, {})
+
+        assert started == [tmp_path / "state"]
+
     def test_start_failure_is_logged_and_retried_next_advance(
         self, monkeypatch, tmp_path, caplog
     ):

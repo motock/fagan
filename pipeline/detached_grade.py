@@ -15,21 +15,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .build_detect import failed_node_ids
+from .host_state import build_host_state
 
 logger = logging.getLogger(__name__)
 
 
-def _put_manifest(manifest_path, manifest) -> None:
+def _put_manifest(plan_name, manifest) -> None:
     """Persist one detached-grade state transition through the record store.
 
-    ``_detached_grade_lifecycle`` receives the manifest and its
-    ``manifest_path`` from ``check_story_status``, whose caller already holds
-    the plan lock; the lifecycle acquires no lock of its own, so the write
-    lands in the same lock scope the direct
-    ``_atomic_write_json(manifest_path, ...)`` call used to. The plan name is
-    recovered from the manifest path exactly as ``cross_plan``/``list_plans``
-    recover it (``<plan_name>.manifest.json``), keeping the threaded
-    ``manifest_path`` parameters in place (ADR 0012 stage C removes them).
+    ``_detached_grade_lifecycle`` receives the manifest and its ``plan_name``
+    from ``check_story_status``, whose caller already holds the plan lock; the
+    lifecycle acquires no lock of its own, so the write lands in the same lock
+    scope the direct file write used to.
 
     A store that rejects the key raises ``InvalidRecordKeyError`` (a
     ``ValueError``): the transition fails closed rather than falling back to a
@@ -38,13 +35,10 @@ def _put_manifest(manifest_path, manifest) -> None:
     """
     from .server import _store
 
-    plan_name = Path(manifest_path).name.removesuffix(".manifest.json")
     _store.records().put_manifest("default", plan_name, manifest)
 
 
-
-
-def _fresh_manifest(manifest_path, story_key, story, manifest, keys_at_entry=()):
+def _fresh_manifest(plan_name, story_key, story, manifest, keys_at_entry=()):
     """The manifest to persist: a FRESH read with this story's fields merged in.
 
     Writing the caller's pre-read ``manifest`` back replaces the whole plan with
@@ -59,7 +53,6 @@ def _fresh_manifest(manifest_path, story_key, story, manifest, keys_at_entry=())
     from .server import _store
     from .story_fields import merge_into_fresh_manifest
 
-    plan_name = Path(manifest_path).name.removesuffix(".manifest.json")
     drop = tuple(key for key in keys_at_entry if key not in story)
     try:
         merged = merge_into_fresh_manifest(
@@ -220,35 +213,20 @@ def _is_pid_alive(pid: int) -> bool:
 _GRADE_PID_FIELD = "grading" + "_pid"
 
 
-def live_grade_count(state_root: Path, exclude: Path | None = None) -> int:
-    """How many OTHER stories hold a live detached grade under *state_root*.
+def live_grade_count(exclude_plan: str | None = None) -> int:
+    """How many OTHER plans hold a live detached grade in the record store.
 
-    Scans only ``*.manifest.json`` files directly under *state_root* (the
-    directory holding this story's manifest - the same base the grading
-    channel uses; deliberately NOT recursive) and counts the stories whose
-    ``grading_pid`` is a live, non-zombie process. Unreadable/malformed
-    manifests and ones without a ``grading_pid`` are skipped, as is the
-    caller's own manifest (*exclude*), so a story cannot block itself.
+    Reads every stored manifest in one bulk ``records().get_manifests`` call
+    and counts the stories whose ``grading_pid`` is a live, non-zombie process.
+    The plan named *exclude_plan* (the caller's own plan) is skipped, so a plan
+    cannot block itself. Malformed manifests and ones without a ``grading_pid``
+    are skipped.
     """
+    from .server import _store
+
     count = 0
-    try:
-        paths = sorted(state_root.glob("*.manifest.json"))
-    except OSError:
-        return 0
-    excluded = None
-    if exclude is not None:
-        try:
-            excluded = Path(exclude).resolve()
-        except OSError:
-            excluded = None
-    for path in paths:
-        try:
-            if excluded is not None and path.resolve() == excluded:
-                continue
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            # Unreadable or malformed manifest: not a grade we can count.
+    for plan_name, data in _store.records().get_manifests("default").items():
+        if plan_name == exclude_plan:
             continue
         stories: list[dict] = []
         if isinstance(data, dict):
@@ -394,7 +372,7 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 
 
 def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
-                              manifest_path, test_cmd, test_dir, test_env,
+                              plan_name, test_cmd, test_dir, test_env,
                               _pid_alive=_is_pid_alive,
                               _live_count=live_grade_count,
                               _cap=max_concurrent_grades,
@@ -475,11 +453,11 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
             # channel must not live in the agent-writable worktree — the code
             # under test could forge a passing grade there during its own
             # build and bypass the acceptance gate. The hardened channel is
-            # the DEFAULT: the state root is the pipeline-owned plans/
-            # manifests base (the parent of this story's manifest path), with
-            # PIPELINE_STATE_DIR as an override. A relative override resolves
-            # against that fixed base — never the scheduler's CWD, since the
-            # collect tick may run with a different CWD than the spawn tick.
+            # the DEFAULT: the state root is the host's job state root (the
+            # plans directory), with PIPELINE_STATE_DIR as an override. A
+            # relative override resolves against that fixed base — never the
+            # scheduler's CWD, since the collect tick may run with a different
+            # CWD than the spawn tick.
             # The result/log files live under <state_root>/grading/<story_id>/
             # (mode 0o700) and the collector reads ONLY the persisted path.
             # The guard below refuses to aim the hardened channel back into
@@ -494,19 +472,10 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
             # check_story_status returns this dict verbatim and the only
             # status pipeline/advance.py branches on is "failed" - a queued
             # story falls through with "grading" and simply stays in_progress.
-            _in_flight = _count_live(
-                Path(manifest_path).parent, exclude=Path(manifest_path)
-            )
+            _in_flight = _count_live(exclude_plan=plan_name)
             if _in_flight >= _grade_cap():
                 return {"status": "grading_queued", "pid": pid}, None
-            env_root = os.environ.get("PIPELINE_STATE_DIR")
-            manifest_root = Path(manifest_path).parent
-            if env_root:
-                state_root = Path(env_root)
-                if not state_root.is_absolute():
-                    state_root = manifest_root / state_root
-            else:
-                state_root = manifest_root
+            state_root = build_host_state().job_state_root()
             grading_dir = state_root / "grading" / story_key
             grading_dir.mkdir(parents=True, exist_ok=True)
             grading_dir.chmod(0o700)
@@ -540,10 +509,8 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                 ).isoformat()
                 story["grading_result_path"] = str(result_path)
                 _write_manifest(
-                    manifest_path,
-                    _fresh(
-                        manifest_path, story_key, story, manifest, _keys_at_entry
-                    ),
+                    plan_name,
+                    _fresh(plan_name, story_key, story, manifest, _keys_at_entry),
                 )
                 # The tick is free; a LATER tick collects the result.
                 return {"status": "grading", "pid": grade_pid}, None
@@ -617,8 +584,8 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         story.pop("grading_result_path", None)
         story["collected_at"] = datetime.now(UTC).isoformat()
         _write_manifest(
-            manifest_path,
-            _fresh(manifest_path, story_key, story, manifest, _keys_at_entry),
+            plan_name,
+            _fresh(plan_name, story_key, story, manifest, _keys_at_entry),
         )
 
     return None, test_result

@@ -8,7 +8,13 @@ import tempfile
 import time
 from pathlib import Path
 
-from .build_detect import detect_test_command
+from .build_detect import (
+    _acceptance_rel_paths,
+    _scope_test_cmd_to_acceptance,
+    detect_test_command,
+    failed_node_ids,
+)
+from .test_scope_run import is_scoped
 
 logger = logging.getLogger(__name__)
 
@@ -272,3 +278,45 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
             fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+
+def baseline_snapshot_for(story: dict, full_snapshot):
+    """The snapshot callable a dispatch should use for ``story``.
+
+    Full mode gets ``full_snapshot`` back unchanged. A ``scoped`` story must
+    never run the repo's full suite on the pipeline host, so its snapshot runs
+    the detected command limited to the story's acceptance fixtures instead,
+    and reports no baseline when that command cannot be scoped. The scoped
+    result is never cached: the cache key covers the unscoped command.
+    """
+    if not is_scoped(story):
+        return full_snapshot
+
+    def snapshot(worktree_path: Path) -> dict | None:
+        acceptance_paths = _acceptance_rel_paths(story)
+        if not acceptance_paths:
+            return None
+        test_dir, test_cmd = detect_test_command(worktree_path)
+        scoped_cmd = _scope_test_cmd_to_acceptance(
+            test_cmd,
+            [str(worktree_path / path) for path in acceptance_paths],
+            test_dir,
+        )
+        if scoped_cmd is None:
+            return None
+        try:
+            r = subprocess.run(
+                scoped_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+                env=_baseline_test_env(), timeout=_BASELINE_TEST_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        return {
+            "cmd": scoped_cmd,
+            "returncode": r.returncode,
+            "stdout_tail": (r.stdout or "")[-1000:],
+            "failed_node_ids": failed_node_ids(r.stdout or ""),
+            "stderr_tail": (r.stderr or "")[-1000:],
+        }
+
+    return snapshot

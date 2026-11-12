@@ -112,6 +112,8 @@ def build_story_record(
         record["files"] = list(story["files"])
     if story.get("blocked_by") is not None:
         record["blocked_by"] = list(story["blocked_by"])
+    if story.get("test_scope") is not None:
+        record["test_scope"] = story["test_scope"]
     return record
 
 

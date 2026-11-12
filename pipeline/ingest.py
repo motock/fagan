@@ -683,7 +683,7 @@ def _ingest_plan_impl(
                         f"{sorted(_VALID_STORY_BACKENDS)}"
                     ),
                 }
-            files_error = _files_field_error(story)
+            files_error = _files_field_error(story) or _test_scope_error(story, f"story {story.get('summary')!r}")
             if files_error is not None:
                 return {"ok": False, "error": files_error}
             blocked_by_error = _blocked_by_error(story)
@@ -811,7 +811,7 @@ def _ingest_plan_impl(
                 for field in _INGEST_AUTHORED_STORY_FIELDS:
                     if field == "risk" and old_story.get("status") != "todo":
                         continue
-                    if field in ("files", "blocked_by"):
+                    if field in ("files", "blocked_by", "test_scope"):
                         # `files` and `blocked_by` are the authored fields
                         # allowed to be absent from a re-ingested story:
                         # present -> copied; absent -> the key is removed.

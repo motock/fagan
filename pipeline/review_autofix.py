@@ -1,6 +1,7 @@
 from typing import Any
 
 from .review_refs import _ServerRef
+from .test_scope_run import grade_test_cmd, is_no_tests_cmd, is_scoped
 
 Path = _ServerRef("Path")
 REVIEWER_AUTO_FIX_MAX_FILES = _ServerRef("REVIEWER_AUTO_FIX_MAX_FILES")
@@ -100,6 +101,8 @@ def _verify_reviewer_auto_fix(
             f"{reviewer_output}"
         )
     test_dir, test_cmd = detect_test_command(Path(worktree))
+    scoped = is_scoped(story)
+    test_cmd = grade_test_cmd(story, story.get("key", ""), Path(worktree), test_dir, test_cmd, test_cmd)
     test_env = {
         k: v
         for k, v in os.environ.items()
@@ -116,15 +119,30 @@ def _verify_reviewer_auto_fix(
         env=test_env,
     )
     if test_result.returncode != 0:
+        scope_label = (
+            "the scoped tests (test_scope=scoped)" if scoped else "the full test suite"
+        )
         return "REQUEST_CHANGES", (
-            "Reviewer self-fix failed the full test suite after being "
+            f"Reviewer self-fix failed {scope_label} after being "
             "applied. Downgraded to REQUEST_CHANGES.\n\n"
             f"Failing command: {' '.join(str(c) for c in test_cmd)}\n\n"
             f"```\n{(test_result.stdout or '')[-2000:]}\n```\n\n{reviewer_output}"
         )
+    if not scoped:
+        return "APPROVE", (
+            f"{reviewer_output}\n\n[harness-verified self-fix: {files_changed} "
+            f"file(s), {total_lines} line(s) changed, full test suite passed]"
+        )
+    if is_no_tests_cmd(test_cmd):
+        return "APPROVE", (
+            f"{reviewer_output}\n\n[harness-verified self-fix: {files_changed} "
+            f"file(s), {total_lines} line(s) changed, no tests in scope "
+            "(test_scope=scoped); CI runs the full suite]"
+        )
     return "APPROVE", (
         f"{reviewer_output}\n\n[harness-verified self-fix: {files_changed} "
-        f"file(s), {total_lines} line(s) changed, full test suite passed]"
+        f"file(s), {total_lines} line(s) changed, scoped tests passed "
+        "(test_scope=scoped)]"
     )
 
 

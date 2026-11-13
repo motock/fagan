@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from scripts import check_line_limit
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 LOCAL_AGENT = REPO_ROOT / "scripts" / "local_agent.py"
@@ -77,7 +78,7 @@ def _line_count(path):
 
 
 def test_local_agent_is_under_the_line_limit():
-    assert _line_count(LOCAL_AGENT) < LINE_LIMIT
+    assert_within_line_limit(_line_count(LOCAL_AGENT), LINE_LIMIT - 1, "local_agent")
 
 
 def test_local_agent_allowlist_entry_is_retired():

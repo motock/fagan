@@ -22,6 +22,7 @@ import pytest
 
 from app import dashboard as d
 from tests.unit._dashboard_helpers import client, plan_dir  # noqa: F401
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 NEW_MODULE = "app.dashboard_routes"
 LINE_LIMIT = 1000
@@ -52,11 +53,11 @@ def _line_count(rel: str) -> int:
 
 
 def test_should_keep_dashboard_at_or_under_line_limit():
-    assert _line_count("app/dashboard.py") <= LINE_LIMIT
+    assert_within_line_limit(_line_count("app/dashboard.py"), LINE_LIMIT, "app/dashboard.py")
 
 
 def test_should_keep_new_module_at_or_under_line_limit():
-    assert _line_count("app/dashboard_routes.py") <= LINE_LIMIT
+    assert_within_line_limit(_line_count("app/dashboard_routes.py"), LINE_LIMIT, "app/dashboard_routes.py")
 
 
 def test_should_drop_dashboard_allowlist_entry():

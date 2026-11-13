@@ -1580,6 +1580,24 @@ a reviewer self-fix is verified on the same scope.
 (without any story's own request) with its `source`, `lock_rejections` and
 `invalid_layers`.
 
+## File size policy (`file_size_policy`)
+
+`file_size_policy` is `advisory` (default) or `enforced`. It is resolved from
+the layers below, highest first: team, org, the `PIPELINE_FILE_SIZE_POLICY`
+environment variable, then the default (`advisory`). There is no plan or story
+field for it in v1. The org record's `allow_team_loosen` lets a team set
+`advisory` over an org `enforced`; without it that override is refused and
+notified. A settings provider error resolves to `enforced`. An unknown value
+resolves to `advisory` and is listed in `invalid_layers`. The resolution is
+stamped on the story as `file_size_policy_resolution` at dispatch.
+
+Under `advisory`, the implementer is told never to park on file size, the
+reviewer reports size only as `Suggestion` or `Nit`, and core's own CI runs
+`scripts/check_line_limit.py --mode warn`. The tests that pin a file's line
+count warn instead of failing; they fail only when `PIPELINE_FILE_SIZE_POLICY=enforced`.
+Test runs read the environment only, not the org or team layers. The ingest
+sizing and `scope_headroom` notices stay notifications in both modes.
+
 ## Plan-level `context` block
 
 Documents the optional plan-level `context` field of the plan JSON (a sibling
@@ -2502,6 +2520,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_SETTINGS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> provider` returning org/team policy settings — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_TEST_SCOPE` | `full` | `full` \| `scoped` — the lowest-precedence `test_scope` request; see "Test scope". Unknown values resolve to `full`. |
+| `PIPELINE_FILE_SIZE_POLICY` | `advisory` | `advisory` \| `enforced` — the file-size policy request; see "File size policy". Unknown values resolve to `advisory`. |
 | `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CREDENTIALS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> CredentialProvider` (its `get(ref) -> Credential \| None` resolves `env`, `model` and `notification` credentials) — see the "Credentials (operator-supplied provider)" section. A bad plugin raises and never falls back to ambient values |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |

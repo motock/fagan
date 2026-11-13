@@ -14,6 +14,7 @@ from typing import Any
 
 from .config import _LOCAL_SKIP_PERSONAS, DEFAULT_MODEL
 from .context_sources import render_files_pointer
+from .file_size_policy_dispatch import file_size_advisory_note
 from .paths import AGENTS_DIR
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
@@ -138,6 +139,7 @@ def _build_dispatch_command(
         "work is committed.\n\n"
     )
     test_scope_instruction = _test_scope_instruction(story)
+    file_size_instruction = file_size_advisory_note(story, "implementer")
     rework_instruction = ""
     if review_feedback:
         rework_attempts = story.get("rework_attempts", 0)
@@ -164,6 +166,7 @@ def _build_dispatch_command(
             f"{story.get('agent_instructions', '')}\n\n"
             f"{context_section}"
             f"{test_scope_instruction}"
+            f"{file_size_instruction}"
             f"This story was previously interrupted. The following steps are "
             f"already completed and committed — do not redo them:\n{completed}\n\n"
             f"Continue from here: {next_hint}\n\n"
@@ -181,6 +184,7 @@ def _build_dispatch_command(
             f"{story.get('agent_instructions', '')}\n\n"
             f"{context_section}"
             f"{test_scope_instruction}"
+            f"{file_size_instruction}"
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"{no_wakeup_instruction}"

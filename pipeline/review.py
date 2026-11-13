@@ -26,6 +26,7 @@ from .config import (
     REVIEWER_AUTO_FIX_MAX_LINES,
     REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
+from .file_size_policy_dispatch import file_size_advisory_note
 from .persona import _persona_body, _persona_default_model
 from .review_rework_scope import scoped_rework_diff
 
@@ -174,6 +175,9 @@ def build_review_story_context(story_key: str, manifest: dict) -> str | None:
     if context_block:
         sections.append(context_block)
 
+    size_note = file_size_advisory_note(story, "reviewer")
+    if size_note:
+        sections.append(size_note)
     sections.append(REVIEW_CONTEXT_SCOPE_RULE)
     return "\n".join(sections)
 

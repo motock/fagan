@@ -2,8 +2,8 @@
 
 The workflow is the check that fails a pull request for adding a dependency
 with a known `high` advisory, so these guards pin its threshold, its READ-ONLY
-permission set and its SHA pinning. PyYAML is not a dependency of this repo, so
-the workflow is read as text.
+permission set, its SHA pinning and its checkout credential handling. PyYAML is
+not a dependency of this repo, so the workflow is read as text.
 """
 
 from __future__ import annotations
@@ -40,12 +40,18 @@ def _uses_refs(text: str) -> list[str]:
     return refs
 
 
-def _permissions(text: str) -> dict[str, str]:
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _top_permissions(text: str) -> dict[str, str]:
     lines = _uncommented(text)
-    start = lines.index("permissions:")
+    header = lines.index("permissions:")
     granted: dict[str, str] = {}
-    for line in lines[start + 1:]:
-        if line and not line.startswith(" "):
+    for line in lines[header + 1:]:
+        if not line.strip():
+            continue
+        if _indent(line) == 0:
             break
         if ":" in line:
             key, _, value = line.strip().partition(":")
@@ -68,7 +74,11 @@ def test_it_fails_on_high_severity() -> None:
 
 
 def test_it_grants_read_only_contents() -> None:
-    assert _permissions(_text()) == {"contents": "read"}
+    assert _top_permissions(_text()) == {"contents": "read"}
+
+
+def test_it_checks_out_without_persisting_credentials() -> None:
+    assert "persist-credentials: false" in _text()
 
 
 def test_it_runs_on_pull_requests_only() -> None:
@@ -92,4 +102,4 @@ def test_permissions_scanner_reports_a_write_scope() -> None:
         "jobs:\n"
         "  review:\n"
     )
-    assert _permissions(synthetic)["pull-requests"] == "write"
+    assert _top_permissions(synthetic)["pull-requests"] == "write"

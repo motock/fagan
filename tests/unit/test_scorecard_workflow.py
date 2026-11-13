@@ -1,9 +1,10 @@
 """Mechanical guards for .github/workflows/scorecard.yml.
 
 Scorecard holds `id-token: write` (it publishes its result to a public API) and
-`security-events: write` (it uploads SARIF), so these guards pin the exact
-permission set, the SHA pinning and the publish switch. PyYAML is not a
-dependency of this repo, so the workflow is read as text.
+`security-events: write` (it uploads SARIF). These guards pin the SHA pinning,
+the publish switch, and the permission layout: the top level grants only
+`contents: read`, and both write scopes sit on the `analysis` job alone. PyYAML
+is not a dependency of this repo, so the workflow is read as text.
 """
 
 from __future__ import annotations
@@ -37,17 +38,39 @@ def _uses_refs(text: str) -> list[str]:
     return refs
 
 
-def _permissions(text: str) -> dict[str, str]:
-    lines = _uncommented(text)
-    start = lines.index("permissions:")
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _entries(lines: list[str], header: int) -> dict[str, str]:
+    indent = _indent(lines[header])
     granted: dict[str, str] = {}
-    for line in lines[start + 1:]:
-        if line and not line.startswith(" "):
+    for line in lines[header + 1:]:
+        if not line.strip():
+            continue
+        if _indent(line) <= indent:
             break
         if ":" in line:
             key, _, value = line.strip().partition(":")
             granted[key.strip()] = value.strip()
     return granted
+
+
+def _top_permissions(text: str) -> dict[str, str]:
+    lines = _uncommented(text)
+    return _entries(lines, lines.index("permissions:"))
+
+
+def _job_permissions(text: str, job: str) -> dict[str, str]:
+    lines = _uncommented(text)
+    job_start = lines.index(f"  {job}:")
+    for index in range(job_start + 1, len(lines)):
+        line = lines[index]
+        if line.strip() and _indent(line) <= 2:
+            break
+        if line == "    permissions:":
+            return _entries(lines, index)
+    return {}
 
 
 def test_every_action_is_pinned_to_a_full_sha() -> None:
@@ -60,8 +83,12 @@ def test_every_action_is_pinned_to_a_full_sha() -> None:
     )
 
 
-def test_permissions_are_exactly_the_two_write_scopes_and_read_contents() -> None:
-    assert _permissions(_text()) == {
+def test_top_level_grants_only_read_contents() -> None:
+    assert _top_permissions(_text()) == {"contents": "read"}
+
+
+def test_analysis_job_holds_the_two_write_scopes() -> None:
+    assert _job_permissions(_text(), "analysis") == {
         "contents": "read",
         "security-events": "write",
         "id-token": "write",
@@ -90,13 +117,25 @@ def test_pin_guard_rejects_a_tag_reference() -> None:
     assert PINNED.fullmatch("ossf/scorecard-action@v2.5.0") is None
 
 
-def test_permissions_scanner_reports_an_extra_scope() -> None:
+def test_top_level_permissions_scanner_reports_a_write_scope() -> None:
     synthetic = (
         "permissions:\n"
         "  contents: read\n"
-        "  packages: write\n"
+        "  id-token: write\n"
         "\n"
         "jobs:\n"
         "  analysis:\n"
     )
-    assert _permissions(synthetic)["packages"] == "write"
+    assert _top_permissions(synthetic)["id-token"] == "write"
+
+
+def test_job_permissions_scanner_ignores_a_top_level_write_scope() -> None:
+    synthetic = (
+        "permissions:\n"
+        "  id-token: write\n"
+        "\n"
+        "jobs:\n"
+        "  analysis:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert _job_permissions(synthetic, "analysis") == {}

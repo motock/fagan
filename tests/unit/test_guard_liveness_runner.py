@@ -36,6 +36,7 @@ import pytest
 
 from pipeline import guard_liveness
 from pipeline.guard_liveness import collect_test_files, main, run_liveness_check
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -487,4 +488,4 @@ def test_module_cli_subprocess_exit_code_and_json_stdout(tmp_path):
 def test_guard_liveness_module_stays_under_1000_lines():
     source = (PROJECT_ROOT / "pipeline" / "guard_liveness.py").read_text(encoding="utf-8")
     line_count = len(source.splitlines())
-    assert line_count < 1000, f"pipeline/guard_liveness.py must stay under 1000 lines, got {line_count}"
+    assert_within_line_limit(line_count, 999, "pipeline/guard_liveness.py")

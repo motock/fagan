@@ -3,6 +3,7 @@ scripts/local_agent_oracle.py (RH-11)."""
 from pathlib import Path
 
 from scripts import local_agent_oracle_done_marker as new
+from tests.unit._line_limit_policy import assert_within_line_limit
 from tests.unit._local_agent_oracle_test_helpers import lao
 
 REPO = Path(__file__).parent.parent.parent
@@ -53,8 +54,8 @@ def test_should_delete_file_that_did_not_exist_at_snapshot(tmp_path):
 
 
 def test_should_keep_original_module_under_line_limit():
-    assert _line_count(REPO / "scripts" / "local_agent_oracle.py") < LINE_LIMIT
+    assert_within_line_limit(_line_count(REPO / "scripts" / "local_agent_oracle.py"), LINE_LIMIT - 1, "scripts/local_agent_oracle.py")
 
 
 def test_should_keep_new_module_under_line_limit():
-    assert _line_count(REPO / "scripts" / "local_agent_oracle_done_marker.py") < LINE_LIMIT
+    assert_within_line_limit(_line_count(REPO / "scripts" / "local_agent_oracle_done_marker.py"), LINE_LIMIT - 1, "scripts/local_agent_oracle_done_marker.py")

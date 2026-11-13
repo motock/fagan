@@ -28,6 +28,7 @@ from app import backend
 from pipeline import dispatch
 from pipeline import server as p
 from pipeline import ticketing as pt
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 
 # ---------------------------------------------------------------------------
@@ -715,7 +716,7 @@ def test_dispatch_module_stays_under_the_line_limit():
 
     repo_root = Path(__file__).resolve().parents[2]
     lines = sum(1 for _ in (repo_root / "pipeline" / "dispatch.py").open())
-    assert lines <= 1000
+    assert_within_line_limit(lines, 1000, "pipeline/dispatch.py")
 
 
 def test_story_fields_module_stays_under_the_line_limit():
@@ -725,4 +726,4 @@ def test_story_fields_module_stays_under_the_line_limit():
 
     repo_root = Path(__file__).resolve().parents[2]
     lines = sum(1 for _ in (repo_root / "pipeline" / "story_fields.py").open())
-    assert lines <= 1000
+    assert_within_line_limit(lines, 1000, "pipeline/story_fields.py")

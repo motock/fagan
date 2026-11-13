@@ -219,8 +219,17 @@ def _patch_clock(monkeypatch, clock):
 # --------------------------------------------------------------------------- #
 
 
+def test_wedge_io_does_not_bind_the_global_plan_dir():
+    """wedge_io must not bind PLAN_DIR: ADR 0012 forbids the global plans directory.
+
+    Its only consumer was the journal path, which now reads through the record
+    store, so the binding has no remaining use.
+    """
+    assert not hasattr(wedge_io, "PLAN_DIR")
+
+
 def test_wedge_resolves_server_names_through_concurrency_serverref():
-    """_notify_user/_store/PLAN_DIR are _ServerRef bindings imported from .concurrency.
+    """_notify_user/_store are _ServerRef bindings imported from .concurrency.
 
     Targets pipeline.wedge_io, not pipeline.wedge: wedge.py stays the
     import-pure verdict module by committed contract (its own purity test,
@@ -231,7 +240,7 @@ def test_wedge_resolves_server_names_through_concurrency_serverref():
     assert wedge_io._ServerRef is pcon._ServerRef, (
         "pipeline.wedge_io must import _ServerRef from .concurrency, not redefine it"
     )
-    for name in ("_notify_user", "_store", "PLAN_DIR"):
+    for name in ("_notify_user", "_store"):
         binding = getattr(wedge_io, name)
         assert isinstance(binding, pcon._ServerRef), name
 

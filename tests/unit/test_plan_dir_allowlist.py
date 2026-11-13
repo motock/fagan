@@ -33,11 +33,6 @@ _SCANNED = {
     "scripts": ("PLAN_DIR",),
 }
 
-_RESIDUE = (
-    "still binds the global plans directory; migration tracked by the follow-up "
-    "plan store-stage-c3-plan-dir-residue"
-)
-
 #: (repo-relative file, identifier) -> (ceiling, reason).
 ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("pipeline/cross_plan.py", "plan_dir"): (4, "file store bulk manifest loader still takes a directory"),
@@ -46,8 +41,10 @@ ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("pipeline/preflight.py", "plan_dir"): (3, "configuration check a's explicit-directory argument (R12)"),
     ("pipeline/server.py", "PLAN_DIR"): (1, "re-export binding only: the patch point the test suite relies on"),
     ("pipeline/store.py", "PLAN_DIR"): (11, "file store implementation"),
-    ("pipeline/wedge_io.py", "PLAN_DIR"): (1, _RESIDUE),
-    ("scripts/local_success_report.py", "PLAN_DIR"): (3, _RESIDUE),
+    ("scripts/local_success_report.py", "PLAN_DIR"): (
+        3,
+        "documented --plan-dir configuration exception: the script points the global modules at its own directory",
+    ),
     ("scripts/smoke_getting_started.py", "PLAN_DIR"): (4, "configuration smoke script (R22)"),
 }
 

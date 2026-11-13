@@ -55,7 +55,6 @@ from . import config
 # monkeypatch.setattr(pipeline.server, "_notify_user", ...) would never land.
 from .concurrency import _ServerRef
 
-PLAN_DIR = _ServerRef("PLAN_DIR")
 _notify_user = _ServerRef("_notify_user")
 _store = _ServerRef("_store")
 

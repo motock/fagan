@@ -4,6 +4,7 @@ import { fetchJson } from "../api.js";
 import { renderBoard, renderFilterBar, escapeHtml } from "./board.js";
 import { renderMaturityPanel } from "./maturity.js";
 import { mountPlanControls, planControlSlotHtml } from "./plan-controls.js";
+import { renderPlanReview } from "./plan-review.js";
 
 // plan-detail.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query
@@ -66,6 +67,7 @@ function _planChromeHtml(plan) {
       <h2>${escapeHtml(plan.name)}</h2>
       ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
       ${planControlSlotHtml(plan)}
+      <button type="button" class="plan-review-btn" data-plan-review>Review</button>
     </div>
     ${renderFilterBar(plan.stories)}
   `;
@@ -109,6 +111,17 @@ function _planPanelsHtml(plan) {
 function _mountPlanControls(root, plan) {
   const slot = root.querySelectorAll ? root.querySelectorAll("[data-plan-control-slot]")[0] : null;
   mountPlanControls(slot, plan);
+}
+
+// Wires the header's Review button to the review slot. The chrome is rebuilt
+// on every poll, so the button is re-wired each render; the slot sits outside
+// the chrome, so an open review and any reason being typed survive polls.
+function _mountPlanReview(section, plan) {
+  if (typeof section.querySelectorAll !== "function") return;
+  const button = section.querySelectorAll("[data-plan-review]")[0];
+  const slot = section.querySelectorAll("[data-plan-review-slot]")[0];
+  if (!button || !slot) return;
+  button.addEventListener("click", () => renderPlanReview(slot, plan.name));
 }
 
 function renderPlanDetail(plan) {
@@ -172,6 +185,7 @@ function renderPlanDetail(plan) {
     if (section.dataset) section.dataset.planName = plan.name;
     section.innerHTML = `
       <div class="plan-chrome">${_planChromeHtml(plan)}</div>
+      <div class="plan-review-slot" data-plan-review-slot></div>
       ${renderBoard(plan.stories)}
       <div class="plan-panels">${_planPanelsHtml(plan)}</div>
     `;
@@ -200,6 +214,8 @@ function renderPlanDetail(plan) {
       });
     }
   }
+
+  _mountPlanReview(section, plan);
 
   section.querySelectorAll(".filter-chip").forEach((el) => {
     el.addEventListener("click", () => {

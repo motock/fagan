@@ -42,7 +42,6 @@ _RESIDUE = (
 ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("app/dashboard.py", "PLAN_DIR"): (2, _RESIDUE),
     ("pipeline/cross_plan.py", "plan_dir"): (4, "file store bulk manifest loader still takes a directory"),
-    ("pipeline/outbox_health.py", "plan_dir"): (2, _RESIDUE),
     ("pipeline/paths.py", "PLAN_DIR"): (1, "configuration: the accessor that resolves the plans directory"),
     ("pipeline/persistence.py", "PLAN_DIR"): (5, "file store implementation"),
     ("pipeline/preflight.py", "plan_dir"): (3, "configuration check a's explicit-directory argument (R12)"),

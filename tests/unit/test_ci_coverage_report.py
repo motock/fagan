@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 SHA = re.compile(r"[0-9a-f]{40}")
 LEG = "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'"
@@ -100,3 +101,9 @@ def test_unrelated_root_files_are_not_gitignored() -> None:
     assert not _is_gitignored("coverage_notes.txt"), (
         "the coverage ignore rules must not hide unrelated root files"
     )
+
+
+def test_contributing_documents_the_artifact() -> None:
+    text = CONTRIBUTING.read_text(encoding="utf-8")
+    assert "coverage-xml" in text
+    assert "coverage.xml" in text

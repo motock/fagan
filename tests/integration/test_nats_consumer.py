@@ -42,8 +42,8 @@ import pytest
 # pipeline.server is imported here, before the pipeline submodules this file
 # uses, to defuse a pre-existing import cycle; see the same idiom in
 # tests/unit/test_triage_cap_silent_skip.py.
-import pipeline.server  # noqa: F401  # isort: skip
-from pipeline import event_wiring, events_nats_consumer, persistence
+import pipeline.server  # isort: skip
+from pipeline import events_nats_consumer, persistence
 from pipeline.event_wiring import wake_handler
 from pipeline.events_nats import NatsEventBus
 
@@ -175,7 +175,7 @@ def buses(nats_env, monkeypatch, tmp_path):
     process's event arrives.
     """
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     consumer_bus = NatsEventBus()
     publisher_bus = NatsEventBus()
     try:

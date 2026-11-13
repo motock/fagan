@@ -1025,7 +1025,7 @@ alive (retrying once it has exited), so two drainers never race the outbox
 merge and drop a record. No
 Slack or generic webhook sink is implemented yet.
 
-### Audit stream (PIPELINE_PLAN_DIR/<plan>.audit.jsonl)
+### Audit stream (file store: PIPELINE_PLAN_DIR/<plan>.audit.jsonl)
 
 The threat model is in docs/AUDIT_CHAIN_THREAT_MODEL.md.
 

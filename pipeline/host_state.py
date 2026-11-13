@@ -45,10 +45,6 @@ _RECENT_FILE = "recent_workspaces.json"
 _ACTIVE_FILE = "active_workspace.json"
 _RECENT_LIMIT = 20
 
-# Wake markers (ADR 0012 decision 9): derived state the reconcile sweep recovers,
-# so one marker per plan lives host-locally, never in a replicated record.
-WAKE_DIR_NAME = ".wake"
-
 # Documented in REFERENCE.md: the dashboard's UI preferences and the scheduler's
 # liveness snapshot are host-local files directly under the plans directory, and
 # so is the daemon's single-instance lock.
@@ -211,10 +207,6 @@ class HostState(Protocol):
 
     def heavy_lock(self) -> AbstractContextManager[None]: ...
 
-    def wake_dir(self) -> Path: ...
-
-    def event_bus_dir(self) -> Path: ...
-
 
 class FileHostState:
     """File-backed ``HostState``: JSON files directly under the plans dir."""
@@ -352,19 +344,6 @@ class FileHostState:
     def git_clone_root(self) -> Path:
         """Directory the git provider clones each pinned commit under."""
         return self._root().joinpath(*_GIT_CLONE_ROOT)
-
-    # -- wakes and the JSONL event bus -------------------------------------
-
-    def wake_dir(self) -> Path:
-        """Directory holding one wake marker per plan awaiting a reconcile.
-
-        Nothing is created: the writer makes it with mode 0o700 on first use.
-        """
-        return self._root() / WAKE_DIR_NAME
-
-    def event_bus_dir(self) -> Path:
-        """Root the JSONL event bus appends ``<plan>.events.jsonl`` under."""
-        return self._root()
 
     # -- plan and heavy locks ----------------------------------------------
 

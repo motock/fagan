@@ -16,7 +16,6 @@
  "pipeline/preflight.py": 11,
  "pipeline/review.py": 1,
  "pipeline/scheduler_daemon.py": 1,
- "pipeline/server.py": 1,
  "pipeline/server_tools_lifecycle.py": 1,
  "pipeline/service.py": 2,
  "pipeline/store.py": 11,

@@ -265,6 +265,15 @@ class FileStore:
         # module's binding is patched after this module is imported.
         return PLAN_DIR
 
+    def ensure_directories(self) -> None:
+        """Create the plans and worktree roots this store writes under.
+
+        Idempotent. ``build_store`` calls it for the file store only, so the
+        sqlite and plugin stores never create either directory.
+        """
+        self._plans_dir().mkdir(parents=True, exist_ok=True)
+        WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
+
     def get_manifest(self, plan_name: str) -> dict[str, Any]:
         return json.loads((self._plans_dir() / f"{plan_name}.manifest.json").read_text())
 
@@ -907,7 +916,9 @@ def build_store(environ=None) -> Store:
         built = factory()
         require_methods(built, RECORD_STORE_METHODS, "store")
         return built
-    return FileStore()
+    built_file_store = FileStore()
+    built_file_store.ensure_directories()
+    return built_file_store
 
 
 def reported_store_kind(environ=None) -> str:

@@ -422,9 +422,6 @@ PIPELINE_SELF_REPO_ROOT = Path(__file__).resolve().parent.parent
 RETRO_PENDING_PATH = PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
 
 
-PLAN_DIR.mkdir(parents=True, exist_ok=True)
-WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
-
 mcp = MCPServer("pipeline")
 
 # MCPServer's constructor calls logging.basicConfig(level=INFO), which the httpx

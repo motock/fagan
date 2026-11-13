@@ -214,6 +214,10 @@ class FileHostState:
     def _root(self) -> Path:
         return Path(os.fspath(_ROOT))
 
+    def ensure_root(self) -> None:
+        """Create the plans directory the host-local files live under. Idempotent."""
+        self._root().mkdir(parents=True, exist_ok=True)
+
     def get_recent_workspaces(self) -> list[str]:
         path = self._root() / _RECENT_FILE
         if not path.exists():
@@ -391,5 +395,7 @@ class FileHostState:
 
 
 def build_host_state() -> HostState:
-    """Return the host state used by the pipeline server."""
-    return FileHostState()
+    """Return the host state used by the pipeline server, with its root present."""
+    host = FileHostState()
+    host.ensure_root()
+    return host

@@ -2,7 +2,7 @@
 
 ``PipelineService`` was extracted verbatim from ``pipeline/server.py``. Its
 methods are thin delegators that call module-level ``_*_impl`` functions and
-read module globals (``PLAN_DIR``, ``_store``, ``_VALID_STORY_STATUSES``, ...)
+read module globals (``_store``, ``_VALID_STORY_STATUSES``, ...)
 as free variables. Those names still live in ``pipeline.server`` (and will be
 moved by LATER stories in this chain), so this module resolves them through
 ``_ServerRef`` bindings that delegate to the *current* ``pipeline.server``
@@ -42,7 +42,7 @@ class _ServerRef:
     """Delegates to the *current* ``pipeline.server`` binding for a name.
 
     The class body below references server-sourced names (``_store``,
-    ``PLAN_DIR``, ``_set_plan_paused``, ``_validate_key``, ...) as bare module
+    ``_set_plan_paused``, ``_validate_key``, ...) as bare module
     globals. The test suite patches ``pipeline.server`` for those names, so
     these bindings must read the live ``pipeline.server`` value at call time
     rather than hold a copy imported at module load.
@@ -112,7 +112,6 @@ class _ServerRef:
 _store, _host_state = _ServerRef("_store"), _ServerRef("_host_state")
 _VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
 _notify_user = _ServerRef("_notify_user")
-PLAN_DIR = _ServerRef("PLAN_DIR")
 WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 config_provenance = _ServerRef("config_provenance")
 role_registry = _ServerRef("role_registry")
@@ -202,8 +201,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     methods, so a future HTTP adapter can drive the same logic without MCP
     (see docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, W1a).
 
-    Methods deliberately read this module's globals (``PLAN_DIR``,
-    ``PIPELINE_AUTONOMY``, ``_plan_lock``, ...) as free variables rather than
+    Methods deliberately read this module's globals (``PIPELINE_AUTONOMY``,
+    ``_plan_lock``, ...) as free variables rather than
     holding copies, so the test suite's ``monkeypatch.setattr(pipeline.server,
     ...)`` targets keep landing exactly as they did before the extraction.
     """
@@ -694,9 +693,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         _validate_key(plan_name)
         if plan_name not in _store.records().list_plans("default"):
             return []
-
-        # Reads PLAN_DIR as a free variable (pinned by test_list_ready_stories_migration).
-        _ = PLAN_DIR
 
         manifest = _store.get_manifest(plan_name)
         stories = manifest["stories"]

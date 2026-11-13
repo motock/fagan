@@ -1,6 +1,5 @@
 {
  "app/dashboard.py": 5,
- "pipeline/advance.py": 1,
  "pipeline/checkpoint.py": 2,
  "pipeline/cross_plan.py": 4,
  "pipeline/dispatch_baseline.py": 1,
@@ -15,7 +14,6 @@
  "pipeline/preflight.py": 11,
  "pipeline/scheduler_daemon.py": 1,
  "pipeline/server_tools_lifecycle.py": 1,
- "pipeline/service.py": 2,
  "pipeline/store.py": 11,
  "pipeline/tick_checks.py": 1,
  "pipeline/topology_identity.py": 1,

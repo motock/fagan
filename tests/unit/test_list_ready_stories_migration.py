@@ -207,12 +207,13 @@ def test_new_method_has_no_self_access_to_module_globals_or_helpers():
     )
 
 
-def test_new_method_reads_plan_dir_as_free_variable():
-    """R1: ``PLAN_DIR`` must remain a bare (free) name inside the method, not
-    copied onto self. We assert the source references the bare global."""
+def test_new_method_does_not_read_plan_dir_as_free_variable():
+    """The method reads plans through the store, not a bare ``PLAN_DIR``
+    global, so the dead free-variable read and the module binding are gone.
+    ``self.PLAN_DIR`` must also be absent (R1)."""
     src = inspect.getsource(p.PipelineService.list_ready_stories)
-    assert re.search(r"\bPLAN_DIR\b", src), (
-        "method must reference the module global `PLAN_DIR` as a bare name"
+    assert not re.search(r"\bPLAN_DIR\b", src), (
+        "method must not reference the module global `PLAN_DIR`"
     )
     assert "self.PLAN_DIR" not in src, (
         "PLAN_DIR must NOT be accessed via self (R1)"

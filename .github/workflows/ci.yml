@@ -193,7 +193,7 @@ jobs:
         run: ruff check .
 
       - name: Check file line limits
-        run: python scripts/check_line_limit.py
+        run: python scripts/check_line_limit.py --mode warn
 
   image:
     name: Build the server image

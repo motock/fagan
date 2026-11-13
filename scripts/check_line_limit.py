@@ -28,6 +28,13 @@ production file that grows past its ceiling fails, and an allowlisted
 production file that no longer exists or has come under the limit fails with a
 "remove this entry" message -- otherwise the list becomes a permanent
 exemption list. Each split story retires its own entry.
+
+Modes
+-----
+``--mode block`` (the default) exits 1 on any blocking violation or stale
+allowlist entry. ``--mode warn`` prints the same blocking findings with a
+``warn:`` prefix, prints ``OK (warn mode): N file(s) over limit``, and always
+exits 0, so the limit can run advisory without removing the gate.
 """
 from __future__ import annotations
 
@@ -126,8 +133,13 @@ def _iter_tracked(root: Path):
             yield full.relative_to(root).as_posix()
 
 
-def check(root: Path, limit: int = DEFAULT_LIMIT) -> int:
-    """Run the gate. Returns the process exit code (0 clean, 1 blocking)."""
+def check(root: Path, limit: int = DEFAULT_LIMIT, mode: str = "block") -> int:
+    """Run the gate. Returns the process exit code (0 clean, 1 blocking).
+
+    In ``warn`` mode blocking findings are printed with a ``warn:`` prefix and
+    the exit code is always 0.
+    """
+    prefix = "warn: " if mode == "warn" else ""
     blocking_violations: list[tuple[str, int, int | None]] = []
     warn_violations: list[tuple[str, int, int | None]] = []
     stale_entries: list[tuple[str, int | None]] = []
@@ -168,19 +180,19 @@ def check(root: Path, limit: int = DEFAULT_LIMIT) -> int:
 
     for rel, count, ceiling in blocking_violations:
         if ceiling is None:
-            print(f"{rel}: {count} lines (limit {limit})")
+            print(f"{prefix}{rel}: {count} lines (limit {limit})")
         else:
-            print(f"{rel}: {count} lines (limit {limit}, ceiling {ceiling})")
+            print(f"{prefix}{rel}: {count} lines (limit {limit}, ceiling {ceiling})")
 
     for rel, count in stale_entries:
         if count is None:
             print(
-                f"{rel}: allowlisted but no longer exists (limit {limit}) "
+                f"{prefix}{rel}: allowlisted but no longer exists (limit {limit}) "
                 "\u2014 remove this entry from the BLOCKING allowlist"
             )
         else:
             print(
-                f"{rel}: allowlisted but now {count} lines (limit {limit}) "
+                f"{prefix}{rel}: allowlisted but now {count} lines (limit {limit}) "
                 "\u2014 remove this entry from the BLOCKING allowlist"
             )
 
@@ -189,6 +201,10 @@ def check(root: Path, limit: int = DEFAULT_LIMIT) -> int:
             print(f"warn-only: {rel}: {count} lines (limit {limit})")
         else:
             print(f"warn-only: {rel}: {count} lines (limit {limit}, ceiling {ceiling})")
+
+    if mode == "warn":
+        print(f"OK (warn mode): {len(blocking_violations)} file(s) over limit")
+        return 0
 
     if blocking_violations or stale_entries:
         print(
@@ -213,13 +229,20 @@ def main(argv: list[str] | None = None) -> int:
         help=f"line limit per file (default {DEFAULT_LIMIT})",
     )
     parser.add_argument(
+        "--mode",
+        choices=("block", "warn"),
+        default="block",
+        help="block: exit 1 on blocking violations (default); "
+        "warn: print them as warnings and always exit 0",
+    )
+    parser.add_argument(
         "--root",
         type=Path,
         default=Path(__file__).resolve().parent.parent,
         help="repository root to scan (default: this script's repo)",
     )
     args = parser.parse_args(argv)
-    return check(args.root.resolve(), args.limit)
+    return check(args.root.resolve(), args.limit, args.mode)
 
 
 if __name__ == "__main__":

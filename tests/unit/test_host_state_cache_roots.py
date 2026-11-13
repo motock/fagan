@@ -56,9 +56,11 @@ def test_should_follow_a_repatched_plans_directory_on_every_call(tmp_path, monke
 
 
 def test_should_not_create_anything_when_resolving_the_roots(tmp_path, monkeypatch):
+    # The bare seam, not build_host_state(): that factory creates the root
+    # (ensure_root) on purpose, so resolving a root through it would create it.
     missing = tmp_path / "not-yet"
     monkeypatch.setattr(server_mod, "PLAN_DIR", missing)
-    state = host_state.build_host_state()
+    state = host_state.FileHostState()
     assert state.cache_root() == missing
     assert state.story_log_root() == missing
     assert not missing.exists()

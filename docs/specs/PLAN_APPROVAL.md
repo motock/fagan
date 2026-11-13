@@ -393,10 +393,18 @@ both `409`: `plan approval is not enabled` when the gate is off, and
 `approval` dict. Unauthenticated callers are refused by the middleware (401)
 before the handler runs.
 
-Core ships **no** review page: this is a JSON API. An operator supplies a review
-UI through the dashboard extension mount (`app/dashboard_mount.py`, see
-"Mounted dashboard extensions"), whose `ctx.router` routes are included under
-`/api/ext` behind the same authentication.
+The JSON route is the contract. The core dashboard renders it in a review panel,
+opened from the plan detail header's **Review** button: it shows the payload
+above, and its Approve and Request-changes buttons send the `current_digest`
+the panel was built from. Approve is disabled while `digest_current` is false.
+An operator may still supply a separate review UI through the dashboard
+extension mount (`app/dashboard_mount.py`, see "Mounted dashboard extensions"),
+whose `ctx.router` routes are included under `/api/ext` behind the same
+authentication.
+
+The plan detail header also has **Pause plan** / **Resume plan**, which call
+`POST /api/plans/{plan_name}/pause` and `.../resume`. Those routes return `403`
+when the policy refuses the caller, the same as the MCP tools.
 
 `app/dashboard_helpers._plan_summary` adds an `"approval"` key **only** when
 the manifest carries an approval record. The value is a six-field projection:
@@ -416,8 +424,9 @@ default-off response is byte-identical to today's.
 
 ## 10. Non-goals
 
-- This spec does not change `REFERENCE.md`; the MCP tools section there is
-  verbatim-pinned and is not the documentation surface for this feature.
+- This spec does not change `REFERENCE.md`'s MCP tools section, which is
+  verbatim-pinned. The dashboard controls are documented in REFERENCE.md under
+  "Plan pausing and story diff tools".
 - Enforcement of the gate at dispatch is tracked separately; this document
   describes the state, the transitions and the surfacing that exist today.
 

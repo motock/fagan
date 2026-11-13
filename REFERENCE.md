@@ -248,6 +248,10 @@ has a dashboard HTTP route.
   model quota in the background. HTTP: `POST /api/plans/{plan_name}/pause`.
 - `resume_plan(plan_name)` — clear the pause; the plan's stories are eligible
   again on the next tick. HTTP: `POST /api/plans/{plan_name}/resume`.
+- The dashboard's plan detail header has a **Pause plan** / **Resume plan**
+  button that calls the same two HTTP routes. It needs the same authorization
+  as the API: a caller the policy refuses gets `403`, shown in the UI as a
+  generic "not permitted" message.
 - `get_story_diff(plan_name, story_key, path=None)` — the story's worktree
   changes against its fork point, including staged, unstaged and untracked
   files. Without `path` it returns a summary of changed files (capped at 500,
@@ -258,6 +262,16 @@ has a dashboard HTTP route.
   unknown plan or story returns `{"ok": false, "status": 404}`. Read-only; it
   backs the story modal's **Diff** section. HTTP:
   `GET /api/plans/{plan_name}/stories/{story_key}/diff?path=...`.
+
+Plan approval can also be decided from the dashboard. The plan detail header's
+**Review** button opens a panel that shows the plan's approval status, its
+warnings and whether the stored digest still matches the plan on disk. An
+authorized user who logged in through OIDC can **Approve** or **Request
+changes**. Each decision is sent with the digest the panel displayed, so it
+applies only to the content the reviewer saw; if the plan changed since, the
+dashboard refuses with `409` and the panel asks the reviewer to reload.
+Unauthenticated sessions and shared-secret sessions cannot decide (see
+[docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) §9).
 
 ---
 

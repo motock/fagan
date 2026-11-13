@@ -92,6 +92,24 @@ async function postJson(url) {
   return res.json();
 }
 
+// POST with a JSON body (plan review decisions). Same auth header, login
+// redirect and error shape as postJson; postJson itself stays bodyless.
+async function postJsonBody(url, body) {
+  const key = window.__PIPELINE_API_KEY__;
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers["X-Pipeline-Api-Key"] = key;
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    await _redirectToLoginIfConfigured(res);
+    throw new Error(`${url} -> ${res.status}`);
+  }
+  return res.json();
+}
+
 // Maturity panel endpoints (a3-maturity-metrics).
 async function fetchPlanMetrics(plan) {
   return fetchJson(`/api/plans/${encodeURIComponent(plan)}/metrics`);
@@ -112,4 +130,4 @@ async function fetchIngestablePlans() {
   return fetchJson('/api/ingestable-plans');
 }
 
-export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness, fetchHealth, fetchIngestablePlans };
+export { fetchJson, postJson, postJsonBody, fetchPlanMetrics, fetchGuardLiveness, fetchHealth, fetchIngestablePlans };

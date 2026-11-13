@@ -31,13 +31,11 @@ Two things are explicit rather than inherited:
       (``pipeline.persistence._plan_role_config``).
 
 ``plans_root``
-    The caller's own plans-directory binding, also required - this module never
-    resolves one for itself, which is also why it is not on ADR 0012's
-    shrink-only allowlist of modules that name the binding directly. Tests patch
-    ``pipeline.server``'s binding, ``pipeline.persistence``'s and friends (see
-    those modules' docstrings), so each caller passes the path *it* documents as
-    patchable, and a patched binding is honoured on the fallback path as well as
-    the primary one.
+    Optional. Omitted, the file fallback reads this host's plan root
+    (``build_host_state().root()``), resolved on every call, so callers name no
+    plans-directory binding of their own. An explicit path still wins. Either
+    way the fallback path honours a patched binding, since the host root reads
+    ``pipeline.server.PLAN_DIR`` live.
 
 The legacy file store has no record view for this purpose. ``FileStore``'s
 record view delegates straight back to the same JSON files, through a
@@ -58,11 +56,19 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .host_state import build_host_state
 from .store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["read_plan_manifest", "read_plan_names"]
+
+
+def _host_plans_root(plans_root: Path | str | None) -> Path | str:
+    """The caller's explicit root, else this host's plan root, resolved per call."""
+    if plans_root is None:
+        return build_host_state().root()
+    return plans_root
 
 
 def _record_view() -> Any | None:
@@ -118,7 +124,10 @@ def _read_manifest_file(
 
 
 def read_plan_manifest(
-    plan_name: str, *, fallback_on_error: bool, plans_root: Path | str
+    plan_name: str,
+    *,
+    fallback_on_error: bool,
+    plans_root: Path | str | None = None,
 ) -> dict[str, Any] | None:
     """Read one plan's manifest, record view first, caller's plan file second.
 
@@ -144,7 +153,7 @@ def read_plan_manifest(
         if isinstance(manifest, dict):
             return manifest
     return _read_manifest_file(
-        plan_name, plans_root, fallback_on_error=fallback_on_error
+        plan_name, _host_plans_root(plans_root), fallback_on_error=fallback_on_error
     )
 
 
@@ -166,7 +175,9 @@ def _read_plan_names_file(
     return [path.name.removesuffix(".manifest.json") for path in paths]
 
 
-def read_plan_names(*, fallback_on_error: bool, plans_root: Path | str) -> list[str]:
+def read_plan_names(
+    *, fallback_on_error: bool, plans_root: Path | str | None = None
+) -> list[str]:
     """List the plan names this deployment knows, record view first.
 
     The listing counterpart of :func:`read_plan_manifest`, with the same two
@@ -197,4 +208,6 @@ def read_plan_names(*, fallback_on_error: bool, plans_root: Path | str) -> list[
             names = []
         if names:
             return sorted(names)
-    return _read_plan_names_file(plans_root, fallback_on_error=fallback_on_error)
+    return _read_plan_names_file(
+        _host_plans_root(plans_root), fallback_on_error=fallback_on_error
+    )

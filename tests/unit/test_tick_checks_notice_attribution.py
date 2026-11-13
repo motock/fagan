@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline import paths, persistence, tick_checks
+from pipeline import persistence, tick_checks
 from pipeline.store import FileStore
 from pipeline.store_records import DEFAULT_NAMESPACE
 
@@ -75,7 +75,7 @@ def notices(monkeypatch):
 def plan_dir(tmp_path, monkeypatch):
     """A plan directory with one local manifest, bound where the tick reads it."""
     (tmp_path / "a-local.manifest.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -159,7 +159,7 @@ def test_a_store_without_a_record_view_degrades_to_the_file(
 
 def test_no_plan_anywhere_means_no_notice(tmp_path, notices, monkeypatch):
     """Nothing to attribute to yet: skip rather than invent a routing key."""
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     _use_store(monkeypatch, _Store(_Records([])))
 
     _notify_stale()

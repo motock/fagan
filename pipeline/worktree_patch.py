@@ -153,9 +153,9 @@ def resolve_write_target(worktree_root: str, relative_path: str) -> Path:
        (the patch may create files).
     4. Containment re-check: the resolved target must be the worktree root
        itself or a descendant, and must NOT resolve inside the pipeline's own
-       ``REPO_ROOT`` / ``PIPELINE_SELF_REPO_ROOT`` or ``PLAN_DIR`` (read
-       lazily from :mod:`pipeline.server`, the pattern used by
-       ``pipeline.checkpoint``).
+       ``REPO_ROOT`` / ``PIPELINE_SELF_REPO_ROOT`` (read lazily from
+       :mod:`pipeline.server`, the pattern used by ``pipeline.checkpoint``) or
+       the host state's plan root (``build_host_state().root()``).
     5. Fail closed: the walk and the containment re-check are wrapped so any
        unexpected OS error (or any other unexpected failure, including a
        failed lazy import of the pipeline constants) becomes
@@ -207,10 +207,11 @@ def resolve_write_target(worktree_root: str, relative_path: str) -> Path:
         #     patch the server bindings stay authoritative.  importlib again:
         #     no import statements in this module (WAP-4A purity test).
         server = importlib.import_module("pipeline.server")
+        host_state = importlib.import_module("pipeline.host_state")
         forbidden_roots = (
             server.REPO_ROOT,
             server.PIPELINE_SELF_REPO_ROOT,
-            server.PLAN_DIR,
+            host_state.build_host_state().root(),
         )
         for forbidden in forbidden_roots:
             if forbidden is None:
@@ -547,8 +548,8 @@ def apply_patch(
        60s scheduler tick can never redispatch mid-apply;
     2. manifest read through the ONE store-first read, the shared
        ``pipeline.manifest_source.read_plan_manifest`` (ADR 0012 stage B),
-       with this server's patchable ``PLAN_DIR`` passed in as the file source
-       so a test that patches ``pipeline.server.PLAN_DIR`` is honoured.  The
+       whose file source is this host's plan root (``build_host_state().root()``,
+       which reads ``pipeline.server.PLAN_DIR`` live).  The
        caller states ``fallback_on_error=False``: a store FAILURE propagates
        (never a silent fall-back to this host's plan file, which would apply a
        diff to a stale worktree), and a plan neither source knows fails closed
@@ -576,8 +577,8 @@ def apply_patch(
 
         # 2. Manifest read through the ONE store-first read,
         #    ``pipeline.manifest_source.read_plan_manifest`` (ADR 0012 stage B
-        #    -- see its docstring), with this server's patchable ``PLAN_DIR``
-        #    supplied as the file source.  Under a store-backed deployment
+        #    -- see its docstring), reading this host's plan root as the file
+        #    source.  Under a store-backed deployment
         #    (``PIPELINE_STORE=sqlite``) a plan's stories live in the database,
         #    so a patch proposed against that plan must resolve its target
         #    worktree from the same source of truth instead of this host's
@@ -590,10 +591,9 @@ def apply_patch(
         #    worktree.  A missing (or non-object) manifest in BOTH sources
         #    fails closed to the same 404 as an unknown plan or story (never a
         #    write).
-        server = importlib.import_module("pipeline.server")
         manifest_source = importlib.import_module("pipeline.manifest_source")
         manifest = manifest_source.read_plan_manifest(
-            plan_name, fallback_on_error=False, plans_root=server.PLAN_DIR
+            plan_name, fallback_on_error=False
         )
         if not isinstance(manifest, dict):
             return {"ok": False, "error": "unknown plan or story", "status_code": 404}

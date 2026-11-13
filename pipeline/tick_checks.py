@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 
-from pipeline import manifest_source, outbox_health, paths, persistence
+from pipeline import manifest_source, outbox_health, persistence
 from pipeline.consumer_watchdog import ConsumerWatchdog
 
 logger = logging.getLogger(__name__)
@@ -91,8 +91,8 @@ def _first_plan_name() -> str | None:
     rather than globbed here: the store-selection rule (lazy
     ``pipeline.server._store`` lookup, legacy :class:`pipeline.store.FileStore`
     excluded) then lives in exactly one place. This module passes the
-    ``paths.PLAN_DIR`` binding it documents as patchable, so a patched binding
-    is honoured on the file path *and* the tests keep their fixture directory.
+    host state's plan root by default (no binding named here), so a patched
+    ``pipeline.server.PLAN_DIR`` is honoured on the file path too.
 
     ``fallback_on_error`` is ``True``: attribution is advisory, like the rest of
     the tick, so a store that cannot list its plans is logged at debug level and
@@ -101,9 +101,7 @@ def _first_plan_name() -> str | None:
     calls this outside its own guard.
     """
     try:
-        names = manifest_source.read_plan_names(
-            fallback_on_error=True, plans_root=paths.PLAN_DIR
-        )
+        names = manifest_source.read_plan_names(fallback_on_error=True)
     except Exception:  # a notice must never break the tick
         logger.debug("first-plan attribution failed", exc_info=True)
         return None

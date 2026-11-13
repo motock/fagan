@@ -49,11 +49,11 @@ def _event(plan: str = "p1", story_key: str = "S1", etype: str = "agent_done") -
 
 @pytest.fixture
 def patched_plan_dir(tmp_path, monkeypatch):
-    """Patch ``PLAN_DIR`` in both ``pipeline.paths`` and ``event_wiring``."""
+    """Patch ``PLAN_DIR`` in ``pipeline.paths`` and the host-state root's binding."""
     monkeypatch.setattr("pipeline.paths.PLAN_DIR", tmp_path)
-    # event_wiring imports PLAN_DIR from .paths at module load; patch the name
-    # it actually references.
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    # wake_handler reads the manifest from the host-state root, which resolves
+    # pipeline.server.PLAN_DIR live.
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -313,7 +313,7 @@ def test_build_bus_does_not_subscribe_other_known_types():
 def test_publish_agent_done_reaches_wake_handler(monkeypatch, tmp_path):
     """Publishing an agent_done event through the built bus calls wake_handler."""
     monkeypatch.setattr("pipeline.paths.PLAN_DIR", tmp_path)
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     _write_manifest(tmp_path, "p1", _manifest("p1", {"S1": {"status": "in_progress"}}))
 
     fn = mock.Mock(return_value={"ok": True})
@@ -343,7 +343,7 @@ def test_publish_unsubscribed_type_does_not_raise(monkeypatch, tmp_path):
 def test_publish_unsubscribed_type_does_not_call_advance(monkeypatch, tmp_path):
     """An event type with no subscriber must not trigger advance_pipeline."""
     monkeypatch.setattr("pipeline.paths.PLAN_DIR", tmp_path)
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     _write_manifest(tmp_path, "p1", _manifest("p1", {"S1": {"status": "todo"}}))
 
     fn = mock.Mock()

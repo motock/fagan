@@ -66,7 +66,7 @@ def seams(tmp_path, monkeypatch):
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
     monkeypatch.setattr("pipeline.paths.PLAN_DIR", plan_dir)
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", plan_dir)
 
     advanced = []
 

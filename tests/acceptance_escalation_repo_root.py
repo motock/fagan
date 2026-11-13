@@ -44,6 +44,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import escalation as esc
+from pipeline import persistence as ppers
 from pipeline import server
 
 SENTINEL = Path("/nonexistent-repo-root-set-per-plan-only")
@@ -65,6 +66,18 @@ def fake_git(monkeypatch):
     fake = _FakeSubprocess()
     monkeypatch.setattr(esc, "subprocess", fake)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _pin_plan_store_to_tmp(tmp_path, monkeypatch):
+    # The escalation teardown persists the manifest through the live store,
+    # which reads PLAN_DIR at call time. Without this pin the acc-plan record
+    # lands in the operator's real plans directory on every run.
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    monkeypatch.setattr(server, "PLAN_DIR", plans)
+    monkeypatch.setattr(ppers, "PLAN_DIR", plans)
+    return plans
 
 
 def _manifest(repo_root, story_key: str) -> dict:

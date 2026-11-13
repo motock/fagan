@@ -26,7 +26,7 @@ import pytest
 
 import pipeline.server  # noqa: F401 - pre-existing import cycle; see test_triage_cap_silent_skip
 from pipeline import audit as audit_mod
-from pipeline import audit_anchor, paths, persistence, watchers
+from pipeline import audit_anchor, persistence, watchers
 
 ANCHOR_VARIABLE = "PIPELINE_AUDIT_ANCHOR"
 
@@ -40,15 +40,15 @@ ANCHOR_VARIABLE = "PIPELINE_AUDIT_ANCHOR"
 def plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point both PLAN_DIR bindings at a temp plan directory for one test.
 
-    ``pipeline.audit`` reads ``persistence.PLAN_DIR`` and ``pipeline.watchers``
-    reads ``paths.PLAN_DIR`` at call time, so patching the module attributes
-    redirects the streams without either module capturing the operator's real
-    plan directory at import.
+    ``pipeline.audit`` reads ``persistence.PLAN_DIR`` and the scan lists plans
+    through the host state root, which reads ``pipeline.server.PLAN_DIR`` at
+    call time, so patching the module attributes redirects the streams without
+    either module capturing the operator's real plan directory at import.
     """
     directory = tmp_path / "plans"
     directory.mkdir()
     monkeypatch.setattr(persistence, "PLAN_DIR", directory)
-    monkeypatch.setattr(paths, "PLAN_DIR", directory)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", directory)
     monkeypatch.delenv(ANCHOR_VARIABLE, raising=False)
     return directory
 

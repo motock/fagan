@@ -26,7 +26,7 @@ import pytest
 # pipeline.server is imported explicitly first: a pre-existing import cycle
 # makes some pipeline modules unimportable cold in any other order.
 import pipeline.server
-from pipeline import ci_rollup, forge_github, paths, watchers
+from pipeline import ci_rollup, forge_github, watchers
 from pipeline.forge import FAIL, PASS, PENDING, CISnapshot, CIStatusUnreadable
 from pipeline.forge_github import GitHubForge
 
@@ -263,7 +263,7 @@ def _ci_events(events):
 
 
 def test_scan_refreshes_a_pending_repo_once_per_interval(tmp_path, monkeypatch, fetches, clock):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
 
@@ -282,7 +282,7 @@ def test_scan_refreshes_a_pending_repo_once_per_interval(tmp_path, monkeypatch, 
 def test_scan_publishes_one_ci_reconcile_when_the_sha_stops_pending(
     tmp_path, monkeypatch, fetches, clock
 ):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
     fetches["answers"].extend(
@@ -304,7 +304,7 @@ def test_scan_publishes_one_ci_reconcile_when_the_sha_stops_pending(
 
 
 def test_scan_publishes_nothing_while_the_sha_stays_pending(tmp_path, monkeypatch, fetches, clock):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
     fetches["answers"].extend(
@@ -326,7 +326,7 @@ def test_scan_publishes_once_for_a_sha_first_seen_already_final(
     tmp_path, monkeypatch, fetches, clock
 ):
     """After a restart the previous state is unknown: a final sha still wakes once."""
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
     fetches["answers"].extend(
@@ -348,7 +348,7 @@ def test_scan_publishes_once_for_a_sha_first_seen_already_final(
 def test_scan_logs_a_warning_when_the_fetch_raises_and_keeps_its_events(
     tmp_path, monkeypatch, fetches, clock, caplog
 ):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
     # A second plan whose marker must still be reported: the CI step may never
@@ -379,7 +379,7 @@ def test_scan_logs_a_warning_when_the_fetch_raises_and_keeps_its_events(
 def test_scan_never_fetches_a_repository_without_a_pending_story(
     tmp_path, monkeypatch, fetches, clock
 ):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root, sha=None))
 
@@ -391,7 +391,7 @@ def test_scan_never_fetches_a_repository_without_a_pending_story(
 def test_scan_stores_the_fetched_rollup_under_the_configured_state_root(
     tmp_path, monkeypatch, fetches, clock, _isolated_state
 ):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
     repo_root = _repo(tmp_path)
     _write_manifest(tmp_path, "alpha", _manifest("alpha", repo_root))
     fetches["answers"].append({SHA: CISnapshot({"unit": PENDING})})

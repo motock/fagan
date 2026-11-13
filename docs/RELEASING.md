@@ -3,7 +3,7 @@
 How a release is cut in this repo. This is a manual procedure, written down so
 the next release does not depend on anyone's memory. Releases are cut by hand
 with `git`, `gh` and `mcp-publisher`; GitHub Actions does not tag, bump versions
-or cut releases. Three workflows are defined, and none of them releases:
+or cut releases. These workflows are defined, and none of them releases:
 
 - `ci.yml` - the test suite, on every change.
 - `smoke.yml` - builds `deploy/Dockerfile`, starts `deploy/compose.yaml`, runs
@@ -20,6 +20,11 @@ or cut releases. Three workflows are defined, and none of them releases:
   pull requests touching `deploy/**` or `pipeline/remote_*.py` and on
   `workflow_dispatch`, gated on the repository variable
   `ENABLE_STANDALONE_SMOKE_CI`.
+
+- `codeql.yml` - CodeQL static analysis for `python` and this repo's workflow
+  files, on every pull request and push to `master` plus a weekly schedule.
+  Results land in GitHub's code scanning: a finding annotates the pull request
+  and appears on the Security tab.
 
 Like the project itself, this is a single-maintainer research project rather
 than a maintained product with an SLA: releases happen when there is something
@@ -48,9 +53,9 @@ inventing a new version scheme.
 
 Work through this checklist before touching the tag. All five must be true.
 
-- [ ] **master CI is green.** Only `ci.yml` and `smoke.yml` run on `master`
+- [ ] **master CI is green.** Several workflows run on `master`
       automatically, so the bare `gh run list --branch master --limit 1` can
-      report either one; scope it per workflow with `--workflow`, running
+      report any of them; check the two that gate a release by name with `--workflow`, running
       `gh run list --workflow ci.yml --branch master --limit 1` and
       `gh run list --workflow smoke.yml --branch master --limit 1`, and confirm
       each most recent run on `master` shows `completed` / `success` —

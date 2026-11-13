@@ -51,6 +51,11 @@ To see which lines the suite does not exercise (optional, not a merge gate):
     --cov-report=term-missing:skip-covered
 ```
 
+CI builds the same XML on one matrix leg (`ubuntu-latest`, Python 3.14) and
+uploads it as the `coverage-xml` artifact on every `ci.yml` run: open the
+run's "Artifacts" section and download `coverage.xml`. The report is not a
+gate, so no coverage threshold applies and a drop never blocks a merge.
+
 - Keep PRs focused — one concern per PR, under ~400 lines of diff as a
   guideline (see CLAUDE.md's "Pull request size"). A large change is better
   submitted as a sequence of smaller reviewable PRs than one big one.

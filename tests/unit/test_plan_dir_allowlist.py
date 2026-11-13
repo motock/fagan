@@ -41,9 +41,7 @@ _RESIDUE = (
 #: (repo-relative file, identifier) -> (ceiling, reason).
 ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("app/dashboard.py", "PLAN_DIR"): (2, _RESIDUE),
-    ("pipeline/checkpoint.py", "PLAN_DIR"): (1, _RESIDUE),
     ("pipeline/cross_plan.py", "plan_dir"): (4, "file store bulk manifest loader still takes a directory"),
-    ("pipeline/event_wiring.py", "PLAN_DIR"): (2, _RESIDUE),
     ("pipeline/outbox_health.py", "plan_dir"): (2, _RESIDUE),
     ("pipeline/paths.py", "PLAN_DIR"): (1, "configuration: the accessor that resolves the plans directory"),
     ("pipeline/persistence.py", "PLAN_DIR"): (5, "file store implementation"),
@@ -51,10 +49,8 @@ ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("pipeline/scheduler_daemon.py", "PLAN_DIR"): (1, _RESIDUE),
     ("pipeline/server.py", "PLAN_DIR"): (1, "re-export binding only: the patch point the test suite relies on"),
     ("pipeline/store.py", "PLAN_DIR"): (11, "file store implementation"),
-    ("pipeline/tick_checks.py", "PLAN_DIR"): (1, _RESIDUE),
     ("pipeline/watchers.py", "PLAN_DIR"): (1, _RESIDUE),
     ("pipeline/wedge_io.py", "PLAN_DIR"): (1, _RESIDUE),
-    ("pipeline/worktree_patch.py", "PLAN_DIR"): (2, _RESIDUE),
     ("scripts/local_success_report.py", "PLAN_DIR"): (3, _RESIDUE),
     ("scripts/smoke_getting_started.py", "PLAN_DIR"): (4, "configuration smoke script (R22)"),
 }

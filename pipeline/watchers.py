@@ -31,6 +31,7 @@ from . import (
 from .ci import CANCELLED, FAIL, PASS, PENDING, _aggregate_ci_states
 from .events import make_event
 from .forge import CIStatusUnreadable
+from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
@@ -151,6 +152,7 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
 
 _SECURITY_DUE_COOLDOWN_SECONDS = 24 * 3600
 _SECURITY_DUE_LAST_EMIT: dict[str, float] = {}
+_store = _ModuleRef("pipeline.server", "_store")
 
 
 def _scan_security_audits(repo_plans: dict[str, str]) -> None:
@@ -158,7 +160,7 @@ def _scan_security_audits(repo_plans: dict[str, str]) -> None:
     if every_commits == 0 and every_days == 0:
         return
     for repo_root, plan_name in repo_plans.items():
-        state = security_audit.read_audit_state(paths.PLAN_DIR, repo_root)
+        state = security_audit.read_audit_state(_store.records(), repo_root)
         commits = (
             security_audit.commits_since(repo_root, state["last_audited_sha"])
             if state

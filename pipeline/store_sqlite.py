@@ -50,6 +50,7 @@ from pipeline.store_records import (
     validate_channel,
     validate_namespace,
     validate_plan_name,
+    validate_repo_key,
     validate_story_key,
     verify_context_digest,
 )
@@ -529,6 +530,26 @@ class SqliteRecords(
         if stored is None:
             stored = self._store._snapshot_row(namespace, digest)
         return stored
+
+    # -- security-audit state (ADR 0012 decision 3) ---------------------
+    # One row per ``(namespace, repo_key)`` of the ``security_audit_state``
+    # table: a put replaces the row, so the repo's last audit is always the
+    # one the latest put wrote.
+    def get_security_audit_state(self, namespace: str, repo_key: str) -> dict | None:
+        """Return the recorded audit for ``repo_key``, or ``None``."""
+        self._namespace(namespace)
+        validate_repo_key(repo_key)
+        return self._store._audit_row(namespace, repo_key)
+
+    def put_security_audit_state(
+        self, namespace: str, repo_key: str, state: dict
+    ) -> None:
+        """Store ``state`` as ``repo_key``'s audit, replacing any previous one."""
+        self._namespace(namespace)
+        validate_repo_key(repo_key)
+        if not isinstance(state, dict):
+            raise TypeError('security audit state must be a dict')
+        self._store._put_audit_row(namespace, repo_key, json.dumps(state))
 
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.

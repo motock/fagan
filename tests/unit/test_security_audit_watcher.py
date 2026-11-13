@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import paths, security_audit, watchers
+from pipeline import paths, persistence, security_audit, server, watchers
 
 _COMMITS = "PIPELINE_SECURITY_AUDIT_EVERY_COMMITS"
 _DAYS = "PIPELINE_SECURITY_AUDIT_EVERY_DAYS"
@@ -50,9 +50,16 @@ def repo(tmp_path):
 
 @pytest.fixture
 def plans(tmp_path, monkeypatch):
+    """A throwaway plans directory shared by the manifests and the live store.
+
+    The audit state is read and written through the live store's records, so
+    its plans directory is the same one the manifests are scanned from.
+    """
     directory = tmp_path / "plans"
     directory.mkdir()
     monkeypatch.setattr(paths, "PLAN_DIR", directory)
+    monkeypatch.setattr(server, "PLAN_DIR", directory)
+    monkeypatch.setattr(persistence, "PLAN_DIR", directory)
     monkeypatch.delenv(_COMMITS, raising=False)
     monkeypatch.delenv(_DAYS, raising=False)
     return directory
@@ -77,7 +84,7 @@ def _due(calls):
 
 def _audited(plans, repo, sha, days_ago=0):
     when = datetime.now(UTC) - timedelta(days=days_ago)
-    security_audit.record_audit(plans, str(repo), sha, when)
+    security_audit.record_audit(server._store.records(), str(repo), sha, when)
 
 
 def test_nothing_is_sent_and_git_is_not_touched_when_the_thresholds_are_off(

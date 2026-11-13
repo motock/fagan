@@ -225,8 +225,8 @@ def test_a_new_database_gets_the_latest_version(db_path):
     with _opened(db_path):
         pass
 
-    assert store_sqlite_schema.latest_version() == 4
-    assert _version(db_path) == [4]
+    assert store_sqlite_schema.latest_version() == 5
+    assert _version(db_path) == [5]
 
 
 def test_the_version_is_recorded_once(db_path):
@@ -299,12 +299,14 @@ def test_a_version_one_database_with_rows_is_migrated(db_path, monkeypatch):
         'MIGRATIONS',
         store_sqlite_schema.MIGRATIONS + (_adds_a_column,),
     )
-    assert store_sqlite_schema.latest_version() == 5
+    # Five real migrations (the security-audit table is migration 5) plus the
+    # one this test appends.
+    assert store_sqlite_schema.latest_version() == 6
 
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [5]
+    assert _version(db_path) == [6]
     assert _row_counts(db_path) == before
     with _probe(db_path) as conn:
         columns = {row[1] for row in conn.execute('PRAGMA table_info(notifications)')}

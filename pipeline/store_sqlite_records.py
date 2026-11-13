@@ -294,6 +294,25 @@ class RecordTablesMixin:
             return None
         return {'content': row[0], 'meta': json.loads(row[1])}
 
+    # -- security-audit state ------------------------------------------
+    def _put_audit_row(self, namespace: str, repo_key: str, state_json: str) -> None:
+        """Store ``repo_key``'s audit row, replacing the previous one."""
+        self._write(
+            'INSERT INTO security_audit_state (namespace, repo_key, state_json) '
+            'VALUES (?, ?, ?) ON CONFLICT(namespace, repo_key) '
+            'DO UPDATE SET state_json = excluded.state_json',
+            (namespace, repo_key, state_json),
+        )
+
+    def _audit_row(self, namespace: str, repo_key: str) -> dict | None:
+        """Return ``repo_key``'s recorded audit, or ``None`` when it has none."""
+        row = self._record_row(
+            'SELECT state_json FROM security_audit_state '
+            'WHERE namespace = ? AND repo_key = ?',
+            (namespace, repo_key),
+        )
+        return None if row is None else json.loads(row[0])
+
     # -- the legacy ``Store`` API over the same rows --------------------
     def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
         self._append_decision_row(DEFAULT_NAMESPACE, plan_name, record)

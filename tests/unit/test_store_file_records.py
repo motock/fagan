@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 
 import pipeline as pipeline_package
-from pipeline import paths, persistence, server
+from pipeline import paths, persistence, server, store_security_audit
 from pipeline.store import FileRecords, FileStore
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
 from pipeline.store_contract_transactions import TransactionContract
-from pipeline.store_records import DEFAULT_NAMESPACE
+from pipeline.store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
 from tests.unit._store_outbox_helpers import SingleNamespaceOutboxBehaviour
 
 
@@ -269,3 +269,85 @@ class TestFileRecordsOutboxFiles:
         store.append_outbox(DEFAULT_NAMESPACE, PLAN, LEGACY, {'n': 1})
         entries = store.read_outbox(DEFAULT_NAMESPACE, PLAN, LEGACY)
         assert entries[0]['id'] != entries[1]['id']
+
+
+_AUDIT_KEY = 'a' * 16
+_AUDIT_STATE = {
+    'repo_root': '/repos/app',
+    'last_audited_sha': 'a' * 40,
+    'last_audited_at': '2026-09-26T12:00:00+00:00',
+}
+
+
+def _audit_file(plan_dir: Path, repo_key: str = _AUDIT_KEY) -> Path:
+    return plan_dir / f'security-audit.{repo_key}.json'
+
+
+class TestFileRecordsSecurityAudit:
+    """The security-audit state file, as the file-backed store lays it out."""
+
+    def test_state_lands_in_the_plans_directory_under_its_repo_key(self, plan_dir):
+        FileStore().records().put_security_audit_state(
+            DEFAULT_NAMESPACE, _AUDIT_KEY, _AUDIT_STATE
+        )
+        assert sorted(p.name for p in plan_dir.iterdir()) == [
+            f'security-audit.{_AUDIT_KEY}.json'
+        ]
+
+    def test_a_state_file_written_before_the_upgrade_reads_back_unchanged(self, plan_dir):
+        _audit_file(plan_dir).write_text(json.dumps(_AUDIT_STATE))
+
+        assert FileStore().records().get_security_audit_state(
+            DEFAULT_NAMESPACE, _AUDIT_KEY
+        ) == _AUDIT_STATE
+
+    def test_a_corrupt_state_file_reads_as_no_audit(self, plan_dir):
+        _audit_file(plan_dir).write_text('{not json')
+
+        assert FileStore().records().get_security_audit_state(
+            DEFAULT_NAMESPACE, _AUDIT_KEY
+        ) is None
+
+    @pytest.mark.parametrize(
+        'payload', ['[]', '{"repo_root": "/repos/app"}', '{"last_audited_sha": 5}']
+    )
+    def test_a_state_file_of_the_wrong_shape_reads_as_no_audit(self, plan_dir, payload):
+        _audit_file(plan_dir).write_text(payload)
+
+        assert FileStore().records().get_security_audit_state(
+            DEFAULT_NAMESPACE, _AUDIT_KEY
+        ) is None
+
+    @pytest.mark.parametrize(
+        'repo_key', ['../x', 'a/b', '..', '', 'A' * 16, 'a' * 15, 'a' * 17]
+    )
+    def test_a_refused_repo_key_writes_nothing_to_the_plans_directory(
+        self, plan_dir, repo_key
+    ):
+        records = FileStore().records()
+        records.put_security_audit_state(DEFAULT_NAMESPACE, _AUDIT_KEY, _AUDIT_STATE)
+        before = sorted(p.name for p in plan_dir.iterdir())
+
+        with pytest.raises(InvalidRecordKeyError):
+            records.put_security_audit_state(DEFAULT_NAMESPACE, repo_key, _AUDIT_STATE)
+
+        assert sorted(p.name for p in plan_dir.iterdir()) == before
+
+    def test_an_injected_write_failure_leaves_no_temp_file_and_keeps_the_record(
+        self, plan_dir, monkeypatch
+    ):
+        records = FileStore().records()
+        records.put_security_audit_state(DEFAULT_NAMESPACE, _AUDIT_KEY, _AUDIT_STATE)
+        replacement = dict(_AUDIT_STATE, last_audited_sha='b' * 40)
+
+        def _fail(src, dst):
+            raise OSError('disk full')
+
+        monkeypatch.setattr(store_security_audit.os, 'replace', _fail)
+        with pytest.raises(OSError, match='disk full'):
+            records.put_security_audit_state(DEFAULT_NAMESPACE, _AUDIT_KEY, replacement)
+
+        assert sorted(p.name for p in plan_dir.iterdir()) == [
+            f'security-audit.{_AUDIT_KEY}.json'
+        ]
+        assert records.get_security_audit_state(DEFAULT_NAMESPACE, _AUDIT_KEY) == _AUDIT_STATE

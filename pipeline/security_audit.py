@@ -1,15 +1,9 @@
 """Per-repo record of the last security audit.
 
 The periodic security-audit reminder needs to know, for each repository, which
-commit was last security-audited and when. This module owns only that record:
-where it lives on disk, how it is read back, and how it is written.
-
-State lives in one JSON file per repository inside a caller-supplied state
-directory, named after a digest of the normalized repo root so that
-``/repos/app`` and ``/repos/app/`` share a file while distinct repositories
-never collide. Reads are forgiving - a missing, unreadable, malformed or
-wrong-shaped file is treated as "no audit recorded" - while writes are strict
-and atomic, so a crash can never leave a half-written record behind.
+commit was last security-audited and when. The record itself is a namespaced
+record of the store (ADR 0012 decision 3): this module names the key a
+repository is recorded under and reads and writes it through a records object.
 
 The module also owns the pure decision logic for "is this repo due an audit":
 the two thresholds read from the environment, the count of commits since the
@@ -19,15 +13,14 @@ testable; the scheduler wiring lives in a sibling module.
 """
 
 import hashlib
-import json
 import logging
 import os
 import re
 import subprocess
-import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timedelta
-from pathlib import Path
+
+from .store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -39,53 +32,29 @@ DAYS_ENV = "PIPELINE_SECURITY_AUDIT_EVERY_DAYS"
 _GIT_TIMEOUT_SECONDS = 30
 
 
-def state_path(state_dir, repo_root) -> Path:
-    """Return the state file path for ``repo_root`` inside ``state_dir``.
+def repo_key(repo_root) -> str:
+    """Return the record key for ``repo_root``: 16 hex characters of its digest.
 
-    The file name is derived from the sha256 of the normalized repo root, so
-    trailing separators do not produce a second file for the same repository.
+    The digest is taken over the normalized root, so trailing separators do not
+    produce a second record for the same repository.
     """
-    digest = hashlib.sha256(os.path.normpath(repo_root).encode("utf-8")).hexdigest()[:16]
-    return Path(state_dir) / f"security-audit.{digest}.json"
+    return hashlib.sha256(os.path.normpath(repo_root).encode("utf-8")).hexdigest()[:16]
 
 
-def read_audit_state(state_dir, repo_root) -> dict | None:
+def read_audit_state(records, repo_root) -> dict | None:
     """Return the recorded audit state for ``repo_root``, or ``None``.
 
-    ``None`` means "no usable record": the file is missing, unreadable, not
-    valid JSON, not a JSON object, or lacks a string ``last_audited_sha``. A
-    file that exists but cannot be used is logged once at WARNING level - the
-    file name only, never its contents - and then treated as absent.
+    ``None`` means no usable record: nothing was recorded, or the store could
+    not read a usable one.
     """
-    path = state_path(state_dir, repo_root)
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError:
-        logger.warning("security audit state file %s could not be read", path.name)
-        return None
-
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        logger.warning("security audit state file %s is not valid JSON", path.name)
-        return None
-
-    if not isinstance(data, dict) or not isinstance(data.get("last_audited_sha"), str):
-        logger.warning("security audit state file %s has an unexpected shape", path.name)
-        return None
-
-    return data
+    return records.get_security_audit_state(DEFAULT_NAMESPACE, repo_key(repo_root))
 
 
-def record_audit(state_dir, repo_root, sha, now: datetime) -> dict:
+def record_audit(records, repo_root, sha, now: datetime) -> dict:
     """Record ``sha`` as the last security-audited commit for ``repo_root``.
 
-    Validation happens before anything touches the filesystem, so a rejected
-    call never truncates an existing record and never leaves a temp file
-    behind. The write itself is atomic: the state is written to a temp file in
-    the state directory and then moved into place with ``os.replace``.
+    Validation happens before the store is touched, so a rejected call never
+    replaces an existing record.
     """
     if not repo_root:
         raise ValueError(f"repo_root must be a non-empty string (got {repo_root!r})")
@@ -99,23 +68,7 @@ def record_audit(state_dir, repo_root, sha, now: datetime) -> dict:
         "last_audited_sha": sha,
         "last_audited_at": now.isoformat(),
     }
-
-    fd, tmp_name = tempfile.mkstemp(dir=str(state_dir), prefix=".security-audit-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(state, handle)
-        os.replace(tmp_name, state_path(state_dir, repo_root))
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
+    records.put_security_audit_state(DEFAULT_NAMESPACE, repo_key(repo_root), state)
     return state
 
 

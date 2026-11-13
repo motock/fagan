@@ -116,56 +116,25 @@ def test_no_plan_dir_glob_parsing_remains():
 
 
 # ---------------------------------------------------------------------------
-# 3. PLAN_DIR itself must SURVIVE -- but ONLY for _dashboard_ui_state_path.
+# 3. PLAN_DIR must be GONE -- the UI preference file moved behind HostState.
 # ---------------------------------------------------------------------------
-def test_plan_dir_module_global_remains():
-    """PLAN_DIR module global must stay (used by _dashboard_ui_state_path)."""
-    assert hasattr(dashboard, "PLAN_DIR"), (
-        "PLAN_DIR module global was removed; it must stay for "
-        "_dashboard_ui_state_path"
-    )
+def test_plan_dir_module_global_is_removed():
+    """PLAN_DIR is no longer a dashboard global (c3-3).
 
-
-def test_dashboard_ui_state_path_still_uses_plan_dir():
-    """_dashboard_ui_state_path is the one intentional PLAN_DIR survivor.
-
-    It must still be defined and must still reference PLAN_DIR, so the UI
-    state preference file keeps its on-disk home until a later story moves
-    it.
+    Its only dashboard use was the UI preferences file path, which now goes
+    through the host state, so the binding must not come back.
     """
-    assert hasattr(dashboard, "_dashboard_ui_state_path"), (
-        "_dashboard_ui_state_path was deleted; it is the intentional PLAN_DIR "
-        "survivor and must remain"
-    )
-    src = _source()
-    # The def line must be present.
-    assert re.search(
-        r"^def _dashboard_ui_state_path\(", src, re.MULTILINE
-    ), "_dashboard_ui_state_path def line is missing"
-    # And its body must still reference PLAN_DIR.
-    # Find the function body and assert PLAN_DIR appears within it.
-    m = re.search(
-        r"^def _dashboard_ui_state_path\([^)]*\)\s*->\s*[^:]+:\n((?:    .*\n|\n)*)",
-        src,
-        re.MULTILINE,
-    )
-    assert m is not None, "could not locate _dashboard_ui_state_path body"
-    assert "PLAN_DIR" in m.group(1), (
-        "_dashboard_ui_state_path no longer references PLAN_DIR"
-    )
+    assert not hasattr(dashboard, "PLAN_DIR")
 
 
-def test_plan_dir_import_remains():
-    """The PLAN_DIR import/assignment line must remain in the source.
+def test_dashboard_ui_state_path_helper_is_removed():
+    """_dashboard_ui_state_path was dead once the UI state moved to HostState."""
+    assert not hasattr(dashboard, "_dashboard_ui_state_path")
 
-    The brief says PLAN_DIR stays for _dashboard_ui_state_path and its import
-    must NOT be removed. We assert the module-global assignment line is still
-    present in the source text.
-    """
-    src = _source()
-    assert re.search(r"^PLAN_DIR\s*=", src, re.MULTILINE), (
-        "PLAN_DIR module-global assignment line was removed from app/dashboard.py"
-    )
+
+def test_plan_dir_assignment_line_is_removed():
+    """No module-level ``PLAN_DIR =`` assignment may remain in the source."""
+    assert not re.search(r"^PLAN_DIR\s*=", _source(), re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------

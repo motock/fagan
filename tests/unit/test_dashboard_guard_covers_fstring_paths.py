@@ -121,17 +121,16 @@ def test_dashboard_source_has_no_fstring_plan_dir_composition():
     )
 
 
-def test_dashboard_source_still_has_sanctioned_plain_string_survivor():
-    """The sanctioned survivor must remain in app/dashboard.py.
+def test_dashboard_source_no_longer_has_sanctioned_plain_string_survivor():
+    """The sanctioned survivor is gone from app/dashboard.py (c3-3).
 
-    Guards the negative case's premise: the plain-string
-    ``PLAN_DIR / ".dashboard_ui_state.json"`` composition is still present in
-    the production source, so the guard's narrowness is load-bearing (it is
-    what keeps this intentional exception passing the widened guard).
+    The plain-string ``PLAN_DIR / ".dashboard_ui_state.json"`` composition was
+    the only intentional exception; the UI state now goes through the host
+    state, so the snippet must not reappear in the production source.
     """
     src = _source()
-    assert _SANCTIONED_PLAIN_STRING_SNIPPET in src, (
-        "the sanctioned survivor "
-        f"{_SANCTIONED_PLAIN_STRING_SNIPPET!r} is missing from "
-        "app/dashboard.py; the guard's negative case is no longer load-bearing"
+    assert _SANCTIONED_PLAIN_STRING_SNIPPET not in src, (
+        "the removed survivor "
+        f"{_SANCTIONED_PLAIN_STRING_SNIPPET!r} reappeared in app/dashboard.py; "
+        "UI state must go through HostState"
     )

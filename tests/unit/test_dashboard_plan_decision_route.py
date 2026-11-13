@@ -35,7 +35,6 @@ def client():
 def plan_dir(tmp_path, monkeypatch):
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

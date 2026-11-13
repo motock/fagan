@@ -64,7 +64,6 @@ def plan_dir(tmp_path, monkeypatch):
     from pipeline import persistence as _pers
     from pipeline import server as _srv
 
-    monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(_srv, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(_pers, "PLAN_DIR", tmp_path)
     return tmp_path

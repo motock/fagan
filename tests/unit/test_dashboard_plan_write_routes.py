@@ -28,14 +28,11 @@ from pipeline import ticketing as pt
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Redirect every PLAN_DIR binding the save/ingest path touches (the
-    dashboard's own copy, plus pipeline.server/persistence/concurrency's)
-    to the same tmp directory, mirroring tests/unit/conftest.py's shared
-    `plan_dir` fixture (shadowed here since this module needs to also patch
-    app.dashboard.PLAN_DIR)."""
+    """Redirect every PLAN_DIR binding the save/ingest path touches
+    (pipeline.server/persistence/concurrency's) to the same tmp directory,
+    mirroring tests/unit/conftest.py's shared `plan_dir` fixture."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

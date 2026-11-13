@@ -33,7 +33,6 @@ def plan_dir(tmp_path, monkeypatch):
     # that same server binding at call time. It must point at the same tmp
     # dir as the dashboard's own PLAN_DIR, or the route and the service
     # disagree about where the manifest lives.
-    monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(pserver, "PLAN_DIR", tmp_path)
     return tmp_path
 

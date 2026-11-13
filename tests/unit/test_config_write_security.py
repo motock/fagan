@@ -61,7 +61,6 @@ def plan_dir(tmp_path, monkeypatch):
     """Redirect every PLAN_DIR binding the write paths touch to one tmp dir."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(psrv, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

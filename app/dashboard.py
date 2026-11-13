@@ -125,7 +125,6 @@ __all__ = [
     "StoryStatusBody",
 ]
 
-PLAN_DIR = LiveRef("PLAN_DIR")
 # Host-local records (the UI preferences and the scheduler's liveness snapshot)
 # live behind this seam; ``FileHostState`` resolves its root through the live
 # ``pipeline.server.PLAN_DIR`` binding on every access.
@@ -283,10 +282,6 @@ def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRe
     if not result.get("ok", True):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     return result
-
-
-def _dashboard_ui_state_path() -> Path:
-    return PLAN_DIR / ".dashboard_ui_state.json"
 
 
 def _read_archived_plans() -> set[str]:

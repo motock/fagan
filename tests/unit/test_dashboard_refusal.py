@@ -20,7 +20,6 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app import dashboard as d
 from app.dashboard_refusal import raise_if_forbidden
 from app.identity import Principal
 from pipeline import persistence as ppers
@@ -52,7 +51,6 @@ def plan_dir(tmp_path, monkeypatch):
     """Redirect every PLAN_DIR binding the write paths touch to one tmp dir."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(psrv, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

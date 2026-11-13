@@ -76,11 +76,9 @@ def plan_dir(tmp_path, monkeypatch):
     for the route's workspace lookup. ``pipeline.concurrency`` resolves
     ``pipeline.server.PLAN_DIR`` at call time.
     """
-    from app import dashboard as d
 
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

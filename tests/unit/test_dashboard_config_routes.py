@@ -57,13 +57,11 @@ _VALID_BACKENDS = frozenset({"claude", "local", "ollama", "lmstudio", "mlx", "li
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Redirect every PLAN_DIR binding the write paths touch (the dashboard's
-    own copy, plus pipeline.server/persistence/concurrency's) to the same tmp
-    directory, mirroring tests/unit/conftest.py's shared `plan_dir` fixture
-    (shadowed here since this module must also patch app.dashboard.PLAN_DIR)."""
+    """Redirect every PLAN_DIR binding the write paths touch
+    (pipeline.server/persistence/concurrency's) to the same tmp directory,
+    mirroring tests/unit/conftest.py's shared `plan_dir` fixture."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(psrv, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

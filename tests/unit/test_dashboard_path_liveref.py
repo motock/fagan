@@ -1,33 +1,18 @@
 """Grade the dashboard path-constant handoff to pipeline.server LiveRefs.
 
-Story: app/dashboard.py must stop resolving PLAN_DIR / USAGE_STATE_PATH /
-WORKTREE_ROOT itself (module-load ``os.environ.get`` snapshots frozen at
-import time) and instead hold :class:`pipeline.live_ref.LiveRef` instances
-that re-read the canonical ``pipeline.server`` bindings on every access.
+Story: app/dashboard.py must stop resolving USAGE_STATE_PATH / WORKTREE_ROOT
+itself (module-load ``os.environ.get`` snapshots frozen at import time) and
+instead hold :class:`pipeline.live_ref.LiveRef` instances that re-read the
+canonical ``pipeline.server`` bindings on every access. PLAN_DIR is no longer
+a dashboard global: its only dashboard use was the UI preferences file, which
+now goes through the host state (see test_dashboard_ui_state_host_seam.py).
 
-Why this matters: the test suite patches ``pipeline.server.PLAN_DIR`` (and
-friends) to temp dirs. If the dashboard takes a module-load copy, those
-patches never reach it. A LiveRef keeps the dashboard glued to the canonical
-binding while preserving the module-global names the rest of the suite
-monkeypatches (rebinding ``app.dashboard.PLAN_DIR`` still wins -- it merely
-shadows the ref, which is exactly what the four existing setattr tests do).
-
-The tests below are RED until the dashboard edit lands:
-
-* the three globals must be LiveRef instances (not Paths),
-* they must follow live ``pipeline.server`` patches -- including a re-patch
-  mid-test, proving nothing is snapshotted at import time,
-* ``_dashboard_ui_state_path()`` must track the patched PLAN_DIR,
-* the source must no longer contain an ``os.environ.get``/``os.getenv``
-  resolution for any of the three names,
-* the module-level assignment lines must survive (the existing
-  test_dashboard_no_direct_plan_dir.py greps for ``^PLAN_DIR\\s*=`` and four
-  existing tests rebind these globals), and
-* FAILURE_MODES_DATASET_PATH and STATIC_DIR must be left exactly as they are.
+Why this matters: the test suite patches ``pipeline.server`` bindings to temp
+dirs. If the dashboard takes a module-load copy, those patches never reach it.
+A LiveRef keeps the dashboard glued to the canonical binding.
 """
 import inspect
 import re
-from pathlib import Path
 
 import pytest
 
@@ -42,7 +27,7 @@ def _source() -> str:
 
 
 # The three names this story moves from os.environ snapshots to LiveRefs.
-_MOVED_NAMES = ("PLAN_DIR", "USAGE_STATE_PATH", "WORKTREE_ROOT")
+_MOVED_NAMES = ("USAGE_STATE_PATH", "WORKTREE_ROOT")
 
 
 # ---------------------------------------------------------------------------
@@ -78,25 +63,6 @@ def test_liveref_imported_from_pipeline_live_ref():
 # ---------------------------------------------------------------------------
 # 2. The refs must follow the canonical pipeline.server bindings LIVE.
 # ---------------------------------------------------------------------------
-def test_plan_dir_follows_pipeline_server_binding(monkeypatch, tmp_path):
-    """Patching pipeline.server.PLAN_DIR must be visible through the dashboard.
-
-    The re-patch halfway through proves the ref re-reads per access instead
-    of snapshotting the binding at import time.
-    """
-    first = tmp_path / "plans-a"
-    second = tmp_path / "plans-b"
-    monkeypatch.setattr(pipeline.server, "PLAN_DIR", first)
-    assert dashboard.PLAN_DIR / "probe.txt" == first / "probe.txt", (
-        "app.dashboard.PLAN_DIR did not follow pipeline.server.PLAN_DIR"
-    )
-    monkeypatch.setattr(pipeline.server, "PLAN_DIR", second)
-    assert dashboard.PLAN_DIR / "probe.txt" == second / "probe.txt", (
-        "app.dashboard.PLAN_DIR kept a stale value after pipeline.server."
-        "PLAN_DIR was re-patched (it must resolve live, per access)"
-    )
-
-
 def test_worktree_root_follows_pipeline_server_binding(monkeypatch, tmp_path):
     """Same live-follow contract for WORKTREE_ROOT."""
     patched = tmp_path / "worktrees"
@@ -132,49 +98,6 @@ def test_usage_state_path_follows_pipeline_server_binding(monkeypatch, tmp_path)
     )
 
 
-def test_liveref_resolution_does_not_require_existing_path(monkeypatch, tmp_path):
-    """Boundary: resolving the ref must not require the path to exist yet."""
-    missing = tmp_path / "plans" / "not_created_yet"
-    monkeypatch.setattr(pipeline.server, "PLAN_DIR", missing)
-    assert dashboard.PLAN_DIR / "state.json" == missing / "state.json", (
-        "resolving app.dashboard.PLAN_DIR against a not-yet-existing "
-        "pipeline.server.PLAN_DIR must work without touching the filesystem"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. _dashboard_ui_state_path must track the patched PLAN_DIR.
-# ---------------------------------------------------------------------------
-def test_dashboard_ui_state_path_tracks_patched_plan_dir(monkeypatch, tmp_path):
-    """``_dashboard_ui_state_path()`` returns <patched PLAN_DIR>/.dashboard_ui_state.json.
-
-    This is the call site the brief says must keep working with NO edit,
-    because LiveRef implements __truediv__.
-    """
-    monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)
-    result = dashboard._dashboard_ui_state_path()
-    assert result == tmp_path / ".dashboard_ui_state.json", (
-        "_dashboard_ui_state_path() did not track the patched "
-        "pipeline.server.PLAN_DIR"
-    )
-    assert isinstance(result, Path), (
-        "_dashboard_ui_state_path() must return a real Path "
-        f"(LiveRef.__truediv__ yields one); got {type(result)!r}"
-    )
-
-
-def test_rebinding_dashboard_module_global_still_wins(monkeypatch, tmp_path):
-    """Compat: monkeypatch.setattr(app.dashboard, "PLAN_DIR", ...) still works.
-
-    Four existing tests rebind the module global over the LiveRef; that
-    rebind must shadow the ref for _dashboard_ui_state_path.
-    """
-    monkeypatch.setattr(dashboard, "PLAN_DIR", tmp_path)
-    assert dashboard._dashboard_ui_state_path() == (
-        tmp_path / ".dashboard_ui_state.json"
-    ), "rebinding app.dashboard.PLAN_DIR no longer drives _dashboard_ui_state_path"
-
-
 # ---------------------------------------------------------------------------
 # 4. NEGATIVE/REGRESSION: no self-resolved env lookups for the moved names.
 # ---------------------------------------------------------------------------
@@ -200,11 +123,10 @@ def test_no_os_environ_resolution_of_moved_paths():
 
 
 def test_module_level_assignment_lines_survive():
-    """The three module-global assignment lines must remain.
+    """The module-global assignment lines for the LiveRef names must remain.
 
-    test_dashboard_no_direct_plan_dir.py asserts ``^PLAN_DIR\\s*=`` and
-    hasattr(dashboard, "PLAN_DIR"); the same must hold for all three names so
-    the existing monkeypatch.setattr call sites keep working.
+    The existing monkeypatch.setattr call sites rebind these globals, so each
+    name must stay a module global in app/dashboard.py.
     """
     src = _source()
     for name in _MOVED_NAMES:

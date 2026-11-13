@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import dashboard as d
+from pipeline import server as psrv
 
 
 class FakeService:
@@ -70,7 +71,7 @@ def _write_manifest(plan_dir, name, stories):
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(psrv, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

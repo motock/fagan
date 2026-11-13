@@ -67,7 +67,6 @@ def plan_dir(tmp_path, monkeypatch):
     """Point the dashboard's PLAN_DIR at a tmp dir and seed a manifest so the
     unknown-plan 404 path can be exercised against the real _list_plan_names
     check (which reads PLAN_DIR)."""
-    monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
     from pipeline import server as _srv
     monkeypatch.setattr(_srv, "PLAN_DIR", tmp_path)
     return tmp_path

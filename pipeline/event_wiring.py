@@ -17,7 +17,6 @@ from .events_nats import NatsEventBus
 from .host_state import build_host_state
 from .notification_outbox import outbox_sink  # noqa: F401 - importable here, never subscribed
 from .notification_sinks import file_log_sink
-from .paths import PLAN_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,6 @@ def wake_handler(event: dict) -> dict:
     manifest = manifest_source.read_plan_manifest(
         plan_name,
         fallback_on_error=True,
-        plans_root=PLAN_DIR,
     )
     if manifest is None:
         logger.warning("Manifest missing for plan %s", plan_name, extra={"plan": plan_name})

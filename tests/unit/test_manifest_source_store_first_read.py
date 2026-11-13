@@ -171,7 +171,7 @@ def test_worktree_patch_delegates_fail_closed(dirs, monkeypatch):
 
     calls = {}
 
-    def spy(plan_name, *, fallback_on_error, plans_root):
+    def spy(plan_name, *, fallback_on_error, plans_root=None):
         calls.update(
             plan_name=plan_name, fallback_on_error=fallback_on_error, plans_root=plans_root
         )
@@ -196,7 +196,7 @@ def test_worktree_patch_delegates_fail_closed(dirs, monkeypatch):
     assert calls == {
         "plan_name": "plan-x",
         "fallback_on_error": False,
-        "plans_root": dirs["server"],
+        "plans_root": None,
     }
 
 

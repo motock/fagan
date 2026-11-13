@@ -5,9 +5,8 @@ worktree as a WIP checkpoint, journals the event, and marks the story
 interrupted. _checkpoint_impl is the shared checkpoint logic used by both
 the `checkpoint` MCP tool and the local dispatch agent loop.
 
-Both read PLAN_DIR via a lazy import from the server (circular-avoidance;
-tests patch p.PLAN_DIR which the plan_dir fixture also mirrors to
-pipeline_persistence / pipeline_concurrency). Both journal their entry
+Both read the manifest through the shared manifest reader, which resolves
+this host's plan root itself (``build_host_state().root()``). Both journal their entry
 through the record store (``_append_journal`` here -> ``server._store``), so
 a checkpoint is visible to the same readers a resumed dispatch consults.
 """
@@ -259,16 +258,14 @@ def _plan_manifest(plan_name: str) -> dict[str, Any]:
     from the server binding, so a test that patches it is honoured. The
     returned manifest is a read-only snapshot: the caller only reads it.
     """
-    from . import server
+    from .host_state import build_host_state
     from .manifest_source import read_plan_manifest
 
-    plans_root = server.PLAN_DIR
-    manifest = read_plan_manifest(
-        plan_name, fallback_on_error=False, plans_root=plans_root
-    )
+    manifest = read_plan_manifest(plan_name, fallback_on_error=False)
     if manifest is None:
         # Neither source yielded a JSON object: report it the way the legacy
         # path did, so the tool's error surface is unchanged.
+        plans_root = build_host_state().root()
         raise FileNotFoundError(str(Path(plans_root) / f"{plan_name}.manifest.json"))
     return manifest
 

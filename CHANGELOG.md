@@ -84,6 +84,8 @@ in practice.
 
 ### Fixed
 
+- `import_file_store` no longer exits 0 over an audit stream it cannot address. A `*.audit.jsonl` file whose name is not a valid plan name was silently skipped by the file audit log; the importer now refuses it as `invalid_name` and exits non-zero, with the report and log naming neither the file's path nor its contents. An unlistable plan directory now fails the import instead of reading as zero chains. `FileAuditLog.list_chains` keeps its contract for other callers.
+- `import_file_store` creates a new `--db` with mode `0600`, not the operator's umask (the database holds the full audit trail, manifests and context snapshots). `--dry-run` refuses a `--db` that does not exist, exits 2 and creates nothing. An existing database keeps its mode.
 - A green, mergeable PR is no longer marked `failed` because GitHub had not finished computing its mergeability yet. The merge gate now polls the forge's new `merge_readiness` verb (`gh pr view --json mergeable,mergeStateStatus`: `MERGEABLE`+`CLEAN` is ready, `DIRTY`/`CONFLICTING`/`BLOCKED`/`DRAFT` is blocked, anything else including `UNKNOWN` is pending) for up to `PIPELINE_MERGE_READINESS_TIMEOUT` seconds (default 180, 5s doubling to a 30s cap) before calling `gh pr merge`. A refusal to merge is not a failed merge: a budget that expires while the host is still computing spends no `merge_attempts` slot, leaves the story `pr_open` with a `merge_pending_reason`, and lets the next tick retry, while a definitive refusal keeps today's attempt-counting path. An unreadable readiness is pending, never ready. `gh pr merge` failures now carry gh's stderr tail in `merge_error` instead of only the argv (2026-11-08: PR #1618 `c1bfcfbf` burned four attempts and PR #1621 `e0163dbc` three, both CLEAN/MERGEABLE with all four required checks SUCCESS and both merged first try by hand).
 - overlord-policy.md and REFERENCE.md no longer say the `full` autonomy level always holds high-risk merges; the overlord adjudicates them and the ruling is recorded.
 - `consumer_status()` now reports `dead_lettered` as the sum of the durable's dead-letter subject counts instead of the whole stream message total, which `subjects_filter` never narrowed.
@@ -123,7 +125,9 @@ in practice.
   notification history and context snapshots) and each audit chain into the
   database, verbatim, so the audit hash chain and its file anchors still match.
   It is safe to re-run, never modifies the source files, and exits non-zero
-  when anything was refused; the JSON summary names what and why.
+  when anything was refused; the JSON summary names what and why. A new
+  database is created owner-only (`0600`); `--dry-run` needs the database to
+  exist already; a real run creates it.
   When `PIPELINE_AUDIT_ANCHOR` is configured, an audit chain is refused before
   anything is written for it, with one of two outcomes: `anchor_mismatch` when
   the chain is shorter than its anchored `seq`, or its hash at that `seq`

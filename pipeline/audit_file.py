@@ -181,30 +181,62 @@ class FileAuditLog:
         neither the file nor the path, because both may be operator data and
         the name may be reserved rather than merely odd.
         """
+        try:
+            chains, skipped = self._scan(namespace)
+        except OSError:  # pragma: no cover - a directory that cannot be listed
+            return []
+        if skipped:
+            logger.warning(
+                "skipping audit streams whose plan name is not addressable",
+                extra={"skipped": len(skipped)},
+            )
+        return chains
+
+    def unaddressable_chains(self, namespace: str) -> list[str]:
+        """Return the stream names :meth:`list_chains` skips, sorted.
+
+        The names are the stems of ``*.audit.jsonl`` files in the plan directory
+        whose name is not an addressable plan name.  Unlike :meth:`list_chains`
+        an unlistable directory raises: a caller that reports refusals must not
+        read a directory it could not see as one with no refusals.
+        """
+        _chains, skipped = self._scan(namespace)
+        return skipped
+
+    def _scan(self, namespace: str) -> tuple[list[str], list[str]]:
+        """Return ``(addressable chains, unaddressable stems)``; raises ``OSError``.
+
+        Uses :func:`os.scandir` rather than :meth:`Path.glob`, which swallows a
+        permission error and would report an unlistable directory as empty.
+        """
         self._require_default(namespace)
         directory = self._streams_directory()
         host_path = self.stream_path(HOST_CHAIN_ID)
         host = _resolved(host_path)
         try:
-            candidates = sorted(directory.glob(f"*{SUFFIX}"))
-        except OSError:  # pragma: no cover - a directory that cannot be listed
-            return []
+            names = sorted(
+                entry.name
+                for entry in os.scandir(directory)
+                if entry.name.endswith(SUFFIX)
+            )
+        except FileNotFoundError:
+            names = []
         chains: list[str] = []
+        skipped: list[str] = []
         host_is_a_plan_stream = False
-        for path in candidates:
+        for file_name in names:
+            path = directory / file_name
             if host is not None and _resolved(path) == host:
                 host_is_a_plan_stream = True
                 continue
-            name = path.name.removesuffix(SUFFIX)
+            name = file_name.removesuffix(SUFFIX)
             if not name or not self._addressable(name):
-                logger.warning(
-                    "skipping an audit stream whose plan name is not addressable"
-                )
+                skipped.append(name)
                 continue
             chains.append(name)
         if not host_is_a_plan_stream and host_path.is_file():
             chains.append(HOST_CHAIN_ID)
-        return chains
+        return chains, skipped
 
     @staticmethod
     def _addressable(name: str) -> bool:

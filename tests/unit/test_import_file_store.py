@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import sqlite3
+import stat
 from pathlib import Path
 
 import pytest
@@ -223,6 +225,7 @@ def test_a_refused_audit_chain_exits_non_zero_after_the_rest_is_imported(plans, 
 
 def test_a_dry_run_writes_nothing_and_reports_what_a_real_run_would(plans, db, capsys):
     _seed(plans)
+    SqliteStore(db).close()  # a dry run refuses a missing database; this one exists, empty
 
     code, dry = _run(["--db", db, "--dry-run"], capsys)
 
@@ -314,3 +317,57 @@ def test_an_unreadable_anchor_sink_exits_non_zero_and_imports_no_chain(
     }
     assert _audit_rows(db, PLAN) == []
     assert _audit_rows(db, HOST_CHAIN_ID) == []
+
+
+def test_an_unaddressable_audit_stream_exits_non_zero_and_names_no_path(
+    plans, db, tmp_path, capsys
+):
+    _seed(plans)
+    (plans / f"bad name{SUFFIX}").write_text("not an audit chain\n")
+
+    code = main(["--db", db])
+    out = capsys.readouterr().out
+    summary = json.loads(out)
+
+    assert code == 1
+    assert {
+        "chain": "bad name",
+        "records": 0,
+        "status": "refused",
+        "reason": "invalid_name",
+    } in summary["audit"]
+    assert _statuses(summary)[PLAN] == "imported"
+    assert str(tmp_path) not in out
+
+
+def test_a_dry_run_on_a_missing_database_exits_2_and_creates_no_file(plans, tmp_path, capsys):
+    _seed(plans)
+    missing = tmp_path / "absent.db"
+
+    with pytest.raises(SystemExit) as refused:
+        main(["--db", str(missing), "--dry-run"])
+
+    assert refused.value.code == 2
+    assert not missing.exists()
+    assert str(tmp_path) not in capsys.readouterr().err
+
+
+def test_a_real_run_creates_the_database_owner_only_whatever_the_umask(plans, db):
+    _seed(plans)
+    previous = os.umask(0)
+    try:
+        assert main(["--db", db]) == 0
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(os.stat(db).st_mode) == 0o600
+
+
+def test_an_existing_database_keeps_its_mode(plans, db, capsys):
+    _seed(plans)
+    SqliteStore(db).close()
+    os.chmod(db, 0o640)
+
+    assert main(["--db", db]) == 0
+
+    assert stat.S_IMODE(os.stat(db).st_mode) == 0o640

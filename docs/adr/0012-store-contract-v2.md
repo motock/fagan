@@ -2,7 +2,7 @@
 
 - **Status:** Proposed (draft 2026-11-04, not yet reviewed)
 - **Date:** 2026-11-04
-- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope'); 2026-11-13 (per-repository security-audit state added to the record kinds in decision 3)
+- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope'); 2026-11-13 (per-repository security-audit state added to the record kinds in decision 3); 2026-11-13 (the plugin surface of decision 7 is published and gated: `PLUGIN_STORE_METHODS` in `pipeline/store_plugin.py`, the outbox, audit-log and transaction conformance suites, and the `PluginStore` wrapper the loader applies)
 - **Builds on:** [0008](0008-shared-control-plane-per-repo-workers.md) (store is
   the system of record for plan and control state; no write-through),
   [0009](0009-tenancy-and-authorization-model.md) (service-layer policy over a
@@ -226,8 +226,13 @@ residual modules still touch `PLAN_DIR`. Each follow-up below is its own story:
   (decision 8).
 - **Leases and the advance queue** (ADR 0011 S2): the store leases of decision 6
   are not yet implemented.
-- **A Postgres store as a plugin** (decision 7), loaded through the plugin loader
-  and passing the same store contract suite.
+- **A Postgres store as a plugin** (decision 7): the plugin surface is published
+  and gated. A plugin implements `PLUGIN_STORE_METHODS` (the record methods, the
+  outbox methods, `audit_log()`), declares its transaction tier, and must pass
+  the published store, outbox, audit and transaction conformance suites. The
+  loader wraps the factory's store so the legacy calls are served. The Postgres
+  implementation itself lives in the enterprise distribution, not in this
+  repository.
 - **Remote-worker log tails as journal records** (open question 2): the size
   bound on a tail and whether workers push on a timer or at checkpoints are
   still open.

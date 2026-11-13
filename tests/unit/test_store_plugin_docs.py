@@ -81,3 +81,15 @@ def test_the_guide_carries_the_test_module_that_collects_the_suite():
     guide = GUIDE.read_text(encoding="utf-8")
 
     assert TEST_SNIPPET in guide
+
+
+def test_the_guide_names_the_plugin_surface_and_its_fixtures():
+    guide = GUIDE.read_text(encoding="utf-8")
+
+    assert "PLUGIN_STORE_METHODS" in guide
+    for fixture in (
+        "audit_rewrite_raw",
+        "record_store_transaction_tier",
+        "record_store_serves_other_namespaces",
+    ):
+        assert fixture in guide, f"the guide does not name the {fixture} fixture"

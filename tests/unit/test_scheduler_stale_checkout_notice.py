@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pipeline import paths, persistence
+from pipeline import persistence, server
 from pipeline import scheduler_daemon as sd
 
 
@@ -64,7 +64,7 @@ def notify(monkeypatch):
 def plan_dir(tmp_path, monkeypatch):
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(paths, "PLAN_DIR", directory)
+    monkeypatch.setattr(server, "PLAN_DIR", directory)
     return directory
 
 

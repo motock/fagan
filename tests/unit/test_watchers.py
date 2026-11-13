@@ -282,7 +282,7 @@ def test_watchers_imports_make_event_from_events():
 
 import inspect
 
-from pipeline import paths
+from pipeline import server
 
 
 def _write_manifest(plan_name, manifest, plan_dir):
@@ -313,7 +313,7 @@ def _make_plan_with_marker(plan_dir, plan_name, payload=None):
 
 
 def test_scan_all_plans_two_plans_each_one_marker_publishes_two_events(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     _make_plan_with_marker(tmp_path, "alpha", {"exit_code": 0})
     _make_plan_with_marker(tmp_path, "beta", {"exit_code": 1})
     bus = FakeBus()
@@ -326,7 +326,7 @@ def test_scan_all_plans_two_plans_each_one_marker_publishes_two_events(tmp_path,
 
 
 def test_scan_all_plans_event_plan_name_is_filename_without_suffix(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     _make_plan_with_marker(tmp_path, "plan-7", {"exit_code": 0})
     bus = FakeBus()
 
@@ -339,7 +339,7 @@ def test_scan_all_plans_event_plan_name_is_filename_without_suffix(tmp_path, mon
 
 
 def test_scan_all_plans_skips_paused_manifest(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     # Paused plan with a marker that WOULD publish if scanned.
     paused_wt = _make_plan_with_marker(tmp_path, "paused-plan", {"exit_code": 0})
     # Flip the paused flag on its manifest.
@@ -358,7 +358,7 @@ def test_scan_all_plans_skips_paused_manifest(tmp_path, monkeypatch):
 
 
 def test_scan_all_plans_skips_unparseable_manifest_and_continues(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     # A garbage manifest file.
     (tmp_path / "broken.manifest.json").write_text("{ not valid json")
     # A valid plan alongside it.
@@ -379,7 +379,7 @@ def test_scan_all_plans_skips_unparseable_manifest_and_continues(tmp_path, monke
 
 def test_scan_all_plans_missing_manifest_file_skipped(tmp_path, monkeypatch, caplog):
     """A manifest path that disappears between glob and read must not crash."""
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     # Create then immediately remove a manifest to simulate a missing file.
     path = tmp_path / "ghost.manifest.json"
     path.write_text(json.dumps({"plan": "ghost", "stories": {}}))
@@ -395,7 +395,7 @@ def test_scan_all_plans_missing_manifest_file_skipped(tmp_path, monkeypatch, cap
 
 
 def test_scan_all_plans_empty_plan_dir_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     bus = FakeBus()
 
     result = watchers.scan_all_plans(bus)
@@ -406,7 +406,7 @@ def test_scan_all_plans_empty_plan_dir_returns_empty(tmp_path, monkeypatch):
 
 def test_scan_all_plans_returns_flat_concatenation(tmp_path, monkeypatch):
     """Multiple plans each contributing multiple events flatten into one list."""
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
 
     # Plan A: two in_progress stories, each with a marker.
     wt_a1 = tmp_path / "a-wt1"
@@ -454,7 +454,7 @@ def test_scan_all_plans_returns_flat_concatenation(tmp_path, monkeypatch):
 
 
 def test_scan_all_plans_never_invokes_subprocess(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     _make_plan_with_marker(tmp_path, "p", {"exit_code": 0})
     bus = FakeBus()
 
@@ -476,27 +476,27 @@ def test_scan_all_plans_does_not_import_pipeline_server():
     assert "import pipeline.server" not in src
 
 
-def test_scan_all_plans_imports_PLAN_DIR_from_paths():
+def test_scan_all_plans_lists_plans_through_manifest_source():
+    """The plan list comes from the store-first reader, not a PLAN_DIR glob."""
     import pipeline.watchers as w
 
     src = inspect.getsource(w)
-    # Must reference PLAN_DIR and import it from .paths (not pipeline.server).
-    assert "PLAN_DIR" in src
-    assert ".paths" in src or "from pipeline.paths" in src
+    assert "manifest_source.read_plan_names" in src
+    assert "PLAN_DIR" not in src
 
 
-def test_scan_all_plans_uses_removesuffix_idiom():
-    """Plan names must be derived with name.removesuffix('.manifest.json')."""
-    import pipeline.watchers as w
+def test_plan_names_derive_from_the_manifest_filename_in_manifest_source():
+    """Plan names are the manifest filename minus '.manifest.json', in one place."""
+    from pipeline import manifest_source
 
-    src = inspect.getsource(w)
+    src = inspect.getsource(manifest_source)
     assert "removesuffix" in src
     assert ".manifest.json" in src
 
 
 def test_scan_all_plans_calls_scan_done_markers(tmp_path, monkeypatch):
     """scan_all_plans must delegate to scan_done_markers per plan."""
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     _make_plan_with_marker(tmp_path, "delegated", {"exit_code": 0})
     bus = FakeBus()
 
@@ -516,7 +516,7 @@ def test_scan_all_plans_calls_scan_done_markers(tmp_path, monkeypatch):
 
 
 def test_scan_all_plans_does_not_mutate_manifests(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     _make_plan_with_marker(tmp_path, "m", {"exit_code": 0})
     bus = FakeBus()
 

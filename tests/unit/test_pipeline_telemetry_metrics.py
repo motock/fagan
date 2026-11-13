@@ -155,9 +155,9 @@ def _write_manifest(plan_name: str, stories: dict[str, dict]) -> None:
 
 def _tick(monkeypatch, plan_dir) -> list[dict]:
     """Run the real scan tick against the scratch manifests in *plan_dir*."""
-    from pipeline import paths, watchers
+    from pipeline import watchers
 
-    monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", plan_dir)
     bus = _Bus()
     watchers.scan_all_plans(bus)
     return bus.events

@@ -26,7 +26,7 @@ import pytest
 # required for cold-importability (every pipeline module imports cold, see
 # tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server  # noqa: F401
-from pipeline import cross_plan, paths, watchers
+from pipeline import cross_plan, manifest_source, server, watchers
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +199,7 @@ def test_exclude_plan_still_excludes(tmp_path, monkeypatch):
     assert set(cross_plan.load_manifests(tmp_path, exclude_plan="alpha")) == {"beta"}
 
 
-def test_scan_all_plans_reads_through_the_cache(tmp_path, monkeypatch):
+def test_scan_all_plans_reads_each_manifest_through_the_store_seam(tmp_path, monkeypatch):
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
     worktree = tmp_path / "wt"
@@ -210,16 +210,16 @@ def test_scan_all_plans_reads_through_the_cache(tmp_path, monkeypatch):
         "alpha",
         {"stories": {"S1": {"status": "in_progress", "worktree": str(worktree)}}},
     )
-    monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(server, "PLAN_DIR", plan_dir)
 
-    seen: list[Path] = []
-    real = cross_plan.read_manifest_cached
+    seen: list[str] = []
+    real = manifest_source.read_plan_manifest
 
-    def _spy(path):
-        seen.append(Path(path))
-        return real(path)
+    def _spy(plan_name, **kwargs):
+        seen.append(plan_name)
+        return real(plan_name, **kwargs)
 
-    monkeypatch.setattr(cross_plan, "read_manifest_cached", _spy)
+    monkeypatch.setattr(manifest_source, "read_plan_manifest", _spy)
 
     class _Bus:
         def __init__(self):
@@ -231,6 +231,6 @@ def test_scan_all_plans_reads_through_the_cache(tmp_path, monkeypatch):
     bus = _Bus()
     events = watchers.scan_all_plans(bus)
 
-    assert [path.name for path in seen] == ["alpha.manifest.json"]
+    assert seen == ["alpha"]
     assert [event["type"] for event in events] == ["agent_done"]
     assert [event["type"] for event in bus.published] == ["agent_done"]

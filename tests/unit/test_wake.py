@@ -16,7 +16,6 @@ The contract pinned here:
 * ``scan_all_plans`` turns each claimed marker into one ``reconcile`` event.
 """
 
-import importlib.util
 import json
 import logging
 import os
@@ -25,7 +24,6 @@ import sys
 
 import pytest
 
-import pipeline.server  # pre-existing import cycle (see test_triage_cap_silent_skip)
 from pipeline import wake, watchers
 
 _ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -51,10 +49,6 @@ def _wake_dir(tmp_path):
 
 def _point_plan_dir_at(tmp_path, monkeypatch):
     monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
-    # scan_all_plans globs the pipeline.paths object watchers bound at import,
-    # which is not always the object pipeline.server re-exports. Patch that
-    # binding too, or the scan reads the operator's real plans directory.
-    monkeypatch.setattr(watchers.paths, "PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -229,28 +223,6 @@ def test_scan_all_plans_publishes_one_reconcile_per_claimed_plan(tmp_path, monke
     bus.events.clear()
     watchers.scan_all_plans(bus)
     assert [e for e in bus.events if e.get("type") == "reconcile"] == []
-
-
-def test_scan_reads_the_patched_plan_dir_when_paths_has_a_second_copy(tmp_path, monkeypatch):
-    """Regression guard for the order-dependent failure of the reconcile test.
-
-    ``pipeline.watchers`` binds the ``pipeline.paths`` module object at import
-    time. Some smoke tests re-import ``pipeline.paths`` and restore
-    ``sys.modules`` without restoring the package attribute, so a later
-    ``from pipeline import paths`` yields a different copy from the one the
-    scan reads. Here that second copy is built the same way, and the scan must
-    still read the directory this test points at, never the operator's real
-    plans directory.
-    """
-    spec = importlib.util.find_spec("pipeline.paths")
-    second_copy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(second_copy)
-    monkeypatch.setitem(sys.modules, "pipeline.paths", second_copy)
-    monkeypatch.setattr(pipeline, "paths", second_copy)
-    _point_plan_dir_at(tmp_path, monkeypatch)
-
-    assert watchers.paths is not second_copy
-    assert watchers.paths.PLAN_DIR == tmp_path
 
 
 def test_scan_all_plans_survives_a_failing_wake_claim(tmp_path, monkeypatch, caplog):

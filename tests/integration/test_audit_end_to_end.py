@@ -31,7 +31,6 @@ from pipeline import (
     audit_anchor,
     authorization,
     ownership,
-    paths,
     persistence,
     watchers,
 )
@@ -53,11 +52,11 @@ PLAN = "alpha"
 
 @pytest.fixture()
 def plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point both PLAN_DIR bindings at a temp plan directory for one test."""
+    """Point the audit and the scan's plan listing at a temp plan directory."""
     directory = tmp_path / "plans"
     directory.mkdir()
     monkeypatch.setattr(persistence, "PLAN_DIR", directory)
-    monkeypatch.setattr(paths, "PLAN_DIR", directory)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", directory)
     monkeypatch.delenv(ANCHOR_VARIABLE, raising=False)
     monkeypatch.delenv(authorization.ENFORCE_ENV, raising=False)
     return directory

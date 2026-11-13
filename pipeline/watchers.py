@@ -22,9 +22,8 @@ from datetime import UTC, datetime
 from . import (
     audit_anchor,
     ci_rollup,
-    cross_plan,
     forge_github,
-    paths,
+    manifest_source,
     security_audit,
     wake,
 )
@@ -536,14 +535,15 @@ def _blocked_by_wakes(
 
 
 def scan_all_plans(bus):
-    """Scan all plan manifests in :data:`PLAN_DIR` and publish events.
+    """Scan all plan manifests and publish events.
 
-    The function iterates over every ``*.manifest.json`` file in the directory
-    specified by :data:`pipeline.paths.PLAN_DIR`.  For each manifest it:
+    The function iterates over every plan that
+    :func:`pipeline.manifest_source.read_plan_names` lists, in sorted order.
+    For each manifest it:
 
-    * Reads it through :func:`pipeline.cross_plan.read_manifest_cached`, so a
-      manifest whose file stamp is unchanged is not re-read or re-parsed on
-      every tick; a missing or malformed file is skipped.
+    * Reads it through :func:`pipeline.manifest_source.read_plan_manifest`, so
+      the record store is the primary source and this host's plan directory
+      the fallback; a missing or malformed manifest is skipped.
 
     * Skips any manifest that has a truthy ``paused`` key.
     * Delegates to :func:`scan_done_markers` for the ``agent_done`` publishing.
@@ -575,9 +575,8 @@ def scan_all_plans(bus):
     # blocked_by resolution runs after the loop over these two maps.
     manifests: dict[str, dict] = {}
     transitions: dict[str, list[str]] = {}
-    for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
-        plan_name = path.name.removesuffix(".manifest.json")
-        manifest = cross_plan.read_manifest_cached(path)
+    for plan_name in manifest_source.read_plan_names(fallback_on_error=True):
+        manifest = manifest_source.read_plan_manifest(plan_name, fallback_on_error=True)
         if manifest is None:
             logger.warning(
                 "Skipping unreadable manifest for plan %s", plan_name, extra={"plan": plan_name}

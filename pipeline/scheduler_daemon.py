@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 
-from pipeline import config_provenance
+from pipeline import config_provenance, manifest_source
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.events_nats_consumer import start_consumers, stop_consumers
@@ -370,15 +370,14 @@ class SchedulerDaemon:
         ]
         if not code_paths:
             return
-        plan_name = next(
-            (
-                path.name.removesuffix(".manifest.json")
-                for path in sorted(paths.PLAN_DIR.glob("*.manifest.json"))
-            ),
-            None,
-        )
-        if plan_name is None:
+        try:
+            names = manifest_source.read_plan_names(fallback_on_error=True)
+        except Exception:  # a notice must never break the daemon
+            logger.debug("plan listing for the stale-checkout notice failed", exc_info=True)
             return
+        if not names:
+            return
+        plan_name = names[0]
         from .persistence import _notify_user
 
         _notify_user(

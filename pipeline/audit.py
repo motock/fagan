@@ -1,18 +1,21 @@
 """Append-only, hash-chained audit stream (enterprise readiness phase 5).
 
-One file per plan, ``<plan>.audit.jsonl``, plus one host-scoped stream: a JSON
-object per line, each carrying the hash of the record before it. Rewriting,
-reordering, or deleting a record in the middle makes ``verify_audit_chain``
-return that record's index.
+One chain per plan plus one host-scoped chain: a record per event, each
+carrying the hash of the record before it. Rewriting, reordering, or deleting a
+record in the middle makes ``verify_audit_chain`` return that record's index.
 
 This module is the facade the rest of the pipeline calls. It builds the record
-body and delegates everything else - the file layout, the lock, the tail read,
-the write - to :class:`pipeline.audit_file.FileAuditLog`, so the process has
-exactly one append implementation and one verify implementation. The file log
-is selected regardless of ``PIPELINE_STORE``: the sqlite store still delegates
-every non-manifest record to the file store (ADR 0012 Context), so moving this
-stream into a table without importing the existing JSONL chains would make
-verification silently lose history.
+body and hands every append, read and verify to the audit log of the process's
+configured store (``pipeline.server._store.audit_log()``): the audit table of
+:class:`pipeline.store_sqlite.SqliteStore` under ``PIPELINE_STORE=sqlite``, and
+the JSONL files of :class:`pipeline.audit_file.FileAuditLog` under
+``PIPELINE_STORE=file``. The store decides where a chain lives; a plan's
+``<plan>.audit.jsonl`` is read only by the file store, never by the sqlite one.
+
+The external anchor is the one part that stays a file, whichever store is
+configured: :mod:`pipeline.audit_anchor` writes the heads it ships to a sink the
+pipeline cannot rewrite from inside the store's database. It reads each chain's
+head and records back through this facade.
 
 What this does NOT detect: truncation of the tail. A chain with no external
 anchor cannot prove that the newest records were not removed, so the head hash
@@ -75,16 +78,19 @@ def host_audit_path() -> Path:
 
 
 def _audit_log() -> Any:
-    """Return the one append/read implementation: the file-backed log.
+    """Return the configured store's audit log: the one append/read implementation.
 
-    Imported inside the call rather than at module scope because
-    :mod:`pipeline.audit_file` resolves its streams through this module's
-    ``audit_path`` and ``host_audit_path``; a module-level import on both sides
-    would break whichever module was imported first.
+    The store is the process's own (``pipeline.server._store``), not a fresh
+    one: an append made inside that store's transaction must join it, so a
+    second connection here would block on the write lock the store holds. The
+    store is read at call time, so a fixture that swaps it swaps the log too.
+
+    Imported inside the call because :mod:`pipeline.server` builds the store at
+    import and imports this module.
     """
-    from .audit_file import FileAuditLog
+    from .server import _store
 
-    return FileAuditLog()
+    return _store.audit_log()
 
 
 def _body(
@@ -160,12 +166,17 @@ def record_audit(
 ) -> None:
     """Append one record without ever changing the caller's decision.
 
-    Call sites are authorization and state-transition paths: a full disk, a
-    read-only plan directory or a chain name the layout cannot address must
-    degrade the audit trail loudly, not turn an allowed merge into a failed one
-    or a denied action into an allowed one. The failure is logged at ERROR with
-    the action and plan so the gap is visible; a refused chain name is logged
-    without the name, which may be a path.
+    Call sites are authorization and state-transition paths. Two failures
+    degrade the audit trail loudly and leave the caller's decision standing: an
+    ``OSError`` (a full disk, a read-only plan directory) and an
+    ``InvalidRecordKeyError`` (a chain name the layout cannot address). Both are
+    logged at ERROR with the action and plan, so the gap is visible; a refused
+    chain name is logged without the name, which may be a path.
+
+    Every other exception propagates and refuses the audited action (fail
+    closed): a store with no ``audit_log()``, a store whose audit log is broken,
+    or a ``sqlite3.Error`` from the database. A write the store cannot audit is
+    not a write the pipeline may make silently.
     """
     try:
         append_audit(

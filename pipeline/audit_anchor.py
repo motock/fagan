@@ -64,6 +64,7 @@ import fcntl
 import json
 import logging
 import os
+import sqlite3
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -407,34 +408,21 @@ def _anchors(sink: AnchorSink) -> dict[str, tuple[int, str]]:
     return strongest
 
 
-def _stream_for(chain: str) -> Path:
-    """The stream a chain's anchor key names.
-
-    The anchor key is the plan name for a plan chain, ``"host"`` for the host
-    chain and ``decisions:<plan>`` for a decisions chain, so a plan actually
-    named ``decisions`` is still read as its own audit stream rather than as the
-    decisions namespace. The path is resolved by the store, not built here.
-    """
-    if chain.startswith("decisions:"):
-        return decision_records.decision_stream_path(chain.removeprefix("decisions:"))
-    log = audit._audit_log()
-    return log.stream_path(HOST_CHAIN_ID if chain == HOST_CHAIN else chain)
-
-
-def _chain_streams() -> Iterator[tuple[str, Path]]:
-    """Yield ``(anchor key, stream path)`` for every chain the log holds.
+def _chain_streams() -> Iterator[str]:
+    """Yield every anchor key the store and the decisions streams hold.
 
     The plan and host chains are enumerated through the audit log rather than by
     globbing the plan directory, so a chain kept anywhere else is anchored the
     same way; the decisions chains come from their own helper. The anchor key is
     the plan name for a plan chain, ``"host"`` for the host chain and
     ``decisions:<plan>`` for a decisions chain - byte-compatible with the anchor
-    log this module has always written.
+    log this module has always written. No stream path is resolved for a plan or
+    host chain: the store reads its head and records.
     """
     log = audit._audit_log()
     try:
         chains = log.list_chains(DEFAULT_NAMESPACE)
-    except OSError as exc:  # pragma: no cover - a store that cannot be listed
+    except (OSError, sqlite3.Error) as exc:
         logger.warning("could not list the audit chains: %s", type(exc).__name__)
         chains = []
     for chain in chains:
@@ -451,24 +439,25 @@ def _chain_streams() -> Iterator[tuple[str, Path]]:
                 "skipping an audit stream whose plan name is not addressable plan=%r", chain
             )
             continue
-        yield chain, log.stream_path(chain)
+        yield chain
     for plan in decision_records.list_decision_chains():
         if ":" in plan:
             logger.warning(
                 "skipping a decisions stream whose plan name is not addressable plan=%r", plan
             )
             continue
-        yield f"decisions:{plan}", decision_records.decision_stream_path(plan)
-    yield HOST_CHAIN, log.stream_path(HOST_CHAIN_ID)
+        yield f"decisions:{plan}"
+    yield HOST_CHAIN
 
 
 def _chain_heads() -> Iterator[tuple[str, tuple[int, str]]]:
     """Yield ``(anchor key, (seq, hash))`` for every chain with a usable head."""
     log = audit._audit_log()
-    for chain, path in _chain_streams():
+    for chain in _chain_streams():
         if chain == HOST_CHAIN:
             head = _head(lambda: log.head(DEFAULT_NAMESPACE, HOST_CHAIN_ID), chain)
         elif chain.startswith("decisions:"):
+            path = decision_records.decision_stream_path(chain.removeprefix("decisions:"))
             head = _head(lambda path=path: audit._tail(path), chain)
         else:
             head = _head(lambda chain=chain: log.head(DEFAULT_NAMESPACE, chain), chain)
@@ -485,7 +474,7 @@ def _head(read: Callable[[], dict[str, Any] | None], chain: str) -> tuple[int, s
     """
     try:
         record = read()
-    except (OSError, InvalidRecordKeyError) as exc:
+    except (OSError, InvalidRecordKeyError, sqlite3.Error) as exc:
         logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
         return None
     if record is None:
@@ -599,7 +588,7 @@ def _chain_records(chain: str) -> Iterator[dict[str, Any] | None]:
     stored = HOST_CHAIN_ID if chain == HOST_CHAIN else chain
     try:
         yield from audit._audit_log().read_chain(DEFAULT_NAMESPACE, stored)
-    except (OSError, InvalidRecordKeyError) as exc:
+    except (OSError, InvalidRecordKeyError, sqlite3.Error) as exc:
         logger.warning("could not read the audit stream for %s: %s", chain, type(exc).__name__)
 
 

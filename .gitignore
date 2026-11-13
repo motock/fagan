@@ -28,6 +28,13 @@ node_modules
 .tdd_split_test_author_done
 .dispatch_baseline_test_checked
 
+# Coverage outputs from `pytest --cov` (CI's coverage leg writes coverage.xml
+# and the .coverage data file). tests/conftest.py fails the run on any new
+# untracked repo-root entry, so these must be ignored, not left on disk.
+/coverage.xml
+/.coverage
+/.coverage.*
+
 # Local scratch/runtime state (not source)
 .local/
 

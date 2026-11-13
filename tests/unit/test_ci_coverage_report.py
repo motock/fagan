@@ -8,6 +8,7 @@ a dependency of this repo, so ci.yml is read as text.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,3 +75,28 @@ def test_gate_scanner_flags_a_threshold() -> None:
     assert _gate_flags("pytest --cov=pipeline --cov-fail-under=80") == [
         "--cov-fail-under"
     ]
+
+
+def _is_gitignored(name: str) -> bool:
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", name],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode in (0, 1), f"git check-ignore failed for {name!r}"
+    return result.returncode == 0
+
+
+def test_coverage_outputs_are_gitignored() -> None:
+    # tests/conftest.py fails the run when it leaves NEW untracked entries in
+    # the repo root. The coverage leg writes coverage.xml and the .coverage
+    # data file there, so both must be ignored or that leg fails every run.
+    for name in ("coverage.xml", ".coverage", ".coverage.runner1234"):
+        assert _is_gitignored(name), f"{name} must be gitignored"
+
+
+def test_unrelated_root_files_are_not_gitignored() -> None:
+    assert not _is_gitignored("coverage_notes.txt"), (
+        "the coverage ignore rules must not hide unrelated root files"
+    )

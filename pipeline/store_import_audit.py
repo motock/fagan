@@ -32,7 +32,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from pipeline import audit_chain
-from pipeline.audit_anchor import HOST_CHAIN
+from pipeline.audit_anchor import (
+    HOST_CHAIN,
+    AnchorUnreadable,
+    _anchors,
+    build_anchor_sink,
+)
 from pipeline.audit_log import HOST_CHAIN_ID, validate_chain
 from pipeline.store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
 from pipeline.store_sqlite_audit import AuditChainConflictError
@@ -49,8 +54,6 @@ def import_audit_chains(
     target: Any,
     namespace: str = DEFAULT_NAMESPACE,
     dry_run: bool = False,
-    anchors: Mapping[str, tuple[int, str]] | None = None,
-    anchors_unreadable: bool = False,
 ) -> list[dict]:
     """Import every chain of *namespace* from *source* into *target*.
 
@@ -59,22 +62,39 @@ def import_audit_chains(
     and reports every chain exactly as a real run would, and writes nothing.
     The source is only ever read.
 
-    *anchors* is the strongest anchored ``(seq, hash)`` per chain, as
-    :func:`pipeline.audit_anchor.anchored_heads` returns it; ``None`` means no
-    anchor sink is configured.  ``anchors_unreadable`` says a sink is configured
-    but could not be read, which refuses every chain.
+    The anchor is read from the configured sink, once per call.  With no sink
+    configured no chain is checked against an anchor; a configured sink that
+    cannot be read refuses every chain.
 
     Returns one ``{"chain", "records", "status"}`` entry per chain, plus a
     ``"reason"`` for a refusal and a ``"seq"`` for an unverifiable chain.  An
     unknown namespace raises before any stream is read.
     """
     chains = source.list_chains(namespace)
+    anchors, anchors_unreadable = _configured_anchors()
     return [
         _import_one(
             source, target, namespace, chain, dry_run, anchors, anchors_unreadable
         )
         for chain in chains
     ]
+
+
+def _configured_anchors() -> tuple[Mapping[str, tuple[int, str]] | None, bool]:
+    """The anchored heads of the configured sink, and whether it is unreadable.
+
+    ``(None, False)`` means no sink is configured.  An invalid or unreadable
+    sink gives ``(None, True)``: nothing may be cleared against an anchor the
+    import cannot read.  The ratchet and chain-name validation are the audit
+    anchor's own, so they apply here as they do to verification.
+    """
+    try:
+        sink = build_anchor_sink()
+        if sink is None:
+            return None, False
+        return _anchors(sink), False
+    except (AnchorUnreadable, ValueError):
+        return None, True
 
 
 def _import_one(

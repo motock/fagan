@@ -25,6 +25,12 @@ class _FakeRecordStore:
         self._manifest_path = manifest_path
         self.requested_namespaces = []
 
+    def audit_log(self):
+        """The file audit log, which is what the real store serves under file."""
+        from pipeline.audit_file import FileAuditLog
+
+        return FileAuditLog()
+
     def manifest_path(self, plan_name):
         return self._manifest_path
 

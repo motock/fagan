@@ -139,6 +139,12 @@ class _LockedStore:
     the behaviour the pre-check path had when the lock was contended.
     """
 
+    def audit_log(self):
+        """The file audit log, which is what the real store serves under file."""
+        from pipeline.audit_file import FileAuditLog
+
+        return FileAuditLog()
+
     @contextmanager
     def transaction(self, plan_name):
         yield False

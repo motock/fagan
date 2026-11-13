@@ -30,8 +30,7 @@ import pipeline
 from pipeline import events_nats_consumer, notification_sinks, persistence, server
 from pipeline.store_records import DEFAULT_NAMESPACE
 from tests.unit._plan_dir_references import count_references
-
-ALLOWLIST_PATH = Path(__file__).with_name("plan_dir_allowlist.json")
+from tests.unit.test_plan_dir_allowlist import ceiling
 
 #: The pattern the plan-directory allowlist counts.
 PLAN_DIR_PATTERN = re.compile(r"\b(PLAN_DIR|plan_dir)\b")
@@ -439,32 +438,27 @@ def test_the_store_accepts_a_record_without_a_message(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _allowlist() -> dict[str, int]:
-    return json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
-
-
 def test_the_notification_writers_left_the_plan_directory_allowlist():
     """None of the three modules composes a notifications path any more, so
     none of them may sit on the allowlist."""
-    allowlist = _allowlist()
     for gone in (
         "pipeline/notification_sinks.py",
         "pipeline/ticketing.py",
         "pipeline/usage_transitions.py",
     ):
-        assert gone not in allowlist, f"{gone} must have left the allowlist"
+        assert ceiling(gone) == 0, f"{gone} must have left the allowlist"
 
 
 def test_the_persistence_allowlist_ceiling_was_lowered():
     """persistence.py composes one path less than before, so its ceiling is
     lower than the one it had -- and the ceiling still covers the file."""
-    ceiling = _allowlist()["pipeline/persistence.py"]
-    assert ceiling < 10, "the persistence ceiling must be lowered"
+    persistence_ceiling = ceiling("pipeline/persistence.py")
+    assert persistence_ceiling < 10, "the persistence ceiling must be lowered"
 
     source = (SOURCE_DIR / "persistence.py").read_text(encoding="utf-8")
     actual = count_references(source, "pipeline/persistence.py")
     assert actual < 10, "persistence.py must compose fewer plan-directory paths"
-    assert actual <= ceiling, "the ceiling must still cover the file"
+    assert actual <= persistence_ceiling, "the ceiling must still cover the file"
 
 
 def test_the_notification_writers_no_longer_name_the_plan_directory():

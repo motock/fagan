@@ -3,7 +3,7 @@
 The pass used to discover plan chains by globbing the plan directory, which
 anchored a file store and nothing else. It now asks the audit log for its chains,
 so a chain kept anywhere else is anchored the same way, and this module stops
-naming the plan directory at all (see ``tests/unit/plan_dir_allowlist.json``).
+naming the plan directory at all (see ``tests/unit/test_plan_dir_allowlist.py``).
 What must not change with that: the anchor key for each chain, so an existing
 anchor log keeps verifying.
 """

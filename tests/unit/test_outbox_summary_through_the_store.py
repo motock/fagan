@@ -36,6 +36,7 @@ from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE
 from tests.unit._injected_state import host_at
 from tests.unit._plan_dir_references import count_references
+from tests.unit.test_plan_dir_allowlist import ceiling
 
 #: The staleness threshold the readers apply.
 THRESHOLD_S = 900
@@ -267,20 +268,10 @@ class TestApplyOutboxHealthAcceptsASummary:
         assert out['degraded'] == []
 
 
-#: The plan-directory allowlist: a shrink-only ceiling per module.
-_ALLOWLIST_PATH = Path(__file__).with_name('plan_dir_allowlist.json')
-
-
 def _plan_dir_references(module: str) -> int:
     """How many direct PLAN_DIR references *module* makes, counted as the guard counts them."""
     path = Path(__file__).resolve().parents[2] / module
     return count_references(path.read_text(encoding='utf-8'), module)
-
-
-def _ceiling(module: str) -> int:
-    """The allowlisted ceiling for *module*; a module whose entry was deleted is at zero."""
-    baseline = json.loads(_ALLOWLIST_PATH.read_text(encoding='utf-8'))
-    return baseline.get(module, 0)
 
 
 class TestPlanDirAllowlistCeilings:
@@ -289,23 +280,23 @@ class TestPlanDirAllowlistCeilings:
     def test_health_freshness_no_longer_names_the_plans_directory(self):
         assert (
             _plan_dir_references('pipeline/health_freshness.py')
-            <= _ceiling('pipeline/health_freshness.py')
+            <= ceiling('pipeline/health_freshness.py')
         )
 
     def test_tick_checks_no_longer_names_the_plans_directory(self):
         assert (
             _plan_dir_references('pipeline/tick_checks.py')
-            <= _ceiling('pipeline/tick_checks.py')
+            <= ceiling('pipeline/tick_checks.py')
         )
 
     def test_metrics_exposition_no_longer_names_the_plans_directory(self):
         assert (
             _plan_dir_references('pipeline/metrics_exposition.py')
-            <= _ceiling('pipeline/metrics_exposition.py')
+            <= ceiling('pipeline/metrics_exposition.py')
         )
 
     def test_outbox_health_stays_on_its_ceiling(self):
         assert (
             _plan_dir_references('pipeline/outbox_health.py')
-            <= _ceiling('pipeline/outbox_health.py')
+            <= ceiling('pipeline/outbox_health.py')
         )

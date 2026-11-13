@@ -37,7 +37,7 @@ __all__ = [
 # The root is the plans directory, resolved through the live ``pipeline.server``
 # binding on every access so ``monkeypatch.setattr(pipeline.server, ...)`` keeps
 # landing. The name is assembled instead of spelled out because the shrink-only
-# allowlist (tests/unit/plan_dir_allowlist.json) counts direct references per
+# allowlist (tests/unit/test_plan_dir_allowlist.py) counts direct references per
 # file and a new module must not add an entry.
 _ROOT = LiveRef("PLAN" + "_DIR")
 

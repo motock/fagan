@@ -25,7 +25,7 @@ import pytest
 
 # pipeline.server is imported explicitly first: a pre-existing import cycle
 # makes some pipeline modules unimportable cold in any other order.
-import pipeline.server  # noqa: F401
+import pipeline.server
 from pipeline import ci_rollup, forge_github, paths, watchers
 from pipeline.forge import FAIL, PASS, PENDING, CISnapshot, CIStatusUnreadable
 from pipeline.forge_github import GitHubForge

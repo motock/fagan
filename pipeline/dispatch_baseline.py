@@ -54,13 +54,13 @@ def _baseline_test_env() -> dict[str, str]:
 def _cache_dir() -> Path:
     """The per-install snapshot cache directory, resolved at call time.
 
-    ``pipeline.server.PLAN_DIR`` is the single surface tests and operators
-    patch to relocate plan storage, so the cache follows it rather than
-    binding the path at import.
+    The cache is host-local and rebuildable, so its root comes from
+    ``HostState.cache_root()``, which follows the plans directory on every
+    call: a test or operator that relocates plan storage relocates this too.
     """
-    import pipeline.server
+    from .host_state import build_host_state
 
-    return Path(pipeline.server.PLAN_DIR) / _BASELINE_CACHE_DIRNAME
+    return build_host_state().cache_root() / _BASELINE_CACHE_DIRNAME
 
 
 def _git_head(worktree_path: Path) -> str | None:

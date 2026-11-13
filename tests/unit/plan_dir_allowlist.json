@@ -28,7 +28,7 @@
  "pipeline/watchers.py": 2,
  "pipeline/wedge_io.py": 1,
  "pipeline/worktree_patch.py": 2,
- "scripts/local_success_report.py": 12,
+ "scripts/local_success_report.py": 10,
  "scripts/reset_false_positive_tests_passed.py": 2,
  "scripts/smoke_getting_started.py": 13
 }

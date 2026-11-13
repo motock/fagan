@@ -31,7 +31,7 @@ from . import (
 from .ci import CANCELLED, FAIL, PASS, PENDING, _aggregate_ci_states
 from .events import make_event
 from .forge import CIStatusUnreadable
-from .module_ref import _ModuleRef
+from .live_ref import LiveRef
 from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
@@ -152,7 +152,7 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
 
 _SECURITY_DUE_COOLDOWN_SECONDS = 24 * 3600
 _SECURITY_DUE_LAST_EMIT: dict[str, float] = {}
-_store = _ModuleRef("pipeline.server", "_store")
+_store = LiveRef("_store")
 
 
 def _scan_security_audits(repo_plans: dict[str, str]) -> None:

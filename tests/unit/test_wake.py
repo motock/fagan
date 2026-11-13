@@ -25,7 +25,7 @@ import sys
 import pytest
 
 import pipeline.server  # noqa: F401 - pre-existing import cycle (see test_triage_cap_silent_skip)
-from pipeline import paths, wake, watchers
+from pipeline import wake, watchers
 
 _ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 _WINDOWS = sys.platform.startswith("win")
@@ -49,7 +49,7 @@ def _wake_dir(tmp_path):
 
 
 def _point_plan_dir_at(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     return tmp_path
 
 

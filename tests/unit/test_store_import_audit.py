@@ -72,6 +72,9 @@ class _FixedSource:
     def list_chains(self, namespace):
         return list(self._chains)
 
+    def unaddressable_chains(self, namespace):
+        return []
+
     def read_chain(self, namespace, chain):
         return self._chains[chain]
 
@@ -172,6 +175,27 @@ def test_a_dry_run_reports_the_same_and_writes_no_rows(tmp_path):
     store.close()
 
 
+def test_an_unaddressable_stream_is_refused_as_invalid_name_and_its_sibling_imports(
+    tmp_path, caplog
+):
+    plans = _plans(tmp_path)
+    shutil.copy(FIXTURES / "legacy.audit.jsonl", plans / f"bad name{SUFFIX}")
+    store, target = _target(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        report = import_audit_chains(_source(plans), target)
+
+    assert {
+        "chain": "bad name",
+        "records": 0,
+        "status": "refused",
+        "reason": "invalid_name",
+    } in report
+    assert _statuses(report)[LEGACY_PLAN] == "imported"
+    assert all("bad name" not in r.getMessage() for r in caplog.records)
+    store.close()
+
+
 def test_an_empty_plans_directory_yields_no_chains(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -239,6 +263,9 @@ def test_a_plan_chain_name_the_store_cannot_hold_is_refused_and_not_logged_by_na
     class _Source:
         def list_chains(self, namespace):
             return ["bad:name"]
+
+        def unaddressable_chains(self, namespace):
+            return []
 
         def read_chain(self, namespace, chain):  # pragma: no cover - must not run
             raise AssertionError("an invalid chain name must not be read")

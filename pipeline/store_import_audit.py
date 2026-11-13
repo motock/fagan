@@ -67,17 +67,25 @@ def import_audit_chains(
     cannot be read refuses every chain.
 
     Returns one ``{"chain", "records", "status"}`` entry per chain, plus a
-    ``"reason"`` for a refusal and a ``"seq"`` for an unverifiable chain.  An
+    ``"reason"`` for a refusal and a ``"seq"`` for an unverifiable chain.  Each
+    stream the source skips as unaddressable is an ``invalid_name`` refusal.  An
     unknown namespace raises before any stream is read.
     """
     chains = source.list_chains(namespace)
     anchors, anchors_unreadable = _configured_anchors()
-    return [
+    report = [
         _import_one(
             source, target, namespace, chain, dry_run, anchors, anchors_unreadable
         )
         for chain in chains
     ]
+    # A stream the source skips is refused, not silently dropped: the report must
+    # account for every file the source holds.
+    report.extend(
+        _refused(name, 0, "invalid_name")
+        for name in source.unaddressable_chains(namespace)
+    )
+    return report
 
 
 def _configured_anchors() -> tuple[Mapping[str, tuple[int, str]] | None, bool]:

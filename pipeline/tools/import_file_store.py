@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from functools import partial
@@ -409,6 +410,20 @@ def _absolute(value: str) -> str:
     return value
 
 
+def _create_private(path: str) -> None:
+    """Create an empty file at *path* readable and writable by its owner only.
+
+    The store is created with the operator's umask otherwise, and the database
+    holds the full audit trail, manifests and context snapshots.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Created by another process after the existence check: keep its mode.
+        return
+    os.close(fd)
+
+
 def run_import(source: FileStore, target: SqliteStore, dry_run: bool) -> dict[str, Any]:
     """Import every record kind, then the audit chains, and return the summary."""
     record_kinds = import_record_kinds(source, target, dry_run)
@@ -444,6 +459,11 @@ def main(argv: list[str] | None = None) -> int:
         help="report what would be imported; write no record",
     )
     args = parser.parse_args(argv)
+
+    if not os.path.exists(args.db):
+        if args.dry_run:
+            parser.error("--dry-run needs an existing --db; a dry run creates nothing")
+        _create_private(args.db)
 
     target = SqliteStore(args.db)
     try:

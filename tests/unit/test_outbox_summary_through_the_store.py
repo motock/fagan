@@ -13,7 +13,6 @@ store the readers see, whatever the directories on disk hold.
 from __future__ import annotations
 
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -35,6 +34,7 @@ from pipeline import (
 )
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._plan_dir_references import count_references
 
 #: The staleness threshold the readers apply.
 THRESHOLD_S = 900
@@ -268,17 +268,12 @@ class TestApplyOutboxHealthAcceptsASummary:
 
 #: The plan-directory allowlist: a shrink-only ceiling per module.
 _ALLOWLIST_PATH = Path(__file__).with_name('plan_dir_allowlist.json')
-_PLAN_DIR_PATTERN = re.compile(r'\b(PLAN_DIR|plan_dir)\b')
 
 
 def _plan_dir_references(module: str) -> int:
-    """How many lines of *module* name the plans directory."""
+    """How many direct PLAN_DIR references *module* makes, counted as the guard counts them."""
     path = Path(__file__).resolve().parents[2] / module
-    return sum(
-        1
-        for line in path.read_text(encoding='utf-8').splitlines()
-        if _PLAN_DIR_PATTERN.search(line)
-    )
+    return count_references(path.read_text(encoding='utf-8'), module)
 
 
 def _ceiling(module: str) -> int:

@@ -8,35 +8,15 @@ passes without editing the JSON, while a new user or a file that grows past its
 ceiling fails.
 """
 
-import ast
 import json
 from pathlib import Path
 
 import pytest
 
-_REFERENCE_NAMES = frozenset({"PLAN_DIR", "plan_dir"})
+from tests.unit._plan_dir_references import count_references
+
 _SCANNED_ROOTS = ("pipeline", "app", "scripts")
 _BASELINE_PATH = Path(__file__).with_name("plan_dir_allowlist.json")
-
-
-def _count_references(source: str, rel: str) -> int:
-    try:
-        tree = ast.parse(source, filename=rel)
-    except SyntaxError as exc:
-        raise ValueError(f"cannot parse {rel}: {exc}") from exc
-    count = 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            ident = node.id
-        elif isinstance(node, ast.Attribute):
-            ident = node.attr
-        elif isinstance(node, (ast.arg, ast.keyword)):
-            ident = node.arg
-        else:
-            continue
-        if ident in _REFERENCE_NAMES:
-            count += 1
-    return count
 
 
 def _measure(root: Path) -> dict[str, int]:
@@ -47,7 +27,7 @@ def _measure(root: Path) -> dict[str, int]:
             continue
         for path in sorted(base.rglob("*.py")):
             rel = path.relative_to(root).as_posix()
-            count = _count_references(path.read_text(encoding="utf-8"), rel)
+            count = count_references(path.read_text(encoding="utf-8"), rel)
             if count:
                 found[rel] = count
     return found

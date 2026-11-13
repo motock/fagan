@@ -29,6 +29,7 @@ import pytest
 import pipeline
 from pipeline import events_nats_consumer, notification_sinks, persistence, server
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._plan_dir_references import count_references
 
 ALLOWLIST_PATH = Path(__file__).with_name("plan_dir_allowlist.json")
 
@@ -461,7 +462,7 @@ def test_the_persistence_allowlist_ceiling_was_lowered():
     assert ceiling < 10, "the persistence ceiling must be lowered"
 
     source = (SOURCE_DIR / "persistence.py").read_text(encoding="utf-8")
-    actual = sum(1 for line in source.splitlines() if PLAN_DIR_PATTERN.search(line))
+    actual = count_references(source, "pipeline/persistence.py")
     assert actual < 10, "persistence.py must compose fewer plan-directory paths"
     assert actual <= ceiling, "the ceiling must still cover the file"
 

@@ -1,4 +1,4 @@
-"""Tests for the pipeline MCP server: reset_false_positive_tests_passed.py unit tests, step-cap exit routing, and the infra-failure streak.
+"""Tests for the pipeline MCP server: step-cap exit routing, and the infra-failure streak.
 
 Split out of test_pipeline_mcp_server.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._pipeline_mcp_server_test_helpers.
 """

@@ -37,7 +37,7 @@ assumed:
 | `app/auth.py` | the `.dashboard_api_key` file location |
 | `app/role_registry.py` | registry resolution |
 | `pipeline/workspace.py` | workspace root-of-truth checks |
-| `scripts/local_agent.py`, `scripts/local_agent_oracle.py`, `scripts/mlx_server_wrapper.py`, `scripts/mlx_server_supervisor.py`, `scripts/smoke_getting_started.py`, `scripts/reset_false_positive_tests_passed.py` | repo root, for various defaults |
+| `scripts/local_agent.py`, `scripts/local_agent_oracle.py`, `scripts/mlx_server_wrapper.py`, `scripts/mlx_server_supervisor.py`, `scripts/smoke_getting_started.py` | repo root, for various defaults |
 
 None of this is a bug — it's a consistent, intentional convention ("the repo
 root is always two levels above any module") that works well for a

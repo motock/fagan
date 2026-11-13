@@ -5,7 +5,7 @@ package (``pipeline.server`` etc.). This thin module re-exports the server
 module's entire public AND private surface so existing callers —
 ``from app import pipeline_mcp_server as p``, the MCP launch command,
 ``backend.py``'s lazy import, ``scripts/local_agent.py``,
-``scripts/local_agent_oracle.py``, ``scripts/reset_false_positive_tests_passed.py``,
+``scripts/local_agent_oracle.py``,
 and ``test_backend.py`` — keep working unchanged.
 """
 

@@ -653,13 +653,13 @@ def ci_rollup_state_root(manifest_root: Path | str | None = None) -> Path:
     The detached grading channel's rule: an absolute ``PIPELINE_STATE_DIR``
     wins, a relative one resolves against the manifests base (never the
     process CWD, which differs between tick kinds), and with no override the
-    manifests base itself. ``manifest_root`` defaults to
-    :data:`pipeline.paths.PLAN_DIR`, read at call time so a scoped plan or a
-    test that patches it is honoured.
+    manifests base itself. ``manifest_root`` defaults to the host cache root
+    (``HostState.cache_root()``), read at call time so a scoped plan or a test
+    that relocates the plans directory is honoured.
     """
-    from . import paths
+    from .host_state import build_host_state
 
-    base = Path(paths.PLAN_DIR if manifest_root is None else manifest_root)
+    base = Path(build_host_state().cache_root() if manifest_root is None else manifest_root)
     override = os.environ.get("PIPELINE_STATE_DIR")
     if not override:
         return base

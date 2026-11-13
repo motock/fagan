@@ -1,10 +1,8 @@
 {
  "app/dashboard.py": 5,
- "pipeline/checkpoint.py": 2,
+ "pipeline/checkpoint.py": 1,
  "pipeline/cross_plan.py": 4,
- "pipeline/dispatch_baseline.py": 1,
  "pipeline/event_wiring.py": 1,
- "pipeline/forge_github.py": 1,
  "pipeline/health_freshness.py": 5,
  "pipeline/metrics_exposition.py": 10,
  "pipeline/notification_routing.py": 1,

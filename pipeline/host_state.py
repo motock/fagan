@@ -177,6 +177,10 @@ class HostState(Protocol):
 
     def job_state_root(self) -> Path: ...
 
+    def cache_root(self) -> Path: ...
+
+    def story_log_root(self) -> Path: ...
+
     def get_recent_workspaces(self) -> list[str]: ...
 
     def add_recent_workspace(self, path: str) -> None: ...
@@ -271,6 +275,22 @@ class FileHostState:
 
     def root(self) -> Path:
         """The host-local root these records live under."""
+        return self._root()
+
+    def cache_root(self) -> Path:
+        """The root the rebuildable host caches live under.
+
+        Caches are never replicated, so they sit with the other host-local
+        records. Resolved on every call, nothing is created.
+        """
+        return self._root()
+
+    def story_log_root(self) -> Path:
+        """The root host-local per-story log tails are written under.
+
+        The watchdog's agent.log tail is a host-local post-mortem copy, so it
+        lives here and not in the worktree (which is deleted after merge).
+        """
         return self._root()
 
     def job_state_root(self) -> Path:

@@ -37,9 +37,9 @@ def test_missing_action_fails_closed_to_park_for_human():
     assert _parse_ruling(text)["action"] == "park_for_human"
 
 
-# retry_transient and rebrief have real executors (ov-2); only these two
-# still hold the shadow stub.
-STUB_ACTIONS = ("resolve_rebase", "approve_test_edit")
+# retry_transient and rebrief have real executors (ov-2); resolve_rebase has
+# one (ov-3). Only approve_test_edit still holds the shadow stub.
+STUB_ACTIONS = ("approve_test_edit",)
 
 
 @pytest.mark.parametrize("action", STUB_ACTIONS)

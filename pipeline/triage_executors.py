@@ -9,6 +9,7 @@ registering its own function for the same action.
 from collections.abc import Callable
 
 from .triage_park_classes import NEW_ACTIONS
+from .triage_rebase import execute_resolve_rebase
 from .triage_rebrief import execute_rebrief, execute_retry_transient
 
 EXECUTORS: dict[str, Callable] = {}
@@ -31,6 +32,7 @@ def _shadow_only(plan_name, story_key, story, ruling, manifest) -> str:
 
 #: Actions with a real executor (ov-2). Every other NEW_ACTIONS entry keeps the stub.
 _IMPLEMENTED: dict[str, Callable] = {
+    "resolve_rebase": execute_resolve_rebase,
     "retry_transient": execute_retry_transient,
     "rebrief": execute_rebrief,
 }

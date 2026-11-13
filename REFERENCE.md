@@ -1506,8 +1506,16 @@ reset an approval (see `docs/specs/PLAN_APPROVAL.md` §3).
 overlord's `rebrief` and `retry_transient` executors (`pipeline/triage_rebrief.py`), and
 they are excluded from `canonical_digest` like the other runtime story fields.
 `triage_diagnosis` is a list of up to three `{ts, class, text}` entries, newest last;
-`text` is at most 600 characters. Storing a diagnosis therefore never resets an
-approval. The dispatched prompt shows only the newest entry, as
+`text` is at most 600 characters when `rebrief` writes it. A `resolve_rebase` task (class
+`rebase_conflict`) is stored whole, since a cut instruction is worse than a long one. Storing a
+diagnosis therefore never resets an approval.
+
+`rebase_attempts` is a list of `{base_sha, ts}` entries written by the overlord's `resolve_rebase`
+executor (`pipeline/triage_rebase.py`). Each entry records one attempt, unpark or dispatch, against
+the base SHA it was made on, with an ISO-8601 UTC timestamp. The executor refuses a second attempt
+on the same base SHA and a fourth attempt ever. A refused attempt is not recorded. Like
+`triage_diagnosis`, it is runtime state excluded from `canonical_digest`. See `overlord-policy.md`
+("resolve_rebase"). The dispatched prompt shows only the newest entry, as
 `OVERLORD DIAGNOSIS (attempt N): <text>`, where N is the story's `dispatch_attempts`.
 `agent_instructions` and `files` are never written by these executors. See
 `overlord-policy.md` ("retry_transient and rebrief").

@@ -107,6 +107,18 @@ def _live_evidence_refusal(story: dict) -> str | None:
     return None
 
 
+def clear_park_for_unpark(plan_name, story_key, story) -> None:
+    """Clear a story's ``parked_reason`` and set it to ``tests_passed``.
+
+    The shared unpark step: ``retry_transient`` and ``resolve_rebase`` both use
+    it once their live evidence has cleared. Raises what ``clear_story_fields``
+    raises; the caller decides how to park.
+    """
+    clear_story_fields(plan_name, story_key, ["parked_reason"], status="tests_passed")
+    story.pop("parked_reason", None)
+    story["status"] = "tests_passed"
+
+
 def execute_retry_transient(plan_name, story_key, story, ruling, manifest) -> str:
     """Unpark a transient bookkeeping park whose live evidence has cleared.
 
@@ -138,14 +150,12 @@ def execute_retry_transient(plan_name, story_key, story, ruling, manifest) -> st
             f"retry_transient declined: {refusal}; parked for a human",
         )
     try:
-        clear_story_fields(plan_name, story_key, ["parked_reason"], status="tests_passed")
+        clear_park_for_unpark(plan_name, story_key, story)
     except (ValueError, KeyError, RuntimeError, OSError) as exc:
         return _park(
             plan_name, story_key, story,
             f"retry_transient failed to unpark ({type(exc).__name__}); parked for a human",
         )
-    story.pop("parked_reason", None)
-    story["status"] = "tests_passed"
     story["triage_transient_retries"] = retries + 1
     _notify_user(
         plan_name,
@@ -235,6 +245,7 @@ __all__ = [
     "DIAGNOSIS_MAX_CHARS",
     "REBRIEF_RESET_FIELDS",
     "RETRY_TRANSIENT_CAP",
+    "clear_park_for_unpark",
     "diagnosis_block",
     "execute_rebrief",
     "execute_retry_transient",

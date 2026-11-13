@@ -29,7 +29,7 @@ from pathlib import Path
 # pipeline.paths is stdlib-only (verified: importing it pulls no third-party
 # modules), so its PLAN_DIR binding is reused as the repo's documented patch
 # surface for plan-dir resolution. It is read at call time, never cached here.
-from pipeline import paths
+from pipeline import host_state, paths
 
 __all__ = ["PreflightError", "raise_on_failure", "run_preflight", "summarize"]
 
@@ -43,12 +43,32 @@ class PreflightError(RuntimeError):
     """Raised by raise_on_failure() when any check reports status "fail"."""
 
 
-def _check_scheduler_config(plan_dir, worktree_root):
+def _read_scheduler_fingerprint(plan_path):
+    """Read the scheduler's snapshot from ``plan_path`` through HostState.
+
+    Returns ``(fingerprint_path, state, config)``. ``state`` is ``"absent"``
+    (no file: a standalone or not-yet-started scheduler), ``"malformed"``
+    (present but unreadable, not a JSON object, or without a ``config`` object)
+    or ``"ok"`` (``config`` is the fingerprint dict). Read-only.
+    """
+    host = host_state.FileHostState(plan_path)
+    fingerprint_path = str(host.scheduler_health_path())
+    payload = host.read_scheduler_health()
+    if payload is None:
+        if not os.path.exists(fingerprint_path):
+            return fingerprint_path, "absent", None
+        return fingerprint_path, "malformed", None
+    if not isinstance(payload.get("config"), dict):
+        return fingerprint_path, "malformed", None
+    return fingerprint_path, "ok", payload["config"]
+
+
+def _check_scheduler_config(plan_path, worktree_root):
     """Compare the scheduler's config fingerprint against THIS process's.
 
-    Reads ``<plan_dir>/.scheduler_health.json`` (the CFG-B2 path the
-    scheduler daemon writes) and diffs its ``config.plan_dir`` /
-    ``config.worktree_root`` against the values run_preflight() already
+    Reads the CFG-B2 fingerprint the scheduler daemon writes (through
+    ``FileHostState`` rooted at ``plan_path``) and diffs its ``config.plan_dir``
+    / ``config.worktree_root`` against the values run_preflight() already
     resolved — the same comparison /api/health performs (CFG-B3), surfaced
     at startup instead of only on demand.
 
@@ -64,44 +84,35 @@ def _check_scheduler_config(plan_dir, worktree_root):
 
     Read-only: the fingerprint is never created, written, or removed here.
     """
-    fingerprint_path = os.path.join(str(plan_dir), ".scheduler_health.json")
-    try:
-        if not os.path.exists(fingerprint_path):
-            return {
-                "name": "SCHEDULER_CONFIG",
-                "status": "ok",
-                "message": (
-                    "no scheduler fingerprint found at "
-                    f"{fingerprint_path} (a standalone or not-yet-started "
-                    "scheduler is normal)"
-                ),
-            }
-        with open(fingerprint_path, "r", encoding="utf-8") as handle:
-            payload = json.loads(handle.read())
-        if not isinstance(payload, dict) or not isinstance(
-            payload.get("config"), dict
-        ):
-            raise TypeError("fingerprint carries no usable config object")
-        fingerprint = payload["config"]
-        fp_plan_dir = fingerprint["plan_dir"]
-        fp_worktree_root = fingerprint["worktree_root"]
-    except Exception as exc:  # noqa: BLE001 - any fingerprint problem is a warn
-        # Non-leaking: report the error CLASS name only, never str(exc) /
-        # repr(exc) (they may carry env values or file contents).
+    fingerprint_path, state, fingerprint = _read_scheduler_fingerprint(plan_path)
+    if state == "absent":
+        return {
+            "name": "SCHEDULER_CONFIG",
+            "status": "ok",
+            "message": (
+                "no scheduler fingerprint found at "
+                f"{fingerprint_path} (a standalone or not-yet-started "
+                "scheduler is normal)"
+            ),
+        }
+    if state == "malformed" or not {"plan_dir", "worktree_root"} <= fingerprint.keys():
+        # Non-leaking: no exception text, which may carry env values or file contents.
         return {
             "name": "SCHEDULER_CONFIG",
             "status": "warn",
             "message": (
                 f"scheduler fingerprint at {fingerprint_path} is malformed "
-                f"or unreadable ({type(exc).__name__}) — cannot compare "
-                "scheduler config against this process"
+                "or unreadable — cannot compare scheduler config against "
+                "this process"
             ),
         }
+    fp_plan_dir = fingerprint["plan_dir"]
+    fp_worktree_root = fingerprint["worktree_root"]
 
     problems = []
-    if str(fp_plan_dir) != str(plan_dir):
+    if str(fp_plan_dir) != str(plan_path):
         problems.append(
-            f"plan_dir: fingerprint={fp_plan_dir} resolved={plan_dir}"
+            f"plan_dir: fingerprint={fp_plan_dir} resolved={plan_path}"
         )
     if worktree_root is not None and str(fp_worktree_root) != str(
         worktree_root
@@ -121,17 +132,18 @@ def _check_scheduler_config(plan_dir, worktree_root):
     return {
         "name": "SCHEDULER_CONFIG",
         "status": "ok",
-        "message": f"scheduler config matches resolved plan dir: {plan_dir}",
+        "message": f"scheduler config matches resolved plan dir: {plan_path}",
     }
 
 
-def _check_scheduler_revision(plan_dir):
+def _check_scheduler_revision(plan_path):
     """Report whether the RUNNING scheduler is executing current code.
 
     Reads the ``config.checkout_sha`` / ``config.checkout_behind_origin`` the
-    scheduler daemon records in the same ``<plan_dir>/.scheduler_health.json``
-    the config check reads. The daemon measures both against its own checkout's
-    upstream, so this compares like with like and never needs git here.
+    scheduler daemon records in the same snapshot the config check reads (via
+    ``FileHostState`` rooted at ``plan_path``). The daemon measures both against
+    its own checkout's upstream, so this compares like with like and never
+    needs git here.
 
     Outcomes:
         behind_origin == 0  -> "ok"   (the daemon runs its checkout's revision)
@@ -149,35 +161,25 @@ def _check_scheduler_revision(plan_dir):
     A stale revision is a warn, never a fail: it must not block startup.
     Read-only: the fingerprint is never created, written, or removed here.
     """
-    fingerprint_path = os.path.join(str(plan_dir), ".scheduler_health.json")
-    try:
-        if not os.path.exists(fingerprint_path):
-            return {
-                "name": "SCHEDULER_REVISION",
-                "status": "ok",
-                "message": (
-                    "no scheduler fingerprint found at "
-                    f"{fingerprint_path} (a standalone or not-yet-started "
-                    "scheduler is normal)"
-                ),
-            }
-        with open(fingerprint_path, "r", encoding="utf-8") as handle:
-            payload = json.loads(handle.read())
-        if not isinstance(payload, dict) or not isinstance(
-            payload.get("config"), dict
-        ):
-            raise TypeError("fingerprint carries no usable config object")
-        fingerprint = payload["config"]
-    except Exception as exc:  # noqa: BLE001 - any fingerprint problem is a warn
-        # Non-leaking: report the error CLASS name only, never str(exc) /
-        # repr(exc) (they may carry env values or file contents).
+    fingerprint_path, state, fingerprint = _read_scheduler_fingerprint(plan_path)
+    if state == "absent":
+        return {
+            "name": "SCHEDULER_REVISION",
+            "status": "ok",
+            "message": (
+                "no scheduler fingerprint found at "
+                f"{fingerprint_path} (a standalone or not-yet-started "
+                "scheduler is normal)"
+            ),
+        }
+    if state == "malformed":
         return {
             "name": "SCHEDULER_REVISION",
             "status": "warn",
             "message": (
                 f"scheduler fingerprint at {fingerprint_path} is malformed "
-                f"or unreadable ({type(exc).__name__}) — cannot tell which "
-                "revision the running scheduler is executing"
+                "or unreadable — cannot tell which revision the running "
+                "scheduler is executing"
             ),
         }
 
@@ -247,7 +249,7 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         if env_plan_dir:
             plan_path = Path(env_plan_dir).expanduser()
         else:
-            plan_path = Path(paths.PLAN_DIR).expanduser()
+            plan_path = Path(paths.configured_plan_dir()).expanduser()
 
     if plan_path.exists():
         if not plan_path.is_dir():

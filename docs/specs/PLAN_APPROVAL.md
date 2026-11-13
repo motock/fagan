@@ -426,7 +426,7 @@ default-off response is byte-identical to today's.
 
 - This spec does not change `REFERENCE.md`'s MCP tools section, which is
   verbatim-pinned. The dashboard controls are documented in REFERENCE.md under
-  "Dashboard plan controls".
+  "Plan pausing and story diff tools".
 - Enforcement of the gate at dispatch is tracked separately; this document
   describes the state, the transitions and the surfacing that exist today.
 

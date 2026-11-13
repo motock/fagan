@@ -271,9 +271,7 @@ changes**. Each decision is sent with the digest the panel displayed, so it
 applies only to the content the reviewer saw; if the plan changed since, the
 dashboard refuses with `409` and the panel asks the reviewer to reload.
 Unauthenticated sessions and shared-secret sessions cannot decide (see
-[docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) §9). The
-dashboard's pause and resume controls described above follow the same rule:
-a caller the policy refuses gets `403`.
+[docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) §9).
 
 ---
 

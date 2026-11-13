@@ -32,7 +32,7 @@ import pipeline.persistence
 # Must precede every other ``pipeline`` import: a pre-existing import cycle
 # requires ``pipeline.server`` to be imported first.
 import pipeline.server
-from pipeline import notification_outbox, paths
+from pipeline import paths, persistence
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
@@ -60,7 +60,7 @@ def plan_dir(db_path, monkeypatch):
     monkeypatch.setattr(pipeline.server, 'PLAN_DIR', Path(directory))
     monkeypatch.setattr(pipeline.persistence, 'PLAN_DIR', Path(directory))
     monkeypatch.setattr(paths, 'PLAN_DIR', Path(directory))
-    monkeypatch.setattr(notification_outbox, 'PLAN_DIR', Path(directory))
+    monkeypatch.setattr(persistence, "PLAN_DIR", Path(directory))
     return Path(directory)
 
 

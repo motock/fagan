@@ -256,7 +256,7 @@ def plan_dir(tmp_path, monkeypatch):
     """An isolated plans directory and a clean notification environment."""
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(server, "PLAN_DIR", tmp_path, raising=False)
     monkeypatch.delenv(ENABLED_ENV, raising=False)
     monkeypatch.delenv(EVENTS_ENV, raising=False)

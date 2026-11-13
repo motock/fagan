@@ -14,7 +14,7 @@ directions, and the fallback taken for a bus object that predates the method.
 from typing import ClassVar
 
 import pipeline.server  # noqa: F401  -- breaks the pre-existing import cycle
-from pipeline import event_wiring, notification_outbox, paths, persistence
+from pipeline import event_wiring, paths, persistence
 from pipeline.events import EventBus, InProcessEventBus, JsonlEventBus
 
 
@@ -40,7 +40,7 @@ def _plan_dir(tmp_path, monkeypatch):
     plan_dir.mkdir()
     monkeypatch.setattr(persistence, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(paths, "PLAN_DIR", plan_dir)
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(persistence, "PLAN_DIR", plan_dir)
     return plan_dir
 
 

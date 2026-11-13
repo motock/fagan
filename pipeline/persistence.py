@@ -42,10 +42,28 @@ NOTIFY_SEVERITIES = frozenset({"info", "warning", "error"})
 # Logger for this module
 logger = logging.getLogger(__name__)
 
+# The host-scoped audit stream's file name, for events that have no plan.
+HOST_AUDIT_FILE = ".audit.host.jsonl"
+
+
+def _plan_file(name: str) -> Path:
+    """Return *name* inside the plan directory, read at call time."""
+    return PLAN_DIR / name
+
+
+def audit_file_path(plan_name: str) -> Path:
+    """Return the plan's audit-stream file (the file store's layout)."""
+    return _plan_file(f"{plan_name}.audit.jsonl")
+
+
+def host_audit_file_path() -> Path:
+    """Return the host-scoped audit-stream file (the file store's layout)."""
+    return _plan_file(HOST_AUDIT_FILE)
+
 
 
 def _decisions_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.decisions.json"
+    return _plan_file(f"{plan_name}.decisions.json")
 
 
 def _append_decision(plan_name: str, record: dict[str, Any]) -> None:
@@ -57,7 +75,7 @@ def _append_decision(plan_name: str, record: dict[str, Any]) -> None:
 # ---------- Checkpoint journal ----------
 
 def _journal_path(plan_name: str, story_key: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    return _plan_file(f"{plan_name}.{story_key}.journal.json")
 
 
 def _append_journal(plan_name: str, story_key: str, record: dict[str, Any]) -> None:
@@ -116,7 +134,7 @@ def _plan_role_config(plan_name: str) -> dict:
 
 def _notifications_jsonl_path(plan_name: str) -> Path:
     """Return the path to the notifications.jsonl file for a plan."""
-    return PLAN_DIR / f"{plan_name}.notifications.jsonl"
+    return _plan_file(f"{plan_name}.notifications.jsonl")
 
 
 def _notification_record(
@@ -317,7 +335,7 @@ def _append_notification(plan_name: str, record: dict) -> None:
 
 
 def _usage_jsonl_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.usage.jsonl"
+    return _plan_file(f"{plan_name}.usage.jsonl")
 
 
 def _write_usage_record(plan_name: str, record: dict) -> None:
@@ -459,11 +477,16 @@ def _notify_user(
 # that is what today's writers use and what the tests patch.
 
 
+def legacy_outbox_dir() -> Path:
+    """Return the directory the legacy e-mail spool lives in, resolved now."""
+    return PLAN_DIR
+
+
 def _outbox_dirs() -> tuple[Path, Path]:
     """Return the ``(legacy, instance)`` outbox directories, resolved now."""
-    from . import notification_outbox, paths
+    from . import paths
 
-    return notification_outbox.PLAN_DIR, paths.PLAN_DIR
+    return legacy_outbox_dir(), paths.PLAN_DIR
 
 
 def _outbox_path(plan_name: str, channel: str) -> Path:

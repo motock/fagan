@@ -65,7 +65,7 @@ TWO_TEAM = {
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(ob, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(nc, "_REGISTRY", {"fake_nc04": FakeChannel})
     monkeypatch.setattr(FakeChannel, "received", {})
     monkeypatch.setattr(FakeChannel, "behaviour", {})

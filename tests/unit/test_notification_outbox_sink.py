@@ -63,8 +63,6 @@ def _patch_plan_dir(monkeypatch, target):
     """
     monkeypatch.setattr(paths, "PLAN_DIR", target)
     monkeypatch.setattr(persistence, "PLAN_DIR", target)
-    if hasattr(notification_outbox, "PLAN_DIR"):
-        monkeypatch.setattr(notification_outbox, "PLAN_DIR", target)
 
 
 @pytest.fixture

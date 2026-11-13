@@ -279,7 +279,7 @@ def spool_env(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(store, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(ob, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(nc, "_REGISTRY", {"fake_rt03": _OwnerChannel})
     monkeypatch.delenv(ob.OUTBOX_ENABLED_ENV, raising=False)
     cfg_path = tmp_path / "cfg" / "notifications.json"

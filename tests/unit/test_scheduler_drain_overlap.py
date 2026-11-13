@@ -24,7 +24,12 @@ import logging
 import threading
 import time
 
-from pipeline import notification_email, notification_outbox, scheduler_timeouts
+from pipeline import (
+    notification_email,
+    notification_outbox,
+    persistence,
+    scheduler_timeouts,
+)
 from pipeline import scheduler_daemon as mod
 from pipeline.events import InProcessEventBus
 
@@ -157,7 +162,7 @@ def test_a_notification_appended_while_the_drain_is_wedged_is_not_lost(
     producer appends r2, B re-reads ``[r2]`` with ``len(raw_lines) == 1``,
     computes ``appended == []`` and rewrites ``[]`` -- r2 is gone.
     """
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     outbox_path = _outbox_path(tmp_path)
     _write_records(outbox_path, ["r1"])
 
@@ -211,7 +216,7 @@ def test_drain_resumes_once_the_abandoned_worker_finishes(monkeypatch, tmp_path)
     Tick 2 is skipped while tick 1's worker is alive; once that worker
     finishes, the next tick must start a fresh drain.
     """
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     _write_records(_outbox_path(tmp_path), ["r1"])
 
     gate = threading.Event()

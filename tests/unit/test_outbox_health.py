@@ -224,6 +224,49 @@ def test_unknown_age_is_never_stale():
 # --------------------------------------------------------------------------
 
 
+def _summary_of(plan_dir):
+    """The spool summary the store-backed caller would hand in."""
+    return outbox_health.outbox_summary(plan_dir)
+
+
+def test_a_stale_summary_marks_unhealthy_and_appends_outbox_stale_once():
+    summary = {"files": 1, "records": 1, "oldest_age_s": 1200}
+    result = {"healthy": True, "degraded": []}
+
+    out = outbox_health.apply_outbox_health(result, summary, threshold=900)
+
+    assert out["outbox"] == summary
+    assert out["healthy"] is False
+    assert out["degraded"] == ["outbox_stale"]
+
+
+def test_a_fresh_summary_leaves_the_payload_alone():
+    summary = {"files": 1, "records": 1, "oldest_age_s": 30}
+    result = {"healthy": True, "degraded": ["config_mismatch"]}
+
+    out = outbox_health.apply_outbox_health(result, summary, threshold=900)
+
+    assert out["healthy"] is True
+    assert out["degraded"] == ["config_mismatch"]
+
+
+def test_an_empty_summary_leaves_the_payload_alone():
+    summary = {"files": 0, "records": 0, "oldest_age_s": None}
+    result = {"healthy": True, "degraded": []}
+
+    out = outbox_health.apply_outbox_health(result, summary, threshold=900)
+
+    assert out["healthy"] is True
+    assert out["degraded"] == []
+
+
+def test_a_missing_summary_is_a_type_error():
+    result = {"healthy": True, "degraded": []}
+
+    with pytest.raises(TypeError):
+        outbox_health.apply_outbox_health(result, threshold=900)
+
+
 def test_health_block_marks_a_stale_outbox(tmp_path):
     _write(
         tmp_path / "alpha.outbox.jsonl",
@@ -232,7 +275,7 @@ def test_health_block_marks_a_stale_outbox(tmp_path):
     _write(tmp_path / "chan-b.outbox.jsonl", [_record(5), "not json"])
     result = {"healthy": True, "degraded": ["config_mismatch"]}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path, threshold=900)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path), threshold=900)
 
     assert out is result
     _assert_summary(out["outbox"], 2, 5, 1200)
@@ -244,7 +287,7 @@ def test_health_block_leaves_a_threshold_age_healthy(tmp_path):
     _write(tmp_path / "alpha.outbox.jsonl", [_record(900)])
     result = {"healthy": True, "degraded": []}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path, threshold=900)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path), threshold=900)
 
     _assert_summary(out["outbox"], 1, 1, 900)
     assert out["healthy"] is True
@@ -255,7 +298,7 @@ def test_health_block_with_unknown_age_leaves_health_alone(tmp_path):
     _write(tmp_path / "alpha.outbox.jsonl", ["not json"])
     result = {"healthy": True, "degraded": []}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path, threshold=900)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path), threshold=900)
 
     _assert_summary(out["outbox"], 1, 1, None)
     assert out["healthy"] is True
@@ -266,7 +309,7 @@ def test_health_block_does_not_duplicate_the_verdict(tmp_path):
     _write(tmp_path / "alpha.outbox.jsonl", [_record(1200)])
     result = {"healthy": True, "degraded": ["outbox_stale"]}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path, threshold=900)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path), threshold=900)
 
     assert out["degraded"] == ["outbox_stale"]
 
@@ -276,7 +319,7 @@ def test_health_block_reads_the_threshold_from_the_env(tmp_path, monkeypatch):
     monkeypatch.setenv(outbox_health.OUTBOX_STALE_ENV, "60")
     result = {"healthy": True, "degraded": []}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path))
 
     assert out["healthy"] is False
     assert out["degraded"] == ["outbox_stale"]
@@ -289,7 +332,7 @@ def test_health_block_carries_no_names_paths_or_payloads(tmp_path):
     )
     result = {"healthy": True, "degraded": []}
 
-    out = outbox_health.apply_outbox_health(result, tmp_path, threshold=900)
+    out = outbox_health.apply_outbox_health(result, _summary_of(tmp_path), threshold=900)
     dumped = json.dumps(out)
 
     assert "SECRET-PAYLOAD-XYZ" not in dumped

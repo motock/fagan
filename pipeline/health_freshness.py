@@ -223,7 +223,7 @@ def health_extras(
         # A rejected PIPELINE_STORE selection must not turn the health probe
         # into a 500; the runtime block reports it as "invalid" instead.
         summary = {"files": 0, "records": 0, "oldest_age_s": None}
-    outbox_health.apply_outbox_health(result, host.root(), summary=summary)
+    outbox_health.apply_outbox_health(result, summary)
     # Additive and never degrading: a deployment without an external anchor is
     # a property of the install, not a fault in this process.
     from pipeline.audit_anchor import anchor_status

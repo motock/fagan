@@ -249,9 +249,7 @@ class TestApplyOutboxHealthAcceptsASummary:
         summary = {'files': 2, 'records': 3, 'oldest_age_s': 1200}
         result = {'healthy': True, 'degraded': []}
 
-        out = outbox_health.apply_outbox_health(
-            result, '/nonexistent-plan-dir', threshold=THRESHOLD_S, summary=summary
-        )
+        out = outbox_health.apply_outbox_health(result, summary, threshold=THRESHOLD_S)
 
         assert out is result
         assert out['outbox'] == summary
@@ -262,9 +260,7 @@ class TestApplyOutboxHealthAcceptsASummary:
         summary = {'files': 1, 'records': 1, 'oldest_age_s': 30}
         result = {'healthy': True, 'degraded': []}
 
-        out = outbox_health.apply_outbox_health(
-            result, '/nonexistent-plan-dir', threshold=THRESHOLD_S, summary=summary
-        )
+        out = outbox_health.apply_outbox_health(result, summary, threshold=THRESHOLD_S)
 
         assert out['outbox'] == summary
         assert out['healthy'] is True

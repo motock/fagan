@@ -338,6 +338,46 @@ def test_no_conflict_records_one_unpark_notice(execute_mode, live, unparks, noti
     assert [n["event"] for n in notices] == ["story_unparked_by_overlord"]
 
 
+def _stub_pr_state(monkeypatch, state):
+    def read(pr_url):
+        if isinstance(state, Exception):
+            raise state
+        return state
+
+    monkeypatch.setattr(tr, "_pr_state", read)
+
+
+def test_no_conflict_with_a_merged_pr_is_left_for_mark_done(execute_mode, live, unparks, notices, monkeypatch):
+    live["paths"] = []
+    _stub_pr_state(monkeypatch, "MERGED")
+    story = _story(pr_url="https://example.invalid/pr/1")
+
+    result = _resolve(story)
+
+    assert (result, story["status"], unparks) == ("park_for_human", "parked", [])
+    assert "MERGED" in story["parked_reason"]
+    assert "mark_done" in story["parked_reason"]
+
+
+def test_no_conflict_with_an_unreadable_pr_state_parks_the_story(execute_mode, live, unparks, notices, monkeypatch):
+    live["paths"] = []
+    _stub_pr_state(monkeypatch, RuntimeError("forge down"))
+    story = _story(pr_url="https://example.invalid/pr/1")
+
+    result = _resolve(story)
+
+    assert (result, story["status"], unparks) == ("park_for_human", "parked", [])
+
+
+def test_no_conflict_with_an_open_pr_still_unparks(execute_mode, live, unparks, notices, monkeypatch):
+    live["paths"] = []
+    _stub_pr_state(monkeypatch, "OPEN")
+    story = _story(pr_url="https://example.invalid/pr/1")
+
+    assert _resolve(story) == "resolve_rebase"
+    assert story["status"] == "tests_passed"
+
+
 def test_a_failed_unpark_parks_the_story_for_a_human(execute_mode, live, monkeypatch, notices):
     live["paths"] = []
 

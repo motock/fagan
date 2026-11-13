@@ -21,6 +21,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 
+from . import triage_rebrief
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .triage_park_classes import _is_test_path, check_ruling_allowed, classify_park
@@ -169,6 +170,26 @@ def _refusal(story: dict, live: dict, attempts: list) -> str | None:
     return None
 
 
+def _pr_blocks_unpark(story: dict) -> str | None:
+    """Why a conflict-free story must not be unparked, or ``None`` when it may be.
+
+    A branch already merged into the base also merges cleanly, so "no conflict"
+    alone cannot tell a resolved park from a landed PR. A MERGED PR is left to
+    ``mark_done``; an unreadable state fails closed. A story with no PR has
+    nothing that could have merged.
+    """
+    pr_url = story.get("pr_url")
+    if not isinstance(pr_url, str) or not pr_url:
+        return None
+    try:
+        state = triage_rebrief._pr_state(pr_url)
+    except Exception:  # noqa: BLE001 - fail closed on any forge failure
+        return "the PR state could not be read"
+    if state == "MERGED":
+        return "the PR is MERGED, so mark_done owns this story"
+    return None
+
+
 def _notify(plan_name, story_key, story, message: str, event: str) -> None:
     _notify_user(
         plan_name,
@@ -217,6 +238,12 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
         )
     stamp = datetime.now(UTC).isoformat()
     if not live["paths"]:
+        merged_or_unknown = _pr_blocks_unpark(story)
+        if merged_or_unknown is not None:
+            return _park(
+                plan_name, story_key, story,
+                f"resolve_rebase declined: {merged_or_unknown}; parked for a human",
+            )
         story["rebase_attempts"] = [*attempts, {"base_sha": live["base_sha"], "ts": stamp}]
         try:
             clear_park_for_unpark(plan_name, story_key, story)

@@ -1,0 +1,37 @@
+name: Dependency review
+
+# Fails a pull request that introduces a dependency with a known advisory at or
+# above `high`. Free on a public repository: the action grades the versions the
+# pull request adds, against the advisory database.
+#
+# Every `uses:` is pinned to a full 40-character commit SHA (a tag is a mutable
+# ref). tests/unit/test_dependency_review_workflow.py enforces that pinning, the
+# `high` threshold and the permission set below.
+#
+# No `pull-requests: write`: the action then reports through the check run and
+# the job summary instead of posting a PR comment, which keeps the job at
+# read-only.
+
+on:
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: dependency-review-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Review dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Review the dependency diff
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high

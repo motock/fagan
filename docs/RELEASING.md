@@ -26,6 +26,13 @@ or cut releases. These workflows are defined, and none of them releases:
   Results land in GitHub's code scanning: a finding annotates the pull request
   and appears on the Security tab.
 
+- `dependency-review.yml` - fails a pull request that adds a dependency with
+  a known advisory at `high` or above, grading the versions the pull request
+  introduces. Runs on pull requests only; needs no write scope.
+- `scorecard.yml` - OpenSSF Scorecard, run weekly and on every push to
+  `master`; it publishes the score to the public scorecard API and uploads its
+  SARIF to code scanning. It is a supply-chain report, not a release gate.
+
 Like the project itself, this is a single-maintainer research project rather
 than a maintained product with an SLA: releases happen when there is something
 worth releasing, and there is no promised cadence and no support policy. What

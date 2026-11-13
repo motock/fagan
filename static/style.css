@@ -356,6 +356,10 @@ main {
 
 .plan-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
 .plan-header h2 { margin: 0; font-size: 18px; }
+.plan-control-btn { padding: 3px 10px; font-size: 12px; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.plan-control-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.plan-control-btn:disabled { opacity: 0.5; cursor: default; }
+.plan-control-msg { font-size: 12px; color: var(--c-parked); }
 
 .filter-bar {
   display: flex;

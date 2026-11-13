@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import server, service
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 _REPO = Path(__file__).resolve().parents[2]
 _SCHEMA_DOC = (_REPO / ".claude/rules/pipeline-story-schema.md").read_text()
@@ -42,4 +43,4 @@ def test_patch_story_docstring_points_at_ingest_plan_for_files():
 def test_server_module_stays_within_the_line_cap():
     lines = (_REPO / "pipeline/server.py").read_text().splitlines()
 
-    assert len(lines) <= 1000
+    assert_within_line_limit(len(lines), 1000, "pipeline/server.py")

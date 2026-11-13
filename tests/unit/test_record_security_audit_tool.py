@@ -13,6 +13,7 @@ import pytest
 
 from pipeline import paths, security_audit
 from pipeline import server as p
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 _REFERENCE = (Path(__file__).resolve().parents[2] / "REFERENCE.md").read_text()
 
@@ -120,7 +121,7 @@ def test_the_tool_is_registered_on_the_mcp_server():
 def test_server_module_stays_within_the_line_cap():
     lines = (Path(p.__file__)).read_text().splitlines()
 
-    assert len(lines) <= 1000
+    assert_within_line_limit(len(lines), 1000, "pipeline/server.py")
 
 
 def test_reference_documents_the_tool_and_the_reminder_section():

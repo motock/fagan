@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import worktree_patch, worktree_patch_parse
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,4 +71,4 @@ def test_should_still_reject_malformed_diff_via_original_module():
 )
 def test_should_keep_file_under_1000_lines(relative):
     line_count = len((REPO_ROOT / relative).read_text().splitlines())
-    assert line_count < 1000
+    assert_within_line_limit(line_count, 999, relative)

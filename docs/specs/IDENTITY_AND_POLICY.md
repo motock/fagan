@@ -544,7 +544,7 @@ principal) through `app/dashboard_refusal.py`. Every other failure keeps the
 route's existing status, and an MCP caller still receives the full refusal dict.
 
 **Audit stream.** Every decision this module makes is also appended to the plan's
-audit stream (`<plan>.audit.jsonl` in `PLAN_DIR`; see
+audit stream (under the file store, `<plan>.audit.jsonl` in `PLAN_DIR`; under sqlite, the store's `audit_records` table; see
 [REFERENCE.md](../../REFERENCE.md)) — except an allowed decision whose caller
 passed `record_allowed=False`, which `checkpoint` does; denials are always
 appended, whatever the caller asked for. `action` is the enforced label

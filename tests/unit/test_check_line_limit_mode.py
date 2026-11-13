@@ -8,7 +8,9 @@ Like tests/unit/test_check_line_limit.py, these drive the real script against
 tmp_path trees and load the module from its file so they read the real
 allowlists.
 """
+
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -110,3 +112,22 @@ def test_unknown_mode_is_rejected_by_argparse(checker):
 def test_main_warn_mode_returns_0_on_clean_tree(checker, tmp_path):
     _make_clean_tree(tmp_path, checker._BLOCKING_ALLOWLIST)
     assert checker.main(["--mode", "warn", "--root", str(tmp_path)]) == 0
+
+
+def test_ci_line_limit_step_runs_in_warn_mode():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "run: python scripts/check_line_limit.py --mode warn" in workflow
+
+
+def test_ci_line_limit_step_has_no_bare_block_invocation():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    bare = re.search(
+        r"run: python scripts/check_line_limit\.py[ \t]*$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert bare is None

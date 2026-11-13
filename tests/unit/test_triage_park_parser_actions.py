@@ -37,12 +37,17 @@ def test_missing_action_fails_closed_to_park_for_human():
     assert _parse_ruling(text)["action"] == "park_for_human"
 
 
-@pytest.mark.parametrize("action", NEW_ACTIONS)
+# retry_transient and rebrief have real executors (ov-2); only these two
+# still hold the shadow stub.
+STUB_ACTIONS = ("resolve_rebase", "approve_test_edit")
+
+
+@pytest.mark.parametrize("action", STUB_ACTIONS)
 def test_executor_registry_holds_shadow_stub_for_new_action(action):
     assert triage_executors.EXECUTORS[action] is triage_executors._shadow_only
 
 
-@pytest.mark.parametrize("action", NEW_ACTIONS)
+@pytest.mark.parametrize("action", STUB_ACTIONS)
 def test_shadow_stub_returns_deferred(action):
     assert triage_executors.EXECUTORS[action]("plan", "ov-1", {}, {}, {}) == "deferred"
 

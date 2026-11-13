@@ -435,3 +435,151 @@ def test_executors_are_inert_in_shadow_mode(plan_dir, notices, live, monkeypatch
     assert result == "shadow"
     assert story == before
     assert recorded[-1]["mode"] == "shadow"
+
+
+# ---------------------------------------------------------------------------
+# wiring: the registry and the live ruling path (execute mode)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def execute_mode(monkeypatch):
+    """Route rulings the way a live ``PIPELINE_TRIAGE_MODE=execute`` sweep does."""
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")
+
+
+@pytest.fixture
+def decisions(monkeypatch):
+    recorded: list[dict] = []
+    monkeypatch.setattr(triage, "_append_decision", lambda plan, record: recorded.append(record))
+    return recorded
+
+
+def _overlord_raw(action: str, diagnosis: str | None = None) -> str:
+    text = (
+        "RULING: r\nTIER: hard\nRISK: low\nRATIONALE: why\nNOTIFY_USER: no\n"
+        f"ACTION: {action}\n"
+    )
+    if diagnosis is not None:
+        text += f"DIAGNOSIS: {diagnosis}\n"
+    return text
+
+
+def test_registry_maps_retry_transient_and_rebrief_to_the_real_executors():
+    from pipeline import triage_executors
+
+    assert triage_executors.EXECUTORS["retry_transient"] is tr.execute_retry_transient
+    assert triage_executors.EXECUTORS["rebrief"] is tr.execute_rebrief
+
+
+def test_execute_mode_retry_transient_unparks_through_the_ruling_path(
+    plan_dir, notices, live, decisions, execute_mode
+):
+    story = _story()
+    manifest = _write(story)
+
+    result = triage._apply_ruling_for_mode(
+        _PLAN, _STORY, story, {"action": "retry_transient", "rationale": "r"}, manifest
+    )
+
+    assert result == "retry_transient"
+    assert _persisted()["status"] == "tests_passed"
+    assert decisions[-1]["mode"] == "full"
+
+
+def test_execute_mode_rebrief_stores_the_diagnosis_through_the_ruling_path(
+    plan_dir, notices, decisions, execute_mode
+):
+    story = _story(parked_reason=_NO_COMMIT_REASON)
+    manifest = _write(story)
+    ruling = {"action": "rebrief", "diagnosis": "The brief names the wrong file.", "rationale": "r"}
+
+    result = triage._apply_ruling_for_mode(_PLAN, _STORY, story, ruling, manifest)
+
+    assert result == "rebrief"
+    assert story["status"] == "todo"
+    assert story["triage_diagnosis"][-1]["text"] == "The brief names the wrong file."
+
+
+def test_execute_mode_rebrief_without_a_diagnosis_parks_for_a_human(
+    plan_dir, notices, decisions, execute_mode
+):
+    story = _story(parked_reason=_NO_COMMIT_REASON)
+    manifest = _write(story)
+
+    result = triage._apply_ruling_for_mode(
+        _PLAN, _STORY, story, {"action": "rebrief", "rationale": "r"}, manifest
+    )
+
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert "triage_diagnosis" not in story
+
+
+def test_shadow_mode_rebrief_does_not_store_a_diagnosis(plan_dir, notices, decisions, monkeypatch):
+    monkeypatch.delenv("PIPELINE_TRIAGE_MODE", raising=False)
+    story = _story(parked_reason=_NO_COMMIT_REASON)
+    manifest = _write(story)
+    ruling = {"action": "rebrief", "diagnosis": "Would be stored.", "rationale": "r"}
+
+    result = triage._apply_ruling_for_mode(_PLAN, _STORY, story, ruling, manifest)
+
+    assert result == "shadow"
+    assert "triage_diagnosis" not in story
+    assert story["status"] == "parked"
+
+
+def test_ruling_parser_reads_the_diagnosis_line(plan_dir, monkeypatch):
+    monkeypatch.setattr(triage, "_load_policy", lambda: "POLICY")
+    monkeypatch.setattr(
+        triage, "_invoke_overlord",
+        lambda prompt, **kwargs: _overlord_raw("rebrief", "The brief names pipeline/old.py."),
+    )
+    ruling = triage.rule_on_story(_PLAN, _STORY, _story(parked_reason=_NO_COMMIT_REASON), "evidence")
+
+    assert ruling["diagnosis"] == "The brief names pipeline/old.py."
+
+
+@pytest.mark.parametrize("diagnosis", [None, ""])
+def test_ruling_parser_omits_the_diagnosis_when_absent_or_blank(plan_dir, monkeypatch, diagnosis):
+    monkeypatch.setattr(triage, "_load_policy", lambda: "POLICY")
+    monkeypatch.setattr(
+        triage, "_invoke_overlord",
+        lambda prompt, **kwargs: _overlord_raw("rebrief", diagnosis),
+    )
+    ruling = triage.rule_on_story(_PLAN, _STORY, _story(parked_reason=_NO_COMMIT_REASON), "evidence")
+
+    assert "diagnosis" not in ruling
+
+
+def test_overlord_prompt_requests_the_diagnosis_line(plan_dir, monkeypatch):
+    prompts: list[str] = []
+    monkeypatch.setattr(triage, "_load_policy", lambda: "POLICY")
+
+    def fake_overlord(prompt, **kwargs):
+        prompts.append(prompt)
+        return _overlord_raw("park_for_human")
+
+    monkeypatch.setattr(triage, "_invoke_overlord", fake_overlord)
+    triage.rule_on_story(_PLAN, _STORY, _story(parked_reason=_NO_COMMIT_REASON), "evidence")
+
+    assert "\nDIAGNOSIS:" in prompts[0]
+
+
+def test_overlord_diagnosis_line_reaches_the_rebrief_executor(
+    plan_dir, notices, decisions, monkeypatch, execute_mode
+):
+    story = _story(parked_reason=_NO_COMMIT_REASON)
+    manifest = _write(story)
+    monkeypatch.setattr(triage, "_load_policy", lambda: "POLICY")
+    monkeypatch.setattr(
+        triage, "_invoke_overlord",
+        lambda prompt, **kwargs: _overlord_raw("rebrief", "The brief names the wrong file."),
+    )
+
+    ruling = triage.rule_on_story(_PLAN, _STORY, story, "evidence")
+    result = triage._apply_ruling_for_mode(_PLAN, _STORY, story, ruling, manifest)
+
+    assert result == "rebrief"
+    assert story["triage_diagnosis"][-1]["text"] == "The brief names the wrong file."

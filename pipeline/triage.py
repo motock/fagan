@@ -31,6 +31,7 @@ from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escal
 from .repo_health import format_findings, classify_repo_health
 from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
 from .triage_executors import EXECUTORS
+from .triage_rebrief import parse_diagnosis
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
 from .triage_repo_issue import _execute_repo_issue  # noqa: E402
@@ -916,13 +917,16 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
     try:
         policy = _load_policy()
         # Build prompt
-        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\n{park_lines}Please respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nACTION: ..."
+        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\n{park_lines}Please respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ..."
         stage = "overlord"
         # Call overlord
         raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
         stage = "parse"
         # Parse ruling
         ruling = _parse_ruling(raw or "")
+        diagnosis = parse_diagnosis(raw or "")
+        if diagnosis is not None:
+            ruling["diagnosis"] = diagnosis
     except Exception as exc:  # pragma: no cover - fail open
         ruling = {
             "ruling": "",

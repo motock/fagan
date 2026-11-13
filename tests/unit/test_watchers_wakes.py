@@ -25,7 +25,7 @@ import os
 import pytest
 
 import pipeline.server  # noqa: F401 - breaks a pre-existing import cycle
-from pipeline import advance_runtime, event_wiring, paths, watchers
+from pipeline import advance_runtime, event_wiring, server, watchers
 
 # The wake helpers are reached through ``watchers`` (not imported by name) so
 # this module always *collects*: an unwired helper must fail on an assertion,
@@ -90,10 +90,10 @@ class FakePool:
 
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
-    """Point ``pipeline.paths.PLAN_DIR`` at an empty directory."""
+    """Point ``pipeline.server.PLAN_DIR`` at an empty directory."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(paths, "PLAN_DIR", directory)
+    monkeypatch.setattr(server, "PLAN_DIR", directory)
     return directory
 
 

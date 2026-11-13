@@ -176,7 +176,7 @@ PLANS = ["team-a-build", "team-b-build"]
 def tenants(tmp_path, monkeypatch):
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
-    for module in (paths, persistence, ob):
+    for module in (paths, persistence):
         monkeypatch.setattr(module, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(nc, "_REGISTRY", {"nc08_fake": _StandInChannel})
     monkeypatch.setattr(_StandInChannel, "received", {})

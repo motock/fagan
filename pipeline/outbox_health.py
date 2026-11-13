@@ -51,8 +51,6 @@ OUTBOX_STALE_ENV = "PIPELINE_OUTBOX_STALE_SECONDS"
 #: Threshold applied when the env var is unset, malformed or not positive.
 DEFAULT_OUTBOX_STALE_SECONDS = 900
 
-#: Every spool file, both per-plan (``<plan>.outbox.jsonl``) and per-channel
-#: (``<plan>.outbox.<channel>.jsonl``), recursively.
 def outbox_stale_seconds() -> int:
     """Return the outbox staleness threshold, in seconds.
 

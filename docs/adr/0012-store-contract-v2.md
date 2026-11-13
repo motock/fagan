@@ -2,7 +2,7 @@
 
 - **Status:** Proposed (draft 2026-11-04, not yet reviewed)
 - **Date:** 2026-11-04
-- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope')
+- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope'); 2026-11-13 (per-repository security-audit state added to the record kinds in decision 3)
 - **Builds on:** [0008](0008-shared-control-plane-per-repo-workers.md) (store is
   the system of record for plan and control state; no write-through),
   [0009](0009-tenancy-and-authorization-model.md) (service-layer policy over a
@@ -16,14 +16,15 @@ staged a database store (2a single host, 2b Postgres with distributed locks).
 Stage 2a shipped as `SqliteStore`, and it shows why the `Store` contract, not the
 database, is the obstacle:
 
-- **The database holds one record kind.** `SqliteStore` has one table,
-  `story_manifests`. Its own module comment says everything "natively a
-  filesystem object is delegated to an internal file store". Decisions,
-  journals, notifications, the plan source, the audit chain and the event log
-  remain files, so a deployment on SQLite has two homes for control-plane state.
-- **The Protocol leaks paths.** `manifest_path()`, `get_worktree_file()` and
-  `get_story_log()` return or read files. A store with no filesystem cannot
-  implement them.
+- **The database held one record kind (history, fixed by stage C).** Before
+  stage C, `SqliteStore` had one table, `story_manifests`, and delegated
+  everything natively a filesystem object to an internal file store, so a
+  deployment on SQLite had two homes for control-plane state. Stage C moved
+  every record kind into the database.
+- **The Protocol leaked paths (history, fixed by stage C).** `manifest_path()`,
+  `get_worktree_file()` and `get_story_log()` returned or read files, which a
+  store with no filesystem cannot implement. Stage C removed them; worktree
+  files and story logs now come from the `WorkspaceReader` seam.
 - **Most of the code bypasses the Protocol.** About 50 modules under `pipeline/`
   and `app/` read or write `PLAN_DIR` directly, and about 316 test files
   reference it. The Store is the contract only on paper.
@@ -87,6 +88,7 @@ decided 2026-11-04.)
    | Audit chain | `<plan>.audit.jsonl` | append-only table, hash-chained, one chain per plan plus a host chain per namespace (decision 10) |
    | Context snapshot (content-addressed, immutable) | `context/<digest>/` | org-owned, namespaced blob; see decision 11 |
    | Plan completion marker and report | `.plan_completed`, `.report.md` | |
+   | Security-audit state (per repository) | `security-audit.<digest>.json` | the last security-audited commit and time for one repository, keyed by the 16-hex digest of its normalized root; written by `record_security_audit`, read by the periodic audit reminder |
    | Leases and the advance queue | none yet | ADR 0011 S2 |
 
 4. **Host-local state stays out of the store.** Locks, the scheduler pid file and
@@ -119,9 +121,9 @@ decided 2026-11-04.)
 
    | Stage | Change | Guard |
    |---|---|---|
-   | A | Add the record operations and `namespace` argument beside the existing methods; `FileStore` implements both | contract suite runs against `FileStore` and `SqliteStore` |
-   | B | Move one module family at a time off direct `PLAN_DIR` use (manifest and decisions, then journal, then notifications and outbox, then audit and events, then plan source) | a test lists the modules still allowed to touch `PLAN_DIR`; the list only shrinks |
-   | C | Remove the path-returning methods; make `SqliteStore` self-contained | the allowlist is empty |
+   | A (done) | Add the record operations and `namespace` argument beside the existing methods; `FileStore` implements both | contract suite runs against `FileStore` and `SqliteStore` |
+   | B (done) | Move one module family at a time off direct `PLAN_DIR` use (manifest and decisions, then journal, then notifications and outbox, then audit and events, then plan source) | a test lists the modules still allowed to touch `PLAN_DIR`; the list only shrinks |
+   | C (done) | Remove the path-returning methods; make `SqliteStore` self-contained | the allowlist is empty |
    | D | Move the flat layout into `PLAN_DIR/default/` with a one-time, reversible migration | upgrade and rollback test |
 
 9. **Events are transport; the outbox is the durable record.** The store keeps
@@ -204,6 +206,32 @@ decided 2026-11-04.)
 - **Do the database store first and fix the contract later.** Rejected: that is
   how `SqliteStore` ended with one table and a file store behind it.
 
+## Migration status and follow-ups
+
+Stages A, B and C are done. Stage C removed the path-returning methods from the
+`Store` Protocol, made `SqliteStore` self-contained (every record kind lives in
+its tables), and moved worktree reads behind `WorkspaceReader` and host-local
+state behind `HostState`. Open question 3 is resolved by those two seams. The
+hard guard that the `PLAN_DIR` allowlist is empty is not yet in place, because
+residual modules still touch `PLAN_DIR`. Each follow-up below is its own story:
+
+- **Hard `PLAN_DIR` guard and the residual users**
+  (`store-stage-c2-residual-plan-dir-users`), including the per-repository
+  security-audit state record kind in decision 3: it is written by
+  `record_security_audit` and read by the periodic audit reminder, and it moves
+  to the record store with the operations that
+  `store-stage-c2-residual-plan-dir-users` adds.
+- **Layout migration (stage D):** move the flat layout into `PLAN_DIR/default/`
+  with a one-time, reversible migration and an upgrade and rollback test
+  (decision 8).
+- **Leases and the advance queue** (ADR 0011 S2): the store leases of decision 6
+  are not yet implemented.
+- **A Postgres store as a plugin** (decision 7), loaded through the plugin loader
+  and passing the same store contract suite.
+- **Remote-worker log tails as journal records** (open question 2): the size
+  bound on a tail and whether workers push on a timer or at checkpoints are
+  still open.
+
 ## Open questions
 
 Resolved 2026-11-04 by the maintainer: the manifest is the single plan record
@@ -219,7 +247,8 @@ namespaced data and clones are host cache (decision 11).
    bounded log tails and the progress checklist as journal records. Still open:
    the size bound on a tail, and whether workers push on a timer or at
    checkpoints.
-3. **Dashboard direct file reads.** `dashboard.py` reads `.scheduler_health.json`
-   and `.dashboard_ui_state.json` (host-local, stay on `HostState`); the story
-   routes read worktree files through `Store.get_worktree_file` (move to
-   `WorkspaceReader`). Each route needs a per-route check in stage B.
+3. **Dashboard direct file reads (resolved by stage C).** `dashboard.py` reads
+   `.scheduler_health.json` and `.dashboard_ui_state.json`, which are host-local
+   and read through `HostState` (decision 4). The story routes that read
+   worktree files through `Store.get_worktree_file` now read them through
+   `WorkspaceReader` (decision 12).

@@ -9,10 +9,11 @@ ceiling fails.
 """
 
 import json
-import re
 from pathlib import Path
 
-PATTERN = re.compile(r"\b(PLAN_DIR|plan_dir)\b")
+import pytest
+
+from tests.unit._plan_dir_references import count_references
 
 _SCANNED_ROOTS = ("pipeline", "app", "scripts")
 _BASELINE_PATH = Path(__file__).with_name("plan_dir_allowlist.json")
@@ -25,12 +26,10 @@ def _measure(root: Path) -> dict[str, int]:
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*.py")):
-            count = 0
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if PATTERN.search(line):
-                    count += 1
+            rel = path.relative_to(root).as_posix()
+            count = count_references(path.read_text(encoding="utf-8"), rel)
             if count:
-                found[path.relative_to(root).as_posix()] = count
+                found[rel] = count
     return found
 
 
@@ -115,9 +114,50 @@ def test_should_match_word_boundaries_only(tmp_path):
     assert _measure(tmp_path) == {}
 
 
-def test_should_count_lines_not_occurrences(tmp_path):
+def test_should_count_each_reference_node_not_just_lines(tmp_path):
     _tree_with_references(tmp_path, "PLAN_DIR = 1 + PLAN_DIR\n")
+    assert _measure(tmp_path) == {"pipeline/a.py": 2}
+
+
+def test_should_not_count_a_plan_dir_mention_in_a_comment(tmp_path):
+    _tree_with_references(tmp_path, "# PLAN_DIR is documented here\nx = 1\n")
+    assert _measure(tmp_path) == {}
+
+
+def test_should_not_count_a_plan_dir_mention_in_a_docstring(tmp_path):
+    _tree_with_references(tmp_path, '"""Uses PLAN_DIR internally."""\nx = 1\n')
+    assert _measure(tmp_path) == {}
+
+
+def test_should_not_count_the_plan_dir_environment_variable_name(tmp_path):
+    _tree_with_references(tmp_path, "import os\nos.environ['PLAN_DIR']\n")
+    assert _measure(tmp_path) == {}
+
+
+def test_should_count_a_bare_name_reference(tmp_path):
+    _tree_with_references(tmp_path, "x = PLAN_DIR\n")
     assert _measure(tmp_path) == {"pipeline/a.py": 1}
+
+
+def test_should_count_an_attribute_reference(tmp_path):
+    _tree_with_references(tmp_path, "from pipeline import paths\nx = paths.PLAN_DIR\n")
+    assert _measure(tmp_path) == {"pipeline/a.py": 1}
+
+
+def test_should_count_a_parameter_named_plan_dir(tmp_path):
+    _tree_with_references(tmp_path, "def f(plan_dir):\n    return plan_dir\n")
+    assert _measure(tmp_path) == {"pipeline/a.py": 2}
+
+
+def test_should_count_a_keyword_argument_named_plan_dir(tmp_path):
+    _tree_with_references(tmp_path, "f(plan_dir=1)\n")
+    assert _measure(tmp_path) == {"pipeline/a.py": 1}
+
+
+def test_should_fail_loudly_on_a_syntax_error_naming_the_file(tmp_path):
+    _tree_with_references(tmp_path, "def broken(:\n")
+    with pytest.raises(ValueError, match="pipeline/a.py"):
+        _measure(tmp_path)
 
 
 def test_should_match_the_committed_baseline_for_the_real_tree():

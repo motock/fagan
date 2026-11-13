@@ -171,7 +171,7 @@ def test_execute_mode_with_stub_executor_parks_for_human(monkeypatch):
     monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "full")
     story = copy.deepcopy(REBASE_STORY)
     result = triage._apply_ruling_for_mode(
-        "plan-x", "ov-1", story, {"action": "resolve_rebase", "rationale": "r"}, {}
+        "plan-x", "ov-1", story, {"action": "approve_test_edit", "rationale": "r"}, {}
     )
     assert (result, story["status"]) == ("park_for_human", "parked")
     assert "not implemented yet" in story["parked_reason"]

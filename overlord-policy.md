@@ -193,6 +193,38 @@ notified, and the story is left untouched.
 A ruling with no usable `DIAGNOSIS:` line, or one whose class does not allow the action, parks the
 story for a human.
 
+### resolve_rebase
+
+`resolve_rebase` (park class `rebase_conflict` only; `pipeline/triage_rebase.py`) resolves a
+story whose branch conflicts with the base. The overlord never edits the repo: the fix is a
+dispatch. The conflicting paths come from git, never from `parked_reason` text:
+
+1. The executor fetches `origin/<base>` and the story's branch, then runs
+   `git merge-tree --write-tree` between them. A failed git call parks the story.
+2. **No conflict now:** the story is unparked through the same step `retry_transient` uses
+   (`parked_reason` cleared, status `tests_passed`) and `story_unparked_by_overlord` is notified.
+   Nothing is dispatched.
+3. **Conflict:** each precondition below must hold, or the story is parked for a human with the
+   refusal stated.
+   - every conflicting path is a test file or is in the story's `files`;
+   - no conflicting path is on the deny-list: `.github/workflows/`; lockfiles (`*.lock`,
+     `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `go.sum`); migration
+     directories (`migrations/`, `migrate/`); key material (`*.pem`, `*.key`, `*.p12`, `*.pfx`,
+     `*.jks`, `*.keystore`, `*.asc`, `*.gpg`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`); and
+     `overlord-authority.json`. The list is `DENIED_PATH_PATTERNS` in `pipeline/triage_rebase.py`;
+   - at most one attempt per distinct base SHA, and at most three attempts per story, ever;
+   - the branch is at most five commits ahead of the base.
+4. The task is built deterministically from the observed paths (sorted) and the base name. It
+   names the paths and gives the rebase rules: take the base's version of a registry-style file and
+   re-apply only the story's own entries; for a modify/delete conflict accept the deletion or move
+   to the replacement the base names. It is stored as the newest `triage_diagnosis` entry, the
+   `rebrief` channel that the next dispatch reads, and the story is set to `todo`. The task is not
+   cut at 600 characters, since a truncated instruction is worse than a long one.
+
+Each attempt that reaches step 2 or 3 is appended to `rebase_attempts` as `{base_sha, ts}` before
+the story changes. A refusal does not count. Shadow mode (`PIPELINE_TRIAGE_MODE` unset) records the
+ruling and leaves the story untouched.
+
 ### patch_acceptance output format
 
 When `ACTION` is `patch_acceptance`, the overlord's response must carry, in

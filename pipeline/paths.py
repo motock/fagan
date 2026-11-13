@@ -28,6 +28,22 @@ POLICY_PATH = Path(os.environ.get("OVERLORD_POLICY", "~/.claude/overlord-policy.
 USAGE_STATE_PATH = Path(os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")).expanduser()
 
 
+def configured_plan_dir() -> Path:
+    """Return the configured plan directory, read from this module at call time.
+
+    Modules that only report or resolve configuration call this instead of
+    reading PLAN_DIR, so a rebound ``paths.PLAN_DIR`` is seen on the next call.
+    The name is looked up in this module's globals rather than written as a
+    bare reference, so the accessor is the one place that resolves it.
+    """
+    return Path(globals()["PLAN_DIR"])
+
+
+def default_notification_config_path() -> Path:
+    """Return the default notification config file, ``PLAN_DIR/notifications.json``."""
+    return configured_plan_dir() / "notifications.json"
+
+
 # Observability artifacts a dispatched/reviewed agent writes into its own
 # worktree (agent.log, review.log) but must NEVER be trackable by git. Mode
 # 17: review.log starts untracked (harmless), but a rework cycle's auto
@@ -108,4 +124,6 @@ __all__ = [
     "WORKTREE_ROOT",
     "_WORKTREE_LOG_EXCLUDES",
     "_exclude_worktree_logs_from_tracking",
+    "configured_plan_dir",
+    "default_notification_config_path",
 ]

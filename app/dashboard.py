@@ -323,7 +323,7 @@ def health() -> dict[str, Any]:
     the outbox aggregate plus the verdicts a stale or missing scheduler and a
     stalled outbox imply — while ``ok`` means "the API answered".
     """
-    plan_dir = str(_host_state.root())
+    root = str(_host_state.root())
     scheduler: Any = None
     config_mismatch: list[str] = []
     try:
@@ -332,7 +332,7 @@ def health() -> dict[str, Any]:
         payload = _host_state.read_scheduler_health()
         if isinstance(payload, dict) and isinstance(payload.get("config"), dict):
             scheduler = payload["config"]
-            resolved = {"plan_dir": plan_dir, "worktree_root": str(WORKTREE_ROOT)}
+            resolved = {"plan_dir": root, "worktree_root": str(WORKTREE_ROOT)}
             config_mismatch = [
                 field
                 for field, dashboard_value in resolved.items()
@@ -346,7 +346,7 @@ def health() -> dict[str, Any]:
         config_mismatch = []
     return {
         "ok": True,
-        "plan_dir": plan_dir,
+        "plan_dir": root,
         "scheduler": scheduler,
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),

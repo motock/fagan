@@ -213,9 +213,19 @@ class HostState(Protocol):
 
 
 class FileHostState:
-    """File-backed ``HostState``: JSON files directly under the plans dir."""
+    """File-backed ``HostState``: JSON files directly under the plans dir.
+
+    ``root`` pins the directory explicitly (a caller that resolved its own plan
+    dir, such as preflight); omitted, the live ``pipeline.server.PLAN_DIR`` binding
+    is resolved on every access.
+    """
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._explicit_root = root
 
     def _root(self) -> Path:
+        if self._explicit_root is not None:
+            return Path(self._explicit_root)
         return Path(os.fspath(_ROOT))
 
     def ensure_root(self) -> None:

@@ -187,7 +187,7 @@ def _config_path(path: Path | str | None, env: Mapping[str, str]) -> Path:
     override = env.get(CONFIG_PATH_ENV)
     if override:
         return Path(override).expanduser()
-    return paths.PLAN_DIR / "notifications.json"
+    return paths.default_notification_config_path()
 
 
 _REGISTERED_CHANNEL_PLUGINS: set[Callable] = set()

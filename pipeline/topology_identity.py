@@ -51,7 +51,7 @@ def resolved_topology() -> dict[str, str | None]:
 
     Keys (exactly these four):
 
-    * ``plan_dir`` — ``str(pipeline.paths.PLAN_DIR)``
+    * ``plan_dir`` — ``str(pipeline.paths.configured_plan_dir())``
     * ``repo_root`` — ``str(pipeline.server.REPO_ROOT)`` (the active target
       repo root)
     * ``branch_namespace`` — ``PIPELINE_BRANCH_NAMESPACE`` or ``None``
@@ -66,7 +66,7 @@ def resolved_topology() -> dict[str, str | None]:
     from pipeline import paths, server
 
     return {
-        "plan_dir": str(paths.PLAN_DIR),
+        "plan_dir": str(paths.configured_plan_dir()),
         "repo_root": str(server.REPO_ROOT),
         "branch_namespace": _namespace(branch_names.NAMESPACE_ENV),
         "worktree_namespace": _namespace(WORKTREE_NAMESPACE_ENV),

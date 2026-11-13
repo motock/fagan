@@ -30,6 +30,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
+from .ci_failing_tests import extract_failing_tests, format_failing_tests
 from .forge import (
     CANCELLED,
     FAIL,
@@ -473,8 +474,9 @@ class GitHubForge(Forge):
         Resolves the most recent workflow run id for ``branch`` via
         ``gh run list``, then pulls the failing job's log with
         ``gh run view --log-failed`` (falling back to ``--log`` if that errors
-        or returns empty). Returns a bounded tail (~800 chars) of the log, or
-        ``None`` on any failure so callers can fall back to the
+        or returns empty). Returns a bounded tail (~800 chars) of the log,
+        led by a ``Failing tests:`` block when the log names failing node ids,
+        or ``None`` on any failure so callers can fall back to the
         classification-only ``error``. Never raises.
         """
         import json
@@ -488,6 +490,7 @@ class GitHubForge(Forge):
                 check=False, capture_output=True, text=True, timeout=20,
             )
             if run_list.returncode != 0:
+                _LOGGER.debug("CI run lookup failed; no failing-test ids")
                 return None
             try:
                 data = json.loads(run_list.stdout or "[]")
@@ -508,9 +511,14 @@ class GitHubForge(Forge):
                     check=False, capture_output=True, text=True, timeout=20,
                 )
                 if view.returncode == 0 and view.stdout.strip():
-                    return view.stdout[-800:]
+                    return _log_excerpt(view.stdout)
+            _LOGGER.debug("CI failure log empty; no failing-test ids")
             return None
-        except (subprocess.SubprocessError, OSError, ValueError):
+        except (subprocess.SubprocessError, OSError, ValueError) as e:
+            _LOGGER.debug(
+                "CI failure log unavailable; no failing-test ids",
+                extra={"error_type": type(e).__name__},
+            )
             return None
 
     def rerun_workflow(self, sha: str) -> bool:
@@ -612,6 +620,19 @@ class GitHubForge(Forge):
 # ---------------------------------------------------------------------------
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _log_excerpt(log: str) -> str:
+    """The bounded log tail, led by the failing node ids when the log names any.
+
+    The ids come from the whole log, not the tail, so a long matrix run still
+    names every failure. Only node ids and short summaries are added; the raw
+    tail keeps its existing shape.
+    """
+    block = format_failing_tests(extract_failing_tests(log))
+    tail = log[-800:]
+    return f"{block}\n\n{tail}" if block else tail
+
 
 #: Env var holding the cache max age in seconds. ``0`` disables the read.
 CI_ROLLUP_MAX_AGE_ENV = "PIPELINE_CI_ROLLUP_MAX_AGE_SECONDS"

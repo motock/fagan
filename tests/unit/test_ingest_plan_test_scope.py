@@ -32,6 +32,7 @@ from pipeline import ingest as ingest_mod
 from pipeline import ingest_plan_fields
 from pipeline import server as p
 from pipeline import ticketing as pt
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = REPO_ROOT / "REFERENCE.md"
@@ -200,7 +201,7 @@ def test_team_error_is_reexported_from_ingest():
 def test_ingest_module_stays_within_line_limit():
     with INGEST_PY.open() as source:
         line_count = sum(1 for _ in source)
-    assert line_count <= 1000
+    assert_within_line_limit(line_count, 1000, "pipeline/ingest.py")
 
 
 # ---------------------------------------------------------------------------

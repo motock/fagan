@@ -57,6 +57,7 @@ from pipeline.notification_outbox import outbox_sink
 from pipeline.store import FileStore
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE, LEGACY_OUTBOX_CHANNEL
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 PLAN = "plan-a"
 ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"
@@ -642,6 +643,4 @@ def test_the_touched_modules_stay_under_the_production_line_ceiling(module):
     """Both modules must stay under the 1000-line production ceiling."""
     path = REPO_ROOT / module
     count = sum(1 for _ in path.open(encoding="utf-8", errors="replace"))
-    assert count <= PRODUCTION_LINE_CEILING, (
-        f"{module} is {count} lines, over the {PRODUCTION_LINE_CEILING}-line ceiling"
-    )
+    assert_within_line_limit(count, PRODUCTION_LINE_CEILING, module)

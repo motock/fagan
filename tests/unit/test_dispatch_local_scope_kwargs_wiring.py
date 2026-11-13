@@ -19,6 +19,7 @@ from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
 from pipeline import ticketing as pt
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 
 class _CiForgeStub:
@@ -225,7 +226,7 @@ def test_claude_scoped_dispatch_passes_no_test_scope_spec(
 
 def test_dispatch_module_stays_within_line_limit():
     lines = Path(dispatch_module.__file__).read_text().splitlines()
-    assert len(lines) <= 999
+    assert_within_line_limit(len(lines), 999, "pipeline/dispatch.py")
 
 
 REFERENCE_DOC = Path(__file__).resolve().parents[2] / "REFERENCE.md"

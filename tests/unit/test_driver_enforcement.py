@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -364,8 +363,8 @@ def repo(tmp_path):
     return root
 
 
-def _state_path(audit_state_dir, repo) -> Path:
-    return security_audit.state_path(audit_state_dir, str(repo))
+def _audit_state(repo) -> dict | None:
+    return security_audit.read_audit_state(psrv._store.records(), str(repo))
 
 
 def test_local_operator_records_the_audit_and_one_allowed_host_record(
@@ -378,7 +377,7 @@ def test_local_operator_records_the_audit_and_one_allowed_host_record(
 
     assert result["ok"] is True
     assert _host_decisions(audit_state_dir) == [("config:write", "allowed")]
-    state = security_audit.read_audit_state(audit_state_dir, str(repo))
+    state = _audit_state(repo)
     assert state is not None
     assert state["last_audited_sha"] == result["last_audited_sha"]
 
@@ -396,8 +395,8 @@ def test_denied_principal_cannot_record_an_audit(audit_state_dir, repo, monkeypa
         "config:write",
     )
     assert _host_decisions(audit_state_dir) == [("config:write", "denied")]
-    assert not _state_path(audit_state_dir, repo).exists()
-    assert security_audit.read_audit_state(audit_state_dir, str(repo)) is None
+    assert _audit_state(repo) is None
+    assert _audit_state(repo) is None
 
 
 def test_malformed_arguments_are_rejected_before_the_policy_is_asked(
@@ -412,7 +411,7 @@ def test_malformed_arguments_are_rejected_before_the_policy_is_asked(
 
     assert (bad_path.get("ok"), bad_sha.get("ok")) == (False, False)
     assert _host_decisions(audit_state_dir) == []
-    assert not _state_path(audit_state_dir, repo).exists()
+    assert _audit_state(repo) is None
 
 
 def test_refusal_after_a_successful_audit_leaves_the_record_intact(
@@ -426,7 +425,7 @@ def test_refusal_after_a_successful_audit_leaves_the_record_intact(
         refused_before = psrv.record_security_audit(str(repo), "not-a-hex-sha")
     assert refused_before.get("ok") is False
     assert _host_decisions(audit_state_dir) == []
-    assert not _state_path(audit_state_dir, repo).exists()
+    assert _audit_state(repo) is None
 
     with bind_principal(ALICE):
         refused = psrv.record_security_audit(str(repo))
@@ -436,7 +435,7 @@ def test_refusal_after_a_successful_audit_leaves_the_record_intact(
     recorded = psrv.record_security_audit(str(repo))
     assert recorded.get("ok") is True
     assert _host_decisions(audit_state_dir)[-1] == ("config:write", "allowed")
-    state_before = _state_path(audit_state_dir, repo).read_bytes()
+    state_before = _audit_state(repo)
 
     with bind_principal(ALICE):
         refused_after = psrv.record_security_audit(str(repo), "0" * 40)
@@ -444,7 +443,7 @@ def test_refusal_after_a_successful_audit_leaves_the_record_intact(
     assert refused_after.get("forbidden") is True
     assert _host_decisions(audit_state_dir)[-1] == ("config:write", "denied")
     assert len(_host_decisions(audit_state_dir)) == 3
-    assert _state_path(audit_state_dir, repo).read_bytes() == state_before
+    assert _audit_state(repo) == state_before
 
 
 def test_kill_switch_lets_a_denied_principal_record_the_audit(
@@ -458,7 +457,7 @@ def test_kill_switch_lets_a_denied_principal_record_the_audit(
 
     assert result["ok"] is True
     assert _host_decisions(audit_state_dir) == []
-    assert security_audit.read_audit_state(audit_state_dir, str(repo)) is not None
+    assert _audit_state(repo) is not None
 
 
 # --------------------------------------------------------------------------- #

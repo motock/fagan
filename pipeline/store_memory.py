@@ -31,6 +31,7 @@ from pipeline.store_records import (
     validate_namespace,
     validate_notification_record,
     validate_plan_name,
+    validate_repo_key,
     validate_story_key,
     validate_usage_record,
     verify_context_digest,
@@ -77,6 +78,7 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # a caller's later mutation of the meta it passed never reaches storage.
         self._snapshots: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
+        self._audit_states: dict[tuple[str, str], dict] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
         self._journals: dict[tuple[str, str, str], list[dict]] = {}
@@ -334,6 +336,27 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         with self._lock:
             return self._reports.get((namespace, plan_name))
+
+    # -- security-audit state ------------------------------------------
+    def get_security_audit_state(self, namespace: str, repo_key: str) -> dict | None:
+        """Return a copy of the audit recorded for ``repo_key``, or ``None``."""
+        validate_namespace(namespace)
+        validate_repo_key(repo_key)
+        with self._lock:
+            state = self._audit_states.get((namespace, repo_key))
+            return None if state is None else copy.deepcopy(state)
+
+    def put_security_audit_state(
+        self, namespace: str, repo_key: str, state: dict
+    ) -> None:
+        """Store ``state`` as ``repo_key``'s audit, replacing any previous one."""
+        validate_namespace(namespace)
+        validate_repo_key(repo_key)
+        if not isinstance(state, dict):
+            raise TypeError('security audit state must be a dict')
+        with self._lock:
+            self._record_undo(self._audit_states, (namespace, repo_key))
+            self._audit_states[(namespace, repo_key)] = copy.deepcopy(state)
 
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:

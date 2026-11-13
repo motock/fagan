@@ -30,6 +30,18 @@ _OTHER_STORY_KEY = 'STORY-2'
 _SECOND_NAMESPACE = 'acme'
 _INVALID_KEY = '../x'
 _INVALID_NAMESPACE = 'Bad NS'
+_REPO_KEY = 'a' * 16
+_OTHER_REPO_KEY = 'b' * 16
+_AUDIT_STATE = {
+    'repo_root': '/repos/app',
+    'last_audited_sha': 'a' * 40,
+    'last_audited_at': '2026-09-26T12:00:00+00:00',
+}
+#: Repo keys the Protocol refuses: traversal, separators, empty, wrong case
+#: and wrong length.  A refused key must never reach storage.
+_MALFORMED_REPO_KEYS = (
+    '../x', 'a/b', '..', '', 'A' * 16, 'a' * 15, 'a' * 17,
+)
 
 
 def _expect(self, exc_type, fn):
@@ -329,6 +341,72 @@ class RecordStoreContract:
         )
         assert store.list_plans(DEFAULT_NAMESPACE) == []
 
+    # -- per-repo security-audit state ---------------------------------
+    def test_security_audit_state_of_an_unaudited_repo_is_none(self):
+        store = self.make_store()
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) is None
+
+    def test_security_audit_state_round_trips_the_state(self):
+        store = self.make_store()
+        store.put_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY, _AUDIT_STATE)
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) == _AUDIT_STATE
+
+    def test_second_security_audit_state_put_replaces_the_first(self):
+        store = self.make_store()
+        store.put_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY, _AUDIT_STATE)
+        replacement = dict(_AUDIT_STATE, last_audited_sha='b' * 40)
+        store.put_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY, replacement)
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) == replacement
+
+    def test_security_audit_state_is_kept_per_repo_key(self):
+        store = self.make_store()
+        store.put_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY, _AUDIT_STATE)
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _OTHER_REPO_KEY) is None
+
+    def test_a_non_dict_security_audit_state_is_refused_and_nothing_is_written(self):
+        store = self.make_store()
+        _expect(
+            self,
+            TypeError,
+            lambda: store.put_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY, ['sha']),
+        )
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) is None
+
+    def test_a_malformed_repo_key_is_refused_on_put_and_nothing_is_written(self):
+        store = self.make_store()
+        for repo_key in _MALFORMED_REPO_KEYS:
+            _expect(
+                self,
+                InvalidRecordKeyError,
+                lambda key=repo_key: store.put_security_audit_state(
+                    DEFAULT_NAMESPACE, key, _AUDIT_STATE
+                ),
+            )
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) is None
+
+    def test_a_malformed_repo_key_is_refused_on_get(self):
+        store = self.make_store()
+        for repo_key in _MALFORMED_REPO_KEYS:
+            _expect(
+                self,
+                InvalidRecordKeyError,
+                lambda key=repo_key: store.get_security_audit_state(DEFAULT_NAMESPACE, key),
+            )
+
+    def test_security_audit_state_rejects_an_invalid_namespace(self):
+        store = self.make_store()
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.put_security_audit_state(_INVALID_NAMESPACE, _REPO_KEY, _AUDIT_STATE),
+        )
+        _expect(
+            self,
+            InvalidRecordKeyError,
+            lambda: store.get_security_audit_state(_INVALID_NAMESPACE, _REPO_KEY),
+        )
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) is None
+
 
 class MultiNamespaceContract:
     """Behaviour of stores that serve several independent namespaces."""
@@ -463,3 +541,17 @@ class SingleNamespaceContract:
             lambda: store.put_manifest(_SECOND_NAMESPACE, _PLAN, {'version': 1}),
         )
         assert store.list_plans(DEFAULT_NAMESPACE) == []
+
+    def test_security_audit_state_refuses_an_unknown_namespace(self):
+        store = self.make_store()
+        _expect(
+            self,
+            UnknownNamespaceError,
+            lambda: store.put_security_audit_state(_SECOND_NAMESPACE, _REPO_KEY, _AUDIT_STATE),
+        )
+        _expect(
+            self,
+            UnknownNamespaceError,
+            lambda: store.get_security_audit_state(_SECOND_NAMESPACE, _REPO_KEY),
+        )
+        assert store.get_security_audit_state(DEFAULT_NAMESPACE, _REPO_KEY) is None

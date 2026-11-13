@@ -86,6 +86,13 @@ OTHER_REPORT = 'retro pending'
 CONTENT = 'context body'
 OTHER_CONTENT = 'other context body'
 META = {'source': 'unit'}
+SECURITY_AUDIT = {
+    'repo_root': '/repos/app',
+    'last_audited_sha': 'a' * 40,
+    'last_audited_at': '2026-09-26T12:00:00+00:00',
+}
+OTHER_SECURITY_AUDIT = dict(SECURITY_AUDIT, last_audited_sha='b' * 40)
+REPO_KEY = 'a' * 16
 
 
 def digest_of(content):
@@ -583,6 +590,17 @@ def test_completion_marker_is_created_exactly_once(backend):
     assert store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN) is True
     assert store.mark_plan_completed(DEFAULT_NAMESPACE, PLAN) is False
     assert store.is_plan_completed(DEFAULT_NAMESPACE, PLAN) is True
+
+
+@covers('get_security_audit_state', 'put_security_audit_state')
+def test_security_audit_state_round_trips_and_replaces_wholesale(backend):
+    store = backend.store
+    assert store.get_security_audit_state(DEFAULT_NAMESPACE, REPO_KEY) is None
+
+    store.put_security_audit_state(DEFAULT_NAMESPACE, REPO_KEY, SECURITY_AUDIT)
+    store.put_security_audit_state(DEFAULT_NAMESPACE, REPO_KEY, OTHER_SECURITY_AUDIT)
+
+    assert store.get_security_audit_state(DEFAULT_NAMESPACE, REPO_KEY) == OTHER_SECURITY_AUDIT
 
 
 @covers('put_plan_report', 'get_plan_report')

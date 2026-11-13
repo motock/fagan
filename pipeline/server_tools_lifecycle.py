@@ -16,11 +16,12 @@ import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from . import audit, audit_anchor, paths, security_audit
+from . import audit, audit_anchor, security_audit
 from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
+_store = _ModuleRef("pipeline.server", "_store")
 
 
 def approve_plan(plan_name: str):
@@ -305,7 +306,7 @@ def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, A
     if proc.returncode != 0:
         return {"ok": False, "error": f"could not resolve sha {target!r}"}
     full_sha = proc.stdout.strip()
-    state = security_audit.record_audit(paths.PLAN_DIR, repo_root, full_sha, datetime.now(UTC))
+    state = security_audit.record_audit(_store.records(), repo_root, full_sha, datetime.now(UTC))
     return {"ok": True, **state}
 
 

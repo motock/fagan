@@ -124,6 +124,11 @@ _CONTEXT_SNAPSHOTS_SCHEMA = (
     'digest TEXT NOT NULL, content TEXT NOT NULL, meta_json TEXT NOT NULL, '
     'PRIMARY KEY (namespace, digest))'
 )
+_SECURITY_AUDIT_STATE_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS security_audit_state (namespace TEXT NOT NULL, '
+    'repo_key TEXT NOT NULL, state_json TEXT NOT NULL, '
+    'PRIMARY KEY (namespace, repo_key))'
+)
 
 
 def _migration_2(conn: sqlite3.Connection) -> None:
@@ -151,9 +156,14 @@ def _migration_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_5(conn: sqlite3.Connection) -> None:
+    """Store the per-repo security-audit state as one row per repository."""
+    conn.execute(_SECURITY_AUDIT_STATE_SCHEMA)
+
+
 #: The migrations, in order.  The version a database is at is how many of them
 #: it has run, so a migration is appended and never renumbered.
-MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4)
+MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4, _migration_5)
 
 
 def latest_version() -> int:

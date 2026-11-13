@@ -25,7 +25,11 @@ from pipeline.store_contract_transactions import (
     AtomicTransactionContract,
     TransactionContract,
 )
-from pipeline.store_records import DEFAULT_NAMESPACE, UnknownNamespaceError
+from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
+    InvalidRecordKeyError,
+    UnknownNamespaceError,
+)
 from pipeline.store_sqlite import SqliteStore
 from tests.unit._store_outbox_helpers import SingleNamespaceOutboxBehaviour
 
@@ -100,6 +104,19 @@ class TestSqliteRecords(RecordStoreContract, SingleNamespaceContract):
     def make_store(self):
         """Return the ``records()`` view built for this test."""
         return self._store
+
+    def test_a_refused_repo_key_leaves_the_security_audit_table_empty(self):
+        for repo_key in ('../x', 'a/b', '..', '', 'A' * 16, 'a' * 15, 'a' * 17):
+            with pytest.raises(InvalidRecordKeyError):
+                self._store.put_security_audit_state(
+                    DEFAULT_NAMESPACE, repo_key, {'last_audited_sha': 'a' * 40}
+                )
+        conn = sqlite3.connect(self._db_path)
+        try:
+            count = conn.execute('SELECT count(*) FROM security_audit_state').fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0
 
     def test_manifest_written_through_records_is_read_by_the_legacy_store(self):
         manifest = {'title': PLAN, 'steps': [{'id': 1}]}

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import paths, security_audit
+from pipeline import persistence, security_audit
 from pipeline import server as p
 from tests.unit._line_limit_policy import assert_within_line_limit
 
@@ -38,24 +38,26 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def plans(tmp_path, monkeypatch):
+def records(tmp_path, monkeypatch):
+    """The live store's record view, over a throwaway plans directory."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(paths, "PLAN_DIR", directory)
-    return directory
+    monkeypatch.setattr(p, "PLAN_DIR", directory)
+    monkeypatch.setattr(persistence, "PLAN_DIR", directory)
+    return p._store.records()
 
 
-def test_it_records_head_when_no_sha_is_given(plans, repo):
+def test_it_records_head_when_no_sha_is_given(records, repo):
     head = _git(repo, "rev-parse", "HEAD")
 
     result = p.record_security_audit(str(repo))
 
     assert result["ok"] is True
     assert result["last_audited_sha"] == head
-    assert security_audit.read_audit_state(plans, str(repo))["last_audited_sha"] == head
+    assert security_audit.read_audit_state(records, str(repo))["last_audited_sha"] == head
 
 
-def test_it_records_an_explicit_sha(plans, repo):
+def test_it_records_an_explicit_sha(records, repo):
     first = _git(repo, "rev-list", "--max-parents=0", "HEAD")
 
     result = p.record_security_audit(str(repo), first)
@@ -63,7 +65,7 @@ def test_it_records_an_explicit_sha(plans, repo):
     assert result["last_audited_sha"] == first
 
 
-def test_an_abbreviated_sha_is_recorded_in_full(plans, repo):
+def test_an_abbreviated_sha_is_recorded_in_full(records, repo):
     first = _git(repo, "rev-list", "--max-parents=0", "HEAD")
 
     result = p.record_security_audit(str(repo), first[:8])
@@ -72,41 +74,41 @@ def test_an_abbreviated_sha_is_recorded_in_full(plans, repo):
 
 
 @pytest.mark.parametrize("sha", ["f" * 40, "not-a-sha", "--all", "HEAD; rm -rf /", ""])
-def test_a_bad_sha_is_rejected_and_nothing_is_recorded(plans, repo, sha):
+def test_a_bad_sha_is_rejected_and_nothing_is_recorded(records, repo, sha):
     result = p.record_security_audit(str(repo), sha)
 
     assert result["ok"] is False
     assert "sha" in result["error"]
-    assert security_audit.read_audit_state(plans, str(repo)) is None
+    assert security_audit.read_audit_state(records, str(repo)) is None
 
 
-def test_a_relative_repo_root_is_rejected(plans, repo):
+def test_a_relative_repo_root_is_rejected(records, repo):
     result = p.record_security_audit("repo")
 
     assert result["ok"] is False
     assert "repo_root" in result["error"]
 
 
-def test_a_missing_directory_is_rejected(plans, tmp_path):
+def test_a_missing_directory_is_rejected(records, tmp_path):
     result = p.record_security_audit(str(tmp_path / "gone"))
 
     assert result["ok"] is False
     assert "repo_root" in result["error"]
 
 
-def test_a_directory_that_is_not_a_git_repo_is_rejected(plans, tmp_path):
+def test_a_directory_that_is_not_a_git_repo_is_rejected(records, tmp_path):
     bare_dir = tmp_path / "plain"
     bare_dir.mkdir()
 
     result = p.record_security_audit(str(bare_dir))
 
     assert result["ok"] is False
-    assert security_audit.read_audit_state(plans, str(bare_dir)) is None
+    assert security_audit.read_audit_state(records, str(bare_dir)) is None
 
 
-def test_a_recorded_repo_is_no_longer_due(plans, repo):
+def test_a_recorded_repo_is_no_longer_due(records, repo):
     result = p.record_security_audit(str(repo))
-    state = security_audit.read_audit_state(plans, str(repo))
+    state = security_audit.read_audit_state(records, str(repo))
     commits = security_audit.commits_since(str(repo), result["last_audited_sha"])
 
     assert security_audit.audit_due_reason(state, commits, datetime.now(UTC), 1, 1) is None

@@ -152,6 +152,22 @@ def validate_story_key(value: str) -> str:
     return value
 
 
+#: A repo key is the 16-hex digest of a normalised repository root -- never a
+#: path, so it cannot traverse out of the directory a record lands in.
+_REPO_KEY_RE = re.compile(r'^[0-9a-f]{16}$')
+
+
+def validate_repo_key(value: str) -> str:
+    """Return ``value`` when it is a valid repo key, else raise.
+
+    The message is generic and the value is never echoed: a repo key that is
+    not a digest may be a path.
+    """
+    if not isinstance(value, str) or _REPO_KEY_RE.fullmatch(value) is None:
+        raise InvalidRecordKeyError('invalid repo key')
+    return value
+
+
 # A context snapshot is content-addressed: its key is ``sha256:`` followed by
 # the lower-case hex SHA-256 of the content, and nothing else is a key.  A
 # digest is therefore never a path fragment and can never address anything but
@@ -594,6 +610,26 @@ class RecordStore(Protocol):
         """
         ...
 
+    def get_security_audit_state(self, namespace: str, repo_key: str) -> dict | None:
+        """Return the last security audit recorded for ``repo_key``, or ``None``.
+
+        ``repo_key`` is validated with :func:`validate_repo_key`; the namespace
+        with :func:`validate_namespace`. Both are refused before storage is
+        touched.
+        """
+        ...
+
+    def put_security_audit_state(
+        self, namespace: str, repo_key: str, state: dict
+    ) -> None:
+        """Store ``state`` as the repo's last audit, replacing any previous one.
+
+        A non-``dict`` state is refused with :class:`TypeError`, a malformed
+        key with :class:`InvalidRecordKeyError`, both before anything is
+        written.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -623,6 +659,8 @@ RECORD_STORE_METHODS = (
     'get_plan_report',
     'put_context_snapshot',
     'get_context_snapshot',
+    'get_security_audit_state',
+    'put_security_audit_state',
     'transaction',
 )
 

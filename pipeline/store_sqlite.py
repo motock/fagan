@@ -101,10 +101,9 @@ class SqliteStore(
     control-plane method here returns or reads a filesystem path.
 
     The audit chain is a table in the database (``audit_records``, served by
-    :meth:`audit_log`). The audit facade (``pipeline/audit.py``) appends,
-    verifies and anchors through this table under ``PIPELINE_STORE=sqlite``;
-    no ``<plan>.audit.jsonl`` sidecar is written in that mode. The external
-    anchor file stays a file outside the database.
+    :meth:`audit_log`), but nothing writes the pipeline's audit history through
+    it yet: the facade still appends to the ``<plan>.audit.jsonl`` sidecar
+    files in the plans directory, and that move is a later story.
     """
 
     def __init__(self, path: str):

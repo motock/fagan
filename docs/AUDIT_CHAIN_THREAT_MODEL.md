@@ -14,20 +14,16 @@ story alters is a security regression until a human reviewer says otherwise.
 
 Four classes of record are in scope.
 
-- Per-plan audit chains, written by `pipeline/audit.py` through the configured
-  store's audit log. Under `PIPELINE_STORE=file` each is an append-only JSON Lines
-  stream, `<plan>.audit.jsonl` in `PLAN_DIR` (default `~/.claude/plans`). Under
-  `PIPELINE_STORE=sqlite` each is a set of rows in the `audit_records` table of
-  the store database, and no `<plan>.audit.jsonl` is written. Each record carries
-  `seq`, `prev_hash`, `hash`, `ts`, `actor`,
+- Per-plan audit chains: `<plan>.audit.jsonl` in `PLAN_DIR` (default
+  `~/.claude/plans`), written by `pipeline/audit.py`. One append-only JSON Lines
+  stream per plan, each line carrying `seq`, `prev_hash`, `hash`, `ts`, `actor`,
   `correlation_id`, `action`, `outcome`, `target`, `detail` and the attribution
   fields. The hash covers the canonical JSON of every other field, so the stream
   is a hash chain and not merely a log.
-- The host chain, the same record shape for ticks that are not bound to a plan.
-  Under `PIPELINE_STORE=file` it is `.audit.host.jsonl` (`HOST_AUDIT_FILE` in
-  `pipeline/audit.py`); under `PIPELINE_STORE=sqlite` it is rows in the same
-  `audit_records` table. The anchor reads it through the store
-  (`pipeline/audit_anchor.py`, `HOST_CHAIN` `"host"` and `_chain_streams`), the
+- The host chain: `.audit.host.jsonl` (`HOST_AUDIT_FILE` in
+  `pipeline/audit.py`), the same record shape for ticks that are not bound to a
+  plan. In today's anchor log it is keyed `HOST_CHAIN` `"host"`
+  (`pipeline/audit_anchor.py`, used by `_chain_streams` and `_stream_for`), the
   same string a plan named `host` would use; Known gaps (i) states that collision
   and how this plan closes it.
 - The decisions chains: `<plan>.decisions.chain.jsonl`, the hash-chained record
@@ -37,9 +33,7 @@ Four classes of record are in scope.
 - The anchor log: the file named by `PIPELINE_AUDIT_ANCHOR=file:<absolute path>`.
   It is an append-only record of each chain's `(seq, hash)` head, living outside
   `PLAN_DIR`, that the pipeline host is not supposed to be able to rewrite. It
-  is the only place a chain's high-water mark survives the chain itself. The
-  anchor stays a file under both stores, and under `PIPELINE_STORE=sqlite` it is
-  the one piece of the audit trail outside the database.
+  is the only place a chain's high-water mark survives the chain itself.
 
 ## Attackers
 

@@ -1502,6 +1502,16 @@ the manifest's runtime state (`status`, `pr_url`, attempts, ...).
 plan-defining: they are outside `canonical_digest`, so recording them cannot
 reset an approval (see `docs/specs/PLAN_APPROVAL.md` §3).
 
+`triage_diagnosis` and `triage_transient_retries` are runtime state written by the
+overlord's `rebrief` and `retry_transient` executors (`pipeline/triage_rebrief.py`), and
+they are excluded from `canonical_digest` like the other runtime story fields.
+`triage_diagnosis` is a list of up to three `{ts, class, text}` entries, newest last;
+`text` is at most 600 characters. Storing a diagnosis therefore never resets an
+approval. The dispatched prompt shows only the newest entry, as
+`OVERLORD DIAGNOSIS (attempt N): <text>`, where N is the story's `dispatch_attempts`.
+`agent_instructions` and `files` are never written by these executors. See
+`overlord-policy.md` ("retry_transient and rebrief").
+
 ### Operator runbook: backfilling plans ingested before these fields existed
 
 Plans ingested before the fields above shipped have a staged draft

@@ -9,7 +9,7 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
-from . import cross_plan, plan_approval
+from . import cross_plan, plan_approval, triage_rebrief
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
@@ -458,7 +458,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # absolute path to the shared primary checkout and the agent ran
         # every command there, landing commits straight on master. Prepend
         # unconditionally so the rule survives an empty brief too.
-        spec["prompt"] = f"{WORKTREE_SCOPE_RULE}\n\n{spec['prompt']}"
+        spec["prompt"] = f"{WORKTREE_SCOPE_RULE}\n\n{triage_rebrief.diagnosis_block(story)}{spec['prompt']}"
         # BASELINE-1: when the fresh-dispatch baseline snapshot above found
         # the test command ALREADY failing on the clean, unmodified worktree,
         # say so up front - before the plan-authored brief - so the agent

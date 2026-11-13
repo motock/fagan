@@ -9,6 +9,7 @@ registering its own function for the same action.
 from collections.abc import Callable
 
 from .triage_park_classes import NEW_ACTIONS
+from .triage_rebrief import execute_rebrief, execute_retry_transient
 
 EXECUTORS: dict[str, Callable] = {}
 
@@ -28,5 +29,11 @@ def _shadow_only(plan_name, story_key, story, ruling, manifest) -> str:
     return "deferred"
 
 
+#: Actions with a real executor (ov-2). Every other NEW_ACTIONS entry keeps the stub.
+_IMPLEMENTED: dict[str, Callable] = {
+    "retry_transient": execute_retry_transient,
+    "rebrief": execute_rebrief,
+}
+
 for _action in sorted(NEW_ACTIONS):
-    register(_action)(_shadow_only)
+    register(_action)(_IMPLEMENTED.get(_action, _shadow_only))

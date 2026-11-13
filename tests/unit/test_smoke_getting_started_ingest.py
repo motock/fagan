@@ -331,7 +331,7 @@ def test_scratch_plan_dir_wiring_pins_all_three_bindings(
 
     # The store resolves PLAN_DIR through pipeline.server, so the manifest the
     # ingest writes must land in the scratch dir too.
-    assert p._store.manifest_path(PLAN_NAME).parent == plan_dir
+    assert (p.PLAN_DIR / f"{PLAN_NAME}.manifest.json").parent == plan_dir
 
 
 def test_scratch_target_repo_is_a_real_git_repo_with_a_commit(tmp_path: Path) -> None:

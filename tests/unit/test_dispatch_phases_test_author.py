@@ -63,7 +63,7 @@ def _setup(tmp_path, story, *, backend="ollama", resuming=False, marker=False):
     manifest = {"stories": {_STORY_KEY: story}}
     # Seed through the store-owned path: the write under test goes through
     # records().put_manifest -> FileStore.save_manifest, i.e. PLAN_DIR.
-    manifest_path = p._store.manifest_path("plan-x")
+    manifest_path = p.PLAN_DIR / "plan-x.manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest))
     worktree = tmp_path / "wt"

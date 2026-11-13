@@ -124,7 +124,7 @@ def _write_manifest(plan_dir: Path, name: str, repo_root: Path) -> None:
             }
         },
     }
-    path = p._store.manifest_path(name)
+    path = p.PLAN_DIR / f"{name}.manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest))
 
@@ -192,7 +192,7 @@ def test_ingest_plan_denial_writes_no_manifest(
     with bind_principal(DENIED):
         p.ingest_plan("plan-a")
 
-    assert not p._store.manifest_path("plan-a").exists()
+    assert not (p.PLAN_DIR / "plan-a.manifest.json").exists()
 
 
 def test_dispatch_story_denies_a_denied_principal(plan_dir: Path, tmp_path: Path) -> None:

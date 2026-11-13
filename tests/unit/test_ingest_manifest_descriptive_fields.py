@@ -124,7 +124,7 @@ def _write_plan(plan_dir: Path, name: str, repo_root: Path, epics, **extra) -> d
 
 
 def _manifest(plan_name: str) -> dict:
-    return json.loads(ingest_mod._store.manifest_path(plan_name).read_text())
+    return json.loads((p.PLAN_DIR / f"{plan_name}.manifest.json").read_text())
 
 
 def _two_epic_plan(repo_root: Path) -> list[dict]:
@@ -273,7 +273,7 @@ def test_non_string_description_is_refused_and_writes_no_manifest(
     assert result["ok"] is False, f"description {bad_description!r} was accepted"
     error = result["error"]
     assert "Bad description story" in error, f"error does not name the story: {error!r}"
-    assert not ingest_mod._store.manifest_path("baddesc").exists()
+    assert not (p.PLAN_DIR / "baddesc.manifest.json").exists()
 
 
 def test_reingest_refreshes_description_and_keeps_runtime_state(
@@ -290,7 +290,7 @@ def test_reingest_refreshes_description_and_keeps_runtime_state(
     assert ingest_mod._ingest_plan_impl("refresh")["ok"] is True
 
     # Simulate runtime state a re-ingest must not clobber.
-    manifest_path = ingest_mod._store.manifest_path("refresh")
+    manifest_path = (p.PLAN_DIR / "refresh.manifest.json")
     manifest = json.loads(manifest_path.read_text())
     manifest["stories"]["issue-Alpha story"]["status"] = "in_progress"
     manifest["stories"]["issue-Alpha story"]["pr_url"] = "https://example.test/pr/1"

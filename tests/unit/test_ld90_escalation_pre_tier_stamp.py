@@ -266,7 +266,7 @@ def test_survivor_bookkeeping_still_happens(fake_git, tmp_path):
     # The reset is persisted through the plan's record store, which derives its
     # target from PLAN_DIR (the autouse fixture pins that at tmp_path); the
     # the store's path for this plan is the file the assertions below read.
-    manifest_path = server._store.manifest_path("plan")
+    manifest_path = server.PLAN_DIR / "plan.manifest.json"
 
     esc._escalate_to_claude(manifest, "plan", "S8")
 

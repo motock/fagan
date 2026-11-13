@@ -123,7 +123,7 @@ def test_wrapper_swallows_exceptions_from_sweep():
 def test_impl_body_starts_with_validate_plan_name_and_is_not_the_wrapper():
     """The renamed body must begin with the original first line, verbatim.
 
-    The original first line was ``manifest_path = _store.manifest_path(...)``;
+    The original first line was a ``manifest_path`` local fetched from the store;
     removing that vestigial local (ADR 0012 stage C) makes the first statement
     ``validate_plan_name(plan_name)``. The pin moves with it.
     """

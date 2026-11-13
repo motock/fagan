@@ -1,9 +1,9 @@
-"""Guard ADR 0012 stage C: ``manifest_path`` stays inside the Store implementations.
+"""Guard ADR 0012 decision 1: no store method returns a filesystem path.
 
-The Store Protocol is about to drop ``manifest_path``. Every caller must reach
-plan manifests through the record view (``records().get_manifest`` and friends),
-so the only modules allowed to mention ``manifest_path`` are the three Store
-implementations. This scans source text, not imports, so a caller added through
+``manifest_path`` is gone from the Store Protocol and from both implementations.
+Every caller reaches plan manifests through the record view (``records()
+.get_manifest`` and friends), so no production module may mention
+``manifest_path``. This scans source text, not imports, so a caller added through
 any route (a bare name, an attribute, a comment left behind) is caught.
 """
 
@@ -11,13 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCANNED_ROOTS = ("pipeline", "app")
-ALLOWED_FILES = frozenset(
-    {
-        "pipeline/store.py",
-        "pipeline/store_records.py",
-        "pipeline/store_sqlite.py",
-    }
-)
+ALLOWED_FILES = frozenset()
 NEEDLE = "manifest_path"
 
 
@@ -34,15 +28,15 @@ def find_manifest_path_mentions(roots: list[Path], base: Path) -> list[str]:
     return offenders
 
 
-def test_manifest_path_is_only_mentioned_by_the_store_implementations():
+def test_manifest_path_is_mentioned_by_no_production_module():
     offenders = find_manifest_path_mentions(
         [REPO_ROOT / root for root in SCANNED_ROOTS], REPO_ROOT
     )
 
     assert offenders == [], (
-        "manifest_path must stay inside pipeline/store.py, store_records.py and "
-        "store_sqlite.py (ADR 0012 stage C); move these callers onto "
-        "records().get_manifest/put_manifest/list_plans: " + repr(offenders)
+        "manifest_path must not appear in any production module (ADR 0012 "
+        "decision 1); move these callers onto records().get_manifest/"
+        "put_manifest/list_plans: " + repr(offenders)
     )
 
 

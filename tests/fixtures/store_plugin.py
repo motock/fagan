@@ -22,3 +22,33 @@ class _IncompleteStore:
 
 def build_incomplete():
     return _IncompleteStore()
+
+
+_SHARED: dict[str, InMemoryRecordStore] = {}
+
+
+def build_shared_record_store():
+    """Return the one in-memory store this process shares across calls.
+
+    A plugin's records live outside the process, so every ``build_store()``
+    call reaches the same data. :func:`build_record_store` builds a fresh
+    store per call, which would hide a manifest written by an earlier call.
+    """
+    if "store" not in _SHARED:
+        _SHARED["store"] = InMemoryRecordStore()
+    return _SHARED["store"]
+
+
+def reset_shared_record_store():
+    """Forget the shared store, so the next test starts from empty."""
+    _SHARED.clear()
+
+
+class _AuditRefusingStore(InMemoryRecordStore):
+    def audit_log(self):
+        raise RuntimeError("audit log unavailable")
+
+
+def build_audit_refusing_record_store():
+    """A conforming store whose audit log cannot be opened."""
+    return _AuditRefusingStore()

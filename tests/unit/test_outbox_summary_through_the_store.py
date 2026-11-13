@@ -295,7 +295,7 @@ class TestPlanDirAllowlistCeilings:
             <= ceiling('pipeline/metrics_exposition.py')
         )
 
-    def test_outbox_health_stays_on_itsceiling(self):
+    def test_outbox_health_stays_on_its_ceiling(self):
         assert (
             _plan_dir_references('pipeline/outbox_health.py')
             <= ceiling('pipeline/outbox_health.py')

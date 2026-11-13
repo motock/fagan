@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -203,16 +204,22 @@ def test_stream_is_created_with_the_documented_shape(bus, nats_env):
 
 
 def test_publish_lands_on_the_plan_scoped_subject(bus, nats_env):
+    # A plan name of its own: the broker is shared by every case in this
+    # session, and the other cases publish to PLAN's subject.
+    plan = f"{PLAN}-subject-{uuid.uuid4().hex[:8]}"
+
     async def receive_one():
         import nats
 
         nc = await nats.connect(servers=[nats_env["url"]])
         try:
-            subject = f"pipeline.{EVENT_TYPE}.{PLAN}"
+            subject = f"pipeline.{EVENT_TYPE}.{plan}"
             subscription = await nc.subscribe(subject)
             await nc.flush()
 
-            await asyncio.to_thread(bus.publish, _event(event_id="e-subject-1"))
+            await asyncio.to_thread(
+                bus.publish, _event(plan=plan, event_id="e-subject-1")
+            )
 
             message = await subscription.next_msg(timeout=5)
             return subject, message
@@ -221,7 +228,7 @@ def test_publish_lands_on_the_plan_scoped_subject(bus, nats_env):
 
     subject, message = asyncio.run(receive_one())
 
-    assert subject == f"pipeline.{EVENT_TYPE}.{PLAN}"
+    assert subject == f"pipeline.{EVENT_TYPE}.{plan}"
     assert json.loads(message.data)["event_id"] == "e-subject-1"
     assert message.headers["Nats-Msg-Id"] == "e-subject-1"
 

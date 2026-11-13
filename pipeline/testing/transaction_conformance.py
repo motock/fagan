@@ -19,6 +19,12 @@ Every test class is a mixin of :mod:`pipeline.store_contract_transactions`,
 collected here so a consumer only imports this module:
 ``from pipeline.testing.transaction_conformance import *``.
 
+Each test declares the protocol names it exercises with ``@covers``;
+``test_transaction_every_protocol_method_is_covered`` asserts that the declarations
+cover every transaction method, and
+``test_transaction_every_covered_name_is_a_transaction_method`` asserts that no
+declaration names anything else.
+
 This module must stay importable without the repo's ``tests/`` tree and without
 loading ``pipeline.server``.
 """

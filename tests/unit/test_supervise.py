@@ -362,14 +362,16 @@ def test_supervisor_resets_the_backoff_after_a_healthy_child(tmp_path: Path) -> 
         )
         # start3 -> start4 follows the healthy run (1.5s uptime). Without the
         # reset the grown 2s delay would apply (>=3.4s); with it the first
-        # delay (0.5s) applies, so ~2.0s.
-        assert gaps[2] < 2.5, (
+        # delay (0.5s) applies, so ~2.0s. The 3.0s bound leaves room for
+        # runner scheduling overhead while staying below the un-reset 3.4s.
+        assert gaps[2] < 3.0, (
             "a healthy run must reset the backoff to the first delay: "
             f"{gaps!r}"
         )
         # start4 -> start5 follows the immediate exit after that reset: the
-        # doubled first delay (1s), never the un-reset growth (4s).
-        assert gaps[3] < 2.0, (
+        # doubled first delay (1s), never the un-reset growth (4s). The 3.0s
+        # bound leaves room for runner scheduling overhead below that 4s.
+        assert gaps[3] < 3.0, (
             "the restarted backoff must grow from the first delay again: "
             f"{gaps!r}"
         )

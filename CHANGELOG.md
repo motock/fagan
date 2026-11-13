@@ -124,6 +124,13 @@ in practice.
   database, verbatim, so the audit hash chain and its file anchors still match.
   It is safe to re-run, never modifies the source files, and exits non-zero
   when anything was refused; the JSON summary names what and why.
+  When `PIPELINE_AUDIT_ANCHOR` is configured, an audit chain is refused before
+  anything is written for it, with one of two outcomes: `anchor_mismatch` when
+  the chain is shorter than its anchored `seq`, or its hash at that `seq`
+  differs from the anchor (a cut tail, or a record rewritten and re-hashed);
+  and `anchor_unreadable` for every chain when the anchor sink is configured
+  but cannot be read, since the import then has nothing to check against. With
+  no anchor sink configured the import is unchanged.
 
 - Plans ingested before the manifest descriptive-fields story carry their
   authored `description`, `epic`, `plan_key`, `plan_epics`,

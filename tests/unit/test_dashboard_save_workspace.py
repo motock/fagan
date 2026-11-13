@@ -50,7 +50,6 @@ def plan_dir(tmp_path, monkeypatch):
     tests/unit/test_dashboard_plan_write_routes.py's plan_dir fixture."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     monkeypatch.setattr(ppers, "PLAN_DIR", directory)
     return directory

@@ -80,7 +80,6 @@ def plan_dir(tmp_path, monkeypatch):
     what actually redirects the active_workspace.json file."""
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(p, "PLAN_DIR", directory)
     return directory
 

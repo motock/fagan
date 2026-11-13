@@ -91,11 +91,9 @@ def roots(tmp_path, monkeypatch):
 @pytest.fixture
 def plan_root(tmp_path, monkeypatch):
     """The plans directory the dashboard routes read from."""
-    from app import dashboard as d
 
     directory = tmp_path / "plans"
     directory.mkdir()
-    monkeypatch.setattr(d, "PLAN_DIR", directory)
     monkeypatch.setattr(server, "PLAN_DIR", directory)
     return directory
 

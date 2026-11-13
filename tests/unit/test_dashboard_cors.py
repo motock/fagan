@@ -26,17 +26,14 @@ _ORIGIN = "https://ui.example.com"
 
 
 @pytest.fixture
-def reload_dashboard(monkeypatch, tmp_path):
+def reload_dashboard(monkeypatch):
     """Reload app.dashboard under a given CORS_ENV value, restoring it after."""
     def _apply(value=None):
         if value is None:
             monkeypatch.delenv(CORS_ENV, raising=False)
         else:
             monkeypatch.setenv(CORS_ENV, value)
-        module = importlib.reload(d)
-        # The reload re-runs the module-level PLAN_DIR assignment.
-        monkeypatch.setattr(module, "PLAN_DIR", tmp_path)
-        return module
+        return importlib.reload(d)
 
     yield _apply
     monkeypatch.delenv(CORS_ENV, raising=False)

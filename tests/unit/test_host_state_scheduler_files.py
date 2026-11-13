@@ -256,14 +256,9 @@ def test_health_reads_the_scheduler_snapshot_from_the_host_state_root(
 ):
     """The snapshot is read from the host-state root, not a private binding.
 
-    The dashboard's own ``PLAN_DIR`` name is shadowed with a DIFFERENT
-    directory: the snapshot must still come from the root the host state
-    resolves (the live ``pipeline.server.PLAN_DIR`` binding).
+    The snapshot must come from the root the host state resolves (the live
+    ``pipeline.server.PLAN_DIR`` binding), not from a dashboard-level copy.
     """
-    other = plan_root.parent / "shadow-plans"
-    other.mkdir()
-    monkeypatch.setattr(dashboard, "PLAN_DIR", other, raising=False)
-
     config = _fingerprint_config(plan_root)
     (plan_root / HEALTH_FILE).write_text(
         json.dumps({"alive": True, "last_scan_ts": _now_iso(), "config": config}),
@@ -304,10 +299,6 @@ def test_the_liveness_probe_reads_the_snapshot_from_the_host_state_root(
     A stale snapshot under the host-state root must make the probe report
     the scheduler as stale -- the probe must not look somewhere else.
     """
-    other = plan_root.parent / "shadow-plans"
-    other.mkdir()
-    monkeypatch.setattr(dashboard, "PLAN_DIR", other, raising=False)
-
     stale = datetime.now(UTC) - timedelta(hours=1)
     (plan_root / HEALTH_FILE).write_text(
         json.dumps({"alive": True, "last_scan_ts": stale.isoformat()}),
@@ -382,10 +373,6 @@ def _plan_names(client: TestClient) -> list[str]:
 
 def test_archived_plans_are_read_from_the_host_state_root(plan_root, monkeypatch):
     """The archived set comes from the host-state root, not a private binding."""
-    other = plan_root.parent / "shadow-plans"
-    other.mkdir()
-    monkeypatch.setattr(dashboard, "PLAN_DIR", other, raising=False)
-
     _write_manifest(plan_root, "plan-archived")
     (plan_root / UI_STATE_FILE).write_text(
         json.dumps({"archived": ["plan-archived"]}), encoding="utf-8"

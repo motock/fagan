@@ -18,7 +18,6 @@ from app import backend, role_registry
 from pipeline.review_base import resolve_review_base
 
 from . import context_sources as ctxsrc
-from . import paths
 from .config import (
     _LOCAL_BACKEND_NAMES,
     DEFAULT_MODEL,
@@ -27,8 +26,16 @@ from .config import (
     REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
 from .file_size_policy_dispatch import file_size_advisory_note
+from .live_ref import LiveRef
 from .persona import _persona_body, _persona_default_model
 from .review_rework_scope import scoped_rework_diff
+from .store_records import (
+    DEFAULT_NAMESPACE,
+    InvalidRecordKeyError,
+    validate_context_digest,
+)
+
+_store = LiveRef("_store")
 
 # Story-context injection (PLD90-W2-CTX): the reviewer prompt carries the
 # story's own brief plus its siblings' status so the reviewer can tell
@@ -69,13 +76,14 @@ def _deferred_lines(text: str) -> list[str]:
 def _read_recorded_snapshot(recorded: dict) -> str | None:
     """Return the snapshot text for a recorded digest, or None if it cannot be verified."""
     digest = recorded.get("digest") or ""
-    hexdigest = digest.removeprefix("sha256:")
-    if not hexdigest.isalnum():
-        return None
     try:
-        text = (paths.PLAN_DIR / "context" / hexdigest / "content.txt").read_text(encoding="utf-8")
-    except OSError:
+        validate_context_digest(digest)
+    except InvalidRecordKeyError:
         return None
+    snapshot = _store.records().get_context_snapshot(DEFAULT_NAMESPACE, digest)
+    if snapshot is None:
+        return None
+    text = snapshot["content"]
     if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
         return None
     return text

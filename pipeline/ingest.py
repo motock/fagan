@@ -2,7 +2,7 @@
 
 ``_ingest_plan_impl`` was moved here verbatim from ``pipeline/server.py``
 (behavior-preserving refactor). It reads server-sourced module globals
-(``PLAN_DIR``, ``_store``, ``_validate_key``, ``get_ticket_provider``,
+(``_store``, ``_validate_key``, ``get_ticket_provider``,
 ``_notify_user``, ``_INGEST_AUTHORED_STORY_FIELDS``,
 ``_VALID_STORY_BACKENDS``, the acceptance/planner warning helpers,
 ``role_registry``) as free variables. The test suite monkeypatches those names
@@ -51,12 +51,11 @@ from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
-from .store_records import UnreadableRecordError
+from .store_records import DEFAULT_NAMESPACE, UnreadableRecordError
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
-PLAN_DIR = _ServerRef("PLAN_DIR")
 WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 _store = _ServerRef("_store")
 _validate_key = _ServerRef("_validate_key")
@@ -388,6 +387,11 @@ def _acceptance_field_error(story: dict) -> str | None:
     return None
 
 
+def _neighbour_manifests(plan_name: str) -> dict[str, dict]:
+    manifests = _store.records().get_manifests(DEFAULT_NAMESPACE)
+    return {name: manifest for name, manifest in manifests.items() if name != plan_name}
+
+
 def _file_overlap_advisories(plan_name: str, stories: dict) -> list[dict]:
     """Notify (never block) for each story sharing files with another plan's in-flight story.
 
@@ -395,9 +399,7 @@ def _file_overlap_advisories(plan_name: str, stories: dict) -> list[dict]:
     collisions without reading the log. Absent ``files`` on either side means
     no advisory.
     """
-    others = cross_plan.in_flight_stories(
-        cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name)
-    )
+    others = cross_plan.in_flight_stories(_neighbour_manifests(plan_name))
     advisories = []
     for key, story in stories.items():
         for hit in cross_plan.file_overlaps(story.get("files"), others):
@@ -430,9 +432,7 @@ def _story_key_conflict_error(
         if isinstance(story.get("key"), str) and story["key"]
     ]
     conflicts = cross_plan.key_conflicts(
-        keys,
-        cross_plan.load_manifests(PLAN_DIR._value(), exclude_plan=plan_name),
-        WORKTREE_ROOT._value(),
+        keys, _neighbour_manifests(plan_name), WORKTREE_ROOT._value()
     )
     if not conflicts:
         return None

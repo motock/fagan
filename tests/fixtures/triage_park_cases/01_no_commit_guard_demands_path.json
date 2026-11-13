@@ -1,0 +1,18 @@
+{
+  "description": "2026-11-13 run: agent parked on no-new-commit; the failing guard demands a path outside files",
+  "story": {
+    "status": "parked",
+    "files": ["pipeline/story_status.py"]
+  },
+  "evidence": {
+    "parked_reason": "no new commit after 2 rework redispatches - agent keeps parking/crashing without writing code.",
+    "test_output": "FAILED tests/unit/test_outbox_health_guard.py::test_stale_entry_listed - AssertionError\nstale entry, remove it: pipeline/outbox_health.py PLAN_DIR\n"
+  },
+  "expected": {
+    "name": "guard_demands_path",
+    "facts": {
+      "paths": ["pipeline/outbox_health.py"],
+      "test_ids": ["tests/unit/test_outbox_health_guard.py::test_stale_entry_listed"]
+    }
+  }
+}

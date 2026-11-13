@@ -2548,6 +2548,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `OVERLORD_POLICY` | `~/.claude/overlord-policy.md` | Global decision policy |
 | `PIPELINE_AUTONOMY` | `gated` | `dry-run` \| `gated` \| `full` |
 | `PIPELINE_AUTO_MERGE` | `1` | Set to `0` to park every reviewed PR for a human merge; dispatch and review continue |
+| `PIPELINE_TRIAGE_MODE` | `shadow` | `shadow` \| `execute`. Unset, empty or unrecognised means `shadow`. In `shadow`, the four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are recorded in the decisions log with `mode: shadow` and notified, and the story is left untouched whatever `PIPELINE_AUTONOMY` is. `execute` runs their executors; a stub without one parks the story for a human. The seven existing actions are unaffected. Park classes (`pipeline/triage_park_classes.py`, table in `overlord-policy.md`): `rebase_conflict`, `scope_gate`, `guard_demands_path`, `pin_removed_test_failure`, `no_commit_after_rework`, `ci_red_after_rework`, `transient_bookkeeping`, `high_risk_hold`, and `unknown`. A ruling whose action the observed class does not allow is replaced with `park_for_human`. |
 | `PIPELINE_RISK_THRESHOLD` | `low` | Highest risk merged unattended in `gated` |
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |

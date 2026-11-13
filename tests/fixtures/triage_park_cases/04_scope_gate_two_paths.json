@@ -1,0 +1,17 @@
+{
+  "description": "2026-11-13 run: review gate rejected two production paths outside the declared files",
+  "story": {
+    "status": "parked",
+    "files": ["pipeline/ci.py"]
+  },
+  "evidence": {
+    "parked_reason": "review changes_requested",
+    "review_feedback": "SCOPE GATE: the diff touches production files the story did not declare\n- Blocking: pipeline/ci_failing_tests.py: outside this story's `files` scope\n- Blocking: pipeline/forge_github.py: outside this story's `files` scope"
+  },
+  "expected": {
+    "name": "scope_gate",
+    "facts": {
+      "paths": ["pipeline/ci_failing_tests.py", "pipeline/forge_github.py"]
+    }
+  }
+}

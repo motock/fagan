@@ -150,6 +150,29 @@ manifest-only actions (`mark_done`, `split_story`, `patch_acceptance`, `amend_sc
 `risk: high` merges. Some stories park permanently BY RULING (abandoned or
 superseded scope) — a correct outcome with recorded reasoning, not a failure.
 
+### Park classes
+
+Each terminal park is named by the live signal it carries (`pipeline/triage_park_classes.py`).
+The prompt states the observed class with its facts and the `ALLOWED ACTIONS` for it. A ruling
+outside that set is replaced with `park_for_human`. The class signals are read from live evidence,
+never from `parked_reason` text alone.
+
+| Park class | Live-evidence signal | Allowed actions |
+| --- | --- | --- |
+| `rebase_conflict` | `parked_reason` starts `rebase conflict:` and names conflicted paths | `resolve_rebase` \| `park_for_human` |
+| `scope_gate` | review feedback reports `outside this story's files scope` for a path | `amend_scope` \| `park_for_human` |
+| `guard_demands_path` | a failing guard names a repo path outside `files` (`remove it`, `add it`, `must be listed`) | `amend_scope` \| `rebrief` \| `park_for_human` |
+| `pin_removed_test_failure` | a test fails on a missing attribute or import whose name the branch removed | `approve_test_edit` \| `park_for_human` |
+| `no_commit_after_rework` | `no new commit after N rework redispatches` | `rebrief` \| `amend_scope` \| `escalate_model` \| `park_for_human` |
+| `ci_red_after_rework` | CI red after rework (`ci_rework` set, or PR checks failed) | `rebrief` \| `escalate_model` \| `park_for_human` |
+| `transient_bookkeeping` | `branch head unavailable`, `plan lock contended`, `unchanged_since_last_review` | `retry_transient` \| `park_for_human` |
+| `high_risk_hold` | `high risk held for human review` | `park_for_human` only |
+| `unknown` | none of the above | the seven existing actions |
+
+The four new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are
+shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
+notified, and the story is left untouched.
+
 ### patch_acceptance output format
 
 When `ACTION` is `patch_acceptance`, the overlord's response must carry, in
@@ -181,7 +204,7 @@ NOTIFY_USER: yes | no
 ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance | amend_scope
 SPLIT: <child A> || <child B>
 ```
-ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.
+ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human. The park-class actions are also valid ACTION values: `resolve_rebase`, `retry_transient`, `rebrief` and `approve_test_edit`, each shadow-only unless `PIPELINE_TRIAGE_MODE=execute`. An ACTION not listed under the observed park class (see Park classes) is replaced with park_for_human.
 
 `SPLIT` is emitted only when `ACTION` is `split_story`: exactly two child summaries separated by ` || `. When `ACTION` is not `split_story`, omit the `SPLIT` line entirely.
 

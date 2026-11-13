@@ -1,0 +1,21 @@
+{
+  "description": "2026-11-13 run: PR CI red after rework; the log tail names the failing test",
+  "story": {
+    "status": "parked"
+  },
+  "evidence": {
+    "parked_reason": "merge gate: PR checks failed",
+    "merge_park_evidence": {
+      "pr_checks": {
+        "state": "fail",
+        "log_tail": "FAILED tests/unit/test_pin_guard_baseline.py::test_should_match_committed_baseline_for_real_tests - AssertionError\n1 failed, 412 passed\n"
+      }
+    }
+  },
+  "expected": {
+    "name": "ci_red_after_rework",
+    "facts": {
+      "failing_ids": ["tests/unit/test_pin_guard_baseline.py::test_should_match_committed_baseline_for_real_tests"]
+    }
+  }
+}

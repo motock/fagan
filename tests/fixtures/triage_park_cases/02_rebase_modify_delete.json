@@ -1,0 +1,16 @@
+{
+  "description": "2026-11-13 run: rebase onto master hit a modify/delete conflict on a fixture",
+  "story": {
+    "status": "parked"
+  },
+  "evidence": {
+    "parked_reason": "rebase conflict: CONFLICT (modify/delete): tests/unit/plan_dir_allowlist.json deleted in HEAD and modified in aac43ec3a6eb"
+  },
+  "expected": {
+    "name": "rebase_conflict",
+    "facts": {
+      "paths": ["tests/unit/plan_dir_allowlist.json"],
+      "kind": "modify_delete"
+    }
+  }
+}

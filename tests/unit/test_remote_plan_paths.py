@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from app.identity import LOCAL_OPERATOR, Principal
-from pipeline import actor, remote_scope, service
+from pipeline import actor, remote_scope
 from pipeline.service import PipelineService
 from pipeline.workspace import ALLOWED_REPO_ROOTS_ENV, validate_workspace
 
@@ -41,14 +41,11 @@ def plan_dir(tmp_path, monkeypatch):
     ``save_plan`` stages the plan draft through the record store, whose draft
     path resolves the plans directory on ``pipeline.server`` per call, so the
     server binding is the one that decides where the draft lands; the
-    ``pipeline.service`` re-export is patched too because the service reads it
-    directly elsewhere.
     """
     import pipeline.server as p
 
     d = tmp_path / "plans"
     d.mkdir()
-    monkeypatch.setattr(service, "PLAN_DIR", d)
     monkeypatch.setattr(p, "PLAN_DIR", d)
     return d
 

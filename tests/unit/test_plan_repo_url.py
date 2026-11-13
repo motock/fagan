@@ -80,10 +80,9 @@ def repos_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture()
 def plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect every ``PLAN_DIR`` the service reads into ``tmp_path``."""
+    """Redirect every ``PLAN_DIR`` the server reads into ``tmp_path``."""
     d = tmp_path / "plans"
     d.mkdir()
-    monkeypatch.setattr(service, "PLAN_DIR", d)
     monkeypatch.setattr(p, "PLAN_DIR", d)
     return d
 

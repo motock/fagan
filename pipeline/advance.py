@@ -139,11 +139,6 @@ _ci_rerun = _ServerRef("_ci_rerun")
 _ci_rework_feedback = _ServerRef("_ci_rework_feedback")
 _completed_dep_ids = _ServerRef("_completed_dep_ids")
 _count_in_progress_agents = _ServerRef("_count_in_progress_agents")
-# The on-device slot count scans every plan's manifest (the spend window the
-# cap protects is session-wide), so it reads PLAN_DIR as a free var exactly
-# like _count_in_progress_agents does in pipeline/concurrency.py. Resolving
-# it via a _ServerRef keeps the plan_dir fixture's p.PLAN_DIR patch landing.
-PLAN_DIR = _ServerRef("PLAN_DIR")
 _default_branch = _ServerRef("_default_branch")
 _escalate_to_claude = _ServerRef("_escalate_to_claude")
 _escalate_to_local_fallback_model = _ServerRef("_escalate_to_local_fallback_model")

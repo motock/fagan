@@ -38,7 +38,7 @@ SHA = "a" * 40
 def test_state_root_follows_the_detached_grade_rule(tmp_path, monkeypatch):
     """An absolute override wins; a relative one sits under the manifests base."""
     plans = tmp_path / "plans"
-    monkeypatch.setattr(paths, "PLAN_DIR", plans)
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", plans)
     monkeypatch.setenv("PIPELINE_STATE_DIR", str(tmp_path / "abs"))
     assert forge_github.ci_rollup_state_root() == tmp_path / "abs"
     monkeypatch.setenv("PIPELINE_STATE_DIR", "rel")

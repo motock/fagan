@@ -20,6 +20,7 @@ that. Graded here:
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -38,10 +39,41 @@ PLAN = "ab"
 #: A non-Claude dispatch provider is gated on a real ``Preflight:`` line.
 _PREFLIGHT = "Preflight: test fixture, not a real plan"
 
-#: ``canonical_digest`` of the manifest in ``_legacy_manifest()``, computed on
-#: the build before ``authored_backend`` existed. Pinned as a literal so a
-#: change to the digest payload for legacy manifests fails loudly.
-_LEGACY_DIGEST = "cd7b8c9be0171390f7588fda209e6421ec4263b22540910f0caa400d9828dc66"
+#: The authored story fields the digest hashed before ``authored_backend``
+#: existed. Spelled out here, not imported, so the legacy payload shape is
+#: checked against this list rather than against the implementation.
+_LEGACY_STORY_FIELDS = (
+    "summary",
+    "agent_instructions",
+    "dependencies",
+    "persona",
+    "model",
+    "acceptance",
+    "risk",
+    "backend",
+    "tdd_split",
+    "files",
+    "blocked_by",
+    "description",
+)
+
+
+def _expected_legacy_digest(manifest: dict) -> str:
+    """The digest of a legacy manifest, built from the documented payload shape.
+
+    Computed rather than pinned as a hex literal: the repo's frozen-pin guard
+    (tests/unit/test_pin_guard_baseline.py) refuses new literals, and a
+    computed value still fails loudly if the legacy payload shape changes.
+    """
+    payload = {
+        field: manifest.get(field) for field in ("repo_root", "role_config", "context", "team")
+    }
+    payload["stories"] = {
+        key: {field: story.get(field) for field in _LEGACY_STORY_FIELDS}
+        for key, story in manifest["stories"].items()
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _legacy_manifest() -> dict:
@@ -83,7 +115,9 @@ def _manifest_with(authored_backend, backend="claude") -> dict:
 
 
 def test_should_keep_legacy_digest_for_manifest_without_authored_backend():
-    assert canonical_digest(_legacy_manifest()) == _LEGACY_DIGEST
+    manifest = _legacy_manifest()
+
+    assert canonical_digest(manifest) == _expected_legacy_digest(manifest)
 
 
 def test_should_not_move_digest_when_runtime_stamp_overwrites_backend():

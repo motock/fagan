@@ -11,6 +11,7 @@ import pytest
 from pipeline import persistence, plan_completion, server
 from pipeline.local_success import classify_story
 from pipeline.plan_summary import format_plan_summary
+from pipeline.store import build_store
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import local_success_report
@@ -54,11 +55,20 @@ def test_should_not_match_step_name_with_suffix() -> None:
     assert result["clean"] is True
 
 
+def _read_through_store(tmp_path, read) -> object:
+    """Run ``read`` against the record view of the file store rooted at tmp_path."""
+    with local_success_report._PlanDirBinding(tmp_path):
+        return read(build_store().records())
+
+
 def _classify_with_journal_file(tmp_path, content: str | None) -> list[dict]:
     (tmp_path / "p.manifest.json").write_text(json.dumps({"stories": {KEY: _story()}}))
     if content is not None:
         (tmp_path / f"p.{KEY}.journal.json").write_text(content)
-    return local_success_report._classify_plan(tmp_path, "p", [])
+    manifest = {"stories": {KEY: _story()}}
+    return _read_through_store(
+        tmp_path, lambda records: local_success_report._classify_plan(records, "p", [], manifest)
+    )
 
 
 def test_report_reads_step_cap_entry_from_journal_file(tmp_path) -> None:
@@ -85,26 +95,32 @@ def test_report_drops_non_dict_journal_entries(tmp_path) -> None:
     assert classified[0]["reasons"] == ["step_cap_reached"]
 
 
+def _load_journal_through_store(tmp_path) -> list[dict]:
+    return _read_through_store(
+        tmp_path, lambda records: local_success_report._load_journal(records, "p", KEY)
+    )
+
+
 def test_load_journal_missing_file_returns_empty_list(tmp_path) -> None:
-    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+    assert _load_journal_through_store(tmp_path) == []
 
 
 def test_load_journal_malformed_json_returns_empty_list(tmp_path) -> None:
     (tmp_path / f"p.{KEY}.journal.json").write_text("{not json")
 
-    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+    assert _load_journal_through_store(tmp_path) == []
 
 
 def test_load_journal_top_level_dict_returns_empty_list(tmp_path) -> None:
     (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps(CAP))
 
-    assert local_success_report._load_journal(tmp_path, "p", KEY) == []
+    assert _load_journal_through_store(tmp_path) == []
 
 
 def test_load_journal_drops_non_dict_entries(tmp_path) -> None:
     (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps([CAP, "x", None, 4]))
 
-    assert local_success_report._load_journal(tmp_path, "p", KEY) == [CAP]
+    assert _load_journal_through_store(tmp_path) == [CAP]
 
 
 def test_report_marks_story_with_step_cap_journal_not_clean(tmp_path) -> None:
@@ -112,7 +128,9 @@ def test_report_marks_story_with_step_cap_journal_not_clean(tmp_path) -> None:
     (tmp_path / "p.manifest.json").write_text(json.dumps(manifest))
     (tmp_path / f"p.{KEY}.journal.json").write_text(json.dumps([CAP]))
 
-    classified = local_success_report._classify_plan(tmp_path, "p", [])
+    classified = _read_through_store(
+        tmp_path, lambda records: local_success_report._classify_plan(records, "p", [], manifest)
+    )
 
     assert [(c["clean"], c["reasons"]) for c in classified] == [(False, ["step_cap_reached"])]
 

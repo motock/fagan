@@ -22,8 +22,11 @@ population to report; every tier block is computed over that same cohort
 (``--window 0`` means all stories), so the tier rates partition the
 overall rate instead of each covering a different period.  The
 ``--plan-dir`` flag points to the directory
-containing plan sidecars.  If the directory does not exist, the
-command prints a message to ``stderr`` and exits with status ``2``.
+containing plan sidecars.  It applies to the file store only: the records are
+read through the store that ``PIPELINE_STORE`` selects, so on a sqlite
+deployment the flag is ignored and the report reads the database.  If the
+file store's directory does not exist, the command prints a message to
+``stderr`` and exits with status ``2``.
 
 --window 0
 
@@ -32,7 +35,7 @@ command prints a message to ``stderr`` and exits with status ``2``.
 from __future__ import annotations
 
 import argparse
-import json
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -43,41 +46,59 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pipeline.local_success import classify_story, rolling_rate
-from pipeline.story_metrics import load_notification_records
+from pipeline.store import build_store, store_kind
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 TIERS = ("on-device", "cloud-oss", "unknown")
 
+# The file store resolves its plans directory from module bindings made at
+# import time, so --plan-dir re-points these for the duration of one call.
+_PLAN_DIR_MODULES = ("pipeline.paths", "pipeline.persistence", "pipeline.server")
 
-def _load_journal(plan_dir: Path, plan: str, key: str) -> list[dict]:
+
+class _PlanDirBinding:
+    """Point the file store at ``plan_dir`` for one ``with`` block; no-op on other stores."""
+
+    def __init__(self, plan_dir: Path) -> None:
+        self._plan_dir = plan_dir
+        self._saved: list[tuple[object, Path]] = []
+
+    def __enter__(self):
+        if store_kind() != "file":
+            return self
+        modules = [importlib.import_module(name) for name in _PLAN_DIR_MODULES]
+        self._saved = [(module, module.PLAN_DIR) for module in modules]
+        for module in modules:
+            module.PLAN_DIR = self._plan_dir
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        for module, value in self._saved:
+            module.PLAN_DIR = value
+        self._saved = []
+
+
+def _load_journal(records, plan: str, key: str) -> list[dict]:
     """Return the journal entries for one story, failing open.
 
-    Reads ``<plan_dir>/<plan>.<key>.journal.json``.  A missing file,
-    malformed JSON or a non-list top level yields ``[]``; non-dict entries
-    are dropped so the classifier only ever sees dicts.
+    A story with no journal, or a key the store refuses, yields ``[]``;
+    non-dict entries are dropped so the classifier only ever sees dicts.
     """
     try:
-        entries = json.loads((plan_dir / f"{plan}.{key}.journal.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if not isinstance(entries, list):
+        entries = records.get_journal(DEFAULT_NAMESPACE, plan, key)
+    except ValueError:
         return []
     return [e for e in entries if isinstance(e, dict)]
 
 
-def _classify_plan(plan_dir: Path, plan: str, records: list[dict]) -> list[dict]:
+def _classify_plan(records, plan: str, notifications: list[dict], manifest: dict) -> list[dict]:
     """Return a list of classified stories for a single plan."""
-    manifest_path = plan_dir / f"{plan}.manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        print(f"warning: failed to load manifest {manifest_path.name}: {exc}", file=sys.stderr)
-        return []
     classified: list[dict] = []
     for key, story in manifest.get("stories", {}).items():
         if not isinstance(story, dict):
             continue
         classified.append(
-            classify_story(key, story, records, journal=_load_journal(plan_dir, plan, key))
+            classify_story(key, story, notifications, journal=_load_journal(records, plan, key))
         )
     return classified
 
@@ -128,23 +149,23 @@ def main(argv: list[str] | None = None) -> int:
 
 
     plan_dir = Path(args.plan_dir).expanduser()
-    if not plan_dir.is_dir():
+    if store_kind() == "file" and not plan_dir.is_dir():
         print(f"error: plan directory {plan_dir} does not exist", file=sys.stderr)
         return 2
 
-    # Collect classified stories from all plans.
+    # Collect classified stories from all plans, read through the selected store.
     all_classified: list[dict] = []
-    for path in sorted(plan_dir.glob("*.manifest.json")):
-        plan_name = path.name.removesuffix(".manifest.json")
-        records, _malformed = load_notification_records(plan_dir / f"{plan_name}.notifications.jsonl")
-        try:
-            plan = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            print(f"warning: failed to load manifest {path.name}: {exc}", file=sys.stderr)
-            continue
-        if not _repo_matches(plan):
-            continue
-        all_classified.extend(_classify_plan(plan_dir, plan_name, records))
+    with _PlanDirBinding(plan_dir):
+        records = build_store().records()
+        for plan_name in records.list_plans(DEFAULT_NAMESPACE):
+            manifest = records.get_manifest(DEFAULT_NAMESPACE, plan_name)
+            if manifest is None:
+                print(f"warning: failed to load manifest {plan_name}.manifest.json", file=sys.stderr)
+                continue
+            if not _repo_matches(manifest):
+                continue
+            notifications, _malformed = records.get_notification_history(DEFAULT_NAMESPACE, plan_name)
+            all_classified.extend(_classify_plan(records, plan_name, notifications, manifest))
 
     # Header
     print(f"window: {args.window}")

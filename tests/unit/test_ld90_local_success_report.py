@@ -254,8 +254,8 @@ def test_script_source_contract():
         "ROOT = Path(__file__).resolve().parent.parent",
         "sys.path.insert(0, str(ROOT))",
         "from pipeline.local_success import classify_story, rolling_rate",
-        "from pipeline.story_metrics import load_notification_records",
-        '.removesuffix(".manifest.json")',
+        "from pipeline.store import build_store, store_kind",
+        "records.list_plans(DEFAULT_NAMESPACE)",
         'if __name__ == "__main__":',
         "sys.exit(main())",
     ):

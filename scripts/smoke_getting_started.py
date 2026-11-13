@@ -64,6 +64,10 @@ resolved provider/model/source) - plus the claude CLI when claude is the
 resolved provider - and exits; it creates nothing.
 """
 
+# PLAN_DIR exemption: this script tests the PLAN_DIR configuration itself. It
+# builds a scratch layout, sets os.environ['PLAN_DIR'] and asserts that
+# pipeline.paths.PLAN_DIR resolves under it, so those lines must name PLAN_DIR.
+# Everything else reads plan state through the record store.
 from __future__ import annotations
 
 import argparse
@@ -552,8 +556,12 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
         print(f"smoke: ingest_plan failed: {ingested.get('error')}", file=sys.stderr)
         return 4
 
+    from pipeline.store import build_store
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    records = build_store().records()
     manifest_path = plan_dir / f"{PLAN_NAME}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = records.get_manifest(DEFAULT_NAMESPACE, PLAN_NAME) or {}
     stories = manifest.get("stories", {})
     story_key = STORY_KEY if STORY_KEY in stories else (
         next(iter(stories)) if len(stories) == 1 else None
@@ -587,10 +595,9 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
             pipeline_server.advance_pipeline(PLAN_NAME)
         except Exception as exc:  # noqa: BLE001 - transient tick errors must not kill the run
             print(f"smoke: advance_pipeline tick error (will retry): {exc}")
-        if manifest_path.exists():
-            manifest = json.loads(manifest_path.read_text())
-            story = manifest.get("stories", {}).get(story_key, {})
-            last_status = story.get("status", last_status)
+        manifest = records.get_manifest(DEFAULT_NAMESPACE, PLAN_NAME) or {}
+        story = manifest.get("stories", {}).get(story_key, {})
+        last_status = story.get("status", last_status)
         if last_status == "tests_passed":
             print(
                 f"PASS: story {story_key} implemented, tests passed on "

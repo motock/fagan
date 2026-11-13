@@ -1879,19 +1879,42 @@ the scope gate will park the story.
 ## Triage action: `amend_scope`
 
 When an agent reports a scope conflict (`scope_conflict` recorded on the
-parked story), the overlord's failure triage may rule `amend_scope`. The
-executor (`pipeline/triage_scope_actions.py`), not the overlord, enforces the
-guardrails and refuses, parking the story for a human, any path that is:
-outside the packages of the story's declared `files`, a protected safety-gate
-module (e.g. `pipeline/triage.py`, `pipeline/scope_gate.py`), a root-level
-file, under `scripts/`, `.github/`, `.claude/` or a config file, a new
-top-level directory, on a `risk: high` story, or beyond 3 amendments per
-story. An accepted amendment appends the paths to the story's `files`, records
-them in `scope_amendments`, and returns the story to `todo` (or `tests_passed`
-when green at HEAD). The decisions-log record carries the autonomy mode and
-`amended_paths`. It runs in `gated` and `full` and is notify-only in
-`dry-run`. A plan re-ingest refreshes `files` from the plan file, so a
-permanent scope change belongs in the plan too.
+parked story), or the story is parked on live scope-gate or guard evidence,
+the overlord's failure triage may rule `amend_scope`. The accepted evidence is:
+
+- `scope_conflict` – the paths the agent reported (the recorded conflict).
+- `scope_gate` – the review feedback's `- Blocking: <path>: outside this
+  story's `files` scope` lines. Every path must also be named in the brief
+  (`agent_instructions`) or in the failing guard output.
+- `guard_demands_path` – the paths a failing guard names (`remove it`,
+  `add it`, `must be listed`). These are named by the guard output by
+  construction.
+
+The executor (`pipeline/triage_scope_actions.py`), not the overlord, re-derives
+the evidence from the story's live state and enforces the guardrails. It
+refuses, parking the story for a human, any path that is: outside the packages
+of the story's declared `files`, a protected safety-gate module (e.g.
+`pipeline/triage.py`, `pipeline/scope_gate.py`), a root-level file, under
+`scripts/`, `.github/`, `.claude/` or a config file, a new top-level directory,
+`overlord-authority.json`, a path with a `security`, `secrets` or `keys`
+component or stem, key material (`.pem`, `.key`), a lockfile, a test file,
+absolute, traversing or non-POSIX, on a `risk: high` story, or over a cap.
+
+The caps are: a `scope_gate` or `guard_demands_path` amendment carries at most
+3 paths, and a story takes at most 2 such amendments; a recorded
+`scope_conflict` keeps its cap of 3 cumulative amended paths. Any refused path
+refuses the whole amendment.
+
+An accepted amendment appends the paths to the story's `files`, records them
+in `scope_amendments` (each entry with its `evidence` class and the
+`digest_before` / `digest_after` of the plan's content digest), and returns the
+story to `todo` (or `tests_passed` when green at HEAD). The plan's approval
+record is restamped to the new digest and stays `approved` only when the plan
+was approved at the pre-amendment digest and the amendment only adds paths;
+otherwise it resets to `pending_approval`. The decisions-log record carries the
+autonomy mode and `amended_paths`. It runs in `gated` and `full` and is
+notify-only in `dry-run`. A plan re-ingest refreshes `files` from the plan
+file, so a permanent scope change belongs in the plan too.
 
 ---
 

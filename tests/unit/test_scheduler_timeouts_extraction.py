@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import scheduler_daemon, scheduler_timeouts
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DAEMON_PATH = REPO_ROOT / "pipeline" / "scheduler_daemon.py"
@@ -51,7 +52,7 @@ def test_scheduler_daemon_no_longer_defines_the_resolvers():
 
 
 def test_scheduler_daemon_is_under_one_thousand_lines():
-    assert len(DAEMON_PATH.read_text(encoding="utf-8").splitlines()) < 1000
+    assert_within_line_limit(len(DAEMON_PATH.read_text(encoding="utf-8").splitlines()), 999, DAEMON_PATH.name)
 
 
 @pytest.mark.parametrize(("name", "env", "default"), FLOAT_RESOLVERS, ids=FLOAT_IDS)

@@ -8,6 +8,7 @@ import pytest
 
 import pipeline.story_status as orig
 import pipeline.story_status_records as new
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 MOVED = ("_record_test_check", "_clear_failure_streaks")
 REPO = Path(__file__).resolve().parents[2]
@@ -25,7 +26,7 @@ def test_should_import_moved_symbol_from_new_module(name):
 
 @pytest.mark.parametrize("path", ["pipeline/story_status.py", "pipeline/story_status_records.py"])
 def test_should_keep_file_under_1000_lines(path):
-    assert len((REPO / path).read_text().splitlines()) < 1000
+    assert_within_line_limit(len((REPO / path).read_text().splitlines()), 999, path)
 
 
 def test_should_reach_subprocess_patch_made_via_story_status(monkeypatch, tmp_path):

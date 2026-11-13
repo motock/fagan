@@ -10,6 +10,7 @@ import os
 from datetime import UTC, datetime
 
 from .authorization import DEFAULT_TEAM
+from .file_size_policy_dispatch import stamp_file_size_policy
 from .forge import get_forge
 from .policy_settings import policy_settings
 from .service import _ServerRef
@@ -91,6 +92,7 @@ def stamp_test_scope(plan_name, story_key, manifest, story):
             event="test_scope_lock_rejected",
             dedup_key=f"test_scope_lock_rejected:{plan_name}:{story_key}",
         )
+    stamp_file_size_policy(plan_name, story_key, settings, story)
     return result
 
 

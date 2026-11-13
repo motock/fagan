@@ -63,13 +63,13 @@ def test_filestore_class_exists():
 
 def test_filestore_implements_store_protocol_methods():
     # FileStore must provide every method named on the Store Protocol.
-    for method in ("manifest_path", "get_manifest", "save_manifest", "transaction"):
+    for method in ("get_manifest", "save_manifest", "transaction"):
         assert hasattr(p.FileStore, method), f"FileStore must define {method}"
 
 
-def test_store_protocol_declares_four_methods():
-    # The Store Protocol itself must declare the four methods.
-    for method in ("manifest_path", "get_manifest", "save_manifest", "transaction"):
+def test_store_protocol_declares_manifest_and_transaction_methods():
+    # The Store Protocol itself must declare the three manifest and transaction methods.
+    for method in ("get_manifest", "save_manifest", "transaction"):
         assert hasattr(p.Store, method), f"Store Protocol must declare {method}"
 
 
@@ -112,7 +112,7 @@ def test_filestore_defines_no_init():
 
 def test_filestore_methods_do_not_reach_globals_through_self():
     # R1: no method body may reference self.PLAN_DIR / self._plan_lock / etc.
-    for method_name in ("manifest_path", "get_manifest", "save_manifest", "transaction"):
+    for method_name in ("get_manifest", "save_manifest", "transaction"):
         method = getattr(p.FileStore, method_name)
         src = inspect.getsource(method)
         assert "self.PLAN_DIR" not in src, f"{method_name} must not use self.PLAN_DIR"
@@ -127,7 +127,7 @@ def test_filestore_methods_do_not_reach_globals_through_self():
 # ---------------------------------------------------------------------------
 
 def test_manifest_path_is_plan_dir_manifest_json(plan_dir):
-    assert p._store.manifest_path("demo") == plan_dir / "demo.manifest.json"
+    assert p.PLAN_DIR / "demo.manifest.json" == plan_dir / "demo.manifest.json"
 
 
 def test_manifest_path_follows_monkeypatched_plan_dir(tmp_path, monkeypatch):
@@ -136,13 +136,13 @@ def test_manifest_path_follows_monkeypatched_plan_dir(tmp_path, monkeypatch):
     second = tmp_path / "elsewhere"
     second.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", second)
-    assert p._store.manifest_path("demo") == second / "demo.manifest.json"
+    assert p.PLAN_DIR / "demo.manifest.json" == second / "demo.manifest.json"
 
 
 def test_manifest_path_returns_a_path():
     from pathlib import Path
 
-    result = p._store.manifest_path("demo")
+    result = p.PLAN_DIR / "demo.manifest.json"
     assert isinstance(result, Path)
 
 
@@ -201,7 +201,7 @@ def test_save_manifest_writes_to_manifest_path(plan_dir):
     manifest = {"k": "v"}
     p._store.save_manifest("demo", manifest)
     assert _read_manifest(plan_dir, "demo") == manifest
-    assert json.loads(p._store.manifest_path("demo").read_text()) == manifest
+    assert json.loads((p.PLAN_DIR / "demo.manifest.json").read_text()) == manifest
 
 
 # ---------------------------------------------------------------------------
@@ -373,10 +373,10 @@ def test_update_story_returns_none_for_unknown_story_key(plan_dir):
     # N1: an unknown story key returns None and does not write the manifest.
     manifest = {"stories": {"s1": {"status": "pending"}}}
     _write_manifest(plan_dir, "demo", manifest)
-    before = p._store.manifest_path("demo").read_text()
+    before = (p.PLAN_DIR / "demo.manifest.json").read_text()
     result = p._store.update_story("demo", "NO-SUCH-KEY", {"status": "done"})
     assert result is None
-    assert p._store.manifest_path("demo").read_text() == before
+    assert (p.PLAN_DIR / "demo.manifest.json").read_text() == before
 
 
 def test_update_story_missing_manifest_raises_file_not_found(plan_dir):

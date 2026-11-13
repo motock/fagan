@@ -186,7 +186,7 @@ def _base_setup(pipeline_root, worktree, monkeypatch, *, test_cmd=None):
 def _manifest_root():
     """The same derivation the implementation must use: the parent of the
     manifest path the store itself hands out."""
-    return Path(p._store.manifest_path(PLAN_NAME)).parent
+    return Path(p.PLAN_DIR / f"{PLAN_NAME}.manifest.json").parent
 
 
 def _expected_result_path(state_root):

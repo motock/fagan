@@ -95,7 +95,7 @@ def _write_manifest(plan_dir, plan_name, story):
         "stories": {STORY_KEY: story},
         "role_config": {},
     }
-    manifest_path = p._store.manifest_path(plan_name)
+    manifest_path = p.PLAN_DIR / f"{plan_name}.manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path

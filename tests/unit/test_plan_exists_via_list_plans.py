@@ -1,6 +1,6 @@
 """Plan-existence checks answer through the record store's ``list_plans``.
 
-Seven call sites used to ask ``_store.manifest_path(name).exists()``. That
+Seven call sites used to ask the store for the plan's manifest file and test it. That
 answers from a file on disk, which a record-only store does not have. Each
 site now asks ``name in _store.records().list_plans("default")``. The store
 below has no manifest file anywhere: a file-based check always says "absent",

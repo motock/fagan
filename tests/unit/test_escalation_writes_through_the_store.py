@@ -164,7 +164,7 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(store, tmp_path):
     # InvalidRecordKeyError is raised before any bytes are written: the caller's
     # fabricated path stays absent, and the store's own path is the same file.
     assert not manifest_path.exists()
-    assert not store.manifest_path(plan_name).exists()
+    assert not (p.PLAN_DIR / f"{plan_name}.manifest.json").exists()
 
     # A later, valid escalation still persists, and the rejected plan stays absent.
     escalation._escalate_to_claude(
@@ -174,4 +174,4 @@ def test_should_not_write_for_a_plan_name_the_store_rejects(store, tmp_path):
     assert stored is not None
     assert stored["_test_sentinel"] == SENTINEL
     assert not manifest_path.exists()
-    assert not store.manifest_path(plan_name).exists()
+    assert not (p.PLAN_DIR / f"{plan_name}.manifest.json").exists()

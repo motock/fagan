@@ -107,7 +107,7 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _manifest(plan_name: str) -> dict:
-    return json.loads(ingest_mod._store.manifest_path(plan_name).read_text())
+    return json.loads((p.PLAN_DIR / f"{plan_name}.manifest.json").read_text())
 
 
 def test_plan_without_team_records_default_team(
@@ -153,7 +153,7 @@ def test_malformed_team_is_rejected_before_any_manifest_is_written(
     assert _TEAM_RULE in error, f"error does not name the rule: {error!r}"
     assert "team" in error, f"error does not name the field: {error!r}"
     # Rejected before any manifest was written.
-    assert not ingest_mod._store.manifest_path("bad-team").exists()
+    assert not (p.PLAN_DIR / "bad-team.manifest.json").exists()
     assert provider.calls == [], f"side effects ran before rejection: {provider.calls!r}"
 
 

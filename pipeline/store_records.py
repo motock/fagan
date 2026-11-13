@@ -641,7 +641,7 @@ class PlanDraftRecords:
     record kind with real behaviour cannot grow there.
 
     The host class supplies ``_store`` (the legacy file store, whose
-    ``manifest_path`` resolves the plans directory per call) and
+    ``_plans_dir`` resolves the plans directory per call) and
     ``_refuse_other_namespace`` (this view serves :data:`DEFAULT_NAMESPACE`).
     """
 
@@ -654,12 +654,12 @@ class PlanDraftRecords:
     def _draft_path(self, plan_name: str) -> Path:
         """Return ``<plans dir>/<plan>.json``, resolved per call.
 
-        The plans directory comes from the file store's own ``manifest_path``,
+        The plans directory comes from the file store's own ``_plans_dir``,
         which resolves the server module's plans-directory binding through a
         :class:`pipeline.live_ref.LiveRef` at call time, so a plans directory
         patched on that module is the one the draft lands in.
         """
-        return self._store.manifest_path(plan_name).parent / f"{plan_name}.json"
+        return self._store._plans_dir() / f"{plan_name}.json"
 
     def put_plan_draft(self, namespace: str, plan_name: str, plan: dict) -> None:
         """Stage ``plan`` as ``plan_name``'s transient plan draft.
@@ -758,7 +758,7 @@ class PlanCompletionRecords:
     satisfies, because ``pipeline/store.py`` sits on the 1000-line gate.
 
     The host class supplies ``_store`` (the legacy file store, whose
-    ``manifest_path`` resolves the plans directory per call) and
+    ``_plans_dir`` resolves the plans directory per call) and
     ``_refuse_other_namespace`` (this view serves :data:`DEFAULT_NAMESPACE`).
     """
 
@@ -771,11 +771,11 @@ class PlanCompletionRecords:
     def _plan_path(self, plan_name: str, suffix: str) -> Path:
         """Return the plans directory ``plan_name``'s ``suffix`` file lives in.
 
-        The directory comes from the file store's own ``manifest_path``, which
+        The directory comes from the file store's own ``_plans_dir``, which
         resolves the plans directory per call, so a plans directory patched on
         the server module is the one the record lands in.
         """
-        return self._store.manifest_path(plan_name).parent / f'{plan_name}{suffix}'
+        return self._store._plans_dir() / f'{plan_name}{suffix}'
 
     def _validate(self, namespace: str, plan_name: str) -> None:
         """Validate ``namespace`` and ``plan_name`` before anything is written."""
@@ -856,12 +856,12 @@ class ContextSnapshotRecords:
     def _snapshots_root(self) -> Path:
         """Return the ``context`` directory, resolved per call.
 
-        The plans directory comes from the file store's own ``manifest_path``,
+        The plans directory comes from the file store's own ``_plans_dir``,
         exactly as every other file-layout record kind resolves it: that call
         re-reads the plans-directory binding on every access, so a directory
         patched on the server module is the one the snapshot lands in.
         """
-        return self._store.manifest_path('snapshot').parent / 'context'
+        return self._store._plans_dir() / 'context'
 
     def _snapshot_folder(self, namespace: str, digest: object) -> Path:
         """Validate the keys and return the folder *digest* lives in for a read."""

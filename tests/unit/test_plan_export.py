@@ -133,7 +133,7 @@ def _write_plan(plan_dir: Path, name: str, repo_root: Path, epics, **extra) -> d
 
 
 def _manifest_of(plan_name: str) -> dict:
-    return json.loads(ingest_mod._store.manifest_path(plan_name).read_text())
+    return json.loads((p.PLAN_DIR / f"{plan_name}.manifest.json").read_text())
 
 
 def _fixture_epics() -> list[dict]:

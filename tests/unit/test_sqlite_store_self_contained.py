@@ -131,11 +131,3 @@ def test_hand_written_manifest_file_is_left_untouched(sqlite_store, plans_dir):
 def test_store_has_no_internal_file_store(sqlite_store):
     """The database store holds no file store to delegate records to."""
     assert not hasattr(sqlite_store, "_files")
-
-
-def test_manifest_path_touches_no_file(sqlite_store, plans_dir):
-    """``manifest_path`` names no file the store would read or write."""
-    with pytest.raises(NotImplementedError, match="database"):
-        sqlite_store.manifest_path(PLAN)
-
-    assert list(plans_dir.iterdir()) == []

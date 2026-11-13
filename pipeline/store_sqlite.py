@@ -170,19 +170,6 @@ class SqliteStore(
         """
         return store_sqlite_audit.SqliteAuditLog(self)
 
-    # -- manifests: the database is the record -----------------------------
-    def manifest_path(self, plan_name: str) -> Path:
-        """Refuse: this store keeps no manifest file to name.
-
-        The manifest is a row of the database. Callers read and write it through
-        ``get_manifest`` and ``save_manifest``; ``manifest_path`` is removed from
-        the Store Protocol in a later story.
-        """
-        raise NotImplementedError(
-            "SqliteStore keeps manifests in its database, not in a plan file; "
-            "use get_manifest / save_manifest"
-        )
-
     def _stored_document(self, plan_name: str) -> dict[str, Any] | None:
         """Return the database row's document, or ``None`` when it has none."""
         with self._guard:

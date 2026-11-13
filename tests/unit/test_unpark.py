@@ -52,7 +52,7 @@ def _read_story() -> dict:
 
 
 def _manifest_bytes() -> bytes:
-    return FileStore().manifest_path(_PLAN).read_bytes()
+    return (p.PLAN_DIR / f"{_PLAN}.manifest.json").read_bytes()
 
 
 def _capture_notices(monkeypatch) -> list[dict]:

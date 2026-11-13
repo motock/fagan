@@ -1051,7 +1051,7 @@ def test_executor_fence_proceeds_when_the_manifest_is_unreadable(
     """An unreadable manifest must not raise and must not refuse."""
     fence = _fence()
     store = _PathStore(plan_dir / "fence-garbled.manifest.json")
-    store.manifest_path("fence-garbled").write_text("{not json")
+    (plan_dir / "fence-garbled.manifest.json").write_text("{not json")
 
     with caplog.at_level("WARNING"):
         assert fence.executor_fence("fence-garbled", "S1", store) is None, (

@@ -188,8 +188,6 @@ class Store(Protocol):
     see docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
     """
 
-    def manifest_path(self, plan_name: str) -> Path: ...
-
     def get_manifest(self, plan_name: str) -> dict[str, Any]: ...
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None: ...
@@ -262,14 +260,16 @@ class FileStore:
     real ~/.claude/plans path into every test run.
     """
 
-    def manifest_path(self, plan_name: str) -> Path:
-        return PLAN_DIR / f"{plan_name}.manifest.json"
+    def _plans_dir(self) -> Path:
+        # Read live, like the other plans-directory call sites: the server
+        # module's binding is patched after this module is imported.
+        return PLAN_DIR
 
     def get_manifest(self, plan_name: str) -> dict[str, Any]:
-        return json.loads(self.manifest_path(plan_name).read_text())
+        return json.loads((self._plans_dir() / f"{plan_name}.manifest.json").read_text())
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
-        _atomic_write_json(self.manifest_path(plan_name), manifest)
+        _atomic_write_json(self._plans_dir() / f"{plan_name}.manifest.json", manifest)
 
     def audit_log(self) -> FileAuditLog:
         """Return the file audit log this store keeps its chains in."""
@@ -522,7 +522,7 @@ class FileRecords(PlanRecords, OutboxContract, OutboxSummaryContract):
         store keeps a single plans-directory binding for its notification
         files -- the one its manifest, log and journal readers already use.
         """
-        return self._store.manifest_path(plan_name).parent / (
+        return self._store._plans_dir() / (
             f"{plan_name}.notifications{suffix}"
         )
 
@@ -578,7 +578,7 @@ class FileRecords(PlanRecords, OutboxContract, OutboxSummaryContract):
         validate_plan_name(plan_name)
         self._refuse_other_namespace(namespace)
         try:
-            return self._store.manifest_path(plan_name).stat().st_mtime
+            return (self._store._plans_dir() / f"{plan_name}.manifest.json").stat().st_mtime
         except FileNotFoundError:
             return None
 

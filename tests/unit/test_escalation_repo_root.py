@@ -440,7 +440,7 @@ def test_claude_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_path
     # The reset is persisted through the plan's record store, which derives its
     # target from PLAN_DIR (the autouse fixture pins that at tmp_path). The
     # store's path for this plan is the file the assertions below read.
-    manifest_path = server._store.manifest_path("plan")
+    manifest_path = server.PLAN_DIR / "plan.manifest.json"
 
     esc._escalate_to_claude(manifest, "plan", "S5")
 
@@ -457,7 +457,7 @@ def test_fallback_escalation_keeps_its_bookkeeping(fake_git, monkeypatch, tmp_pa
     monkeypatch.setattr(server, "REPO_ROOT", SENTINEL)
     manifest = _manifest(str(tmp_path), "S6")
     story = manifest["stories"]["S6"]
-    manifest_path = server._store.manifest_path("plan")
+    manifest_path = server.PLAN_DIR / "plan.manifest.json"
 
     esc._escalate_to_local_fallback_model(
         manifest, "plan", "S6", "gpt-oss-20b-high:latest"

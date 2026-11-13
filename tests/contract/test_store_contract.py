@@ -33,14 +33,13 @@ from pipeline.store_sqlite import SqliteStore
 PLAN = "contract-plan"
 
 
-def _plans_dir(store):
-    """The directory holding the plan files this store reads and writes.
+def _plans_dir():
+    """The directory holding the plan files the file store reads and writes.
 
-    Derived from the store's own ``manifest_path`` (part of the Protocol) so
-    tests seed raw log files where that backend will look for them instead of
-    hard-coding a layout.
+    The fixture patches ``pipeline.server.PLAN_DIR`` to the plans directory, so
+    tests seed raw log files where the file backend will look for them.
     """
-    return store.manifest_path(PLAN).parent
+    return pipeline.server.PLAN_DIR
 
 
 @pytest.fixture(params=["file", "sqlite"], ids=["file", "sqlite"])
@@ -74,19 +73,6 @@ def store_factory(tmp_path, monkeypatch, request):
             store.close()
 
 
-def test_manifest_path_locates_plan_manifest(store_factory):
-    """``manifest_path`` is a pure path computation for the plan's manifest."""
-    store = store_factory()
-    if isinstance(store, SqliteStore):
-        pytest.skip("SqliteStore keeps no manifest file (ADR 0012 decision 7)")
-
-    path = store.manifest_path(PLAN)
-
-    assert PLAN in path.name
-    assert path == store.manifest_path(PLAN)
-    assert not path.exists(), "computing a manifest path must not create the file"
-
-
 def test_get_manifest_missing(store_factory):
     """A plan that was never saved has no manifest to read."""
     store = store_factory()
@@ -113,7 +99,7 @@ def test_manifest_save_get_round_trip(store_factory):
     assert second == M1
     assert first == second, "a repeated read must return the same document"
     if isinstance(store, FileStore):
-        assert store.manifest_path(PLAN).exists()
+        assert (pipeline.server.PLAN_DIR / f"{PLAN}.manifest.json").exists()
 
 
 def test_manifest_save_replaces_previous(store_factory):
@@ -370,9 +356,9 @@ def test_notifications_missing_and_appended(store_factory):
         assert got[0]["story_key"] == "S1"
         return
 
-    log = _plans_dir(store) / f"{PLAN}.notifications.log"
+    log = _plans_dir() / f"{PLAN}.notifications.log"
     log.write_text("first\nsecond\n")
-    records = _plans_dir(store) / f"{PLAN}.notifications.jsonl"
+    records = _plans_dir() / f"{PLAN}.notifications.jsonl"
     records.write_text(
         '{"ts": "t1", "message": "m1", "severity": "warning", "story_key": "S1"}\n'
         "not json\n"
@@ -464,7 +450,7 @@ def test_get_manifest_or_none_reads_saved_and_swallows_corrupt(store_factory):
 
     assert store.get_manifest_or_none(PLAN) == M1
 
-    store.manifest_path(PLAN).write_text("{not json")
+    (pipeline.server.PLAN_DIR / f"{PLAN}.manifest.json").write_text("{not json")
 
     assert store.get_manifest_or_none(PLAN) is None
     with pytest.raises(json.JSONDecodeError):

@@ -33,7 +33,7 @@ def test_should_write_the_manifest_with_two_space_indentation(store, tmp_path):
 
 
 def test_should_route_the_write_through_the_server_atomic_writer(
-    store, monkeypatch
+    store, tmp_path, monkeypatch
 ):
     calls = []
 
@@ -45,7 +45,7 @@ def test_should_route_the_write_through_the_server_atomic_writer(
 
     store.save_manifest("demo", manifest)
 
-    assert calls == [(store.manifest_path("demo"), manifest)]
+    assert calls == [(tmp_path / "demo.manifest.json", manifest)]
 
 
 def test_should_leave_the_old_manifest_untouched_when_the_writer_raises(

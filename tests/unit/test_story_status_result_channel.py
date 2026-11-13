@@ -239,7 +239,7 @@ def test_default_channel_is_manifest_root_without_env_override(
     """Security review cycle 2: the hardened channel must be the DEFAULT,
     not an opt-in. With PIPELINE_STATE_DIR unset, the spawn tick must aim
     the wrapper at <manifest_root>/grading/<story_key>/result.json — the
-    pipeline-owned plans/manifests base (_store.manifest_path's parent) —
+    pipeline-owned plans/manifests base (the plans directory) —
     and never at the agent-writable worktree."""
     monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
     setup = _base_setup(plan_dir, monkeypatch)
@@ -253,7 +253,7 @@ def test_default_channel_is_manifest_root_without_env_override(
 
     # Same derivation the implementation must use: the parent of the
     # manifest path the store itself hands out.
-    manifest_root = Path(p._store.manifest_path(PLAN_NAME)).parent
+    manifest_root = Path(p.PLAN_DIR / f"{PLAN_NAME}.manifest.json").parent
     expected_result = manifest_root / "grading" / STORY_KEY / "result.json"
     expected_log = manifest_root / "grading" / STORY_KEY / "grading.log"
 

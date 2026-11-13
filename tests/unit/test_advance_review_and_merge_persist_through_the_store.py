@@ -38,9 +38,6 @@ class _SpyStore:
         self._inner = inner
         self.writes: list[tuple[str, str]] = []
 
-    def manifest_path(self, plan_name):
-        return self._inner.manifest_path(plan_name)
-
     def records(self):
         return self
 

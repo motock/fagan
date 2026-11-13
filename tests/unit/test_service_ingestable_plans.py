@@ -68,7 +68,7 @@ def test_sorted_output(plan_dir):
 
 # ---------------------------------------------------------------------------
 # Already-ingested exclusion: a plan with a companion '<stem>.manifest.json'
-# (written by pipeline/ingest.py via _store.manifest_path(plan_name)) has
+# (written by pipeline/ingest.py via the store's manifest save) has
 # already been ingested and must not be offered as an ingest target again.
 # ---------------------------------------------------------------------------
 

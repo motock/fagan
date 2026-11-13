@@ -418,16 +418,13 @@ def test_keyless_reingest_error_is_reported_before_the_lock_is_taken(
     assert _ingest("kp")["ok"] is True
 
     class _NoTransactionStore:
-        """Delegates the record view and manifest_path, refuses a transaction."""
+        """Delegates the record view, refuses a transaction."""
 
         def __init__(self, inner):
             self._inner = inner
 
         def records(self):
             return self._inner.records()
-
-        def manifest_path(self, plan_name):
-            return self._inner.manifest_path(plan_name)
 
         def transaction(self, plan_name):  # pragma: no cover - regression only
             raise AssertionError("the transaction must not be entered")

@@ -17,6 +17,7 @@ import {
   setDiffNotificationsOnPoll, resetPlanDetailState, initPlanDetail, renderChecklist,
   loadStoryJournal, loadStoryChecklist, renderCopyButton, handleCopyClick, copyValues,
 } from "./render/plan-detail.js";
+import { initPlanControls } from "./render/plan-controls.js";
 import {
   initStoryModal, filterStoryNotifications,
   renderStoryModalNotifications, showStoryModal, _renderStoryModalBody,
@@ -84,6 +85,7 @@ initPlanList({
   refresh,
 });
 initPlanDetail({ showStoryModal, renderNotifications, renderDecisions, setNotifSeverityFilter });
+initPlanControls({ refresh });
 initStoryModal({ backendErrorEl: _backendErrorEl, notifSeverityColor: NOTIF_SEVERITY_COLOR });
 initNotifications({ selectComms });
 // WAP-14: wire the patch review/apply panel with the real WAP-13 collaborators

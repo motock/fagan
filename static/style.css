@@ -1194,6 +1194,12 @@ body.trace-off .trace-detail { display: none !important; }
 .story-diff-truncated, .story-diff-empty { opacity: 0.8; font-style: italic; }
 .story-diff-file-header { font-weight: 600; margin-top: 8px; }
 
+/* Plan header pause/resume control */
+.plan-control-btn { padding: 3px 10px; font-size: 12px; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.plan-control-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.plan-control-btn:disabled { opacity: 0.5; cursor: default; }
+.plan-control-msg { font-size: 12px; color: var(--c-parked); }
+
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }
 .config-table th, .config-table td { padding: var(--sp-2); border: 1px solid var(--border); }

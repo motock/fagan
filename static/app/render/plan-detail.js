@@ -3,6 +3,7 @@ import { updateHash } from "../routing.js";
 import { fetchJson } from "../api.js";
 import { renderBoard, renderFilterBar, escapeHtml } from "./board.js";
 import { renderMaturityPanel } from "./maturity.js";
+import { mountPlanControls, planControlSlotHtml } from "./plan-controls.js";
 
 // plan-detail.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query
@@ -64,6 +65,7 @@ function _planChromeHtml(plan) {
     <div class="plan-header">
       <h2>${escapeHtml(plan.name)}</h2>
       ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
+      ${planControlSlotHtml(plan)}
     </div>
     ${renderFilterBar(plan.stories)}
   `;
@@ -102,6 +104,13 @@ function _planPanelsHtml(plan) {
   `;
 }
 
+// Builds the pause/resume button into the header slot. The slot is created by
+// _planChromeHtml, so it is always fresh; mountPlanControls clears it first.
+function _mountPlanControls(root, plan) {
+  const slot = root.querySelectorAll ? root.querySelectorAll("[data-plan-control-slot]")[0] : null;
+  mountPlanControls(slot, plan);
+}
+
 function renderPlanDetail(plan) {
   const section = document.getElementById("plan-detail");
   // The board's delegated click listener (attached once, below) can't close
@@ -128,7 +137,10 @@ function renderPlanDetail(plan) {
 
   if (boardEl) {
     const chromeEl = section.querySelectorAll(".plan-chrome")[0];
-    if (chromeEl) chromeEl.innerHTML = _planChromeHtml(plan);
+    if (chromeEl) {
+      chromeEl.innerHTML = _planChromeHtml(plan);
+      _mountPlanControls(chromeEl, plan);
+    }
     const panelsEl = section.querySelectorAll(".plan-panels")[0];
     if (panelsEl) {
       if (diffNotificationsOnPoll) {
@@ -163,6 +175,7 @@ function renderPlanDetail(plan) {
       ${renderBoard(plan.stories)}
       <div class="plan-panels">${_planPanelsHtml(plan)}</div>
     `;
+    _mountPlanControls(section, plan);
     boardEl = typeof section.querySelectorAll === "function"
       ? section.querySelectorAll(".board")[0]
       : null;

@@ -1,0 +1,16 @@
+{
+  "description": "2026-11-13 run: rebase onto master hit a content conflict in a unit test",
+  "story": {
+    "status": "parked"
+  },
+  "evidence": {
+    "parked_reason": "rebase conflict: Auto-merging tests/unit/test_plan_dir_allowlist.py\nCONFLICT (content): Merge conflict in tests/unit/test_plan_dir_allowlist.py"
+  },
+  "expected": {
+    "name": "rebase_conflict",
+    "facts": {
+      "paths": ["tests/unit/test_plan_dir_allowlist.py"],
+      "kind": "content"
+    }
+  }
+}

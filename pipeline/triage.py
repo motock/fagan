@@ -29,6 +29,8 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label, _escalation_target)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
+from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
+from .triage_executors import EXECUTORS
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
 from .triage_repo_issue import _execute_repo_issue  # noqa: E402
@@ -214,6 +216,9 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
         # ladder exhausted
         reason = f"escalate_model ruled but ladder exhausted: {rationale}"
         return _park(plan_name, story_key, story, reason)
+    if action in NEW_ACTIONS and action in EXECUTORS:
+        result = EXECUTORS[action](plan_name, story_key, story, ruling, manifest)
+        return result if result != "deferred" else _park(plan_name, story_key, story, f"triage ruled {action}, which is not implemented yet; parked for a human")
     reason = f"unhandled ruling action '{action}': {rationale}"
     return _park(plan_name, story_key, story, reason)
 
@@ -251,6 +256,11 @@ def _record_execution(plan_name, story_key, action, result, mode,
         )
 
 
+def _triage_mode() -> str:
+    """``PIPELINE_TRIAGE_MODE``: ``execute`` runs the park-class actions; anything else is shadow."""
+    return "execute" if os.environ.get("PIPELINE_TRIAGE_MODE", "").strip().lower() == "execute" else "shadow"
+
+
 def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str:
     """Dispatch a ruling based on the current autonomy mode.
 
@@ -270,6 +280,10 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str
     prior_status = story.get("status")
     prior_parked_reason = story.get("parked_reason")
     action = ruling.get("action", "unknown")
+    if action in NEW_ACTIONS and _triage_mode() == "shadow":
+        _notify_user(plan_name, f"{story_key} triage shadow: {action} - {ruling.get('rationale', '')}")
+        _record_execution(plan_name, story_key, action, "shadow", "shadow", prior_status, prior_parked_reason)
+        return "shadow"
     if PIPELINE_AUTONOMY == "dry-run":
         # Notify but do not act
         rationale = ruling.get("rationale", "")
@@ -896,10 +910,13 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
     and logs a warning containing only the exception type.
     """
     stage = "policy"
+    check = story.get("last_test_check")
+    park = classify_park(story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None})
+    park_lines = f"OBSERVED PARK CLASS: {park.name} facts={json.dumps(park.facts, sort_keys=True, default=str)}\nALLOWED ACTIONS: {', '.join(sorted(ALLOWED_ACTIONS[park.name]))}\n"
     try:
         policy = _load_policy()
         # Build prompt
-        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nACTION: ..."
+        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\n{park_lines}Please respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nACTION: ..."
         stage = "overlord"
         # Call overlord
         raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
@@ -928,6 +945,9 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
         )
     else:
         ruling["failed_open"] = False
+        if not check_ruling_allowed(park, ruling["action"]):
+            ruling["rationale"] = f"action {ruling['action']} not allowed for park class {park.name}"
+            ruling["action"] = "park_for_human"
     # Append decision record
     record = {
         "story_key": story_key,

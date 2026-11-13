@@ -1,0 +1,17 @@
+{
+  "description": "2026-11-13 run: CI rework feedback that names no test id at all",
+  "story": {
+    "status": "parked",
+    "ci_rework": true
+  },
+  "evidence": {
+    "parked_reason": "ci rework exhausted",
+    "review_feedback": "CI failed on the branch; the job log did not name a test."
+  },
+  "expected": {
+    "name": "ci_red_after_rework",
+    "facts": {
+      "failing_ids": []
+    }
+  }
+}

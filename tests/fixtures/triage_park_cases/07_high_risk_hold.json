@@ -1,0 +1,14 @@
+{
+  "description": "2026-11-13 run: a risk-high story held at the merge gate",
+  "story": {
+    "status": "parked",
+    "risk": "high"
+  },
+  "evidence": {
+    "parked_reason": "high risk held for human review"
+  },
+  "expected": {
+    "name": "high_risk_hold",
+    "facts": {}
+  }
+}

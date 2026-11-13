@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .scope_gate import is_test_path
+from .triage_park_classes import NEW_ACTIONS
 
 
 def _extract_json_block(text: str) -> str:
@@ -33,7 +34,7 @@ def _extract_json_block(text: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     return m.group(1).strip() if m else stripped
 
-TRIAGE_ACTIONS = frozenset({"escalate_model", "split_story", "repo_issue", "park_for_human", "mark_done", "patch_acceptance", "amend_scope"})
+TRIAGE_ACTIONS = frozenset({"escalate_model", "split_story", "repo_issue", "park_for_human", "mark_done", "patch_acceptance", "amend_scope"}) | NEW_ACTIONS
 # Default action when parsing fails: park_for_human
 DEFAULT_TRIAGE_ACTION = "park_for_human"
 

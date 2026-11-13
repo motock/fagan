@@ -1,0 +1,13 @@
+{
+  "description": "2026-11-13 run: review approval could not be matched to a branch head",
+  "story": {
+    "status": "parked"
+  },
+  "evidence": {
+    "parked_reason": "branch head unavailable (got None); the approval covers aac43ec3a6eb and cannot be matched; re-run review_story"
+  },
+  "expected": {
+    "name": "transient_bookkeeping",
+    "facts": {}
+  }
+}

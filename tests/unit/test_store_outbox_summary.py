@@ -30,7 +30,7 @@ import pipeline.persistence
 # Must precede every other ``pipeline`` import: a pre-existing import cycle
 # requires ``pipeline.server`` to be imported first.
 import pipeline.server
-from pipeline import notification_outbox, outbox_health, paths
+from pipeline import outbox_health, paths, persistence
 from pipeline.store import FileRecords, FileStore
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
@@ -77,7 +77,7 @@ def plans_dir(tmp_path, monkeypatch):
     # module this fixture patches so a stray re-import elsewhere in the
     # worker cannot leave the store reading another module's PLAN_DIR.
     monkeypatch.setattr(pipeline_package, 'paths', paths)
-    monkeypatch.setattr(notification_outbox, 'PLAN_DIR', directory)
+    monkeypatch.setattr(persistence, "PLAN_DIR", directory)
     monkeypatch.setattr(pipeline.server, 'PLAN_DIR', directory)
     monkeypatch.setattr(pipeline.persistence, 'PLAN_DIR', directory)
     return directory

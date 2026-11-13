@@ -103,12 +103,12 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     "plans").mkdir()`, and pre-creating that same path here would collide
     with it (FileExistsError).
 
-    Also patches pipeline.scheduler_daemon.PLAN_DIR and
-    pipeline.notification_outbox.PLAN_DIR, each its own module-level binding
-    imported from pipeline.paths at load time (PLANNOTIFY-06's drain phase
-    reads scheduler_daemon's copy directly and drain_outbox reads its own) -
-    without this, any pre-existing test calling run_once() drains the
-    operator's real ~/.claude/plans outbox files on every run.
+    Also patches pipeline.scheduler_daemon.PLAN_DIR, its own module-level
+    binding imported from pipeline.paths at load time (PLANNOTIFY-06's drain
+    phase reads that copy directly) - without this, any pre-existing test
+    calling run_once() drains the operator's real ~/.claude/plans outbox files
+    on every run. The legacy outbox resolves through persistence.PLAN_DIR, which
+    is patched above.
 
     Finally patches pipeline.server.PLAN_DIR itself - the binding every
     server-side read actually goes through. pipeline/server.py imports
@@ -126,8 +126,8 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     (and per-module ``plan_dir`` fixtures) still override it afterward with
     their own tmp_path, which composes fine (monkeypatch unwinds LIFO).
     """
-    from pipeline import notification_outbox, persistence, scheduler_daemon
     from pipeline import paths as pipeline_paths
+    from pipeline import persistence, scheduler_daemon
     from pipeline import server as pserver
 
     default_plan_dir = tmp_path_factory.mktemp("default_plan_dir")
@@ -144,7 +144,6 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
         # once it resolves the host-local root through the host state this
         # binding is gone and the server binding below is what counts.
         monkeypatch.setattr(scheduler_daemon, "PLAN_DIR", default_plan_dir)
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", default_plan_dir)
     monkeypatch.setattr(pserver, "PLAN_DIR", default_plan_dir)
 
 

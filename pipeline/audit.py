@@ -47,8 +47,9 @@ def audit_path(plan_name: str) -> Path:
     The plan directory is read at call time, not captured at import, so the
     fixtures that redirect it at a temp directory redirect this stream with
     them instead of letting a test append to the operator's real plan directory.
+    The file layout itself is the file store's, in :mod:`pipeline.persistence`.
     """
-    return persistence.PLAN_DIR / f"{plan_name}.audit.jsonl"
+    return persistence.audit_file_path(plan_name)
 
 
 def _canonical(record: dict[str, Any]) -> str:
@@ -69,12 +70,12 @@ def _tail(path: Path) -> dict[str, Any] | None:
 
 
 #: The host-scoped stream: events that have no plan to belong to.
-HOST_AUDIT_FILE = ".audit.host.jsonl"
+HOST_AUDIT_FILE = persistence.HOST_AUDIT_FILE
 
 
 def host_audit_path() -> Path:
     """Return the host-scoped audit stream, for events that have no plan."""
-    return persistence.PLAN_DIR / HOST_AUDIT_FILE
+    return persistence.host_audit_file_path()
 
 
 def _audit_log() -> Any:

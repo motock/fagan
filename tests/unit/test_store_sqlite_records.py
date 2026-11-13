@@ -19,7 +19,7 @@ import pipeline.persistence
 # Must precede every other ``pipeline`` import: a pre-existing import cycle
 # requires ``pipeline.server`` to be imported first.
 import pipeline.server
-from pipeline import notification_outbox, paths
+from pipeline import paths, persistence
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
 from pipeline.store_contract_transactions import (
     AtomicTransactionContract,
@@ -135,7 +135,7 @@ class TestSqliteRecordsOutbox(SingleNamespaceOutboxBehaviour):
     def _outbox_dirs(self, plan_dir, monkeypatch):
         """Point the two outbox path bindings at the throwaway plan dir."""
         monkeypatch.setattr(paths, 'PLAN_DIR', plan_dir)
-        monkeypatch.setattr(notification_outbox, 'PLAN_DIR', plan_dir)
+        monkeypatch.setattr(persistence, "PLAN_DIR", plan_dir)
         # See tests/unit/test_store_file_records.py: the outbox path
         # resolution reads ``paths`` as a package attribute.
         monkeypatch.setattr(pipeline_package, 'paths', paths)

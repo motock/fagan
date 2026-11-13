@@ -39,6 +39,7 @@ ALLOWED = frozenset(
         "pipeline/audit_anchor.py",
         "pipeline/decision_records.py",
         "pipeline/audit_chain.py",
+        "pipeline/persistence.py",
     }
 )
 

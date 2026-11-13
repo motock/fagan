@@ -67,7 +67,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths, persistence
+from . import persistence
 from .live_ref import LiveRef as _ServerRef
 from .notification_channels import as_sender
 from .notification_routing import safe_load_notification_config
@@ -79,10 +79,6 @@ logger = logging.getLogger(__name__)
 # ``pipeline.server``: every outbox read and acknowledgement goes through
 # ``_store.records()`` so the drain can never see a second copy of a queue.
 _store = _ServerRef("_store")
-
-# The outbox module keeps this binding because the file store's legacy-channel
-# path resolves through it; read at call time, never cached.
-PLAN_DIR = paths.PLAN_DIR
 
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"
 OUTBOX_EVENTS_ENV = "PIPELINE_NOTIFY_OUTBOX_EVENTS"
@@ -192,7 +188,7 @@ def _spool_instances(plan: str, evt_name: str | None, record: dict[str, Any]) ->
     """
     if "PYTEST_CURRENT_TEST" in os.environ:
         _default_plans = (Path.home() / ".claude" / "plans").resolve()
-        if Path(PLAN_DIR).resolve() == _default_plans:
+        if persistence.legacy_outbox_dir().resolve() == _default_plans:
             logger.warning(
                 "refusing to spool instance notifications into the live plan directory under pytest"
             )

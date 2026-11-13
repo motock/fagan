@@ -16,7 +16,7 @@ import pytest
 
 from pipeline import notification_channels as nc
 from pipeline import notification_outbox as ob
-from pipeline import paths
+from pipeline import paths, persistence
 from pipeline.notification_channels import DeliveryResult, DeliveryStatus
 
 PLAN = "ng01-plan"
@@ -81,7 +81,7 @@ def test_guard_blocks_when_pytest_and_default_plan_dir(
     monkeypatch.setattr(Path, "home", lambda: tmp_home)
     live_plans = Path.home() / ".claude" / "plans"
     live_plans.mkdir(parents=True)
-    monkeypatch.setattr(ob, "PLAN_DIR", live_plans)
+    monkeypatch.setattr(persistence, "PLAN_DIR", live_plans)
     # The write path resolves through ``paths.PLAN_DIR``; point it at the same
     # fake directory so a missing guard is observable and nothing real is hit.
     monkeypatch.setattr(paths, "PLAN_DIR", live_plans)
@@ -94,7 +94,7 @@ def test_guard_blocks_when_pytest_and_default_plan_dir(
 
 def test_guard_allows_tmp_plan_dir_under_pytest(tmp_path, monkeypatch, config_path):
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_guard_allows_tmp (call)")
-    monkeypatch.setattr(ob, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
 
     _emit()
@@ -104,7 +104,7 @@ def test_guard_allows_tmp_plan_dir_under_pytest(tmp_path, monkeypatch, config_pa
 
 def test_guard_allows_when_pytest_unset(tmp_path, monkeypatch, config_path):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setattr(ob, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
 
     _emit()

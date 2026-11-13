@@ -529,11 +529,9 @@ def test_should_keep_the_outbox_suffix_on_the_channel_protocol():
     assert hasattr(nc, "as_sender")
 
 
-def test_should_keep_the_plan_dir_binding_in_the_outbox_module():
-    """``notification_outbox`` keeps its ``PLAN_DIR`` binding."""
-    from pipeline import paths
-
-    assert ob.PLAN_DIR == paths.PLAN_DIR
+def test_should_not_keep_a_plan_dir_binding_in_the_outbox_module():
+    """The legacy spool resolves through ``persistence``, so ``notification_outbox`` holds no binding."""
+    assert not hasattr(ob, "PLAN_DIR")
 
 
 def test_should_read_and_ack_only_through_the_shared_store(store, monkeypatch):

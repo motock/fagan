@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from pipeline import notification_outbox, notification_routing, paths
+from pipeline import notification_outbox, notification_routing, paths, persistence
 
 CONFIG_PATH_ENV = "PIPELINE_NOTIFY_CONFIG_PATH"
 
@@ -38,8 +38,7 @@ def test_should_ignore_a_real_config_in_plan_dir(tmp_path, monkeypatch):
 def test_should_not_spool_instance_queues_for_a_real_config_in_plan_dir(tmp_path, monkeypatch):
     (tmp_path / "notifications.json").write_text(json.dumps(_CONFIG))
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(notification_outbox, "PLAN_DIR", tmp_path)
-
+    monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     notification_outbox.outbox_sink(
         {"type": "notification", "plan": "fixture", "payload": {"event": "story_merged"}}
     )

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import pipeline as pipeline_package
-from pipeline import notification_outbox, paths, persistence, server
+from pipeline import paths, persistence, server
 from pipeline.store import FileRecords, FileStore
 from pipeline.store_contract import RecordStoreContract, SingleNamespaceContract
 from pipeline.store_contract_transactions import TransactionContract
@@ -99,8 +99,8 @@ class TestFileRecordsOutbox(SingleNamespaceOutboxBehaviour):
 def outbox_dirs(tmp_path, monkeypatch):
     """Point the two outbox path bindings at separate throwaway directories.
 
-    The legacy queue resolves through ``notification_outbox.PLAN_DIR`` (the
-    binding the legacy spool writes through) and an instance queue through
+    The legacy queue resolves through ``persistence.PLAN_DIR`` (the binding
+    the legacy spool writes through) and an instance queue through
     ``paths.PLAN_DIR`` (the binding the channel writer resolves).  They are
     patched apart so a test can tell which binding a queue follows.
     """
@@ -108,7 +108,7 @@ def outbox_dirs(tmp_path, monkeypatch):
     instance_dir = tmp_path / 'instance'
     legacy_dir.mkdir()
     instance_dir.mkdir()
-    monkeypatch.setattr(notification_outbox, 'PLAN_DIR', legacy_dir)
+    monkeypatch.setattr(persistence, "PLAN_DIR", legacy_dir)
     monkeypatch.setattr(paths, 'PLAN_DIR', instance_dir)
     # ``pipeline.persistence._outbox_dirs`` resolves ``paths`` as a PACKAGE
     # ATTRIBUTE (``from . import paths``), while this fixture patches the module

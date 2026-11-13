@@ -78,8 +78,6 @@ def _patch_plan_dir(monkeypatch, target):
     if hasattr(daemon_mod, "PLAN_DIR"):
         # Pre-migration the daemon held its own module-load copy of PLAN_DIR.
         monkeypatch.setattr(daemon_mod, "PLAN_DIR", target)
-    if hasattr(notification_outbox, "PLAN_DIR"):
-        monkeypatch.setattr(notification_outbox, "PLAN_DIR", target)
 
 
 @pytest.fixture

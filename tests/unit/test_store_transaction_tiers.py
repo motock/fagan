@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import notification_outbox, paths, persistence, server
+from pipeline import paths, persistence, server
 from pipeline.store import FileRecords, FileStore
 from pipeline.store_contract_transactions import (
     AtomicTransactionContract,
@@ -393,7 +393,7 @@ def plan_dir(tmp_path, monkeypatch):
     """Point every plans-directory binding at an empty temporary directory."""
     directory = tmp_path / 'plans'
     directory.mkdir()
-    for module in (server, persistence, paths, notification_outbox):
+    for module in (server, persistence, paths):
         monkeypatch.setattr(module, _PLAN_DIR_ATTR, directory)
     return directory
 

@@ -86,7 +86,7 @@ def test_jsonl_builds_jsonl_event_bus(monkeypatch):
 
 def test_jsonl_bus_writes_under_the_plan_dir(monkeypatch, tmp_path):
     """The jsonl bus is rooted at the plan dir its log names belong to."""
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     monkeypatch.setenv(EVENT_BUS_ENV, "jsonl")
 
     build_bus().publish(make_event("agent_done", "plan-a", "S-1"))
@@ -143,7 +143,7 @@ def test_selection_is_not_cached_between_calls(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_jsonl_dispatches_agent_done_to_wake_handler(monkeypatch, tmp_path):
     """``agent_done`` must still advance the plan under the jsonl bus."""
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     seen: list[dict] = []
     monkeypatch.setattr(event_wiring, "wake_handler", seen.append)
     monkeypatch.setenv(EVENT_BUS_ENV, "jsonl")
@@ -160,7 +160,7 @@ def test_jsonl_dispatches_notification_to_the_file_log_sink_only(monkeypatch, tm
     event (ADR 0012 decision 9), so a bus subscriber would write every record
     a second time.
     """
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr("pipeline.server.PLAN_DIR", tmp_path)
     seen: list[tuple[str, str]] = []
     monkeypatch.setattr(
         event_wiring, "file_log_sink", lambda event: seen.append(("file", event["type"]))

@@ -14,6 +14,7 @@ from . import manifest_source, telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
 from .events_nats import NatsEventBus
+from .host_state import build_host_state
 from .notification_outbox import outbox_sink  # noqa: F401 - importable here, never subscribed
 from .notification_sinks import file_log_sink
 from .paths import PLAN_DIR
@@ -282,11 +283,11 @@ def build_bus() -> EventBus:
       ``notification`` -> the file-log and outbox sinks, plus the opt-in
       lifecycle tracing handlers when telemetry is enabled).
     * ``"jsonl"`` -- a :class:`DispatchingJsonlEventBus` rooted at
-      :data:`pipeline.paths.PLAN_DIR`, with the same handlers subscribed. It
-      appends one JSON object per event to ``<PLAN_DIR>/<plan>.events.jsonl``
-      *and* dispatches to those handlers, so persistence is added rather than
-      traded for delivery. The log is plan-scoped, which is why the plan dir is
-      its natural root; ``JsonlEventBus``'s own tests pin only the
+      ``HostState.root()`` (the host-local root), with the same
+      handlers subscribed. It appends one JSON object per event to
+      ``<root>/<plan>.events.jsonl`` *and* dispatches to those handlers, so
+      persistence is added rather than traded for delivery. The log is
+      plan-scoped; ``JsonlEventBus``'s own tests pin only the
       ``<root>/<plan>.events.jsonl`` shape and root it at a per-test temporary
       directory.
     * ``"nats"`` -- a :class:`~pipeline.events_nats.NatsEventBus` publishing to
@@ -317,7 +318,9 @@ def build_bus() -> EventBus:
             raise ValueError("PIPELINE_EVENT_BUS_PLUGIN must build an EventBus")
         return _subscribe_handlers(bus)
     if selected_event_bus_name() == EVENT_BUS_JSONL:
-        return _subscribe_handlers(DispatchingJsonlEventBus(PLAN_DIR))
+        return _subscribe_handlers(
+            DispatchingJsonlEventBus(build_host_state().root())
+        )
     if selected_event_bus_name() == EVENT_BUS_NATS:
         # Constructed before subscribing: a bus whose configuration or broker is
         # unusable raises here, so the caller never gets a half-wired bus and no

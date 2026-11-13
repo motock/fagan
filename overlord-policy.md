@@ -173,6 +173,26 @@ The four new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_t
 shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
 notified, and the story is left untouched.
 
+### retry_transient and rebrief
+
+- `retry_transient` (park class `transient_bookkeeping` only) re-checks live evidence before it
+  acts: the story's branch must still be on origin (`git ls-remote`) and its PR must be OPEN. When
+  both hold, the story is unparked through the `pipeline.unpark` allowlist (`parked_reason` is
+  cleared) and set to `tests_passed`, so review runs again, and `story_unparked_by_overlord` is
+  notified. A story gets at most two transient retries (`triage_transient_retries`); a third
+  parks for a human. A MERGED PR is not retried: the reason is rewritten so `mark_done` can rule
+  on the story. Any other outcome parks the story for a human with the reason stated.
+- `rebrief` (park classes `guard_demands_path`, `no_commit_after_rework`, `ci_red_after_rework`)
+  stores the ruling's `DIAGNOSIS:` line as the newest entry of `triage_diagnosis`, keeps the last
+  three, clears only the retry counters (`rework_attempts`, `ci_rework`, `merge_attempts`,
+  `review_deferred_count`, `review_inconclusive_count`), and sets the story to `todo`. The next
+  dispatch opens with `OVERLORD DIAGNOSIS (attempt N): <text>`, where N is the story's
+  `dispatch_attempts`. `rebrief` never edits `agent_instructions`, `files` or any other field in
+  the plan's approval digest, so plan approval is not reset.
+
+A ruling with no usable `DIAGNOSIS:` line, or one whose class does not allow the action, parks the
+story for a human.
+
 ### patch_acceptance output format
 
 When `ACTION` is `patch_acceptance`, the overlord's response must carry, in
@@ -203,7 +223,13 @@ RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
 ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance | amend_scope
 SPLIT: <child A> || <child B>
+DIAGNOSIS: <one plain-text line, at most two sentences>
 ```
+`DIAGNOSIS:` is optional. `rebrief` uses it (see retry_transient and rebrief above). The executor
+joins a multi-line value into one paragraph and cuts it at 600 characters, and the notification
+says when a cut happened. The two-sentence limit is the instruction to the overlord; the executor
+enforces only the 600-character cap.
+
 ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human. The park-class actions are also valid ACTION values: `resolve_rebase`, `retry_transient`, `rebrief` and `approve_test_edit`, each shadow-only unless `PIPELINE_TRIAGE_MODE=execute`. An ACTION not listed under the observed park class (see Park classes) is replaced with park_for_human.
 
 `SPLIT` is emitted only when `ACTION` is `split_story`: exactly two child summaries separated by ` || `. When `ACTION` is not `split_story`, omit the `SPLIT` line entirely.

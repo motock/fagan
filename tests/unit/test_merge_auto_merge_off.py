@@ -169,6 +169,12 @@ class _FakeStore:
     def __init__(self, manifest):
         self._manifest = manifest
 
+    def audit_log(self):
+        """The file audit log, which is what the real store serves under file."""
+        from pipeline.audit_file import FileAuditLog
+
+        return FileAuditLog()
+
     def manifest_path(self, plan_name):
         return f"/nonexistent/{plan_name}/manifest.json"
 

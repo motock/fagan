@@ -35,6 +35,12 @@ class _RecordsOnlyStore:
             self._records.put_manifest(NAMESPACE, name, manifest)
         self._never_written = tmp_path / "no-plans-here" / "plan.manifest.json"
 
+    def audit_log(self):
+        """The file audit log, which is what the real store serves under file."""
+        from pipeline.audit_file import FileAuditLog
+
+        return FileAuditLog()
+
     def manifest_path(self, plan_name: str) -> Path:
         return self._never_written
 

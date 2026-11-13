@@ -698,4 +698,10 @@ def test_a_forced_review_runs_end_to_end_on_a_sqlite_backed_service(
     # The markers were cleared on this connection, so the review is a
     # first-style full-branch pass rather than a since_sha rework diff.
     assert reviewer_calls[0]["kwargs"]["since_sha"] is None
-    assert len(_audit_records(plan_dir, "pe", action="story:force_review")) == 1
+    # Under sqlite the audit chain is a table, not <plan>.audit.jsonl.
+    forced = [
+        record
+        for record in store.audit_log().read_chain("default", "pe")
+        if record.get("action") == "story:force_review"
+    ]
+    assert len(forced) == 1

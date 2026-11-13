@@ -542,8 +542,9 @@ def test_plan_named_decisions_does_not_collide_with_the_prefix(plan_dir: Path) -
     _append("decisions")
     _append("p")
 
-    assert audit_anchor._stream_for("decisions") == plan_dir / "decisions.audit.jsonl"
-    assert audit_anchor._stream_for("decisions:p") == _chain_path(plan_dir, "p")
+    keys = list(audit_anchor._chain_streams())
+    assert keys.count("decisions:decisions") == 1
+    assert keys.count("decisions:p") == 1
 
 
 # --------------------------------------------------------------------------
@@ -649,10 +650,9 @@ def test_colon_plan_audit_stream_does_not_alias_the_decisions_namespace(
         json.dumps({"seq": 0, "hash": "0" * 64}) + "\n", encoding="utf-8"
     )
 
-    chains = dict(audit_anchor._chain_streams())
+    keys = list(audit_anchor._chain_streams())
 
-    assert list(chains).count("decisions:p") == 1
-    assert chains["decisions:p"] == _chain_path(plan_dir, "p")
+    assert keys.count("decisions:p") == 1
     assert audit_anchor._usable_chain("decisions:p") == "decisions:p"
     assert audit_anchor._usable_chain("decisions:x:y") is None
     assert audit_anchor._usable_chain("plan:audit") is None

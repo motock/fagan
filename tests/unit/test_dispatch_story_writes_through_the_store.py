@@ -383,6 +383,12 @@ class _KeyedStore:
         self._manifest = manifest
         self._records = _KeyedRecords(manifest, self.calls)
 
+    def audit_log(self):
+        """The file audit log, which is what the real store serves under file."""
+        from pipeline.audit_file import FileAuditLog
+
+        return FileAuditLog()
+
     def transaction(self, plan_name, wait_seconds=0.0):
         return _busy_transaction_true()
 

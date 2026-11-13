@@ -14,7 +14,10 @@ The record carries a ``digest`` of the manifest's authored content so an
 approval can be tied to the content it approved. ``canonical_digest`` hashes
 only authored fields (never the ``approval`` block itself, never runtime
 state), so recording a decision cannot invalidate the digest it was made
-against. ``on_ingest`` recomputes the digest and keeps ``approved`` only when
+against. A story's ``backend`` is hashed as authored (``authored_backend``,
+recorded at ingest): the resolved provider the dispatcher stamps onto
+``backend`` at runtime does not change an approval. ``on_ingest`` recomputes
+the digest and keeps ``approved`` only when
 the previous record was approved *and* its digest still matches; any authored
 change therefore resets the record to ``pending_approval`` while preserving the
 previous decision metadata for auditability.
@@ -69,6 +72,9 @@ _PLAN_AUTHORED_FIELDS = ("repo_root", "role_config", "context", "team")
 #: Authored, per-story fields that participate in the content digest. Runtime
 #: state (status, attempts, sizing_auto_routed, ...) is deliberately excluded:
 #: it changes as the pipeline runs and must not invalidate an approval.
+#: ``backend`` is hashed as *authored* (``authored_backend``, see
+#: ``_story_digest_view``): the dispatcher, escalation and review stamp the
+#: resolved provider onto ``backend`` at runtime, which must not move the digest.
 _STORY_AUTHORED_FIELDS = (
     "summary",
     "agent_instructions",
@@ -126,6 +132,21 @@ def approval_enabled() -> bool:
     )
 
 
+def _story_digest_view(story: dict[str, Any]) -> dict[str, Any]:
+    """Return the authored view of one story that the digest hashes.
+
+    ``backend`` is read from ``authored_backend`` when the manifest records it
+    (every story ingested since dig-1), so a runtime stamp on ``backend`` does
+    not move the digest. A manifest without the key hashes ``backend`` as it
+    always did. The value is hashed as given, never coerced: a malformed
+    ``authored_backend`` changes the digest like any other edit.
+    """
+    view = {field: story.get(field) for field in _STORY_AUTHORED_FIELDS}
+    if "authored_backend" in story:
+        view["backend"] = story["authored_backend"]
+    return view
+
+
 def canonical_digest(manifest: dict[str, Any]) -> str:
     """Return the sha256 digest of ``manifest``'s authored content.
 
@@ -133,10 +154,11 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
     ``role_config``, ``context`` and ``team``, plus each story's authored
     fields (``summary``, ``agent_instructions``, ``dependencies``,
     ``persona``, ``model``, ``acceptance``, ``risk``, ``backend``,
-    ``tdd_split``, ``files``, ``blocked_by`` and ``description``).
-    ``team`` is read raw from the manifest, never defaulted from config, and a
-    story without a ``description`` hashes it as ``None`` — distinct from a
-    description of ``""``. The ``approval`` block and runtime story state are
+    ``tdd_split``, ``files``, ``blocked_by`` and ``description``). ``backend``
+    is hashed as authored (``authored_backend``), never as the runtime-stamped
+    value. ``team`` is read raw from the manifest, never defaulted from config,
+    and a story without a ``description`` hashes it as ``None`` — distinct from
+    a description of ``""``. The ``approval`` block and runtime story state are
     excluded so that recording or changing a decision never changes the
     digest. ``test_scope`` (plan and story level) is hashed only when its key
     is present, so a manifest without it keeps its existing digest. The
@@ -149,7 +171,7 @@ def canonical_digest(manifest: dict[str, Any]) -> str:
     if not isinstance(stories, dict):
         stories = {}
     payload["stories"] = {
-        key: {field: story.get(field) for field in _STORY_AUTHORED_FIELDS}
+        key: _story_digest_view(story)
         | ({"test_scope": story["test_scope"]} if "test_scope" in story else {})
         for key, story in stories.items()
         if isinstance(story, dict)

@@ -356,10 +356,6 @@ main {
 
 .plan-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
 .plan-header h2 { margin: 0; font-size: 18px; }
-.plan-control-btn { padding: 3px 10px; font-size: 12px; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
-.plan-control-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
-.plan-control-btn:disabled { opacity: 0.5; cursor: default; }
-.plan-control-msg { font-size: 12px; color: var(--c-parked); }
 
 .filter-bar {
   display: flex;
@@ -1197,6 +1193,12 @@ body.trace-off .trace-detail { display: none !important; }
 .story-diff-untracked, .story-diff-binary, .story-diff-old-path { opacity: 0.7; }
 .story-diff-truncated, .story-diff-empty { opacity: 0.8; font-style: italic; }
 .story-diff-file-header { font-weight: 600; margin-top: 8px; }
+
+/* Plan header pause/resume control */
+.plan-control-btn { padding: 3px 10px; font-size: 12px; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.plan-control-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.plan-control-btn:disabled { opacity: 0.5; cursor: default; }
+.plan-control-msg { font-size: 12px; color: var(--c-parked); }
 
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }

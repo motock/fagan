@@ -30,6 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from pipeline.audit_anchor import AnchorUnreadable, anchored_heads
 from pipeline.audit_file import FileAuditLog
 from pipeline.plan_approval import canonical_digest
 from pipeline.store import FileStore, build_store
@@ -412,11 +413,18 @@ def _absolute(value: str) -> str:
 def run_import(source: FileStore, target: SqliteStore, dry_run: bool) -> dict[str, Any]:
     """Import every record kind, then the audit chains, and return the summary."""
     record_kinds = import_record_kinds(source, target, dry_run)
+    try:
+        anchors, anchors_unreadable = anchored_heads(), False
+    except AnchorUnreadable:
+        # A configured anchor that cannot be read must not allow any chain in.
+        anchors, anchors_unreadable = None, True
     audit = import_audit_chains(
         FileAuditLog(),
         target.audit_log(),
         namespace=DEFAULT_NAMESPACE,
         dry_run=dry_run,
+        anchors=anchors,
+        anchors_unreadable=anchors_unreadable,
     )
     return {"dry_run": dry_run, "record_kinds": record_kinds, "audit": audit}
 

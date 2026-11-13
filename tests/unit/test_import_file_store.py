@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import persistence, server
+from pipeline.audit_anchor import PIPELINE_AUDIT_ANCHOR, FileAnchorSink
 from pipeline.audit_file import SUFFIX, FileAuditLog
 from pipeline.audit_log import HOST_CHAIN_ID
 from pipeline.store import FileStore
@@ -147,6 +148,14 @@ def _raw_counts(db: str) -> dict[str, int]:
     return counts
 
 
+def _audit_rows(db: str, chain: str) -> list:
+    store = SqliteStore(db)
+    try:
+        return store.audit_log().read_chain(NS, chain)
+    finally:
+        store.close()
+
+
 # -- the import ---------------------------------------------------------------
 def test_imports_every_record_kind_and_the_audit_chains(plans, db, capsys):
     _seed(plans)
@@ -263,3 +272,45 @@ def test_a_manifest_whose_digest_changes_on_import_is_refused(plans, db, capsys,
 
     assert code == 1
     assert {"name": PLAN, "reason": "digest_mismatch"} in _kinds(summary)["manifests"]["refused"]
+
+
+def test_a_chain_cut_below_its_anchor_exits_non_zero_and_writes_no_rows(
+    plans, db, tmp_path, capsys, monkeypatch
+):
+    _seed(plans)
+    audit = FileAuditLog()
+    audit.append(NS, PLAN, {"action": "plan.start", "outcome": "allowed"})
+    head = audit.head(NS, PLAN)
+    anchor = tmp_path / "anchors" / "heads.jsonl"
+    FileAnchorSink(anchor).publish(NS, PLAN, head["seq"], head["hash"])
+    monkeypatch.setenv(PIPELINE_AUDIT_ANCHOR, f"file:{anchor}")
+    stream = plans / f"{PLAN}{SUFFIX}"
+    # Cut the newest record: the first record alone still verifies.
+    stream.write_text(stream.read_text().splitlines()[0] + "\n")
+
+    code, summary = _run(["--db", db], capsys)
+
+    assert code == 1
+    assert _statuses(summary) == {PLAN: "refused", HOST_CHAIN_ID: "imported"}
+    refusal = next(entry for entry in summary["audit"] if entry["chain"] == PLAN)
+    assert refusal["reason"] == "anchor_mismatch"
+    assert _audit_rows(db, PLAN) == []
+
+
+def test_an_unreadable_anchor_sink_exits_non_zero_and_imports_no_chain(
+    plans, db, tmp_path, capsys, monkeypatch
+):
+    _seed(plans)
+    unreadable = tmp_path / "anchor-as-a-directory"
+    unreadable.mkdir()
+    monkeypatch.setenv(PIPELINE_AUDIT_ANCHOR, f"file:{unreadable}")
+
+    code, summary = _run(["--db", db], capsys)
+
+    assert code == 1
+    assert {(e["chain"], e["status"], e["reason"]) for e in summary["audit"]} == {
+        (PLAN, "refused", "anchor_unreadable"),
+        (HOST_CHAIN_ID, "refused", "anchor_unreadable"),
+    }
+    assert _audit_rows(db, PLAN) == []
+    assert _audit_rows(db, HOST_CHAIN_ID) == []

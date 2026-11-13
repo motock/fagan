@@ -21,6 +21,12 @@ import pytest
 
 from pipeline import audit_chain
 from pipeline.audit import HOST_AUDIT_FILE
+from pipeline.audit_anchor import (
+    PIPELINE_AUDIT_ANCHOR,
+    AnchorUnreadable,
+    FileAnchorSink,
+    anchored_heads,
+)
 from pipeline.audit_file import SUFFIX, FileAuditLog
 from pipeline.audit_log import HOST_CHAIN_ID
 from pipeline.store_import_audit import import_audit_chains
@@ -60,6 +66,25 @@ def _statuses(report: list[dict]) -> dict[str, str]:
 
 def _row_count(log, chain: str) -> int:
     return len(log.read_chain(DEFAULT_NAMESPACE, chain))
+
+
+class _FixedSource:
+    """A source of in-memory chains, for a chain the file layout cannot express."""
+
+    def __init__(self, chains: dict[str, list[dict]]) -> None:
+        self._chains = chains
+
+    def list_chains(self, namespace):
+        return list(self._chains)
+
+    def read_chain(self, namespace, chain):
+        return self._chains[chain]
+
+
+def _anchor_of(source, chain: str, index: int) -> tuple[int, str]:
+    """The ``(seq, hash)`` of the record at *index* of *chain*, as an anchor holds it."""
+    record = source.read_chain(DEFAULT_NAMESPACE, chain)[index]
+    return record["seq"], record["hash"]
 
 
 def _chain(*bodies: dict) -> list[dict]:
@@ -305,3 +330,152 @@ def test_import_chain_has_exactly_two_callers_in_the_tree():
         "pipeline/store_sqlite_audit.py",
         "pipeline/store_import_audit.py",
     }
+
+
+# -- the anchor: a chain must agree with the head anchored for it ------------
+def test_a_chain_longer_than_its_anchor_imports(tmp_path):
+    source = _source(_plans(tmp_path))
+    store, target = _target(tmp_path)
+    anchors = {LEGACY_PLAN: _anchor_of(source, LEGACY_PLAN, 0)}
+
+    report = import_audit_chains(source, target, anchors=anchors)
+
+    assert _statuses(report)[LEGACY_PLAN] == "imported"
+    assert _row_count(target, LEGACY_PLAN) == 2
+    store.close()
+
+
+def test_a_chain_exactly_at_its_anchor_imports(tmp_path):
+    source = _source(_plans(tmp_path))
+    store, target = _target(tmp_path)
+    anchors = {LEGACY_PLAN: _anchor_of(source, LEGACY_PLAN, -1)}
+
+    report = import_audit_chains(source, target, anchors=anchors)
+
+    assert _statuses(report)[LEGACY_PLAN] == "imported"
+    store.close()
+
+
+def test_a_chain_truncated_below_its_anchored_seq_is_refused_and_nothing_written(tmp_path):
+    plans = _plans(tmp_path)
+    anchors = {LEGACY_PLAN: _anchor_of(_source(plans), LEGACY_PLAN, -1)}
+    stream = plans / f"{LEGACY_PLAN}{SUFFIX}"
+    # Cut the newest record: the remaining one-record chain still verifies.
+    stream.write_text(stream.read_text().splitlines()[0] + "\n")
+    store, target = _target(tmp_path)
+
+    report = {e["chain"]: e for e in import_audit_chains(_source(plans), target, anchors=anchors)}
+
+    assert report[LEGACY_PLAN]["status"] == "refused"
+    assert report[LEGACY_PLAN]["reason"] == "anchor_mismatch"
+    assert _row_count(target, LEGACY_PLAN) == 0
+    assert report[HOST_CHAIN_ID]["status"] == "imported"
+    store.close()
+
+
+def test_a_truncated_chain_is_refused_on_a_dry_run_too(tmp_path):
+    plans = _plans(tmp_path)
+    anchors = {LEGACY_PLAN: _anchor_of(_source(plans), LEGACY_PLAN, -1)}
+    stream = plans / f"{LEGACY_PLAN}{SUFFIX}"
+    stream.write_text(stream.read_text().splitlines()[0] + "\n")
+    store, target = _target(tmp_path)
+
+    report = {
+        e["chain"]: e
+        for e in import_audit_chains(_source(plans), target, anchors=anchors, dry_run=True)
+    }
+
+    assert report[LEGACY_PLAN]["reason"] == "anchor_mismatch"
+    assert _row_count(target, LEGACY_PLAN) == 0
+    store.close()
+
+
+def test_a_chain_rewritten_and_rehashed_under_a_different_hash_is_refused(tmp_path):
+    source = _source(_plans(tmp_path))
+    anchors = {LEGACY_PLAN: _anchor_of(source, LEGACY_PLAN, -1)}
+    # Self-consistent and as long as the anchor, but re-linked: seq 1 differs.
+    forged = _chain({"action": "forged.one"}, {"action": "forged.two"})
+    store, target = _target(tmp_path)
+
+    report = {
+        e["chain"]: e
+        for e in import_audit_chains(
+            _FixedSource({LEGACY_PLAN: forged}), target, anchors=anchors
+        )
+    }
+
+    assert report[LEGACY_PLAN]["status"] == "refused"
+    assert report[LEGACY_PLAN]["reason"] == "anchor_mismatch"
+    assert _row_count(target, LEGACY_PLAN) == 0
+    store.close()
+
+
+def test_the_host_chain_is_anchored_under_the_host_key(tmp_path):
+    # The import names the host chain "@host"; the anchor log keys it "host".
+    source = _source(_plans(tmp_path))
+    store, target = _target(tmp_path)
+    anchors = {"host": (1, "0" * 64)}
+
+    report = {e["chain"]: e for e in import_audit_chains(source, target, anchors=anchors)}
+
+    assert report[HOST_CHAIN_ID]["status"] == "refused"
+    assert report[HOST_CHAIN_ID]["reason"] == "anchor_mismatch"
+    assert _row_count(target, HOST_CHAIN_ID) == 0
+    store.close()
+
+
+def test_a_chain_with_no_anchor_imports_whatever_the_other_anchors_say(tmp_path):
+    source = _source(_plans(tmp_path))
+    store, target = _target(tmp_path)
+
+    report = import_audit_chains(source, target, anchors={"elsewhere": (9, "f" * 64)})
+
+    assert _statuses(report) == {LEGACY_PLAN: "imported", HOST_CHAIN_ID: "imported"}
+    store.close()
+
+
+def test_an_unreadable_anchor_refuses_every_chain_and_writes_nothing(tmp_path):
+    source = _source(_plans(tmp_path))
+    store, target = _target(tmp_path)
+
+    report = import_audit_chains(source, target, anchors_unreadable=True)
+
+    assert {e["chain"]: (e["status"], e["reason"]) for e in report} == {
+        LEGACY_PLAN: ("refused", "anchor_unreadable"),
+        HOST_CHAIN_ID: ("refused", "anchor_unreadable"),
+    }
+    assert _row_count(target, LEGACY_PLAN) == 0
+    assert _row_count(target, HOST_CHAIN_ID) == 0
+    store.close()
+
+
+# -- the anchored heads the command reads -----------------------------------
+def test_no_anchor_sink_configured_reads_as_no_anchors(monkeypatch):
+    monkeypatch.delenv(PIPELINE_AUDIT_ANCHOR, raising=False)
+
+    assert anchored_heads() is None
+
+
+def test_a_configured_anchor_log_that_cannot_be_read_raises(tmp_path, monkeypatch):
+    unreadable = tmp_path / "anchor-as-a-directory"
+    unreadable.mkdir()
+    monkeypatch.setenv(PIPELINE_AUDIT_ANCHOR, f"file:{unreadable}")
+
+    with pytest.raises(AnchorUnreadable):
+        anchored_heads()
+
+
+@pytest.mark.parametrize("value", ["file:relative/anchor.jsonl", "s3://bucket/anchor"])
+def test_an_invalid_anchor_sink_fails_closed_as_unreadable(monkeypatch, value):
+    monkeypatch.setenv(PIPELINE_AUDIT_ANCHOR, value)
+
+    with pytest.raises(AnchorUnreadable):
+        anchored_heads()
+
+
+def test_a_readable_anchor_log_yields_the_anchored_heads(tmp_path, monkeypatch):
+    log = tmp_path / "anchors.jsonl"
+    FileAnchorSink(log).publish(DEFAULT_NAMESPACE, LEGACY_PLAN, 1, "a" * 64)
+    monkeypatch.setenv(PIPELINE_AUDIT_ANCHOR, f"file:{log}")
+
+    assert anchored_heads() == {LEGACY_PLAN: (1, "a" * 64)}

@@ -647,3 +647,23 @@ def anchor_report() -> dict[str, str | None] | None:
     except AnchorUnreadable as exc:
         return {SINK_VERDICT: f"anchor log unreadable: {exc.error_type}"}
     return {chain: _verdict(chain, seq, digest) for chain, (seq, digest) in anchored.items()}
+
+
+def anchored_heads() -> dict[str, tuple[int, str]] | None:
+    """The strongest anchored ``(seq, hash)`` per chain, or ``None`` when off.
+
+    The read an import decides against: the same ratchet and chain-name
+    validation as verification, through the configured sink.
+
+    Raises:
+        AnchorUnreadable: A sink is configured but cannot be used or read. The
+            anchors are unknown, so nothing may be cleared against them. An
+            invalid configuration reports the ``ValueError`` type name only.
+    """
+    try:
+        sink = build_anchor_sink()
+    except ValueError:
+        raise AnchorUnreadable("ValueError") from None
+    if sink is None:
+        return None
+    return _anchors(sink)

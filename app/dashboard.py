@@ -351,9 +351,9 @@ def health() -> dict[str, Any]:
         "config_mismatch": config_mismatch,
         "topology": resolved_topology(),
         "runtime": resolved_runtime(),
-        **health_extras(_host_state.root()),
+        **health_extras(),
     }
-register_probes(app, lambda: _host_state.root())
+register_probes(app, lambda: _host_state)
 
 
 @app.get("/api/dispatch_health")

@@ -32,6 +32,7 @@ import pytest
 
 from pipeline import health_freshness, paths
 from tests.unit._dashboard_helpers import client, plan_dir
+from tests.unit._injected_state import host_at, store_at
 
 STALE_ENV = "PIPELINE_HEALTH_STALE_SECONDS"
 REQUIRE_ENV = "PIPELINE_HEALTH_REQUIRE_SCHEDULER"
@@ -224,7 +225,7 @@ def test_stale_seconds_is_re_read_on_every_call(monkeypatch):
 
 def test_health_extras_without_a_scheduler_file_is_healthy(tmp_path, monkeypatch):
     monkeypatch.delenv(REQUIRE_ENV, raising=False)
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
     assert result["scheduler_age_s"] is None
     assert result["healthy"] is True
     assert result["degraded"] == []
@@ -233,7 +234,7 @@ def test_health_extras_without_a_scheduler_file_is_healthy(tmp_path, monkeypatch
 
 def test_health_extras_requires_a_scheduler_when_opted_in(tmp_path, monkeypatch):
     monkeypatch.setenv(REQUIRE_ENV, "1")
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
     assert result["healthy"] is False
     assert result["degraded"] == ["scheduler_unreported"]
 
@@ -243,7 +244,7 @@ def test_health_extras_treats_malformed_scheduler_json_as_absent(
 ):
     monkeypatch.delenv(REQUIRE_ENV, raising=False)
     _write_health(tmp_path, "{not json")
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
     assert result["scheduler_age_s"] is None
     assert result["healthy"] is True
     assert result["degraded"] == []
@@ -260,7 +261,7 @@ def test_health_extras_reports_both_scheduler_stale_and_outbox_stale(
     _write_health(tmp_path, {"heartbeat_ts": _recent(300)})
     _write_outbox(tmp_path / "alpha.outbox.jsonl", [1200])
 
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["healthy"] is False
     assert result["scheduler_age_s"] == pytest.approx(300, abs=2)
@@ -277,7 +278,7 @@ def test_health_extras_keeps_both_verdicts_even_when_only_the_outbox_is_stale(
     _write_health(tmp_path, {"heartbeat_ts": _recent(5)})
     _write_outbox(tmp_path / "alpha.outbox.jsonl", [1200])
 
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["healthy"] is False
     assert result["degraded"] == ["outbox_stale"]
@@ -286,7 +287,7 @@ def test_health_extras_keeps_both_verdicts_even_when_only_the_outbox_is_stale(
 def test_health_extras_ignores_a_plan_dir_that_does_not_exist(tmp_path, monkeypatch):
     monkeypatch.delenv(REQUIRE_ENV, raising=False)
     monkeypatch.delenv(STALE_ENV, raising=False)
-    result = health_freshness.health_extras(tmp_path / "missing")
+    result = health_freshness.health_extras(host_at(tmp_path / "missing"), store_at(tmp_path / "missing"))
     assert result["healthy"] is True
     assert result["scheduler_age_s"] is None
     assert result["degraded"] == []

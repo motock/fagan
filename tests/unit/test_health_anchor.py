@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import health_freshness
+from tests.unit._injected_state import host_at, store_at
 
 ANCHOR_VARIABLE = "PIPELINE_AUDIT_ANCHOR"
 STORE_VARIABLE = "PIPELINE_STORE"
@@ -73,7 +74,7 @@ def anchor_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
 
 def _anchor(tmp_path: Path) -> str:
     """The anchor field of the health payload."""
-    return health_freshness.health_extras(tmp_path)["anchor"]
+    return health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))["anchor"]
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def test_the_anchor_field_never_carries_the_configured_value(
     """A bad value may hold a credential, and it must not reach the payload."""
     monkeypatch.setenv(ANCHOR_VARIABLE, "s3://user:secret@bucket")
 
-    payload = json.dumps(health_freshness.health_extras(tmp_path))
+    payload = json.dumps(health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path)))
 
     assert "secret" not in payload
     assert "bucket" not in payload
@@ -125,7 +126,7 @@ def test_the_anchor_field_never_carries_the_configured_value(
 def test_the_anchor_field_never_carries_the_sink_path(
     tmp_path: Path, anchor_sink: str
 ) -> None:
-    payload = json.dumps(health_freshness.health_extras(tmp_path))
+    payload = json.dumps(health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path)))
 
     assert anchor_sink not in payload
 
@@ -144,7 +145,7 @@ def test_the_anchor_value_is_one_of_the_four_fixed_words(
 def test_an_unconfigured_anchor_leaves_the_instance_healthy(
     tmp_path: Path, sqlite_store: str
 ) -> None:
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["anchor"] == "unconfigured"
     assert result["healthy"] is True
@@ -156,7 +157,7 @@ def test_an_invalid_anchor_leaves_the_instance_healthy(
 ) -> None:
     monkeypatch.setenv(ANCHOR_VARIABLE, "s3://user:secret@bucket")
 
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["anchor"] == "invalid"
     assert result["healthy"] is True
@@ -166,7 +167,7 @@ def test_an_invalid_anchor_leaves_the_instance_healthy(
 def test_a_configured_anchor_leaves_the_instance_healthy(
     tmp_path: Path, anchor_sink: str
 ) -> None:
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["anchor"] == "configured"
     assert result["healthy"] is True
@@ -174,7 +175,7 @@ def test_a_configured_anchor_leaves_the_instance_healthy(
 
 
 def test_an_off_anchor_leaves_the_instance_healthy(tmp_path: Path) -> None:
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["anchor"] == "off"
     assert result["healthy"] is True
@@ -196,7 +197,7 @@ def test_an_unusable_store_selection_does_not_raise(
     """
     monkeypatch.setenv(STORE_VARIABLE, "not-a-store")
 
-    result = health_freshness.health_extras(tmp_path)
+    result = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert result["anchor"] == "unconfigured"
     assert result["healthy"] is True
@@ -222,8 +223,9 @@ def test_an_unconfigured_anchor_warns_once_per_process(
         "import logging, sys\n"
         "logging.basicConfig(level=logging.WARNING, stream=sys.stderr)\n"
         "from pipeline import health_freshness\n"
-        "health_freshness.health_extras(sys.argv[1])\n"
-        "health_freshness.health_extras(sys.argv[1])\n"
+        "from tests.unit._injected_state import host_at, store_at\n"
+        "health_freshness.health_extras(host_at(sys.argv[1]), store_at(sys.argv[1]))\n"
+        "health_freshness.health_extras(host_at(sys.argv[1]), store_at(sys.argv[1]))\n"
     )
     env = dict(os.environ)
     env[STORE_VARIABLE] = "sqlite"

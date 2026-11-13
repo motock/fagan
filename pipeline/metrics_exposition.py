@@ -10,14 +10,13 @@ same snapshot can be asserted byte-for-byte in a unit test. Two functions:
   exposition must never invent a ``NaN`` for "we could not tell".
 * :func:`collect` gathers the snapshot from the producers the dashboard
   already reads -- :func:`pipeline.health_freshness.health_extras`,
-  the record store's ``outbox_summary`` (via :func:`outbox_summary` here),
+  the record store's outbox aggregate (via :func:`outbox_summary` here),
   :func:`pipeline.events_nats_consumer.consumer_status` and
   :func:`pipeline.service_levels.service_level_percentiles` -- plus the plans'
-  approval status, counted through the one store-first plan read
-  (:func:`pipeline.manifest_source.read_plan_names` and
-  :func:`pipeline.manifest_source.read_plan_manifest`), so a store-backed
-  deployment counts the record store's plans rather than this host's files. It
-  NEVER raises: a producer that fails omits its metric and increments
+  approval status, counted from the injected store's record view. It takes the
+  host state and the store as arguments, defaulting to
+  :func:`pipeline.host_state.build_host_state` and
+  :func:`pipeline.store.build_store`. It NEVER raises: a producer that fails omits its metric and increments
   ``fagan_metrics_errors_total{source}``.
 
 Secure by Design: every label value comes from a closed set (an approval
@@ -29,16 +28,15 @@ anything holding a scrape credential, so it carries aggregates only.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
-from pipeline import manifest_source, parsers
-from pipeline.audit_file import FileAuditLog
+from pipeline import parsers
 from pipeline.component_health import component_status
 from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.service_levels import MEASURES as SERVICE_LEVEL_MEASURES
 from pipeline.service_levels import service_level_percentiles
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -207,46 +205,26 @@ def _approval_status(manifest: Any) -> str:
     return status if status in PLAN_STATUSES else "none"
 
 
-def _plan_samples(plan_dir: str | Path, counts: dict[str, int]) -> list[tuple[dict, int]]:
-    """Count the plans this deployment knows by approval status, in the fixed order.
+def _plan_samples(records: Any, counts: dict[str, int]) -> list[tuple[dict, int]]:
+    """Count the plans the injected store knows by approval status, in fixed order.
 
-    Both reads are delegated to :mod:`pipeline.manifest_source` -- the one
-    store-first listing (:func:`~pipeline.manifest_source.read_plan_names`) and
-    the one store-first manifest read
-    (:func:`~pipeline.manifest_source.read_plan_manifest`) -- so a store-backed
-    deployment counts the plans its *record store* knows instead of whatever
-    manifests happen to sit on this host's disk. Globbing here would have been a
-    third hand-rolled copy of a read whose store-selection rule then never
-    reached this endpoint.
+    The plan listing and each manifest come from the store's record view, so a
+    store-backed deployment counts the plans its record store knows and never
+    this host's manifest files. An empty store therefore counts zero plans.
 
-    ``fallback_on_error`` is ``True``: a scrape is advisory, so a store that
-    raises is logged at debug level by the reader and the file is counted
-    instead, exactly like ``pipeline.tick_checks``' advisory read. A plan
-    neither source knows is simply absent, and a manifest that is missing,
-    corrupt or not a JSON object is skipped rather than counted.
-
-    Every name is checked by :func:`pipeline.parsers._validate_key` before it
-    reaches a read, because a plan name flows into a filesystem path
-    (``<plans_root>/<plan_name>.manifest.json``, built by
-    :func:`~pipeline.manifest_source.read_plan_manifest`). A glob stem is safe
-    by construction, but the record store's ``list_plans`` is not
-    separator-checked (note the defensive ``str(name)`` cast in
-    :func:`~pipeline.manifest_source.read_plan_names`), so a store-supplied
-    ``"../x"`` would otherwise become an out-of-tree read. The same guard drops
-    dot-only names such as the ``".."`` a ``...manifest.json`` file yields, so
-    ``fagan_plans`` counts exactly the names the dashboard's plan routes accept.
-    An invalid name is skipped: it is neither read nor counted.
+    Every name is checked by :func:`pipeline.parsers._validate_key` before it is
+    read, because the record store's ``list_plans`` is not separator-checked: a
+    store-supplied ``"../x"`` or a dot-only name must not reach a read. An
+    invalid name is skipped: it is neither read nor counted. A manifest that is
+    missing or not a JSON object is skipped rather than counted.
     """
-    for name in manifest_source.read_plan_names(
-        fallback_on_error=True, plans_root=plan_dir
-    ):
+    for name in records.list_plans(DEFAULT_NAMESPACE):
+        name = str(name)
         try:
             parsers._validate_key(name)
         except ValueError:
             continue
-        manifest = manifest_source.read_plan_manifest(
-            name, fallback_on_error=True, plans_root=plan_dir
-        )
+        manifest = records.get_manifest(DEFAULT_NAMESPACE, name)
         if not isinstance(manifest, dict):
             continue
         counts[_approval_status(manifest)] += 1
@@ -325,20 +303,14 @@ def _service_level_samples(snapshot: dict, percentiles: Any) -> None:
     snapshot["fagan_story_service_level_samples"] = counts
 
 
-def outbox_summary() -> dict:
-    """Return the notification outbox aggregate, from the record store.
+def outbox_summary(store: Any) -> dict:
+    """Return the notification outbox aggregate, from the injected store.
 
-    The store owns the outbox queues now, so the scrape asks it for the
-    aggregate rather than walking a plans directory that may not be the
-    store's. Resolved lazily through ``pipeline.server._store`` at call time,
-    like every other store read, so a test that patches that binding is
-    honoured. Kept as this module's own producer seam, so ``collect`` calls it
-    through the module attribute and a test can replace it.
+    The store owns the outbox queues, so the scrape asks it for the aggregate
+    rather than walking a directory. Kept as this module's own producer seam, so
+    ``collect`` calls it through the module attribute and a test can replace it.
     """
-    from pipeline.store import _ServerRef
-    from pipeline.store_records import DEFAULT_NAMESPACE
-
-    return _ServerRef("_store").records().outbox_summary(DEFAULT_NAMESPACE)
+    return store.records().outbox_summary(DEFAULT_NAMESPACE)
 
 
 def _component_samples(snapshot: dict, rows: Any) -> None:
@@ -372,12 +344,16 @@ def _component_samples(snapshot: dict, rows: Any) -> None:
         snapshot["fagan_component_health_age_seconds"] = age_samples
 
 
-def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, Any]]]:
+def collect(
+    host_state: Any = None, store: Any = None
+) -> dict[str, list[tuple[dict, Any]]]:
     """Return the metrics snapshot, never raising.
 
-    *plan_dir* defaults to :data:`pipeline.paths.PLAN_DIR` and is resolved
-    lazily, so this module stays importable without the full runtime
-    configuration and a test can point the plan count at any directory.
+    *host_state* defaults to :func:`pipeline.host_state.build_host_state` (inside
+    :func:`health_extras`) and *store* to :func:`pipeline.store.build_store`, both
+    resolved lazily so this module stays importable without the full runtime
+    configuration. A test passes its own and reads the same stored state the
+    ``/api/health`` payload does.
 
     Each producer is called through this module's attribute
     (``metrics_exposition.health_extras``), which is the seam a test replaces;
@@ -385,21 +361,26 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
     ``fagan_metrics_errors_total{source}``. The exception text is logged as a
     source name only -- a broker error can carry connection details.
     """
-    if plan_dir is None:
-        from pipeline import paths
+    from pipeline.store import build_store
 
-        plan_dir = paths.PLAN_DIR
+    try:
+        injected = build_store() if store is None else store
+    except Exception:  # noqa: BLE001 - a fail-closed store must not break the scrape
+        # Every store-backed producer below then fails on ``None`` and is
+        # counted in ``fagan_metrics_errors_total`` like any other failure.
+        logger.warning("metrics store unavailable")
+        injected = None
     errors = dict.fromkeys(SOURCES, 0)
     snapshot: dict[str, list[tuple[dict, Any]]] = {}
 
     try:
-        _scheduler_samples(snapshot, health_extras(plan_dir))
+        _scheduler_samples(snapshot, health_extras(host_state, injected))
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["health_extras"] += 1
         logger.warning("metrics producer failed", extra={"metrics_source": "health_extras"})
 
     try:
-        _outbox_samples(snapshot, outbox_summary())
+        _outbox_samples(snapshot, outbox_summary(injected))
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["outbox_summary"] += 1
         logger.warning("metrics producer failed", extra={"metrics_source": "outbox_summary"})
@@ -413,14 +394,16 @@ def collect(plan_dir: str | Path | None = None) -> dict[str, list[tuple[dict, An
         )
 
     try:
-        snapshot["fagan_plans"] = _plan_samples(plan_dir, dict.fromkeys(PLAN_STATUSES, 0))
+        snapshot["fagan_plans"] = _plan_samples(
+            injected.records(), dict.fromkeys(PLAN_STATUSES, 0)
+        )
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["plans"] += 1
         logger.warning("metrics producer failed", extra={"metrics_source": "plans"})
 
     try:
         _service_level_samples(
-            snapshot, service_level_percentiles(FileAuditLog(plan_dir))
+            snapshot, service_level_percentiles(injected.audit_log())
         )
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["service_levels"] += 1

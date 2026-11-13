@@ -41,6 +41,7 @@ import pytest
 
 from pipeline import component_health as ch
 from pipeline import metrics_exposition as m
+from tests.unit._injected_state import host_at, store_at
 
 #: The three components the probe reports.
 COMPONENTS = ("dashboard", "mcp", "scheduler")
@@ -386,8 +387,8 @@ def _patch_components(monkeypatch, rows: list[dict]) -> None:
 
 
 def _patch_other_producers(monkeypatch) -> None:
-    monkeypatch.setattr(m, "health_extras", lambda plan_dir=None: {"healthy": True})
-    monkeypatch.setattr(m, "outbox_summary", lambda plan_dir=None: {"records": 0})
+    monkeypatch.setattr(m, "health_extras", lambda *_a, **_k: {"healthy": True})
+    monkeypatch.setattr(m, "outbox_summary", lambda *_a, **_k: {"records": 0})
     monkeypatch.setattr(m, "consumer_status", lambda: {"reachable": False})
 
 
@@ -401,7 +402,7 @@ def test_the_exposition_carries_both_component_series(monkeypatch, tmp_path) -> 
             {"component": "scheduler", "up": True, "age_s": 12.5},
         ],
     )
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     up = {labels["component"]: _flag(value) for labels, value in snapshot["fagan_component_up"]}
     assert up == {"dashboard": 1, "mcp": 0, "scheduler": 1}
     ages = {
@@ -423,7 +424,7 @@ def test_the_exposition_omits_an_unknown_component_age(monkeypatch, tmp_path) ->
             {"component": "mcp", "up": False, "age_s": None},
         ],
     )
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     rendered = m.render(snapshot)
     assert "NaN" not in rendered
     for labels, value in snapshot.get("fagan_component_health_age_seconds", []):
@@ -436,7 +437,7 @@ def test_the_exposition_leaves_the_pre_existing_metrics_unchanged(
 ) -> None:
     _patch_other_producers(monkeypatch)
     _patch_components(monkeypatch, [{"component": "dashboard", "up": True, "age_s": 0}])
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert snapshot["fagan_scheduler_healthy"] == [({}, True)]
     assert snapshot["fagan_broker_reachable"] == [({}, 0)]
     assert snapshot["fagan_outbox_records"] == [({}, 0)]

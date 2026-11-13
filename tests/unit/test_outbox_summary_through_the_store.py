@@ -34,6 +34,7 @@ from pipeline import (
 )
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._injected_state import host_at
 from tests.unit._plan_dir_references import count_references
 
 #: The staleness threshold the readers apply.
@@ -93,7 +94,7 @@ class TestHealthExtrasReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(1200)}
         )
 
-        extras = health_freshness.health_extras(plan_dir)
+        extras = health_freshness.health_extras(host_at(plan_dir), outbox_store)
 
         assert extras['healthy'] is False
         assert 'outbox_stale' in extras['degraded']
@@ -105,7 +106,7 @@ class TestHealthExtrasReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(30)}
         )
 
-        extras = health_freshness.health_extras(plan_dir)
+        extras = health_freshness.health_extras(host_at(plan_dir), outbox_store)
 
         assert extras['outbox'] == outbox_store.outbox_summary(DEFAULT_NAMESPACE)
         assert extras['healthy'] is True
@@ -118,7 +119,7 @@ class TestHealthExtrasReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(THRESHOLD_S)}
         )
 
-        extras = health_freshness.health_extras(plan_dir)
+        extras = health_freshness.health_extras(host_at(plan_dir), outbox_store)
 
         assert extras['outbox']['oldest_age_s'] >= THRESHOLD_S
         assert extras['healthy'] is True
@@ -136,7 +137,7 @@ class TestHealthExtrasReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(30)}
         )
 
-        extras = health_freshness.health_extras(plan_dir)
+        extras = health_freshness.health_extras(host_at(plan_dir), outbox_store)
 
         assert extras['outbox']['records'] == 1
         assert extras['outbox']['oldest_age_s'] < THRESHOLD_S
@@ -151,7 +152,7 @@ class TestHealthExtrasReadsTheStore:
             encoding='utf-8',
         )
 
-        extras = health_freshness.health_extras(plan_dir)
+        extras = health_freshness.health_extras(host_at(plan_dir), outbox_store)
 
         assert extras['scheduler_age_s'] is not None
         assert extras['scheduler_age_s'] < 60
@@ -216,7 +217,7 @@ class TestMetricsExpositionReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(1200)}
         )
 
-        snapshot = metrics_exposition.collect(plan_dir)
+        snapshot = metrics_exposition.collect(host_at(plan_dir), outbox_store)
 
         assert snapshot['fagan_outbox_records'] == [({}, 1)]
         assert snapshot['fagan_outbox_oldest_age_seconds'][0][1] >= 1200
@@ -231,7 +232,7 @@ class TestMetricsExpositionReadsTheStore:
             DEFAULT_NAMESPACE, PLAN, 'email-a', {'ts': _ts(30)}
         )
 
-        snapshot = metrics_exposition.collect(plan_dir)
+        snapshot = metrics_exposition.collect(host_at(plan_dir), outbox_store)
 
         assert snapshot['fagan_outbox_records'] == [({}, 1)]
         assert snapshot['fagan_outbox_oldest_age_seconds'][0][1] < THRESHOLD_S
@@ -277,9 +278,9 @@ def _plan_dir_references(module: str) -> int:
 
 
 def _ceiling(module: str) -> int:
-    """The allowlisted ceiling for *module*."""
+    """The allowlisted ceiling for *module*; a module whose entry was deleted is at zero."""
     baseline = json.loads(_ALLOWLIST_PATH.read_text(encoding='utf-8'))
-    return baseline[module]
+    return baseline.get(module, 0)
 
 
 class TestPlanDirAllowlistCeilings:

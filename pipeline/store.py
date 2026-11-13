@@ -27,13 +27,12 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.plugin_loader import SPEC_RE, load_plugin, plugin_spec, require_methods
+from app.plugin_loader import SPEC_RE, load_plugin, plugin_spec
 from pipeline.audit_file import FileAuditLog
 from pipeline.live_ref import LiveRef
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
-    RECORD_STORE_METHODS,
     InvalidRecordKeyError,
     PlanRecords,
     UnknownNamespaceError,
@@ -902,8 +901,9 @@ def build_store(environ=None) -> Store:
 
     For ``PIPELINE_STORE=plugin`` the factory named by ``PIPELINE_STORE_PLUGIN``
     is loaded through the plugin loader (ADR 0012 decision 7) and called with no
-    arguments; the object it returns must provide every name in
-    ``RECORD_STORE_METHODS``. Any loader error raises: nothing falls back to the
+    arguments; the record store it returns is wrapped by
+    :func:`pipeline.store_plugin.build_plugin_store`, which requires every name in
+    ``PLUGIN_STORE_METHODS``. Any loader error raises: nothing falls back to the
     file store.
     """
     source = os.environ if environ is None else environ
@@ -915,10 +915,10 @@ def build_store(environ=None) -> Store:
 
         return SqliteStore(source["PIPELINE_STORE_PATH"])
     if kind == "plugin":
-        factory = load_plugin("store", source)
-        built = factory()
-        require_methods(built, RECORD_STORE_METHODS, "store")
-        return built
+        # Function-local, like the sqlite branch above.
+        from pipeline.store_plugin import build_plugin_store
+
+        return build_plugin_store(load_plugin("store", source))
     built_file_store = FileStore()
     built_file_store.ensure_directories()
     return built_file_store

@@ -18,6 +18,7 @@ import math
 import threading
 import time
 
+from pipeline.audit_memory import InMemoryAuditLog
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
 from pipeline.store_contract_outbox import OutboxContract, OutboxSummaryContract
 from pipeline.store_records import (
@@ -98,6 +99,12 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         # One re-entrant lock per (namespace, plan_name), created on first use
         # so an unused pair costs nothing.
         self._plan_locks: dict[tuple[str, str], threading.RLock] = {}
+        # One audit chain per store, so every call to audit_log() sees one log.
+        self._audit_log = InMemoryAuditLog()
+
+    def audit_log(self) -> InMemoryAuditLog:
+        """Return this store's audit log: the same object on every call."""
+        return self._audit_log
 
     # -- manifests -----------------------------------------------------
     def get_manifest(self, namespace: str, plan_name: str) -> dict | None:

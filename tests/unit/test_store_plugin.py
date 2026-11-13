@@ -21,7 +21,7 @@ import pytest
 import pipeline.server  # noqa: F401
 from app.plugin_loader import PluginError
 from pipeline import store
-from pipeline.store_memory import InMemoryRecordStore
+from pipeline.store_plugin import PluginStore
 from pipeline.store_records import RECORD_STORE_METHODS
 
 STORE_ENV = "PIPELINE_STORE"
@@ -44,9 +44,9 @@ def _build(environ):
 def test_plugin_factory_is_loaded_and_its_store_is_used():
     built = _build({STORE_ENV: "plugin", PLUGIN_ENV: GOOD_SPEC})
 
-    assert isinstance(built, InMemoryRecordStore)
+    assert isinstance(built, PluginStore)
     built.put_manifest("default", "p", {"stories": {}})
-    assert built.get_manifest("default", "p") == {"stories": {}}
+    assert built.records().get_manifest("default", "p") == {"stories": {}}
 
 
 def test_plugin_store_provides_every_record_store_method():

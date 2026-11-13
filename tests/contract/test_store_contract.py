@@ -27,6 +27,7 @@ import pipeline.server
 from pipeline.store import FileStore, Store
 from pipeline.store_contract_notifications import NotificationHistoryContract
 from pipeline.store_memory import InMemoryRecordStore
+from pipeline.store_plugin import PluginStore
 from pipeline.store_records import DEFAULT_NAMESPACE
 from pipeline.store_sqlite import SqliteStore
 
@@ -42,7 +43,7 @@ def _plans_dir():
     return pipeline.server.PLAN_DIR
 
 
-@pytest.fixture(params=["file", "sqlite"], ids=["file", "sqlite"])
+@pytest.fixture(params=["file", "sqlite", "plugin"], ids=["file", "sqlite", "plugin"])
 def store_factory(tmp_path, monkeypatch, request):
     """A fresh Store per call, backed by an empty plans directory.
 
@@ -62,6 +63,8 @@ def store_factory(tmp_path, monkeypatch, request):
     def _make():
         if request.param == "sqlite":
             store = SqliteStore(str(tmp_path / "contract.db"))
+        elif request.param == "plugin":
+            store = PluginStore(InMemoryRecordStore())
         else:
             store = FileStore()
         created.append(store)
@@ -338,10 +341,11 @@ def test_notifications_missing_and_appended(store_factory):
     assert store.get_notifications(PLAN) == []
     assert store.get_notification_records(PLAN) == []
 
-    if isinstance(store, SqliteStore):
-        # SqliteStore serves the legacy readers from its own table, so the
-        # contract seeds through the store's writer, not file sidecars it no
-        # longer reads. A row store has no unparseable lines to skip.
+    if isinstance(store, (SqliteStore, PluginStore)):
+        # SqliteStore and a plugin-backed store serve the legacy readers from
+        # their own records, so the contract seeds through the store's writer,
+        # not file sidecars they no longer read. A row store has no
+        # unparseable lines to skip.
         store.records().append_notification(
             DEFAULT_NAMESPACE,
             PLAN,
@@ -446,6 +450,8 @@ def test_get_manifest_or_none_reads_saved_and_swallows_corrupt(store_factory):
     store = store_factory()
     if isinstance(store, SqliteStore):
         pytest.skip("a damaged SqliteStore row is covered in test_store_sqlite.py")
+    if isinstance(store, PluginStore):
+        pytest.skip("corrupt-file handling is a file-store concern; an in-memory plugin has no manifest file")
     store.save_manifest(PLAN, M1)
 
     assert store.get_manifest_or_none(PLAN) == M1

@@ -1,8 +1,8 @@
 """The JSONL event bus writes under the host-local root (ADR 0012 decision 9).
 
 ``PIPELINE_EVENT_BUS=jsonl`` is an EventBus implementation for single-host use,
-so its log directory comes from ``FileHostState.event_bus_dir()``, resolved
-through the ``pipeline.server.PLAN_DIR`` binding.
+so its log directory is ``HostState.root()``, resolved through the
+``pipeline.server.PLAN_DIR`` binding.
 
 Contract under test:
 

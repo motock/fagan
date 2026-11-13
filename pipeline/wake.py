@@ -21,16 +21,20 @@ import os
 import tempfile
 from datetime import UTC, datetime
 
-from .host_state import WAKE_DIR_NAME, build_host_state  # noqa: F401 - re-exported
+from .host_state import build_host_state
 from .parsers import _validate_key
 
 logger = logging.getLogger(__name__)
 
+#: Directory under the host root holding one marker file per plan awaiting a
+#: reconcile. Private to the pipeline's user (mode 0o700).
+WAKE_DIR_NAME = ".wake"
+
 
 def _wake_dir():
     # Host-local derived state (ADR 0012 decision 9): one marker per plan under
-    # the host root, private to the pipeline's user (mode 0o700).
-    return build_host_state().wake_dir()
+    # the host root, not a replicated record.
+    return build_host_state().root() / WAKE_DIR_NAME
 
 
 def request_wake(plan_name: str, reason: str) -> None:

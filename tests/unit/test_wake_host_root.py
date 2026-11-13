@@ -1,8 +1,8 @@
 """Wake markers live under the host-local root (ADR 0012 decision 9).
 
 Wake events are derived state the reconcile sweep recovers, so their marker
-directory is a HostState concern: ``FileHostState.wake_dir()`` roots it at the
-host root, resolved through the ``pipeline.server.PLAN_DIR`` binding.
+directory is a HostState concern: ``wake`` roots it at ``HostState.root()``,
+resolved through the ``pipeline.server.PLAN_DIR`` binding.
 
 Contract under test:
 

@@ -283,7 +283,7 @@ def build_bus() -> EventBus:
       ``notification`` -> the file-log and outbox sinks, plus the opt-in
       lifecycle tracing handlers when telemetry is enabled).
     * ``"jsonl"`` -- a :class:`DispatchingJsonlEventBus` rooted at
-      ``HostState.event_bus_dir()`` (the host-local root), with the same
+      ``HostState.root()`` (the host-local root), with the same
       handlers subscribed. It appends one JSON object per event to
       ``<root>/<plan>.events.jsonl`` *and* dispatches to those handlers, so
       persistence is added rather than traded for delivery. The log is
@@ -319,7 +319,7 @@ def build_bus() -> EventBus:
         return _subscribe_handlers(bus)
     if selected_event_bus_name() == EVENT_BUS_JSONL:
         return _subscribe_handlers(
-            DispatchingJsonlEventBus(build_host_state().event_bus_dir())
+            DispatchingJsonlEventBus(build_host_state().root())
         )
     if selected_event_bus_name() == EVENT_BUS_NATS:
         # Constructed before subscribing: a bus whose configuration or broker is

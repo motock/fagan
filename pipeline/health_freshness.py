@@ -202,7 +202,6 @@ def health_extras(
     not a reason to page.
     """
     host = build_host_state() if host_state is None else host_state
-    records = (build_store() if store is None else store).records()
     payload: object = None
     try:
         with open(host.scheduler_health_path(), "r", encoding="utf-8") as handle:
@@ -217,7 +216,13 @@ def health_extras(
         stale_seconds_from_env(),
         os.environ.get(REQUIRE_SCHEDULER_ENV) == "1",
     )
-    summary = records.outbox_summary(DEFAULT_NAMESPACE)
+    try:
+        records = (build_store() if store is None else store).records()
+        summary = records.outbox_summary(DEFAULT_NAMESPACE)
+    except Exception:  # noqa: BLE001 (read-only probe: an unreadable store is "no outbox")
+        # A rejected PIPELINE_STORE selection must not turn the health probe
+        # into a 500; the runtime block reports it as "invalid" instead.
+        summary = {"files": 0, "records": 0, "oldest_age_s": None}
     outbox_health.apply_outbox_health(result, host.root(), summary=summary)
     # Additive and never degrading: a deployment without an external anchor is
     # a property of the install, not a fault in this process.

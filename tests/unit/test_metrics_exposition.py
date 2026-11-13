@@ -19,6 +19,7 @@ import json
 import pytest
 
 from pipeline import metrics_exposition as m
+from tests.unit._injected_state import host_at, store_at
 
 #: A fixed snapshot: every metric with a value, deliberately in a scrambled key
 #: order so the expected output proves the exposition order is fixed by the
@@ -136,11 +137,11 @@ def test_every_metric_has_a_help_and_a_type_declaration(spec) -> None:
 # --- collect: the three producers, monkeypatched at this module's attributes ---
 
 
-def _healthy_scheduler(plan_dir=None):
+def _healthy_scheduler(*_a, **_k):
     return {"scheduler_age_s": 12, "healthy": True, "degraded": []}
 
 
-def _quiet_outbox(plan_dir=None):
+def _quiet_outbox(*_a, **_k):
     return {"files": 1, "records": 4, "oldest_age_s": 90}
 
 
@@ -160,7 +161,7 @@ def test_collect_gathers_every_producer(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(m, "health_extras", _healthy_scheduler)
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _reachable_consumers)
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert snapshot["fagan_scheduler_age_seconds"] == [({}, 12)]
     assert snapshot["fagan_scheduler_healthy"] == [({}, True)]
     assert snapshot["fagan_outbox_records"] == [({}, 4)]
@@ -180,11 +181,11 @@ def test_collect_omits_the_scheduler_age_when_the_scheduler_is_unreported(
     monkeypatch.setattr(
         m,
         "health_extras",
-        lambda plan_dir=None: {"healthy": False, "degraded": ["scheduler_unreported"]},
+        lambda *_a, **_k: {"healthy": False, "degraded": ["scheduler_unreported"]},
     )
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _reachable_consumers)
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert "fagan_scheduler_age_seconds" not in snapshot
     assert snapshot["fagan_scheduler_healthy"] == [({}, False)]
 
@@ -196,7 +197,7 @@ def test_collect_never_raises_when_a_producer_fails(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(m, "health_extras", _healthy_scheduler)
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _boom)
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert "fagan_consumer_pending" not in snapshot
     assert "fagan_consumer_subscribed" not in snapshot
     assert "fagan_consumer_dead_lettered" not in snapshot
@@ -215,7 +216,7 @@ def test_collect_error_counter_never_echoes_the_exception_text(monkeypatch, tmp_
     monkeypatch.setattr(m, "health_extras", _healthy_scheduler)
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _boom)
-    assert "hunter2" not in m.render(m.collect(plan_dir=tmp_path))
+    assert "hunter2" not in m.render(m.collect(host_at(tmp_path), store_at(tmp_path)))
 
 
 def test_collect_renders_an_unreachable_broker_with_no_consumer_samples(
@@ -224,7 +225,7 @@ def test_collect_renders_an_unreachable_broker_with_no_consumer_samples(
     monkeypatch.setattr(m, "health_extras", _healthy_scheduler)
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", lambda: {"reachable": False})
-    rendered = m.render(m.collect(plan_dir=tmp_path))
+    rendered = m.render(m.collect(host_at(tmp_path), store_at(tmp_path)))
     assert "fagan_broker_reachable 0\n" in rendered
     assert "fagan_consumer_pending" not in rendered
     assert "fagan_consumer_subscribed" not in rendered
@@ -248,7 +249,7 @@ def test_collect_counts_plan_manifests_by_approval_status(monkeypatch, tmp_path)
     _write_manifest(tmp_path, "beta", {"approval": {"status": "pending_approval"}})
     _write_manifest(tmp_path, "gamma", {})
     _write_manifest(tmp_path, "delta", {"approval": {"status": "rejected"}})
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert snapshot["fagan_plans"] == [
         ({"status": "approved"}, 1),
         ({"status": "pending_approval"}, 1),
@@ -263,7 +264,7 @@ def test_collect_skips_an_unreadable_manifest(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(m, "consumer_status", _reachable_consumers)
     _write_manifest(tmp_path, "alpha", {"approval": {"status": "approved"}})
     _write_manifest(tmp_path, "broken", "{not json")
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert snapshot["fagan_plans"] == [
         ({"status": "approved"}, 1),
         ({"status": "pending_approval"}, 0),
@@ -277,7 +278,7 @@ def test_collect_counts_an_unknown_status_as_none(monkeypatch, tmp_path) -> None
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _reachable_consumers)
     _write_manifest(tmp_path, "alpha", {"approval": {"status": "sk-secret-status"}})
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), store_at(tmp_path))
     assert snapshot["fagan_plans"] == [
         ({"status": "approved"}, 0),
         ({"status": "pending_approval"}, 0),
@@ -297,7 +298,7 @@ def test_no_sentinel_manifest_text_reaches_the_exposition(monkeypatch, tmp_path)
         sentinel_plan,
         {"approval": {"status": "approved", "decided_by": sentinel_email}},
     )
-    rendered = m.render(m.collect(plan_dir=tmp_path))
+    rendered = m.render(m.collect(host_at(tmp_path), store_at(tmp_path)))
     assert sentinel_plan not in rendered
     assert sentinel_email not in rendered
 
@@ -307,5 +308,5 @@ def test_no_plan_path_reaches_the_exposition(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(m, "outbox_summary", _quiet_outbox)
     monkeypatch.setattr(m, "consumer_status", _reachable_consumers)
     _write_manifest(tmp_path, "alpha", {"approval": {"status": "approved"}})
-    rendered = m.render(m.collect(plan_dir=tmp_path))
+    rendered = m.render(m.collect(host_at(tmp_path), store_at(tmp_path)))
     assert str(tmp_path) not in rendered

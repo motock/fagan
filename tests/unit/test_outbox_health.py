@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from pipeline import outbox_health
+from tests.unit._injected_state import host_at, store_at
 
 TOLERANCE_S = 2
 
@@ -400,7 +401,7 @@ def test_health_extras_reports_the_endpoint_visible_literals(tmp_path, monkeypat
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "plan.outbox.jsonl", [_record(1200)])
 
-    extras = health_freshness.health_extras(tmp_path)
+    extras = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert "outbox" in extras
     assert extras["healthy"] is False
@@ -416,7 +417,7 @@ def test_health_extras_stays_healthy_for_a_fresh_outbox(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "plan.outbox.jsonl", [_record(100)])
 
-    extras = health_freshness.health_extras(tmp_path)
+    extras = health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path))
 
     assert extras["healthy"] is True
     assert extras["degraded"] == []
@@ -429,7 +430,7 @@ def test_health_extras_missing_dir_stays_healthy(tmp_path, monkeypatch):
     monkeypatch.setenv("PIPELINE_OUTBOX_STALE_SECONDS", "900")
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path / "does-not-exist")
 
-    extras = health_freshness.health_extras(tmp_path / "does-not-exist")
+    extras = health_freshness.health_extras(host_at(tmp_path / "does-not-exist"), store_at(tmp_path / "does-not-exist"))
 
     assert extras["outbox"] == {"files": 0, "records": 0, "oldest_age_s": None}
     assert extras["healthy"] is True
@@ -443,7 +444,7 @@ def test_health_extras_carries_no_names_paths_or_payloads(tmp_path, monkeypatch)
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
     _write(tmp_path / "tenant-name.outbox.jsonl", [_record(1200, "SECRET-PAYLOAD-XYZ")])
 
-    dumped = json.dumps(health_freshness.health_extras(tmp_path))
+    dumped = json.dumps(health_freshness.health_extras(host_at(tmp_path), store_at(tmp_path)))
 
     assert "SECRET-PAYLOAD-XYZ" not in dumped
     assert "tenant-name" not in dumped

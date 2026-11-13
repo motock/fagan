@@ -3,8 +3,6 @@
  "pipeline/checkpoint.py": 1,
  "pipeline/cross_plan.py": 4,
  "pipeline/event_wiring.py": 1,
- "pipeline/health_freshness.py": 5,
- "pipeline/metrics_exposition.py": 10,
  "pipeline/outbox_health.py": 2,
  "pipeline/paths.py": 1,
  "pipeline/persistence.py": 4,

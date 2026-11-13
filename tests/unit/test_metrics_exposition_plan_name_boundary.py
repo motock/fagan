@@ -24,6 +24,7 @@ import pytest
 from pipeline import metrics_exposition as m
 from pipeline import server
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._injected_state import host_at
 
 
 class _Records:
@@ -62,10 +63,10 @@ def _counts(snapshot, status: str) -> int:
 @pytest.fixture(autouse=True)
 def quiet_produce(monkeypatch):
     """Keep the other producers quiet: this file only cares about the plans."""
-    monkeypatch.setattr(m, "health_extras", lambda plan_dir=None: {})
-    monkeypatch.setattr(m, "outbox_summary", lambda plan_dir=None: {})
+    monkeypatch.setattr(m, "health_extras", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "outbox_summary", lambda *_a, **_k: {})
     monkeypatch.setattr(m, "consumer_status", dict)
-    monkeypatch.setattr(m, "service_level_percentiles", lambda plan_dir=None: {})
+    monkeypatch.setattr(m, "service_level_percentiles", lambda *_a, **_k: {})
 
 
 def test_a_store_supplied_traversal_name_is_never_read(monkeypatch, tmp_path) -> None:
@@ -77,7 +78,7 @@ def test_a_store_supplied_traversal_name_is_never_read(monkeypatch, tmp_path) ->
     )
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 0
     assert _counts(snapshot, "rejected") == 1
@@ -90,18 +91,16 @@ def test_a_dot_only_name_is_not_counted(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(server, "_store", _Store(_Records(names=[])))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 0
     assert _counts(snapshot, "none") == 0
 
 
 def test_an_ordinary_name_still_counts(monkeypatch, tmp_path) -> None:
-    (tmp_path / "v1.2.3.manifest.json").write_text(
-        json.dumps(_approved("approved")), encoding="utf-8"
-    )
-    monkeypatch.setattr(server, "_store", _Store(_Records(names=[])))
+    records = _Records(names=["v1.2.3"], manifests={"v1.2.3": _approved("approved")})
+    monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 1

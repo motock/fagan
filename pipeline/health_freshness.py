@@ -12,7 +12,7 @@ The shape is deliberately a small dict, computed per call:
      "outbox": {...}}
 
 * ``scheduler_age_s`` is the age of the newest timestamp the scheduler daemon
-  wrote to ``<plan_dir>/.scheduler_health.json`` -- ``heartbeat_ts``,
+  wrote to the host state's ``.scheduler_health.json`` -- ``heartbeat_ts``,
   ``last_reconcile_ts`` or ``last_scan_ts``, whichever is newest -- or ``None``
   when the daemon has not reported (yet).
 * ``outbox`` is the aggregate depth/age of the notification outbox queues, as
@@ -45,6 +45,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeline import outbox_health
+from pipeline.host_state import HostState, build_host_state
+from pipeline.store import Store, build_store
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 #: Env var carrying the scheduler staleness threshold, in seconds.
 STALE_ENV = "PIPELINE_HEALTH_STALE_SECONDS"
@@ -178,13 +181,16 @@ def scheduler_health_path(
     return Path(directory) / HEALTH_FILENAME
 
 
-def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
+def health_extras(
+    host_state: HostState | None = None, store: Store | None = None
+) -> dict[str, Any]:
     """Return the freshness extras for ``/api/health``.
 
-    *plan_dir* defaults to the host state's root, re-resolved on every call;
-    an explicit directory still points the probe at any plan directory.
+    *host_state* supplies the scheduler snapshot and *store* the outbox
+    aggregate; both default to :func:`build_host_state` and :func:`build_store`,
+    resolved on every call.
 
-    The scheduler snapshot is read from ``<plan_dir>/.scheduler_health.json``;
+    The scheduler snapshot is read from the host state's ``.scheduler_health.json``;
     any failure to read or parse it means "no payload", which is graded by
     :func:`freshness`. The outbox health is applied **last**, so its stale
     verdict lands alongside the scheduler's rather than replacing it.
@@ -195,9 +201,11 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
     leaves ``healthy`` alone -- an outbox we cannot read is a reason to look,
     not a reason to page.
     """
+    host = build_host_state() if host_state is None else host_state
+    records = (build_store() if store is None else store).records()
     payload: object = None
     try:
-        with open(scheduler_health_path(plan_dir), "r", encoding="utf-8") as handle:
+        with open(host.scheduler_health_path(), "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except Exception:  # noqa: BLE001 (read-only probe: any failure means "absent")
         # Absent, unreadable (including a directory at that path), empty,
@@ -209,12 +217,8 @@ def health_extras(plan_dir: str | Path | None = None) -> dict[str, Any]:
         stale_seconds_from_env(),
         os.environ.get(REQUIRE_SCHEDULER_ENV) == "1",
     )
-    from pipeline.store import _ServerRef
-    from pipeline.store_records import DEFAULT_NAMESPACE
-
-    _store = _ServerRef("_store")
-    summary = _store.records().outbox_summary(DEFAULT_NAMESPACE)
-    outbox_health.apply_outbox_health(result, plan_dir, summary=summary)
+    summary = records.outbox_summary(DEFAULT_NAMESPACE)
+    outbox_health.apply_outbox_health(result, host.root(), summary=summary)
     # Additive and never degrading: a deployment without an external anchor is
     # a property of the install, not a fault in this process.
     from pipeline.audit_anchor import anchor_status
@@ -292,7 +296,7 @@ class Ready(BaseModel):
     ready: bool
 
 
-def _freshness_reasons(plan_dir: str | Path | None) -> list[str]:
+def _freshness_reasons(host_state: HostState) -> list[str]:
     """Verdicts implied by the local freshness extras, in a fixed order.
 
     Read-only and side-effect free: :func:`health_extras` re-reads the scheduler
@@ -301,7 +305,7 @@ def _freshness_reasons(plan_dir: str | Path | None) -> list[str]:
     which keeps the response body inside :data:`PROBE_REASONS` even if a
     contributor starts reporting something new.
     """
-    extras = health_extras(plan_dir)
+    extras = health_extras(host_state)
     degraded = extras.get("degraded") if isinstance(extras, dict) else None
     if not isinstance(degraded, list):
         return []
@@ -333,13 +337,12 @@ def _degraded(field: str, reasons: list[str]) -> JSONResponse:
     return JSONResponse(status_code=503, content={field: False, "degraded": reasons})
 
 
-def register_probes(
-    app: FastAPI, plan_dir_fn: Callable[[], str | Path | None]
-) -> None:
+def register_probes(app: FastAPI, host_state_fn: Callable[[], HostState]) -> None:
     """Register ``/livez`` and ``/readyz`` on *app*.
 
-    *plan_dir_fn* is a zero-argument callable returning the resolved plan
-    directory, read per request so a rebound plan dir is honoured.
+    *host_state_fn* is a zero-argument callable returning the host state the
+    scheduler snapshot is read from, called per request so a rebound root is
+    honoured.
     """
 
     @app.get("/livez", response_model=Live, responses={503: {"description": "degraded"}})
@@ -348,7 +351,7 @@ def register_probes(
         try:
             reasons = [
                 reason
-                for reason in _freshness_reasons(plan_dir_fn())
+                for reason in _freshness_reasons(host_state_fn())
                 if reason in LIVENESS_REASONS
             ]
         except Exception:  # noqa: BLE001 - a probe never answers 500
@@ -361,7 +364,7 @@ def register_probes(
     def readyz():
         """Readiness: live, broker reachable, outbox drained."""
         try:
-            reasons = _freshness_reasons(plan_dir_fn())
+            reasons = _freshness_reasons(host_state_fn())
             if _broker_is_unreachable():
                 reasons.append(REASON_BROKER_UNREACHABLE)
         except Exception:  # noqa: BLE001 - a probe never answers 500

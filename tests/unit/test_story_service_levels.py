@@ -29,6 +29,7 @@ from pipeline import audit as audit_mod
 from pipeline import metrics_exposition as metrics
 from pipeline import persistence, service_levels
 from pipeline.audit_file import FileAuditLog
+from tests.unit._injected_state import host_at, store_at
 
 #: A story's three marks, as the audit stream records them.
 DISPATCHED = "2025-01-01T00:00:00Z"
@@ -389,8 +390,8 @@ WORKED = {
 
 def _silence_other_producers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leave only the service-level gauges (and the plan count) renderable."""
-    monkeypatch.setattr(metrics, "health_extras", lambda plan_dir=None: None)
-    monkeypatch.setattr(metrics, "outbox_summary", lambda plan_dir=None: None)
+    monkeypatch.setattr(metrics, "health_extras", lambda *_a, **_k: None)
+    monkeypatch.setattr(metrics, "outbox_summary", lambda *_a, **_k: None)
     monkeypatch.setattr(metrics, "consumer_status", lambda: None)
 
 
@@ -405,7 +406,7 @@ def _rendered(
         "service_level_percentiles",
         lambda *args, **kwargs: WORKED if percentiles is None else percentiles,
     )
-    return metrics.render(metrics.collect(plan_dir))
+    return metrics.render(metrics.collect(host_at(plan_dir), store_at(plan_dir)))
 
 
 @pytest.mark.parametrize(
@@ -481,7 +482,7 @@ def test_a_planted_story_key_never_reaches_the_exposition(monkeypatch, plan_dir)
     monkeypatch.setattr(
         service_levels, "datetime", _frozen_clock("2025-01-02T00:00:00Z")
     )
-    rendered = metrics.render(metrics.collect(plan_dir))
+    rendered = metrics.render(metrics.collect(host_at(plan_dir), store_at(plan_dir)))
     assert "SENTINEL" not in rendered
     assert 'fagan_story_service_level_samples{measure="cycle"} 1' in rendered
 
@@ -492,7 +493,7 @@ def test_a_raising_producer_is_counted_and_omits_the_gauges(monkeypatch, plan_di
 
     _silence_other_producers(monkeypatch)
     monkeypatch.setattr(metrics, "service_level_percentiles", _boom)
-    rendered = metrics.render(metrics.collect(plan_dir))
+    rendered = metrics.render(metrics.collect(host_at(plan_dir), store_at(plan_dir)))
     assert 'fagan_metrics_errors_total{source="service_levels"} 1' in rendered
     assert "fagan_story_cycle_seconds" not in rendered
     assert "fagan_story_service_level_samples" not in rendered

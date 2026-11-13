@@ -30,6 +30,7 @@ import pytest
 from pipeline import metrics_exposition as m
 from pipeline import server
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._injected_state import host_at
 
 
 class _Records:
@@ -87,10 +88,10 @@ def _write_manifest(directory, plan_name: str, payload) -> None:
 @pytest.fixture(autouse=True)
 def quiet_producers(monkeypatch):
     """Silence the other producers: only the plan count is under test."""
-    monkeypatch.setattr(m, "health_extras", lambda plan_dir=None: {})
-    monkeypatch.setattr(m, "outbox_summary", lambda plan_dir=None: {})
+    monkeypatch.setattr(m, "health_extras", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "outbox_summary", lambda *_a, **_k: {})
     monkeypatch.setattr(m, "consumer_status", dict)
-    monkeypatch.setattr(m, "service_level_percentiles", lambda plan_dir=None: {})
+    monkeypatch.setattr(m, "service_level_percentiles", lambda *_a, **_k: {})
 
 
 def test_a_store_only_plan_is_counted(monkeypatch, tmp_path) -> None:
@@ -99,7 +100,7 @@ def test_a_store_only_plan_is_counted(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 1
     assert _counts(snapshot, "none") == 0
@@ -117,7 +118,7 @@ def test_the_store_listing_is_not_shadowed_by_a_local_file(
     )
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 1
     assert _counts(snapshot, "rejected") == 0
@@ -132,23 +133,24 @@ def test_the_store_manifest_wins_over_the_same_plans_local_file(
     )
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
     assert _counts(snapshot, "approved") == 1
     assert _counts(snapshot, "rejected") == 0
 
 
-def test_a_store_error_falls_back_to_the_file_without_counting_an_error(
+def test_a_store_error_is_counted_as_a_plans_error_without_its_text(
     monkeypatch, tmp_path
 ) -> None:
+    """The store is the only plan source now, so a failing store is an error, not a fallback."""
     _write_manifest(tmp_path, "alpha", _approved("approved"))
     records = _Records(listing_error=RuntimeError("store unavailable: secret-dsn"))
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
-    assert _counts(snapshot, "approved") == 1
-    assert _plans_error_count(snapshot) == 0
+    assert "fagan_plans" not in snapshot
+    assert _plans_error_count(snapshot) == 1
     assert "secret-dsn" not in m.render(snapshot)
 
 
@@ -159,7 +161,7 @@ def test_two_scrapes_re_read_the_store(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    first = m.collect(plan_dir=tmp_path)
+    first = m.collect(host_at(tmp_path), server._store)
     assert _counts(first, "approved") == 1
 
     records._names = ["alpha", "beta"]
@@ -168,17 +170,20 @@ def test_two_scrapes_re_read_the_store(monkeypatch, tmp_path) -> None:
         "beta": _approved("approved"),
     }
 
-    second = m.collect(plan_dir=tmp_path)
+    second = m.collect(host_at(tmp_path), server._store)
     assert _counts(second, "approved") == 2
     assert records.listed == [DEFAULT_NAMESPACE, DEFAULT_NAMESPACE]
 
 
-def test_an_empty_store_listing_still_counts_the_files(monkeypatch, tmp_path) -> None:
-    """An empty listing is "no store view", not "no plans" (read_plan_names)."""
+def test_an_empty_store_listing_counts_zero_plans_never_the_host_files(
+    monkeypatch, tmp_path
+) -> None:
+    """An injected empty store is an answer: the host's manifests are not a second source."""
     _write_manifest(tmp_path, "alpha", _approved("approved"))
     records = _Records(names=[])
     monkeypatch.setattr(server, "_store", _Store(records))
 
-    snapshot = m.collect(plan_dir=tmp_path)
+    snapshot = m.collect(host_at(tmp_path), server._store)
 
-    assert _counts(snapshot, "approved") == 1
+    assert _counts(snapshot, "approved") == 0
+

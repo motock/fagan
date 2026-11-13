@@ -99,6 +99,7 @@ def build_story_record(
         "acceptance": story.get("acceptance", []),
         "risk": story.get("risk", "low"),
         "backend": story.get("backend"),
+        "authored_backend": story.get("backend"),
         "status": "todo",
         "description": story_description(story),
         "epic": epic_summary,

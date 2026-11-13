@@ -75,6 +75,15 @@ computed by `canonical_digest(manifest)`:
   `acceptance`, `risk`, `backend`, `tdd_split`, `files`, `blocked_by`,
   `description`), and `test_scope` at plan and story level only when the key is
   present, so manifests without it keep their existing digest.
+- A story's `backend` is hashed **as authored**: ingest records the plan's
+  value as `authored_backend` and the digest reads that. The resolved provider
+  the dispatcher, escalation and review write to `backend` at runtime does not
+  change an approval, so a first dispatch never resets a plan nobody edited.
+  Changing the authored `backend` (or the ingest-time sizing auto-route, which
+  rewrites `backend` as policy and so is also outside the digest) is handled as
+  follows: an authored change resets the approval; a sizing auto-route does not.
+  Stories ingested before `authored_backend` existed keep hashing `backend` as
+  before until they are re-ingested.
 - It **excludes** the `approval` block itself and all runtime story state
   (`status`, `attempts`, `sizing_auto_routed`, …). Recording or changing a
   decision therefore never invalidates the digest it was made against, and a

@@ -825,6 +825,8 @@ def _ingest_plan_impl(
                 # same rule for merging only; they stay out of
                 # _INGEST_AUTHORED_STORY_FIELDS.
                 merge_descriptive_story_fields(combined, new_story)
+                # Hashed by canonical_digest; the stamped `backend` is not.
+                combined["authored_backend"] = new_story["authored_backend"]
                 merged_stories[key] = combined
             else:
                 merged_stories[key] = new_story

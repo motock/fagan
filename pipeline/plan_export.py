@@ -104,6 +104,11 @@ def _render_story(
                 dependencies = [plan_keys.get(dep, dep) for dep in dependencies]
             exported[field] = dependencies
             continue
+        if field == "backend":
+            # The author's value, not the provider the dispatcher stamped on
+            # ``backend`` at runtime, so export -> ingest keeps the digest.
+            exported[field] = story.get("authored_backend", story.get(field))
+            continue
         exported[field] = story.get(field)
     return exported
 

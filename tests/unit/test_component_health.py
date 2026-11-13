@@ -233,35 +233,33 @@ def test_mcp_probe_uses_a_short_connect_timeout(env, monkeypatch, dead_port) -> 
     assert all(value <= 1.0 for value in timeouts)
 
 
-def test_mcp_probe_gives_up_on_a_stalled_connect(env) -> None:
-    """A transport that accepts nothing must not hold the scrape."""
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(0)
-    port = listener.getsockname()[1]
-    fillers = []
-    for _ in range(5):
-        try:
-            fillers.append(socket.create_connection(("127.0.0.1", port), timeout=0.2))
-        except OSError:
-            break
+def test_mcp_probe_gives_up_on_a_stalled_connect(env, monkeypatch) -> None:
+    """A transport that accepts nothing must not hold the scrape.
+
+    The stall is simulated rather than built from a real socket: a full accept
+    backlog is refused on Linux but accepted on macOS, so a real listener is
+    not portable. The fake blocks for the timeout the probe passes, then raises
+    as a real connect would. A probe that passes no timeout is held for 10s,
+    which trips the 3.0s join below.
+    """
+
+    def _stalled_connect(address, timeout=None, *args, **kwargs):
+        threading.Event().wait(timeout if timeout is not None else 10.0)
+        raise TimeoutError("stalled connect")
+
+    monkeypatch.setattr(socket, "create_connection", _stalled_connect)
     outcome: dict = {}
 
     def _run() -> None:
-        outcome["report"] = ch.component_status(env(PIPELINE_MCP_PORT=port))
+        outcome["report"] = ch.component_status(env(PIPELINE_MCP_PORT=8080))
 
-    try:
-        worker = threading.Thread(target=_run, daemon=True)
-        started = time.monotonic()
-        worker.start()
-        worker.join(timeout=3.0)
-        assert not worker.is_alive(), "the MCP probe blocked on a stalled connect"
-        assert time.monotonic() - started < 1.5
-        assert _flag(_row(outcome["report"], "mcp")["up"]) == 0
-    finally:
-        listener.close()
-        for filler in fillers:
-            filler.close()
+    worker = threading.Thread(target=_run, daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=3.0)
+    assert not worker.is_alive(), "the MCP probe blocked on a stalled connect"
+    assert time.monotonic() - started < 1.5
+    assert _flag(_row(outcome["report"], "mcp")["up"]) == 0
 
 
 # --- scheduler: healthy -------------------------------------------------------

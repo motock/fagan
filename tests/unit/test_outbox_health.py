@@ -466,9 +466,12 @@ class _FakeDaemon:
 
 @pytest.fixture()
 def tick_env(tmp_path, monkeypatch):
-    from pipeline import paths, persistence, tick_checks
+    from pipeline import paths, persistence, server, tick_checks
 
+    # The outbox is read through the store (paths binding); the tick's
+    # plan-name lookup reads the host-state root (server binding).
     monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     monkeypatch.delenv("PIPELINE_EVENT_BUS", raising=False)
     monkeypatch.setenv(outbox_health.OUTBOX_STALE_ENV, "900")
     monkeypatch.setattr(tick_checks, "_OUTBOX_STALE", False)

@@ -81,6 +81,8 @@ def plan_dir(tmp_path, monkeypatch):
     directory = tmp_path / 'plans'
     directory.mkdir()
     monkeypatch.setattr(paths, 'PLAN_DIR', directory)
+    # The tick and health readers resolve the host-state root from the server.
+    monkeypatch.setattr(pipeline.server, 'PLAN_DIR', directory)
     # The readers resolve ``paths`` as a package attribute; bind it to the
     # module patched above (see tests/unit/test_store_outbox_summary.py).
     monkeypatch.setattr(pipeline_package, 'paths', paths)
@@ -173,6 +175,7 @@ class TestTickChecksReadsTheStore:
     @pytest.fixture(autouse=True)
     def _tick_env(self, tmp_path, monkeypatch):
         monkeypatch.setattr(paths, 'PLAN_DIR', tmp_path)
+        monkeypatch.setattr(pipeline.server, 'PLAN_DIR', tmp_path)
         monkeypatch.setattr(pipeline_package, 'paths', paths)
         monkeypatch.delenv('PIPELINE_EVENT_BUS', raising=False)
         monkeypatch.setenv(outbox_health.OUTBOX_STALE_ENV, str(THRESHOLD_S))

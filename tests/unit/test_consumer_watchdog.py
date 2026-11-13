@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from pipeline import events_nats_consumer, paths, persistence, tick_checks
+from pipeline import events_nats_consumer, persistence, tick_checks
 from pipeline.consumer_watchdog import ConsumerWatchdog
 
 STALL_ENV = "PIPELINE_CONSUMER_STALL_SECONDS"
@@ -217,8 +217,10 @@ def notices(monkeypatch):
 
 @pytest.fixture
 def plan_dir(monkeypatch, tmp_path):
+    from pipeline import server
+
     (tmp_path / "alpha.manifest.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -394,7 +396,9 @@ def test_hook_skips_notification_when_no_manifest_plan_exists(
     monkeypatch, notices, tmp_path
 ):
     monkeypatch.setenv("PIPELINE_EVENT_BUS", "nats")
-    monkeypatch.setattr(paths, "PLAN_DIR", tmp_path)  # no manifests at all
+    from pipeline import server
+
+    monkeypatch.setattr(server, "PLAN_DIR", tmp_path)  # no manifests at all
     clock = _Clock(1300.0)
     monkeypatch.setattr(tick_checks, "time", clock)
     daemon = _Daemon()

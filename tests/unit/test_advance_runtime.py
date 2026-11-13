@@ -83,7 +83,7 @@ def _clear_wake_hook():
 def _write_manifest(tmp_path, monkeypatch, plan_name="alpha", status="in_progress"):
     manifest = {"name": plan_name, "stories": {"SQ-1": {"status": status}}}
     (tmp_path / f"{plan_name}.manifest.json").write_text(json.dumps(manifest))
-    monkeypatch.setattr(event_wiring, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
     return {"plan": plan_name, "story_key": "SQ-1", "type": "agent_done"}
 
 

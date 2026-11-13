@@ -16,6 +16,7 @@ import pytest
 from pipeline import server as p
 from pipeline import story_status
 from pipeline import test_scope_run as tsr
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 LINT_CMD = ["ruff", "check", "."]
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -228,7 +229,7 @@ def test_grade_helper_is_exported_onto_server():
 
 def test_story_status_stays_within_line_cap():
     line_count = len(Path(story_status.__file__).read_text().splitlines())
-    assert line_count <= 999
+    assert_within_line_limit(line_count, 999, "pipeline/story_status.py")
 
 
 def test_reference_documents_no_tests_record():

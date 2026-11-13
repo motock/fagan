@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from pipeline import dispatch_baseline
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 _PYTEST_CMD = [sys.executable, "-m", "pytest", "-q"]
 _ACCEPTANCE = [{"path": "tests/acceptance_x.py", "source": "def test_t(): pass\n"}]
@@ -181,4 +182,4 @@ def test_dispatch_module_stays_under_line_limit():
     dispatch_path = Path(__file__).resolve().parents[2] / "pipeline" / "dispatch.py"
     with dispatch_path.open() as handle:
         line_count = sum(1 for _ in handle)
-    assert line_count <= 1000
+    assert_within_line_limit(line_count, 1000, "pipeline/dispatch.py")

@@ -30,6 +30,7 @@ values the local composition produced.
 """
 import inspect
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -317,11 +318,11 @@ def test_dashboard_get_plan_metrics_source_calls_accessor():
     )
 
 
-def test_plan_dir_global_retained_for_ui_state_path():
-    """DO-NOT guard: the PLAN_DIR module global stays (it is still needed
-    by _dashboard_ui_state_path)."""
-    assert hasattr(dashboard, "PLAN_DIR")
-    assert "PLAN_DIR" in inspect.getsource(dashboard._dashboard_ui_state_path)
+def test_plan_dir_global_removed_with_ui_state_path():
+    """The PLAN_DIR module global is gone: its only use was the UI state file,
+    which now goes through the host state (c3-3)."""
+    assert not hasattr(dashboard, "PLAN_DIR")
+    assert not re.search(r"^PLAN_DIR\s*=", inspect.getsource(dashboard), re.MULTILINE)
 
 
 def test_story_metrics_public_surface_unchanged():

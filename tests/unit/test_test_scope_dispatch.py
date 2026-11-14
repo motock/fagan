@@ -29,21 +29,10 @@ def _scoped_survives_dispatch(monkeypatch, seed_merge_gate):
     )
 
 
-class _NoRecordsStore:
-    """A settings Store with no records, so tests never read the host's own."""
-
-    def records(self):
-        return self
-
-    def get_settings(self, namespace, scope, scope_id, repo):
-        return None
-
-
 @pytest.fixture
 def settings_calls(monkeypatch):
     calls = []
     monkeypatch.delenv(tsd.TEST_SCOPE_ENV, raising=False)
-    monkeypatch.setattr(settings_store, "_store", _NoRecordsStore())
 
     def _set(settings):
         def _fake(namespace, team):

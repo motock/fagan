@@ -7,7 +7,6 @@ The environment is not a source; the plan and story carry the request.
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 
 from .ci import SettingsContext, context_from_manifest

@@ -237,7 +237,7 @@ class GitLabForge(Forge):
             return
 
     def merge_readiness(
-        self, worktree: str, branch: str
+        self, worktree: str, branch: str, *, ci_gate_on: bool = True
     ) -> Literal["ready", "pending", "blocked"]:
         """Has GitLab FINISHED deciding whether this MR can land?
 
@@ -253,6 +253,10 @@ class GitLabForge(Forge):
 
         Both vocabularies are read: ``detailed_merge_status`` (current) and
         ``merge_status`` (legacy), plus the ``has_conflicts``/``draft`` flags.
+
+        ``ci_gate_on`` is accepted so every forge takes the same call, but
+        GitLab's pending states are not relaxed when the gate is off yet; only
+        the GitHub adapter does that.
         """
         try:
             proc = self._run(

@@ -86,6 +86,46 @@ def test_github_merge_readiness_classification(
 
 
 @pytest.mark.parametrize(
+    ("mergeable", "state", "expected", "why"),
+    [
+        ("UNKNOWN", "CLEAN", "ready", "gate off: mergeability not computed is landable"),
+        ("MERGEABLE", "UNSTABLE", "ready", "gate off: failing checks do not gate"),
+        ("UNKNOWN", "UNSTABLE", "ready", "gate off: both relaxations together"),
+        (None, "UNSTABLE", "ready", "gate off: a null mergeable reads as UNKNOWN"),
+        ("CONFLICTING", "UNSTABLE", "blocked", "gate off: a real conflict still blocks"),
+        ("CONFLICTING", "CLEAN", "blocked", "gate off: a real conflict still blocks"),
+        ("MERGEABLE", "BLOCKED", "blocked", "gate off: branch protection still blocks"),
+        ("MERGEABLE", "DIRTY", "blocked", "gate off: dirty still blocks"),
+        ("MERGEABLE", "BEHIND", "pending", "gate off: base moving is not relaxed"),
+        ("UNKNOWN", "UNKNOWN", "pending", "gate off: nothing computed yet"),
+    ],
+)
+def test_github_merge_readiness_with_the_ci_gate_off(
+    monkeypatch, mergeable, state, expected, why
+):
+    _stub_run(monkeypatch, stdout=_json(mergeable, state))
+    result = GitHubForge().merge_readiness(CWD, BRANCH, ci_gate_on=False)
+    assert result == expected, why
+
+
+@pytest.mark.parametrize(
+    ("mergeable", "state", "expected", "why"),
+    [
+        ("UNKNOWN", "CLEAN", "pending", "gate on: mergeability still computing"),
+        ("MERGEABLE", "UNSTABLE", "pending", "gate on: failing checks still gate"),
+        ("UNKNOWN", "UNSTABLE", "pending", "gate on: both still gate"),
+        (None, "UNSTABLE", "pending", "gate on: a null mergeable is still computing"),
+    ],
+)
+def test_github_merge_readiness_with_the_ci_gate_on(
+    monkeypatch, mergeable, state, expected, why
+):
+    _stub_run(monkeypatch, stdout=_json(mergeable, state))
+    result = GitHubForge().merge_readiness(CWD, BRANCH, ci_gate_on=True)
+    assert result == expected, why
+
+
+@pytest.mark.parametrize(
     ("mergeable", "state", "expected"),
     [
         ("MERGEABLE", "CLEAN", "ready"),

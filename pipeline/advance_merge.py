@@ -106,10 +106,11 @@ def _await_merge_readiness(
         # be the signal.
         return "ready"
     deadline = time.monotonic() + _merge_readiness_timeout(settings)
+    ci_gate_on = bool(settings.value("merge_ci_gate"))
     delay = 5.0
     while True:
         try:
-            state = read(worktree, branch)
+            state = read(worktree, branch, ci_gate_on=ci_gate_on)
         except Exception:  # noqa: BLE001 - unreadable is pending, never ready
             state = "pending"
         if state == "ready":

@@ -65,9 +65,11 @@ class FakeForge:
         self.states = list(states)
         self.raises = raises
         self.reads = 0
+        self.ci_gate_seen: list[bool] = []
 
-    def merge_readiness(self, worktree, branch):
+    def merge_readiness(self, worktree, branch, *, ci_gate_on=True):
         self.reads += 1
+        self.ci_gate_seen.append(ci_gate_on)
         if self.raises is not None:
             raise self.raises
         if len(self.states) > 1:
@@ -432,10 +434,34 @@ def test_budget_is_resolved_per_repo(plan_dir, monkeypatch):
     )
 
 
+def test_ci_gate_off_for_one_repo_reaches_the_forge(plan_dir, monkeypatch):
+    _put_repo_setting(
+        "github.com/acme/alpha", {"merge_ci_gate": False},
+        allow_loosen=["merge_ci_gate"],
+    )
+    forge = FakeForge(["ready"])
+    _harness(monkeypatch, plan_dir, forge)
+    _write_repo_manifest(plan_dir, "https://github.com/acme/alpha")
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    assert forge.ci_gate_seen == [False], forge.ci_gate_seen
+
+
+def test_ci_gate_on_by_default_reaches_the_forge(plan_dir, monkeypatch):
+    forge = FakeForge(["ready"])
+    _harness(monkeypatch, plan_dir, forge)
+    _write_manifest(plan_dir, PLAN, {KEY: _story(worktree=str(plan_dir / "wt"))})
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    assert forge.ci_gate_seen == [True], forge.ci_gate_seen
+
+
 def test_unreadable_store_resolves_gate_on_and_the_180s_budget(
     plan_dir, monkeypatch
 ):
-    """A Store read failure never shortens the readiness budget."""
+    """A Store read failure never loosens a gate or shortens the budget."""
 
     class _UnreadableStore:
         def records(self):
@@ -448,4 +474,5 @@ def test_unreadable_store_resolves_gate_on_and_the_180s_budget(
 
     advance_merge._adjudicate_merges(PLAN, _summary())
 
+    assert set(forge.ci_gate_seen) == {True}, forge.ci_gate_seen
     assert sum(harness.clock.sleeps) == pytest.approx(180.0), harness.clock.sleeps

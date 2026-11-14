@@ -27,6 +27,12 @@ loader wraps that result in `PluginStore`, which serves the server's legacy
 surface only. A store missing any name in `PLUGIN_STORE_METHODS` is refused at
 startup, and the refusal names the missing methods.
 
+**Contract change (ADR 0015):** the record surface now includes the settings
+kind, so `get_settings`, `put_settings` and `list_settings` are required. A
+plugin built before this change is refused at startup naming those methods
+until it implements them. A `put_settings` is compare-and-set on the version it
+names, and a stale or duplicate create raises `SettingsVersionConflictError`.
+
 ```python
 # mystore/store.py
 class PostgresRecordStore:

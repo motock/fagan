@@ -112,15 +112,6 @@ class UnreadableRecordError(RecordStoreError, ValueError):
         super().__init__(reason)
 
 
-class SettingsVersionConflictError(RecordStoreError):
-    """Raised when a settings write's ``expected_version`` does not match.
-
-    A create (``expected_version=None``) of a record that already exists, and a
-    write whose expected version is stale or names a missing record, both raise
-    this. The stored record is left unchanged.
-    """
-
-
 def validate_namespace(value: str) -> str:
     """Return ``value`` when it is a valid namespace, else raise.
 
@@ -639,6 +630,27 @@ class RecordStore(Protocol):
         """
         ...
 
+    def get_settings(
+        self, namespace: str, scope: str, scope_id: str, repo: str
+    ) -> dict | None:
+        """Return the settings record for the key, or ``None`` (ADR 0015)."""
+        ...
+
+    def put_settings(
+        self, namespace: str, scope: str, scope_id: str, repo: str, values: dict,
+        allow_loosen: list[str], updated_by: str, expected_version: int | None,
+    ) -> dict:
+        """Write the record, compare-and-set on ``expected_version`` (ADR 0015).
+
+        ``SettingsVersionConflictError`` (``pipeline.store_settings``) signals a
+        stale or duplicate write; the stored record is then unchanged.
+        """
+        ...
+
+    def list_settings(self, namespace: str) -> list[dict]:
+        """Return the namespace's settings records, ordered by key (ADR 0015)."""
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -670,6 +682,7 @@ RECORD_STORE_METHODS = (
     'get_context_snapshot',
     'get_security_audit_state',
     'put_security_audit_state',
+    'get_settings', 'put_settings', 'list_settings',
     'transaction',
 )
 

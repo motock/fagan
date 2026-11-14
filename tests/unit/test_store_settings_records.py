@@ -16,10 +16,10 @@ from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
-    SettingsVersionConflictError,
     UnknownNamespaceError,
     UnreadableRecordError,
 )
+from pipeline.store_settings import SettingsVersionConflictError
 
 _OTHER_NAMESPACE = 'org-1'
 _REPO = 'github.com/acme/app'

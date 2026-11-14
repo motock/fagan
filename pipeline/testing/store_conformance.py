@@ -861,3 +861,9 @@ NAMESPACE_CHECKS = (
     check_foreign_write_is_contained,
     check_foreign_write_leaves_default_unchanged,
 )
+
+
+# The settings cases (ADR 0015) live in their own module, which imports this
+# one, so it is loaded last. Keeping them there holds this file under the
+# 1000-line gate; the star import re-exports them to every consumer.
+from pipeline.testing.store_conformance_settings import *

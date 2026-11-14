@@ -23,7 +23,7 @@ from typing import Any
 
 from pipeline.store_records import (
     InvalidRecordKeyError,
-    SettingsVersionConflictError,
+    RecordStoreError,
     UnreadableRecordError,
     validate_namespace,
 )
@@ -42,6 +42,16 @@ _REPO_RE = re.compile(r'[A-Za-z0-9.:-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+')
 _RECORD_PREFIX = 'settings-record-'
 _RECORD_NAME_RE = re.compile(r'settings-record-[0-9a-f]{64}\.json')
 _LOCK_NAME = '.settings-record.lock'
+
+
+class SettingsVersionConflictError(RecordStoreError):
+    """Raised when a settings write's ``expected_version`` does not match.
+
+    A create (``expected_version=None``) of a record that already exists, and a
+    write whose expected version is stale or names a missing record, both raise
+    this. The stored record is left unchanged. It lives here, beside the
+    settings rules, so ``store_records`` stays under the line gate.
+    """
 
 
 def validate_settings_key(scope: object, scope_id: object, repo: object) -> None:

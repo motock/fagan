@@ -36,6 +36,7 @@ from pipeline import (
     store_sqlite_outbox,
     store_sqlite_records,
     store_sqlite_schema,
+    store_sqlite_settings,
     store_sqlite_usage,
 )
 from pipeline.concurrency import PLAN_LOCK_RETRY_INTERVAL_SECONDS
@@ -80,6 +81,7 @@ def _is_lock_conflict(exc: sqlite3.OperationalError) -> bool:
 
 class SqliteStore(
     store_sqlite_records.RecordTablesMixin,
+    store_sqlite_settings.SettingsTablesMixin,
     store_sqlite_notifications.NotificationHistoryMixin,
 ):
     """A database-backed ``Store`` for a single host.
@@ -349,6 +351,7 @@ class SqliteStore(
 
 
 class SqliteRecords(
+    store_sqlite_settings.SettingsRecordsMixin,
     store_sqlite_notifications.NotificationHistoryMixin,
     OutboxContract,
     OutboxSummaryContract,

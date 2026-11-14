@@ -624,8 +624,9 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         try:
             with _scoped_repo_root(plan_name):
                 # Mode 9 gate applies here too: even an explicit human merge must
-                # not land a conflicting or CI-red PR. Disable via
-                # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
+                # not land a conflicting or CI-red PR. The merge_ci_gate setting
+                # (resolved per namespace, team and repo) turns it off, and only
+                # if you intentionally accept that.
                 worktree = story.get("worktree", "")
                 # Resolve the worktree's ACTUAL HEAD branch (a rework round can
                 # leave it on an alias agent/<key>-<suffix>) so rebase -> push

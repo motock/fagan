@@ -35,9 +35,9 @@ def test_reference_md_documents_default_900() -> None:
     rows = [
         line
         for line in REFERENCE_MD.read_text(encoding="utf-8").splitlines()
-        if "PIPELINE_MERGE_CI_TIMEOUT" in line
+        if line.startswith("| `merge_ci_timeout_s`")
     ]
     assert rows and all("900" in row for row in rows), (
-        "REFERENCE.md must document the PIPELINE_MERGE_CI_TIMEOUT row with "
+        "REFERENCE.md must document the merge_ci_timeout_s setting row with "
         f"default 900; found {rows!r}"
     )

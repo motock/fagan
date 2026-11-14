@@ -41,7 +41,6 @@ from pipeline.store_records import (
     RECORD_STORE_METHODS,
     InvalidRecordKeyError,
     InvalidUsageRecordError,
-    SettingsVersionConflictError,
     UnknownNamespaceError,
 )
 
@@ -94,12 +93,6 @@ SECURITY_AUDIT = {
 }
 OTHER_SECURITY_AUDIT = dict(SECURITY_AUDIT, last_audited_sha='b' * 40)
 REPO_KEY = 'a' * 16
-SETTINGS_SCOPE = 'org'
-SETTINGS_SCOPE_ID = 'acme'
-SETTINGS_REPO = ''
-SETTINGS = {'max_concurrent_agents': 2}
-OTHER_SETTINGS = {'max_concurrent_agents': 4}
-OPERATOR = 'operator'
 
 
 def digest_of(content):
@@ -169,23 +162,6 @@ def backend(request, record_store_factory):
 
 Kind = namedtuple('Kind', 'name write read empty first second')
 
-
-def _write_settings(store, namespace, values):
-    """Write the settings key's record as ``values``, creating or advancing it.
-
-    The write names the version it read, so the same helper serves the first
-    write (a create) and every later one, without a conflict either way.
-    """
-    current = store.get_settings(
-        namespace, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO
-    )
-    expected = None if current is None else current['version']
-    store.put_settings(
-        namespace, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO,
-        values, [], OPERATOR, expected,
-    )
-
-
 KINDS = (
     Kind(
         'manifest',
@@ -240,14 +216,6 @@ KINDS = (
         lambda s, ns, v: s.put_context_snapshot(ns, digest_of(v), v, META),
         lambda s, ns: s.get_context_snapshot(ns, digest_of(CONTENT)),
         None, CONTENT, OTHER_CONTENT,
-    ),
-    Kind(
-        'settings',
-        _write_settings,
-        lambda s, ns: s.get_settings(
-            ns, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO
-        ),
-        None, SETTINGS, OTHER_SETTINGS,
     ),
 )
 KIND_IDS = [kind.name for kind in KINDS]
@@ -729,7 +697,7 @@ def test_a_malformed_namespace_is_refused_before_storage(backend, namespace):
     'append_notification', 'get_notification_history', 'put_plan_draft',
     'get_plan_draft', 'mark_plan_completed', 'is_plan_completed',
     'put_plan_report', 'get_plan_report', 'put_context_snapshot',
-    'get_context_snapshot', 'get_settings', 'put_settings',
+    'get_context_snapshot',
 )
 def test_a_malformed_namespace_is_refused_for_every_record_kind(backend, kind):
     check_invalid_namespace_is_refused(backend.store, kind)
@@ -738,7 +706,7 @@ def test_a_malformed_namespace_is_refused_for_every_record_kind(backend, kind):
 @pytest.mark.parametrize('kind', KINDS, ids=KIND_IDS)
 @covers('get_manifest', 'get_decisions', 'get_journal', 'get_usage',
         'get_notification_history', 'get_plan_draft', 'is_plan_completed',
-        'get_plan_report', 'get_context_snapshot', 'get_settings')
+        'get_plan_report', 'get_context_snapshot')
 def test_a_foreign_namespace_reads_no_default_records(backend, kind):
     check_foreign_read_is_contained(backend.store, kind.name in backend.serves_other, kind)
 
@@ -746,7 +714,7 @@ def test_a_foreign_namespace_reads_no_default_records(backend, kind):
 @pytest.mark.parametrize('kind', KINDS, ids=KIND_IDS)
 @covers('put_manifest', 'append_decision', 'append_journal', 'append_usage',
         'append_notification', 'put_plan_draft', 'mark_plan_completed',
-        'put_plan_report', 'put_context_snapshot', 'put_settings')
+        'put_plan_report', 'put_context_snapshot')
 def test_a_foreign_namespace_write_never_reaches_the_default_namespace(backend, kind):
     check_foreign_write_is_contained(backend.store, kind.name in backend.serves_other, kind)
 
@@ -849,183 +817,6 @@ def test_a_foreign_namespace_transaction_follows_the_backend_policy(backend):
         assert held is True
 
 
-# -- settings (ADR 0015) ---------------------------------------------------------
-
-SETTINGS_REPO_KEY = 'github.com/acme/app'
-_SETTINGS_RECORD_FIELDS = {
-    'scope', 'scope_id', 'repo', 'values', 'allow_loosen', 'version',
-    'updated_at', 'updated_by',
-}
-
-
-def _put_settings(
-    store,
-    namespace=DEFAULT_NAMESPACE,
-    scope=SETTINGS_SCOPE,
-    scope_id=SETTINGS_SCOPE_ID,
-    repo=SETTINGS_REPO,
-    values=SETTINGS,
-    allow_loosen=None,
-    updated_by=OPERATOR,
-    expected_version=None,
-):
-    return store.put_settings(
-        namespace, scope, scope_id, repo, values,
-        [] if allow_loosen is None else allow_loosen,
-        updated_by, expected_version,
-    )
-
-
-@covers('get_settings', 'put_settings')
-def test_settings_round_trip_and_a_missing_record_is_none(backend):
-    store = backend.store
-    key = (DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO)
-    assert store.get_settings(*key) is None
-
-    stored = _put_settings(store)
-    got = store.get_settings(*key)
-
-    assert set(got) == _SETTINGS_RECORD_FIELDS
-    assert got == stored
-    assert got['values'] == SETTINGS
-    assert got['version'] == 1
-    assert got['updated_by'] == OPERATOR
-    assert isinstance(got['updated_at'], str)
-    assert store.get_settings(*key) == got
-
-
-@covers('put_settings', 'get_settings')
-def test_allow_loosen_is_stored_as_a_sorted_set_of_key_names(backend):
-    store = backend.store
-    _put_settings(store, allow_loosen=['max_concurrent_agents', 'alpha', 'alpha'])
-
-    got = store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO)
-    assert got['allow_loosen'] == ['alpha', 'max_concurrent_agents']
-
-
-@covers('put_settings', 'get_settings')
-def test_each_settings_write_advances_the_version_by_one(backend):
-    store = backend.store
-    assert _put_settings(store, values=SETTINGS)['version'] == 1
-    assert _put_settings(store, values=OTHER_SETTINGS, expected_version=1)['version'] == 2
-
-    current = store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO)
-    assert current['version'] == 2
-    assert current['values'] == OTHER_SETTINGS
-
-
-@covers('put_settings', 'get_settings')
-def test_a_stale_settings_version_is_refused_and_the_record_is_unchanged(backend):
-    store = backend.store
-    _put_settings(store, values=SETTINGS)
-    _put_settings(store, values=OTHER_SETTINGS, expected_version=1)
-
-    with pytest.raises(SettingsVersionConflictError):
-        _put_settings(store, values=SETTINGS, expected_version=1)
-
-    current = store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO)
-    assert current['version'] == 2
-    assert current['values'] == OTHER_SETTINGS
-
-
-@covers('put_settings', 'get_settings')
-def test_a_second_settings_create_is_refused_and_the_first_record_is_kept(backend):
-    store = backend.store
-    _put_settings(store, values=SETTINGS)
-
-    with pytest.raises(SettingsVersionConflictError):
-        _put_settings(store, values=OTHER_SETTINGS)
-
-    current = store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO)
-    assert current['version'] == 1
-    assert current['values'] == SETTINGS
-
-
-@covers('put_settings', 'get_settings')
-def test_an_expected_version_on_a_missing_settings_record_is_refused(backend):
-    store = backend.store
-
-    with pytest.raises(SettingsVersionConflictError):
-        _put_settings(store, expected_version=1)
-
-    assert store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO) is None
-
-
-@covers('put_settings', 'get_settings')
-def test_settings_records_are_kept_per_key(backend):
-    store = backend.store
-    _put_settings(store, scope='deployment', scope_id='', values=SETTINGS)
-    _put_settings(store, scope='org', scope_id='acme', values=OTHER_SETTINGS)
-
-    deployment = store.get_settings(DEFAULT_NAMESPACE, 'deployment', '', SETTINGS_REPO)
-    org = store.get_settings(DEFAULT_NAMESPACE, 'org', 'acme', SETTINGS_REPO)
-    assert deployment['values'] == SETTINGS
-    assert org['values'] == OTHER_SETTINGS
-
-
-_INVALID_SETTINGS_WRITES = (
-    pytest.param({'scope': 'galaxy'}, InvalidRecordKeyError, id='unknown-scope'),
-    pytest.param({'scope': 'deployment', 'scope_id': 'acme'}, InvalidRecordKeyError,
-                 id='deployment-with-a-scope-id'),
-    pytest.param({'scope_id': ''}, InvalidRecordKeyError, id='org-without-a-scope-id'),
-    pytest.param({'scope_id': 'Acme Corp'}, InvalidRecordKeyError,
-                 id='scope-id-not-an-identifier'),
-    pytest.param({'repo': SETTINGS_REPO_KEY}, InvalidRecordKeyError,
-                 id='repo-on-a-scope-without-one'),
-    pytest.param({'scope': 'team_repo', 'scope_id': 'alpha', 'repo': 'not-a-repo'},
-                 InvalidRecordKeyError, id='malformed-repo'),
-    pytest.param({'scope': 'team_repo', 'scope_id': 'alpha',
-                  'repo': 'github.com/acme/' + 'a' * 250},
-                 InvalidRecordKeyError, id='repo-over-256-characters'),
-    pytest.param({'values': ['not', 'a', 'dict']}, TypeError, id='values-not-a-dict'),
-    pytest.param({'values': {'max_concurrent_agents': object()}}, TypeError,
-                 id='values-not-json-serialisable'),
-    pytest.param({'allow_loosen': 'max_concurrent_agents'}, TypeError,
-                 id='allow-loosen-not-a-list'),
-    pytest.param({'updated_by': None}, TypeError, id='updated-by-not-a-str'),
-    pytest.param({'expected_version': '1'}, TypeError, id='version-not-an-int'),
-    pytest.param({'expected_version': True}, TypeError, id='version-is-a-bool'),
-)
-
-
-@pytest.mark.parametrize('overrides, error', _INVALID_SETTINGS_WRITES)
-@covers('put_settings', 'get_settings', 'list_settings')
-def test_a_settings_write_with_an_invalid_key_or_shape_is_refused_and_nothing_is_written(
-    backend, overrides, error
-):
-    store = backend.store
-    with pytest.raises(error):
-        _put_settings(store, **overrides)
-
-    assert store.get_settings(DEFAULT_NAMESPACE, SETTINGS_SCOPE, SETTINGS_SCOPE_ID, SETTINGS_REPO) is None
-    assert store.list_settings(DEFAULT_NAMESPACE) == []
-
-
-@covers('put_settings', 'list_settings')
-def test_settings_list_is_sorted_by_key_and_refuses_other_namespaces(backend):
-    store = backend.store
-    _put_settings(store, scope='team', scope_id='alpha', values=SETTINGS)
-    _put_settings(store, scope='deployment', scope_id='', values=OTHER_SETTINGS)
-    _put_settings(store, scope='team_repo', scope_id='alpha', repo=SETTINGS_REPO_KEY,
-                  values=SETTINGS)
-
-    listed = store.list_settings(DEFAULT_NAMESPACE)
-    assert [(r['scope'], r['scope_id'], r['repo']) for r in listed] == [
-        ('deployment', '', ''),
-        ('team', 'alpha', ''),
-        ('team_repo', 'alpha', SETTINGS_REPO_KEY),
-    ]
-    assert [r['values'] for r in listed] == [OTHER_SETTINGS, SETTINGS, SETTINGS]
-
-    with pytest.raises(InvalidRecordKeyError):
-        store.list_settings(INVALID_NAMESPACE)
-    if 'settings' in backend.serves_other:
-        assert store.list_settings(FOREIGN) == []
-    else:
-        with pytest.raises(UnknownNamespaceError):
-            store.list_settings(FOREIGN)
-
-
 # -- registry -------------------------------------------------------------------
 
 
@@ -1070,3 +861,9 @@ NAMESPACE_CHECKS = (
     check_foreign_write_is_contained,
     check_foreign_write_leaves_default_unchanged,
 )
+
+
+# The settings cases (ADR 0015) live in their own module, which imports this
+# one, so it is loaded last. Keeping them there holds this file under the
+# 1000-line gate; the star import re-exports them to every consumer.
+from pipeline.testing.store_conformance_settings import *

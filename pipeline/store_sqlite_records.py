@@ -28,7 +28,6 @@ import time
 from typing import Any
 
 from pipeline.store_records import DEFAULT_NAMESPACE
-from pipeline.store_settings import next_version, settings_record
 
 #: The optional progress fields the legacy journal reader fills in.  The record
 #: view omits them when the writer never set them; the ``Store`` API, whose
@@ -39,27 +38,6 @@ JOURNAL_OPTIONAL_FIELDS = ("step", "summary", "next_hint")
 def completion_timestamp() -> str:
     """Return the moment a plan is completed, as an ISO 8601 UTC stamp."""
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-
-
-_SETTINGS_COLUMNS = (
-    'scope, scope_id, repo, values_json, allow_loosen_json, version, '
-    'updated_at, updated_by'
-)
-
-
-def _settings_from_row(row: tuple) -> dict:
-    """Return the stored settings record a ``settings`` row holds."""
-    scope, scope_id, repo, values_json, allow_loosen_json, version, updated_at, updated_by = row
-    return {
-        'scope': scope,
-        'scope_id': scope_id,
-        'repo': repo,
-        'values': json.loads(values_json),
-        'allow_loosen': json.loads(allow_loosen_json),
-        'version': version,
-        'updated_at': updated_at,
-        'updated_by': updated_by,
-    }
 
 
 class RecordTablesMixin:
@@ -334,69 +312,6 @@ class RecordTablesMixin:
             (namespace, repo_key),
         )
         return None if row is None else json.loads(row[0])
-
-    # -- settings (ADR 0015) -------------------------------------------
-    def _settings_row(
-        self, namespace: str, scope: str, scope_id: str, repo: str
-    ) -> dict | None:
-        """Return the settings record for the key, or ``None`` when unset."""
-        row = self._record_row(
-            f'SELECT {_SETTINGS_COLUMNS} FROM settings WHERE namespace = ? '
-            'AND scope = ? AND scope_id = ? AND repo = ?',
-            (namespace, scope, scope_id, repo),
-        )
-        return None if row is None else _settings_from_row(row)
-
-    def _put_settings_row(
-        self,
-        namespace: str,
-        scope: str,
-        scope_id: str,
-        repo: str,
-        values: dict,
-        allow_loosen: list[str],
-        updated_by: str,
-        expected_version: int | None,
-    ) -> dict:
-        """Write the settings record for the key, compare-and-set on its version.
-
-        The read of the stored version and the write are one step inside the
-        store's write transaction, so a concurrent writer cannot slip in
-        between them. A conflict raises before the row is touched.
-        """
-        with self._write_records():
-            current = self._settings_row(namespace, scope, scope_id, repo)
-            record = settings_record(
-                scope, scope_id, repo, values, allow_loosen,
-                next_version(current, expected_version), updated_by,
-            )
-            self._conn.execute(
-                'INSERT INTO settings (namespace, scope, scope_id, repo, '
-                'values_json, allow_loosen_json, version, updated_at, updated_by) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, scope, '
-                'scope_id, repo) DO UPDATE SET values_json = excluded.values_json, '
-                'allow_loosen_json = excluded.allow_loosen_json, '
-                'version = excluded.version, updated_at = excluded.updated_at, '
-                'updated_by = excluded.updated_by',
-                (
-                    namespace, scope, scope_id, repo,
-                    json.dumps(record['values']),
-                    json.dumps(record['allow_loosen']),
-                    record['version'], record['updated_at'], record['updated_by'],
-                ),
-            )
-        return record
-
-    def _settings_rows(self, namespace: str) -> list[dict]:
-        """Return every settings record in ``namespace``, ordered by key."""
-        return [
-            _settings_from_row(row)
-            for row in self._record_rows(
-                f'SELECT {_SETTINGS_COLUMNS} FROM settings '
-                'WHERE namespace = ? ORDER BY scope, scope_id, repo',
-                (namespace,),
-            )
-        ]
 
     # -- the legacy ``Store`` API over the same rows --------------------
     def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:

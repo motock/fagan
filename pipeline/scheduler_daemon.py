@@ -911,8 +911,7 @@ def run_daemon() -> int:
     from .log_format import configure_logging_from_env
     from .settings_env_guard import refuse_retired_env
 
-    # Before the lock, the logging setup and the authorizer: a retired variable
-    # exits here, so nothing is claimed or served under a stale configuration.
+    # Exit before the lock so nothing is claimed under a stale configuration.
     refuse_retired_env()
     configure_logging_from_env()
     activate_authorizer()

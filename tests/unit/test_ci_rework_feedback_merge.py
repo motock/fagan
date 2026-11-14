@@ -100,7 +100,7 @@ class _FakeBackend:
         return {"ok": True, "reason": ""}
 
 
-def _stub_tick(monkeypatch):
+def _stub_tick(monkeypatch, seed_merge_gate):
     """Stub every model/subprocess seam around the tick.
 
     Only the external seams are replaced: the merge-gate CI status, the
@@ -108,7 +108,7 @@ def _stub_tick(monkeypatch):
     merge-gate branch run end to end.
     """
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 4)
     monkeypatch.setattr(
@@ -161,13 +161,14 @@ def _stub_tick(monkeypatch):
 def test_merge_gate_ci_failure_keeps_prior_review_feedback(
     plan_dir,  # noqa: F811 - pytest fixture param, not a redefinition
     monkeypatch,
+    seed_merge_gate,
 ):
     """THE regression guard: a CI-fail rework must not replace review feedback.
 
     Fails against the pre-change call site, where ``review_feedback`` is
     exactly ``"CI TEXT"`` and the reviewer's findings are gone.
     """
-    _stub_tick(monkeypatch)
+    _stub_tick(monkeypatch, seed_merge_gate)
     _write_manifest(plan_dir, "cimerge_prior", {
         "P1": {
             "summary": "pr open story",

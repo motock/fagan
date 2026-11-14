@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import merge_reverify
-from .ci import gate_record, settings_for_plan
+from .ci import SettingsContext, gate_record, settings_for_plan
 from .host_state import build_host_state
 from .merge_reverify import (
     cancel_merge_reverify,
@@ -47,28 +47,14 @@ _REVERIFY_FAIL = "fail"
 # PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS.
 MERGE_REVERIFY_TIMEOUT_DEFAULT = 1800.0
 
-# Default wall-clock budget for waiting out GitHub's *computation* of a PR's
-# mergeability before falling back to "retry next tick". Overridable with
-# PIPELINE_MERGE_READINESS_TIMEOUT. See _await_merge_readiness.
-MERGE_READINESS_TIMEOUT_DEFAULT = 180.0
-
-
-def _merge_readiness_timeout() -> float:
+def _merge_readiness_timeout(settings: SettingsContext) -> float:
     """Wall-clock budget for one merge-readiness poll, in seconds.
 
-    Read from the environment on EVERY call, never cached at import time: a
-    module-level constant would make ``monkeypatch.setenv`` in the tests a
-    no-op and turn a "pending forever" case into a 180-second real sleep. An
-    unparseable value falls back to the default; a negative value means "do
-    not wait" (one non-blocking read, then the caller retries next tick).
+    The plan's resolved ``merge_readiness_timeout_s`` (default 180), read
+    for the plan's (namespace, team, repo) on every call so a settings change
+    applies to the next tick without a restart.
     """
-    try:
-        timeout = float(
-            os.environ.get("PIPELINE_MERGE_READINESS_TIMEOUT", "180")
-        )
-    except (TypeError, ValueError):
-        return MERGE_READINESS_TIMEOUT_DEFAULT
-    return max(0.0, timeout)
+    return float(settings.value("merge_readiness_timeout_s"))
 
 
 def _merge_readiness_forge():
@@ -94,7 +80,9 @@ def _merge_readiness_forge():
         return None
 
 
-def _await_merge_readiness(forge, worktree: str, branch: str) -> str:
+def _await_merge_readiness(
+    forge, worktree: str, branch: str, settings: SettingsContext
+) -> str:
     """Poll the host until it has FINISHED computing this PR's mergeability.
 
     Returns ``"ready"``, ``"blocked"`` or ``"pending"`` (the budget expired
@@ -117,11 +105,12 @@ def _await_merge_readiness(forge, worktree: str, branch: str) -> str:
         # exactly as before this gate existed and let the merge's own failure
         # be the signal.
         return "ready"
-    deadline = time.monotonic() + _merge_readiness_timeout()
+    deadline = time.monotonic() + _merge_readiness_timeout(settings)
+    ci_gate_on = bool(settings.value("merge_ci_gate"))
     delay = 5.0
     while True:
         try:
-            state = read(worktree, branch)
+            state = read(worktree, branch, ci_gate_on=ci_gate_on)
         except Exception:  # noqa: BLE001 - unreadable is pending, never ready
             state = "pending"
         if state == "ready":
@@ -767,7 +756,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 summary["notify"].append(key)
                 continue
 
-            # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
+            # Opt-in (the rework_on_ci_fail setting, per repo): a DEFINITIVE CI test
             # failure - not a transient rebase/push error, not
             # pending/cancelled - can be caused by the agent's own
             # committed test file rather than the reviewed implementation
@@ -780,9 +769,8 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
             # token_bucket: ground-truth-correct code abandoned because the
             # agent's own broken self-test tripped this gate).
-            rework_ok = (
-                ci_definitive_fail
-                and os.environ.get("PIPELINE_REWORK_ON_CI_FAIL", "0") == "1"
+            rework_ok = ci_definitive_fail and bool(
+                settings.value("rework_on_ci_fail")
             )
             if rework_ok:
                 # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts
@@ -895,12 +883,12 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # nothing to interrogate; it then behaves exactly as before.
         if story.get("pr_url"):
             readiness = _await_merge_readiness(
-                _merge_readiness_forge(), worktree, branch
+                _merge_readiness_forge(), worktree, branch, settings
             )
             if readiness == "pending":
                 story["merge_pending_reason"] = (
                     "merge readiness still pending after "
-                    f"{_merge_readiness_timeout():g}s"
+                    f"{_merge_readiness_timeout(settings):g}s"
                 )
                 # Deliberately NOT an attempt: this is a state the host has
                 # not finished computing, not a refusal. The manifest write at

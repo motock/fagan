@@ -186,12 +186,12 @@ def test_advance_pipeline_ci_fail_blocks_merge(plan_dir, monkeypatch):
     assert result["failed"] == []
 
 
-def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monkeypatch, seed_merge_gate):
     # PIPELINE_REWORK_ON_CI_FAIL=1: a definitive CI test failure on an
     # APPROVEd branch (e.g. the agent's own broken self-test, invisible to
     # the acceptance-scoped reviewer) is handed back to the implementer as
     # rework feedback instead of silently retrying the unchanged branch.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -219,13 +219,13 @@ def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monke
     assert result["failed"] == []
 
 
-def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypatch, seed_merge_gate):
     # L1 (REVIEWER_ESCALATION_PLAN.md): when a definitive CI failure is routed
     # to rework, the story must carry a `ci_rework` flag so dispatch_story can
     # raise the agent's done-bar to full-suite-green on the redispatch. Without
     # it the rework round keeps the oracle-green bar and re-fails CI on the same
     # assertion (the gpt-oss token_bucket loop).
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -246,7 +246,7 @@ def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypat
     assert story.get("ci_rework") is True
 
 
-def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, monkeypatch, seed_merge_gate):
     # Dead-code/wiring guard (MODE40-CI-REWORK-FEEDBACK-V2): the merge-gate
     # CI-fail block must CALL _ci_rework_feedback(gate_error) rather than keep
     # an inline template. The glm-authored unit suite calls the helper in
@@ -258,7 +258,7 @@ def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, mo
     # non-lint branches). The pre-MODE40 inline template lacks that sentence
     # (it instead says "an incorrect assertion"), so this assertion fails on
     # an unwired/inline merge-gate and passes only when the helper is wired.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -287,7 +287,6 @@ def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkey
     # Without the flag, a definitive CI failure keeps today's exact behavior:
     # merge_attempts increments and the story terminal-fails at the cap - no
     # rework routing.
-    monkeypatch.delenv("PIPELINE_REWORK_ON_CI_FAIL", raising=False)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 1)
@@ -310,11 +309,11 @@ def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkey
     assert "P1" in result["failed"]
 
 
-def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_dir, monkeypatch, seed_merge_gate):
     # Once the merge-CI rework budget is already spent (merge_attempts has
     # reached MERGE_MAX_ATTEMPTS), a further CI fail must not loop forever on
     # rework - it falls through to the existing terminal-fail path.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -338,7 +337,7 @@ def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_d
     assert "P1" in result["failed"]
 
 
-def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_dir, monkeypatch, seed_merge_gate):
     # Regression (2026-07-17, token_bucket live run): the merge-CI->rework
     # loop MUST be bounded by merge_attempts, not rework_attempts. The review
     # APPROVE path (~line 4189) pops rework_attempts on every pass because the
@@ -349,7 +348,7 @@ def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_di
     # merge gate's own counter and is NOT reset by review, so it must advance
     # 1->2->3 across rework -> review APPROVE -> merge-gate cycles, then
     # terminal-fail instead of looping forever.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -405,10 +404,10 @@ def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_di
     assert "P1" in result["failed"]
 
 
-def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, monkeypatch):
+def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, monkeypatch, seed_merge_gate):
     # A push/network failure is not a CI verdict at all - it must never
     # consume rework budget even with the opt-in flag set.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -438,10 +437,10 @@ def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, 
     assert result["merged"] == []
 
 
-def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch, seed_merge_gate):
     # A pending CI result is not a definitive failure - it must keep retrying
     # via the ordinary merge_attempts path, never rework, even with the flag on.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -469,10 +468,10 @@ def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch)
     assert result["merged"] == []
 
 
-def test_advance_pipeline_cancelled_ci_not_routed_to_rework(plan_dir, monkeypatch):
+def test_advance_pipeline_cancelled_ci_not_routed_to_rework(plan_dir, monkeypatch, seed_merge_gate):
     # A cancelled-only CI result (after its one auto-rerun) carries no
     # code-quality signal - it must fall to the ordinary retry path, not rework.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)

@@ -71,6 +71,15 @@ _MERGEABLE_BLOCKED = frozenset({"CONFLICTING", "DIRTY"})
 # protection. UNKNOWN/BEHIND/hashes are not refusals.
 _MERGE_STATE_BLOCKED = frozenset({"DIRTY", "DRAFT", "BLOCKED"})
 
+# What ``merge_readiness`` reads as landable. With the merge CI gate OFF, an
+# uncomputed mergeability (``UNKNOWN``, or a null that reads as "") and failing
+# checks (``UNSTABLE``) are landable too: the operator has said CI results do
+# not gate a merge. Gate ON keeps the strict pair.
+_MERGEABLE_LANDABLE = frozenset({"MERGEABLE"})
+_MERGEABLE_LANDABLE_GATE_OFF = _MERGEABLE_LANDABLE | {"", "UNKNOWN"}
+_MERGE_STATE_LANDABLE = frozenset({"CLEAN"})
+_MERGE_STATE_LANDABLE_GATE_OFF = _MERGE_STATE_LANDABLE | {"UNSTABLE"}
+
 
 class ForgeMergeRefused(subprocess.CalledProcessError):
     """A ``merge_pr`` refusal that reports gh's own stderr as its message.
@@ -151,14 +160,18 @@ class GitHubForge(Forge):
         )
 
     def merge_readiness(
-        self, worktree: str, branch: str
+        self, worktree: str, branch: str, *, ci_gate_on: bool = True
     ) -> Literal["ready", "pending", "blocked"]:
         """Has GitHub FINISHED deciding whether this PR can land?
 
         ``ready``: computed and landable (MERGEABLE + CLEAN).
         ``blocked``: a definitive refusal - a conflict, a draft PR, or branch
         protection.
-        ``pending``: everything else, including ``UNKNOWN``. Right after a
+        ``pending``: everything else, including ``UNKNOWN``. With
+        ``ci_gate_on=False`` the operator has said CI results do not gate a
+        merge, so an uncomputed mergeability (``UNKNOWN``) and failing checks
+        (``UNSTABLE``) also read ``ready``; a conflict, a draft, or branch
+        protection still block. Right after a
         push GitHub still *computes* mergeability and reports ``UNKNOWN``
         while ``gh pr merge`` refuses instead of waiting. That refusal is not
         a failed merge: on 2026-11-08 it burned four merge attempts on PR
@@ -192,7 +205,12 @@ class GitHubForge(Forge):
         # contradictory pair), then "ready" needs BOTH fields to agree.
         if mergeable in _MERGEABLE_BLOCKED or state in _MERGE_STATE_BLOCKED:
             return "blocked"
-        if mergeable == "MERGEABLE" and state == "CLEAN":
+        landable_mergeable = _MERGEABLE_LANDABLE
+        landable_state = _MERGE_STATE_LANDABLE
+        if not ci_gate_on:
+            landable_mergeable = _MERGEABLE_LANDABLE_GATE_OFF
+            landable_state = _MERGE_STATE_LANDABLE_GATE_OFF
+        if mergeable in landable_mergeable and state in landable_state:
             return "ready"
         return "pending"
 

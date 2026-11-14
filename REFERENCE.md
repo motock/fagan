@@ -3712,6 +3712,21 @@ A repo with no recorded audit is due as soon as either threshold is on, and a
 value that is not a non-negative integer disables that check.
 
 
+## Seeding settings from the environment
+
+`python -m pipeline.settings_seed` copies the eight legacy `PIPELINE_*` variables that are set in the current environment into the settings Store. The keys are `merge_ci_gate`, `merge_build_gate`, `test_scope`, `merge_ci_timeout_s`, `merge_readiness_timeout_s`, `rework_on_ci_fail`, `reverify_full_suite` and `grade_xdist_workers`, and the legacy names are the ones in the settings registry. Unset and blank variables are ignored.
+
+- No flags: writes a `deployment` record. The values apply to every team and repo.
+- `--team T --repo R`: writes a `team_repo` record for that team and repo instead. Use both or neither; either one alone is a usage error.
+- `--dry-run`: lists what would be written under `planned` and writes nothing.
+- `--overwrite`: replaces a stored value that differs. Without it, a differing stored value is reported as `already_set` and left alone. An identical stored value is reported under `unchanged`.
+
+A value is parsed with the rule its old reader used. `PIPELINE_MERGE_CI_GATE`, `PIPELINE_MERGE_BUILD_GATE` and `PIPELINE_REVERIFY_FULL_SUITE` are off only for `0`, so `false` leaves them on. `PIPELINE_REWORK_ON_CI_FAIL` is on only for `1`. A value that does not parse, or that is outside the registry range, is listed under `skipped` with `reason: invalid_value` and is never written. Writes go through `set_setting`, so authorization and the host audit chain apply. The CLI runs as the local operator.
+
+The output is one JSON object with `ok`, the target `scope`, `scope_id` and `repo`, `dry_run`, and the lists `written`, `planned`, `unchanged` and `skipped`. Each entry names the `key` and its `legacy_env`. The exit status is 0 on success and 1 when the Store cannot be read. A usage error exits 2.
+
+Seeding does not change what the running process reads: the legacy readers still read the environment directly. Run it once with no scope for container-wide values, then with `--team` and `--repo` for any value that was meant for one repository only.
+
 ## End-to-end workflow
 
 1. **Plan.** Use the `product-analyst` persona to produce a plan, then

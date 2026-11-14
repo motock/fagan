@@ -25,8 +25,8 @@ from .authority_matrix import HUMAN_TIER, FileLayerSource, tier_for
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .triage_park_classes import _is_test_path, check_ruling_allowed, classify_park
-from .triage_rebase import _default_branch, _git, _repo_root
-from .triage_rebrief import DIAGNOSIS_HISTORY
+from .triage_rebase import _git
+from .triage_rebrief import DIAGNOSIS_HISTORY, plan_repo
 
 _park = _ModuleRef("pipeline.triage", "_park")
 _triage_mode = _ModuleRef("pipeline.triage", "_triage_mode")
@@ -105,9 +105,14 @@ def execute_approve_test_edit(plan_name, story_key, story, ruling, manifest) -> 
             plan_name, story_key, story,
             "approve_test_edit declined: no branch is recorded for this story; parked for a human",
         )
-    repo = _repo_root()
+    repo = plan_repo(manifest)
+    if isinstance(repo, str):
+        return _park(
+            plan_name, story_key, story,
+            f"approve_test_edit declined: {repo}; parked for a human",
+        )
     try:
-        base_sha, head_sha, diff = _live_evidence(repo, _default_branch(), branch)
+        base_sha, head_sha, diff = _live_evidence(repo.root, repo.default_branch, branch)
     except Exception:  # noqa: BLE001 - fail closed on any git or config failure
         return _park(
             plan_name, story_key, story,
@@ -134,7 +139,7 @@ def execute_approve_test_edit(plan_name, story_key, story, ruling, manifest) -> 
             "parked for a human",
         )
 
-    verdict = test_edit_judge.judge(base_sha, head_sha, repo, name=name, brief=_brief(story))
+    verdict = test_edit_judge.judge(base_sha, head_sha, repo.root, name=name, brief=_brief(story))
     tier = resolve_tier()
     outside = sorted(set(verdict.test_files) - set(named))
     blockers: list[str] = []

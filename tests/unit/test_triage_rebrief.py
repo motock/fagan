@@ -15,6 +15,9 @@ writes through the store.
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 import pipeline.server as p
@@ -59,11 +62,23 @@ def notices(monkeypatch):
 
 
 @pytest.fixture
-def live(monkeypatch):
-    """Stub live evidence: branch on origin and the PR state. Defaults to confirmed."""
-    evidence = {"branch": True, "pr_state": "OPEN"}
+def live(monkeypatch, tmp_path):
+    """Stub live evidence: branch on origin and the PR state. Defaults to confirmed.
+
+    ``root`` is a real git repository standing for the plan's ``repo_root``.
+    ``pr_roots`` records the repository each PR query was made against.
+    """
+    root = tmp_path / "plan"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    evidence = {"branch": True, "pr_state": "OPEN", "root": str(root), "pr_roots": []}
+
+    def pr_state(repo_root, pr_url):
+        evidence["pr_roots"].append(repo_root)
+        return evidence["pr_state"]
+
     monkeypatch.setattr(tr, "_branch_on_origin", lambda repo, branch: evidence["branch"])
-    monkeypatch.setattr(tr, "_pr_state", lambda pr_url: evidence["pr_state"])
+    monkeypatch.setattr(tr, "_pr_state", pr_state)
     return evidence
 
 
@@ -94,8 +109,8 @@ def _persisted() -> dict:
     return FileStore().get_manifest(_PLAN)["stories"][_STORY]
 
 
-def _retry(story: dict) -> str:
-    manifest = {"plan": _PLAN, "stories": {_STORY: story}}
+def _retry(story: dict, live: dict) -> str:
+    manifest = {"plan": _PLAN, "repo_root": live["root"], "stories": {_STORY: story}}
     return tr.execute_retry_transient(_PLAN, _STORY, story, {"action": "retry_transient"}, manifest)
 
 
@@ -120,7 +135,7 @@ def test_retry_transient_unparks_when_branch_and_pr_are_live(plan_dir, notices, 
     story = _story()
     _write(story)
 
-    result = _retry(story)
+    result = _retry(story, live)
 
     assert result == "retry_transient"
     assert story["status"] == "tests_passed"
@@ -134,7 +149,7 @@ def test_retry_transient_records_one_unpark_event(plan_dir, notices, live):
     story = _story()
     _write(story)
 
-    _retry(story)
+    _retry(story, live)
 
     assert len(_unparked(notices)) == 1
 
@@ -144,7 +159,7 @@ def test_retry_transient_parks_with_a_reason_when_branch_is_gone(plan_dir, notic
     story = _story()
     _write(story)
 
-    result = _retry(story)
+    result = _retry(story, live)
 
     assert result == "park_for_human"
     assert story["status"] == "parked"
@@ -153,16 +168,15 @@ def test_retry_transient_parks_with_a_reason_when_branch_is_gone(plan_dir, notic
     assert _persisted()["status"] == "parked"
 
 
-def test_retry_transient_parks_when_branch_query_fails(plan_dir, notices, monkeypatch):
+def test_retry_transient_parks_when_branch_query_fails(plan_dir, notices, live, monkeypatch):
     def raise_guard(repo, branch):
         raise BranchGuardError("could not query origin")
 
     monkeypatch.setattr(tr, "_branch_on_origin", raise_guard)
-    monkeypatch.setattr(tr, "_pr_state", lambda pr_url: "OPEN")
     story = _story()
     _write(story)
 
-    assert _retry(story) == "park_for_human"
+    assert _retry(story, live) == "park_for_human"
     assert story["status"] == "parked"
     assert _unparked(notices) == []
 
@@ -173,7 +187,7 @@ def test_retry_transient_does_not_retry_when_pr_is_not_open(plan_dir, notices, l
     story = _story()
     _write(story)
 
-    assert _retry(story) == "park_for_human"
+    assert _retry(story, live) == "park_for_human"
     assert story["status"] == "parked"
     assert _unparked(notices) == []
 
@@ -188,7 +202,7 @@ def test_retry_transient_declines_merged_pr_and_leaves_it_for_mark_done(plan_dir
     story = _story(parked_reason=_TRANSIENT_REASON)
     _write(story)
 
-    result = _retry(story)
+    result = _retry(story, live)
 
     assert result == "park_for_human"
     assert story["status"] == "parked"
@@ -201,7 +215,7 @@ def test_retry_transient_refuses_a_story_without_a_pr_url(plan_dir, notices, liv
     story = _story(pr_url=None)
     _write(story)
 
-    assert _retry(story) == "park_for_human"
+    assert _retry(story, live) == "park_for_human"
     assert story["status"] == "parked"
     assert _unparked(notices) == []
 
@@ -210,7 +224,7 @@ def test_retry_transient_refuses_a_park_outside_transient_bookkeeping(plan_dir, 
     story = _story(parked_reason=_REBASE_REASON)
     _write(story)
 
-    assert _retry(story) == "park_for_human"
+    assert _retry(story, live) == "park_for_human"
     assert story["status"] == "parked"
     assert _unparked(notices) == []
 
@@ -219,7 +233,7 @@ def test_retry_transient_allows_the_second_retry_and_counts_it(plan_dir, notices
     story = _story(triage_transient_retries=1)
     _write(story)
 
-    assert _retry(story) == "retry_transient"
+    assert _retry(story, live) == "retry_transient"
     assert story["triage_transient_retries"] == 2
 
 
@@ -227,7 +241,7 @@ def test_third_retry_parks_for_a_human_without_unparking(plan_dir, notices, live
     story = _story(triage_transient_retries=2)
     _write(story)
 
-    result = _retry(story)
+    result = _retry(story, live)
 
     assert result == "park_for_human"
     assert story["status"] == "parked"
@@ -478,6 +492,7 @@ def test_execute_mode_retry_transient_unparks_through_the_ruling_path(
 ):
     story = _story()
     manifest = _write(story)
+    manifest["repo_root"] = live["root"]
 
     result = triage._apply_ruling_for_mode(
         _PLAN, _STORY, story, {"action": "retry_transient", "rationale": "r"}, manifest
@@ -583,3 +598,129 @@ def test_overlord_diagnosis_line_reaches_the_rebrief_executor(
 
     assert result == "rebrief"
     assert story["triage_diagnosis"][-1]["text"] == "The brief names the wrong file."
+
+
+# ---------------------------------------------------------------------------
+# The plan's repository, never the server's
+# ---------------------------------------------------------------------------
+
+_NO_REPO_ROOT = object()
+
+
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=cwd, capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
+
+
+def _plan_repo(tmp_path: Path, name: str, default: str, branches=()) -> Path:
+    """A clone of a bare origin whose HEAD is ``default`` and which holds ``branches``.
+
+    The seed commit's content is ``name``, so two repos built here never share
+    a SHA. The clone sets ``refs/remotes/origin/HEAD``, which the plan repo check reads.
+    """
+    origin = tmp_path / f"{name}-origin.git"
+    seed = tmp_path / f"{name}-seed"
+    _git(tmp_path, "init", "-q", "--bare", "-b", default, str(origin))
+    _git(tmp_path, "init", "-q", "-b", default, str(seed))
+    (seed / "f.txt").write_text(f"{name}\n", encoding="utf-8")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-q", "-m", "base")
+    _git(seed, "remote", "add", "origin", str(origin))
+    _git(seed, "push", "-q", "origin", default)
+    for branch in branches:
+        _git(seed, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+    clone = tmp_path / name
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    return clone
+
+
+def _manifest(story: dict, root) -> dict:
+    manifest = {"plan": _PLAN, "stories": {_STORY: story}}
+    if root is not _NO_REPO_ROOT:
+        manifest["repo_root"] = root
+    return manifest
+
+
+def test_plan_repo_reports_the_default_branch_from_origin_head(tmp_path):
+    clone = _plan_repo(tmp_path, "plan", "main")
+
+    assert tr.plan_repo({"repo_root": str(clone)}) == tr.PlanRepo(str(clone), "main")
+
+
+def test_plan_repo_falls_back_to_the_checked_out_branch_without_origin_head(tmp_path):
+    repo = tmp_path / "solo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "trunk")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+
+    assert tr.plan_repo({"repo_root": str(repo)}) == tr.PlanRepo(str(repo), "trunk")
+
+
+def test_retry_transient_asks_the_forge_about_the_plan_repo(plan_dir, notices, live, monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path / "elsewhere")
+    story = _story()
+    _write(story)
+
+    assert _retry(story, live) == "retry_transient"
+    assert live["pr_roots"] == [live["root"]]
+
+
+def test_retry_transient_ignores_a_branch_that_exists_only_on_the_servers_repo(
+    plan_dir, notices, monkeypatch, tmp_path
+):
+    plan = _plan_repo(tmp_path, "plan", "main")
+    server_repo = _plan_repo(tmp_path, "server", "master", [_BRANCH])
+    monkeypatch.setattr(p, "REPO_ROOT", server_repo)
+    monkeypatch.setattr(tr, "_pr_state", lambda repo_root, pr_url: "OPEN")
+    story = _story()
+    _write(story)
+
+    result = tr.execute_retry_transient(
+        _PLAN, _STORY, story, {"action": "retry_transient"}, _manifest(story, str(plan))
+    )
+
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert "no longer on origin" in story["parked_reason"]
+    assert _unparked(notices) == []
+
+
+@pytest.mark.parametrize("case", ["missing", "none", "empty", "non_string", "not_a_directory", "not_a_git_directory"])
+def test_retry_transient_parks_a_plan_without_a_usable_repo_root_and_never_falls_back(
+    case, plan_dir, notices, monkeypatch, tmp_path
+):
+    server_repo = _plan_repo(tmp_path, "server", "master", [_BRANCH])
+    monkeypatch.setattr(p, "REPO_ROOT", server_repo)
+    asked: list = []
+    monkeypatch.setattr(tr, "_branch_on_origin", lambda repo, branch: True)
+    monkeypatch.setattr(tr, "_pr_state", lambda repo_root, pr_url: asked.append(repo_root) or "OPEN")
+    roots = {
+        "missing": _NO_REPO_ROOT,
+        "none": None,
+        "empty": "",
+        "non_string": 7,
+        "not_a_directory": str(_write_file(tmp_path / "plan.txt")),
+        "not_a_git_directory": str(_make_dir(tmp_path / "plain")),
+    }
+    story = _story()
+    _write(story)
+
+    result = tr.execute_retry_transient(
+        _PLAN, _STORY, story, {"action": "retry_transient"}, _manifest(story, roots[case])
+    )
+
+    assert (result, story["status"], asked, _unparked(notices)) == ("park_for_human", "parked", [], [])
+    assert "repo_root" in story["parked_reason"]
+
+
+def _write_file(path: Path) -> Path:
+    path.write_text("x", encoding="utf-8")
+    return path
+
+
+def _make_dir(path: Path) -> Path:
+    path.mkdir()
+    return path

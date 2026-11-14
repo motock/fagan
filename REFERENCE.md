@@ -1522,6 +1522,12 @@ on the same base SHA and a fourth attempt ever. A refused attempt is not recorde
 `agent_instructions` and `files` are never written by these executors. See
 `overlord-policy.md` ("retry_transient and rebrief").
 
+The `retry_transient`, `resolve_rebase` and `approve_test_edit` executors act on the plan's own
+repository, `repo_root` in its manifest, and on that repository's default branch; they never use the
+server's `REPO_ROOT`. A plan with no usable `repo_root` (missing, empty, non-string, not an absolute
+directory, or not the root of a git repository) is refused and its story parked for a human. See
+`overlord-policy.md` ("Repository scope").
+
 ### Operator runbook: backfilling plans ingested before these fields existed
 
 Plans ingested before the fields above shipped have a staged draft

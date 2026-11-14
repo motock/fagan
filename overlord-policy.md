@@ -175,6 +175,15 @@ The four new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_t
 shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
 notified, and the story is left untouched.
 
+**Repository scope.** In execute mode, `retry_transient`, `resolve_rebase` and `approve_test_edit`
+act only on the plan's own repository, `manifest["repo_root"]`, and on that repository's default
+branch (origin's HEAD, then the checked-out branch, then `main`). Every git and forge query runs
+in that directory. The server's global `REPO_ROOT` and its default-branch cache are never read.
+A plan whose `repo_root` is missing, empty, not a string, not an absolute path, not a directory,
+or not the root of a git repository is refused: the story is parked for a human with a reason
+naming `repo_root`, and nothing falls back to the server's repository. `rebrief` reads no
+repository, so it is not affected by `repo_root`.
+
 ### retry_transient and rebrief
 
 - `retry_transient` (park class `transient_bookkeeping` only) re-checks live evidence before it

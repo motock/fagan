@@ -55,7 +55,7 @@ def _bounds(setting: SettingKey) -> tuple[int, int] | None:
     return None
 
 
-def _value_problem(setting: SettingKey, value: Any) -> tuple[str, str] | None:
+def value_problem(setting: SettingKey, value: Any) -> tuple[str, str] | None:
     if not setting.accepts(value):
         return "invalid_value", f"invalid value for {setting.name!r}"
     bounds = _bounds(setting)
@@ -86,7 +86,7 @@ def _request_problem(
         return "invalid_key", str(exc)
     if not isinstance(key, str) or key not in REGISTRY:
         return "unknown_key", f"unknown settings key {_loggable(key)!r}"
-    problem = _value_problem(REGISTRY[key], value)
+    problem = value_problem(REGISTRY[key], value)
     if problem is not None:
         return problem
     if expected_version is not None and (

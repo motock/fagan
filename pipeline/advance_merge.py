@@ -18,6 +18,7 @@ from typing import Any
 
 from . import merge_reverify
 from .ci import SettingsContext, gate_record, settings_for_plan
+from .concurrency import _released_plan_lock
 from .host_state import build_host_state
 from .merge_reverify import (
     cancel_merge_reverify,
@@ -424,7 +425,12 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     if manifest is None:
         raise FileNotFoundError("manifest not found")
     stories = manifest["stories"]
-    for key, story in stories.items():
+    for key in list(stories):
+        # A readiness poll below may reload the manifest, so each key is read
+        # from the current snapshot rather than from a dict iterated up front.
+        story = stories.get(key)
+        if story is None:
+            continue
         # MERGEPARK-2: a parked high-risk merge hold is re-examined when the
         # evidence the ruling cited changed. A fresh "merge" ruling flips the
         # story to pr_open and falls through into the SAME merge path below;
@@ -882,9 +888,29 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # ``pr_url`` gates the poll because a story with no recorded PR has
         # nothing to interrogate; it then behaves exactly as before.
         if story.get("pr_url"):
-            readiness = _await_merge_readiness(
-                _merge_readiness_forge(), worktree, branch, settings
-            )
+            # The poll can sleep for the whole readiness budget, so it runs with
+            # the plan lock released: a human approve or mark-done must not see
+            # "plan busy" meanwhile. Persist this tick's edits first so the
+            # reload below keeps them, then apply the answer only if the story
+            # is still the same pr_open story that was polled.
+            polled = (story["status"], story.get("review_verdict_sha"))
+            _store.records().put_manifest("default", plan_name, manifest)
+            with _released_plan_lock(plan_name):
+                readiness = _await_merge_readiness(
+                    _merge_readiness_forge(), worktree, branch, settings
+                )
+            manifest = _store.records().get_manifest("default", plan_name)
+            if manifest is None:
+                raise FileNotFoundError("manifest not found")
+            stories = manifest["stories"]
+            story = stories.get(key)
+            if story is None or (
+                story["status"],
+                story.get("review_verdict_sha"),
+            ) != polled:
+                # A human (or another tick) moved this story on during the
+                # poll: that outcome wins and this tick does nothing for it.
+                continue
             if readiness == "pending":
                 story["merge_pending_reason"] = (
                     "merge readiness still pending after "

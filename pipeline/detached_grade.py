@@ -16,6 +16,8 @@ from pathlib import Path
 
 from .build_detect import failed_node_ids
 from .host_state import build_host_state
+from .settings_resolve import SAFE_DEFAULT_SOURCE
+from .settings_store import effective_setting
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,6 @@ def _fresh_manifest(plan_name, story_key, story, manifest, keys_at_entry=()):
 # optionally how many xdist workers each of them gets. Both live here rather
 # than in pipeline/story_status.py so that module keeps its size.
 MAX_CONCURRENT_GRADES_VAR = "PIPELINE_MAX_CONCURRENT_GRADES"
-GRADE_XDIST_WORKERS_VAR = "PIPELINE_GRADE_XDIST_WORKERS"
 
 # Invalid values already warned about, keyed by (variable, raw value). A tick
 # re-reads these variables every poll; warning on every tick would print the
@@ -119,31 +120,27 @@ def max_concurrent_grades(environ=None) -> int:
     return value
 
 
-def xdist_workers(environ=None) -> int | None:
+def xdist_workers(manifest) -> int | None:
     """The optional xdist worker count for a detached grade, or None.
 
-    ``PIPELINE_GRADE_XDIST_WORKERS`` set to a positive integer overrides the
-    ``-n auto`` in pytest's addopts (a later ``-n`` wins). Unset means "leave
-    the command alone"; an invalid value is ignored with a WARN.
+    ``grade_xdist_workers`` resolves across the tenant layers for the plan's
+    (namespace, team, repo). A value set in any layer overrides the ``-n auto``
+    in pytest's addopts (a later ``-n`` wins). When no layer sets it, the
+    command is left alone.
     """
-    if environ is None:
-        environ = os.environ
-    raw = environ.get(GRADE_XDIST_WORKERS_VAR)
-    if raw is None or raw == "":
+    # Lazy: pipeline.ci imports the settings resolver, as merge gating does.
+    from .ci import context_from_manifest
+
+    context = context_from_manifest(manifest)
+    resolved = effective_setting(
+        "grade_xdist_workers",
+        namespace=context.namespace,
+        team=context.team,
+        repo=context.repo,
+    )
+    if resolved["source"] == SAFE_DEFAULT_SOURCE:
         return None
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        _warn_invalid_once(
-            GRADE_XDIST_WORKERS_VAR, raw, "the configured default"
-        )
-        return None
-    if value < 1:
-        _warn_invalid_once(
-            GRADE_XDIST_WORKERS_VAR, raw, "the configured default"
-        )
-        return None
-    return value
+    return resolved["value"]
 
 
 def _invokes_pytest(cmd) -> bool:
@@ -491,7 +488,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     )
             try:
                 grade_pid = starter(
-                    _xdist_cmd(test_cmd, _grade_workers()),
+                    _xdist_cmd(test_cmd, _grade_workers(manifest)),
                     str(test_dir),
                     test_env,
                     str(result_path),

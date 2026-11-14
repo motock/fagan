@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import config_provenance
+from pipeline import config_provenance, settings_store
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline import test_scope_dispatch as tsd
@@ -51,22 +51,24 @@ def test_no_plan_reports_default_full_scope():
     }
 
 
-def test_no_plan_reports_env_source_when_env_requests_scoped(monkeypatch):
-    monkeypatch.setenv(tsd.TEST_SCOPE_ENV, "scoped")
+def test_no_plan_reports_deployment_source_when_deployment_requests_scoped():
+    p._store.records().put_settings(
+        "default", "deployment", "", "", {"test_scope": "scoped"}, [], "ops", None
+    )
 
     result = p.get_effective_config()
 
     assert result["test_scope"]["test_scope"] == "scoped"
-    assert result["test_scope"]["source"] == "env"
+    assert result["test_scope"]["source"] == "deployment"
 
 
-def test_no_plan_unknown_env_value_resolves_to_full_and_is_reported(monkeypatch):
+def test_no_plan_ignores_the_environment_request(monkeypatch):
     monkeypatch.setenv(tsd.TEST_SCOPE_ENV, "partial")
 
     result = p.get_effective_config()
 
     assert result["test_scope"]["test_scope"] == "full"
-    assert result["test_scope"]["invalid_layers"] == ["env"]
+    assert result["test_scope"]["invalid_layers"] == []
 
 
 # ---------- 2. Plan manifest layer ----------
@@ -97,11 +99,12 @@ def test_plan_manifest_full_does_not_report_scoped(_isolated_scope_inputs, monke
 def test_org_full_policy_rejects_plan_scoped_request(
     _isolated_scope_inputs, monkeypatch
 ):
-    monkeypatch.setattr(
-        tsd,
-        "policy_settings",
-        lambda namespace, team: {"org": {"test_scope": "full"}, "team": {}},
-    )
+    def org_policy(namespace, team):
+        return {"org": {"test_scope": "full"}, "team": {}}
+
+    monkeypatch.setattr(tsd, "policy_settings", org_policy)
+    monkeypatch.setattr(settings_store, "policy_settings", org_policy)
+    monkeypatch.setattr(settings_store, "provider_configured", lambda: True)
     _write_manifest(_isolated_scope_inputs, "lockedplan", test_scope="scoped")
 
     result = p.get_effective_config(plan_name="lockedplan")
@@ -126,10 +129,10 @@ def test_unknown_plan_resolves_to_default_without_raising():
 # ---------- 5. Catalog and documentation ----------
 
 
-def test_test_scope_env_var_is_cataloged_with_full_default():
-    catalog = {spec.name: spec.default for spec in config_provenance.ENV_VAR_CATALOG}
+def test_test_scope_env_var_is_not_cataloged_as_a_live_source():
+    names = {spec.name for spec in config_provenance.ENV_VAR_CATALOG}
 
-    assert catalog["PIPELINE_TEST_SCOPE"] == "full"
+    assert "PIPELINE_TEST_SCOPE" not in names
 
 
 def test_reference_documents_effective_config_test_scope_block():

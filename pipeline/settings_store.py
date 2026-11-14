@@ -74,6 +74,15 @@ def _layers_or_error(namespace: str, *, org: str, team: str, repo: str) -> dict:
         return {SETTINGS_ERROR_KEY: STORE_READ_ERROR}
 
 
+def read_layers(namespace: str, *, team: str, repo: str, org: str = "") -> dict:
+    """The raw layers for one context, for a caller that resolves a key itself.
+
+    Same sources as :func:`effective_setting`; a read failure returns the
+    settings error marker instead of raising.
+    """
+    return _layers_or_error(namespace, org=org, team=team, repo=repo)
+
+
 def _with_context(result: dict, team: str, repo: str) -> dict:
     return {**result, "team": team, "repo": repo}
 

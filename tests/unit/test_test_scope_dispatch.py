@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pipeline import server as p
+from pipeline import settings_store
 from pipeline import test_scope_dispatch as tsd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,8 @@ def settings_calls(monkeypatch):
             return settings
 
         monkeypatch.setattr(tsd, "policy_settings", _fake)
+        monkeypatch.setattr(settings_store, "provider_configured", lambda: True)
+        monkeypatch.setattr(settings_store, "policy_settings", _fake)
         return calls
 
     return _set
@@ -74,11 +77,11 @@ def test_stamps_default_full_when_no_layer_is_set(settings_calls, notifications)
     assert story["test_scope_resolution"] == result
 
 
-def test_stamps_env_source_from_environment(settings_calls, notifications, monkeypatch):
+def test_environment_request_is_not_a_source(settings_calls, notifications, monkeypatch):
     settings_calls({})
     monkeypatch.setenv(tsd.TEST_SCOPE_ENV, "scoped")
     result = _stamp()
-    assert (result["test_scope"], result["source"]) == ("scoped", "env")
+    assert (result["test_scope"], result["source"]) == ("full", "default")
 
 
 def test_stamps_plan_source_from_manifest(settings_calls, notifications):
@@ -115,13 +118,14 @@ def test_stamps_resolved_at_as_iso_timestamp(settings_calls, notifications):
 def test_passes_manifest_team_and_default_namespace_to_settings(settings_calls, notifications):
     calls = settings_calls({})
     _stamp(manifest={"team": "payments"})
-    assert calls == [("default", "payments")]
+    # Read once for the test_scope layers and once for the file-size policy.
+    assert set(calls) == {("default", "payments")}
 
 
 def test_passes_local_team_when_manifest_has_none(settings_calls, notifications):
     calls = settings_calls({})
     _stamp(manifest={})
-    assert calls == [("default", "local")]
+    assert set(calls) == {("default", "local")}
 
 
 # ---------- lock rejection notification ----------
@@ -166,15 +170,15 @@ def test_notification_message_carries_no_settings_values(settings_calls, notific
     assert "hunter2" not in notifications[0][1]
 
 
-# ---------- invalid environment value ----------
-def test_bogus_env_value_resolves_full_and_records_invalid_layer(
+# ---------- environment is not read ----------
+def test_bogus_env_value_is_ignored_and_not_reported_as_invalid(
     settings_calls, notifications, monkeypatch,
 ):
     settings_calls({})
     monkeypatch.setenv(tsd.TEST_SCOPE_ENV, "bogus")
     result = _stamp()
     assert result["test_scope"] == "full"
-    assert result["invalid_layers"] == ["env"]
+    assert result["invalid_layers"] == []
 
 
 # ---------- event fields ----------
@@ -225,7 +229,7 @@ def test_effective_test_scope_works_without_a_manifest(settings_calls, monkeypat
     monkeypatch.setenv(tsd.TEST_SCOPE_ENV, "scoped")
     result = tsd.effective_test_scope(None)
     assert (result["test_scope"], result["source"], result["env"]) == (
-        "scoped", "env", "PIPELINE_TEST_SCOPE",
+        "full", "default", "PIPELINE_TEST_SCOPE",
     )
 
 
@@ -251,12 +255,14 @@ def test_reference_has_exactly_one_test_scope_section():
 
 def test_reference_documents_resolution_order():
     text = (REPO_ROOT / "REFERENCE.md").read_text()
-    assert "Resolution, highest first: team override" in text
+    assert "Resolution, highest first: team_repo override, team override" in text
 
 
 def test_reference_env_table_has_test_scope_row():
     text = (REPO_ROOT / "REFERENCE.md").read_text()
     assert (
-        "| `PIPELINE_TEST_SCOPE` | `full` | `full` \\| `scoped` — the lowest-precedence "
-        "`test_scope` request; see \"Test scope\". Unknown values resolve to `full`. |"
+        "| `PIPELINE_TEST_SCOPE` | *(retired)* | No longer a `test_scope` request: "
+        "dispatch does not read it. `python -m pipeline.settings_seed` copies it "
+        "into the settings Store once; set `test_scope` with `set_setting` instead. "
+        "See \"Test scope\". |"
     ) in text

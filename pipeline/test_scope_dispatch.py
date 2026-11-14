@@ -1,25 +1,24 @@
 """Resolve and record ``test_scope`` for one dispatch.
 
 Glue between the pure resolver (``pipeline.test_scope``) and dispatch: reads
-the policy settings and the environment, stamps the result on the story, and
-notifies the user when a policy refused a ``scoped`` request.
+the tenant settings for the plan's (namespace, team, repo), stamps the result
+on the story, and notifies the user when a policy refused a ``scoped`` request.
+The environment is not a source; the plan and story carry the request.
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 
-from .authorization import DEFAULT_TEAM
 from .ci import SettingsContext, context_from_manifest
 from .file_size_policy_dispatch import stamp_file_size_policy
 from .forge import get_forge
 from .policy_settings import policy_settings
 from .service import _ServerRef
+from .settings_store import read_layers
 from .test_scope import resolve_test_scope
 
 _notify_user = _ServerRef("_notify_user")
 TEST_SCOPE_ENV = "PIPELINE_TEST_SCOPE"
-SETTINGS_NAMESPACE = "default"
 
 
 def rework_on_ci_fail_enabled(settings: SettingsContext) -> bool:
@@ -54,15 +53,32 @@ def _lock_rejected_message(story_key, rejections):
     )
 
 
-def stamp_test_scope(plan_name, story_key, manifest, story):
-    settings = policy_settings(
-        SETTINGS_NAMESPACE, manifest.get("team") or DEFAULT_TEAM
+def _context(manifest):
+    # Lazy: pipeline.ci imports the settings resolver, as ci_unavailable_reason does.
+    from .ci import context_from_manifest
+
+    return context_from_manifest(manifest)
+
+
+def _test_scope_resolution(manifest, *, plan_value, story_value=None):
+    context = _context(manifest)
+    # A plan with no repo_url has no repository record to read: its repo_root
+    # path is not a settings repo key, so the team_repo layer is skipped.
+    repo = context.repo if manifest.get("repo_url") else ""
+    return resolve_test_scope(
+        settings=read_layers(context.namespace, team=context.team, repo=repo),
+        plan_value=plan_value,
+        story_value=story_value,
     )
-    result = resolve_test_scope(
-        settings=settings,
+
+
+def stamp_test_scope(plan_name, story_key, manifest, story):
+    context = _context(manifest)
+    settings = policy_settings(context.namespace, context.team)
+    result = _test_scope_resolution(
+        manifest,
         plan_value=manifest.get("test_scope"),
         story_value=story.get("test_scope"),
-        env_value=os.environ.get(TEST_SCOPE_ENV),
     )
     if result["test_scope"] == "scoped":
         reason = ci_unavailable_reason(manifest)
@@ -119,12 +135,5 @@ test_scope_event_fields.__test__ = False
 
 def effective_test_scope(manifest):
     manifest = manifest or {}
-    settings = policy_settings(
-        SETTINGS_NAMESPACE, manifest.get("team") or DEFAULT_TEAM
-    )
-    result = resolve_test_scope(
-        settings=settings,
-        plan_value=manifest.get("test_scope"),
-        env_value=os.environ.get(TEST_SCOPE_ENV),
-    )
+    result = _test_scope_resolution(manifest, plan_value=manifest.get("test_scope"))
     return {**result, "env": TEST_SCOPE_ENV}

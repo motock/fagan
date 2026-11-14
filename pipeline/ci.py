@@ -661,12 +661,13 @@ def _get_effective_config_impl(
     from .authorization import DEFAULT_TEAM
     from .persistence import _plan_manifest
     from .settings_store import effective_settings
-    from .test_scope_dispatch import SETTINGS_NAMESPACE, effective_test_scope
+    from .test_scope_dispatch import effective_test_scope
 
     manifest = _plan_manifest(plan_name) if plan_name else None
     team = (manifest or {}).get("team") or DEFAULT_TEAM
+    namespace = (manifest or {}).get("namespace") or DEFAULT_NAMESPACE
     # No repo here: the view shows the deployment, org and team layers only.
-    settings = effective_settings(SETTINGS_NAMESPACE, team, "")
+    settings = effective_settings(namespace, team, "")
 
     return {
         "ok": True,

@@ -266,12 +266,14 @@ def test_reference_has_exactly_one_test_scope_section():
 
 def test_reference_documents_resolution_order():
     text = (REPO_ROOT / "REFERENCE.md").read_text()
-    assert "Resolution, highest first: team override" in text
+    assert "Resolution, highest first: team_repo override, team override" in text
 
 
 def test_reference_env_table_has_test_scope_row():
     text = (REPO_ROOT / "REFERENCE.md").read_text()
     assert (
-        "| `PIPELINE_TEST_SCOPE` | `full` | `full` \\| `scoped` — the lowest-precedence "
-        "`test_scope` request; see \"Test scope\". Unknown values resolve to `full`. |"
+        "| `PIPELINE_TEST_SCOPE` | *(retired)* | No longer a `test_scope` request: "
+        "dispatch does not read it. `python -m pipeline.settings_seed` copies it "
+        "into the settings Store once; set `test_scope` with `set_setting` instead. "
+        "See \"Test scope\". |"
     ) in text

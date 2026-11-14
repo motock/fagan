@@ -129,10 +129,10 @@ def test_unknown_plan_resolves_to_default_without_raising():
 # ---------- 5. Catalog and documentation ----------
 
 
-def test_test_scope_env_var_is_cataloged_with_full_default():
-    catalog = {spec.name: spec.default for spec in config_provenance.ENV_VAR_CATALOG}
+def test_test_scope_env_var_is_not_cataloged_as_a_live_source():
+    names = {spec.name for spec in config_provenance.ENV_VAR_CATALOG}
 
-    assert catalog["PIPELINE_TEST_SCOPE"] == "full"
+    assert "PIPELINE_TEST_SCOPE" not in names
 
 
 def test_reference_documents_effective_config_test_scope_block():

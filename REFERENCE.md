@@ -1573,16 +1573,21 @@ optional: `full` (the default) or `scoped`. `ingest_plan` rejects any other
 value, and omitting it on re-ingest keeps the prior value.
 
 A story-level `test_scope` (`full` or `scoped`) is a request that ranks below the
-plan-level value and above `PIPELINE_TEST_SCOPE`. Re-ingest refreshes it and
-removes it when absent.
+plan-level value. Re-ingest refreshes it and removes it when absent.
 
-Resolution, highest first: team override, org default (both from the
-`PIPELINE_SETTINGS_PLUGIN` provider; core ships none), plan-level `test_scope`,
-story-level `test_scope`, `PIPELINE_TEST_SCOPE`, then `full`. The org record's
-`allow_team_loosen` (default false; only the boolean `true` unlocks) lets a team
-loosen an org `full` to `scoped`; otherwise a team may only tighten. Plan, story
-and environment may always ask for `full`; their `scoped` request is refused when
-the org or team says `full`. The value is resolved at every dispatch and recorded
+Resolution, highest first: team_repo override, team override, org default, and
+deployment default. These are the `test_scope` settings in the settings Store
+for the plan's namespace, team and repo (set them with `set_setting`; org and
+team policy can also come from the `PIPELINE_SETTINGS_PLUGIN` provider). Then
+come the plan-level `test_scope`, the story-level `test_scope`, and `full`. The
+environment is not a source: `PIPELINE_TEST_SCOPE` is seeded into the Store once
+(see "Seeding settings from the environment") and dispatch never reads it again.
+A lower layer may loosen the value in force only when the layer that set it lists
+`test_scope` in its `allow_loosen`; the org record's `allow_team_loosen` (default
+false; only the boolean `true` unlocks) does the same for an org `full`. Otherwise
+a layer may only tighten. Plan and story may always ask for `full`; their `scoped`
+request is refused when a policy layer says `full` and does not allow loosening.
+The value is resolved at every dispatch and recorded
 on the story as `test_scope_resolution` (`test_scope`, `source`,
 `lock_rejections`, `invalid_layers`, `resolved_at`); the `agent_dispatched` event
 carries `test_scope`, `test_scope_source`, `test_scope_lock_rejected` and
@@ -2606,7 +2611,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_FORGE_PLUGIN` | *(unset → off)* | `module:attr` factory `(repo_root) -> Forge` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_TICKET_PROVIDER_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> TicketProvider` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_SETTINGS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> provider` returning org/team policy settings — see the "Plugins (operator-supplied adapters)" section |
-| `PIPELINE_TEST_SCOPE` | `full` | `full` \| `scoped` — the lowest-precedence `test_scope` request; see "Test scope". Unknown values resolve to `full`. |
+| `PIPELINE_TEST_SCOPE` | *(retired)* | No longer a `test_scope` request: dispatch does not read it. `python -m pipeline.settings_seed` copies it into the settings Store once; set `test_scope` with `set_setting` instead. See "Test scope". |
 | `PIPELINE_FILE_SIZE_POLICY` | `advisory` | `advisory` \| `enforced` — the file-size policy request; see "File size policy". Unknown values resolve to `advisory`. |
 | `PIPELINE_CHANNEL_PLUGINS` | *(unset → off)* | Comma list of `module:attr` registrars called with `register_channel_type` — see the "Plugins (operator-supplied adapters)" section |
 | `PIPELINE_CREDENTIALS_PLUGIN` | *(unset → off)* | `module:attr` factory `() -> CredentialProvider` (its `get(ref) -> Credential \| None` resolves `env`, `model` and `notification` credentials) — see the "Credentials (operator-supplied provider)" section. A bad plugin raises and never falls back to ambient values |

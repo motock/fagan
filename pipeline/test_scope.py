@@ -1,8 +1,9 @@
 """Resolve the effective ``test_scope`` for one dispatch from the policy layers.
 
-Pure: no I/O, no environment reads, no logging. The policy layers (deployment,
-org, team, team_repo) are combined by ``pipeline.settings_resolve``; this module
-adds the plan/story request on top and keeps the result shape dispatch reports.
+No I/O, no environment reads, no logging: the caller reads the tenant settings
+and passes them in. The policy layers (deployment, org, team, team_repo) are
+combined by ``pipeline.settings_resolve``; this module adds the plan/story
+request on top and keeps the result shape dispatch reports.
 Layers only tighten, except that a layer may loosen an org ``full`` policy when
 the org opts in.
 """

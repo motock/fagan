@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import triage
+from pipeline import server, triage
 from pipeline import triage_test_edit as te
 from pipeline.authority_matrix import ORG_ENV_VAR, TEAM_ENV_VAR
 
@@ -70,7 +70,7 @@ def _write(repo: Path, files: dict) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path):
     """A clone whose ``master`` is the base and whose ``agent/ov-5`` is the story branch.
 
     Returns a function that commits the branch's changes and pushes it. The
@@ -88,6 +88,7 @@ def repo(tmp_path, monkeypatch):
     _run(work, "add", "-A")
     _run(work, "commit", "-q", "-m", "base")
     _run(work, "push", "-q", "origin", _BASE)
+    _run(work, "remote", "set-head", "origin", _BASE)
     _run(work, "checkout", "-q", "-b", _BRANCH)
 
     def commit_branch(changes: dict) -> None:
@@ -96,8 +97,6 @@ def repo(tmp_path, monkeypatch):
         _run(work, "commit", "-q", "--allow-empty", "-m", "story")
         _run(work, "push", "-q", "origin", _BRANCH)
 
-    monkeypatch.setattr(te, "_repo_root", lambda: work)
-    monkeypatch.setattr(te, "_default_branch", lambda: _BASE)
     return commit_branch, work
 
 
@@ -163,8 +162,10 @@ def _story(**overrides) -> dict:
     return story
 
 
-def _execute(story: dict) -> str:
-    return te.execute_approve_test_edit(_PLAN, _STORY, story, {"action": "approve_test_edit"}, {})
+def _execute(story: dict, repo) -> str:
+    """Run the executor against ``repo``, the fixture's ``(commit, work)`` pair."""
+    manifest = {"plan": _PLAN, "repo_root": str(repo[1]), "stories": {_STORY: story}}
+    return te.execute_approve_test_edit(_PLAN, _STORY, story, {"action": "approve_test_edit"}, manifest)
 
 
 # --- gating: shadow mode and park classes ----------------------------------
@@ -175,7 +176,7 @@ def test_shadow_mode_returns_shadow_and_leaves_the_story_untouched(repo, notices
     story = _story()
     before = copy.deepcopy(story)
 
-    assert _execute(story) == "shadow"
+    assert _execute(story, repo) == "shadow"
     assert story == before
     assert notices == []
 
@@ -186,7 +187,7 @@ def test_a_park_class_other_than_pin_is_refused(repo, execute_mode, notices, set
     story = _story(parked_reason="rebase conflict: CONFLICT (content): Merge conflict in pipeline/app.py",
                    last_test_check=None)
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert story["status"] == "parked"
     assert "refused for park class rebase_conflict" in story["parked_reason"]
 
@@ -196,7 +197,7 @@ def test_a_failure_with_no_recorded_test_output_is_refused(repo, execute_mode, n
     commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
     story = _story(last_test_check=None)
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "refused for park class unknown" in story["parked_reason"]
 
 
@@ -208,7 +209,7 @@ def test_a_judged_rename_with_auto_notify_authorises_the_named_test_file(repo, e
     commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
     story = _story()
 
-    assert _execute(story) == "approve_test_edit"
+    assert _execute(story, repo) == "approve_test_edit"
     assert story["status"] == "todo"
     assert "parked_reason" not in story
     entry = story["triage_diagnosis"][-1]
@@ -222,7 +223,7 @@ def test_the_auto_tier_also_authorises(repo, execute_mode, notices, set_tier):
     set_tier("auto")
     story = _story()
 
-    assert _execute(story) == "approve_test_edit"
+    assert _execute(story, repo) == "approve_test_edit"
     assert story["status"] == "todo"
 
 
@@ -230,7 +231,7 @@ def test_an_authorisation_notifies_the_overlord_decision(repo, execute_mode, not
     commit, _ = repo
     commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
 
-    _execute(_story())
+    _execute(_story(), repo)
 
     assert [notice["event"] for notice in notices] == [_PIN_EVENT]
 
@@ -240,7 +241,7 @@ def test_the_executor_never_edits_a_test_file(repo, execute_mode, notices, set_t
     commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
     before = (work / _TEST).read_text(encoding="utf-8")
 
-    _execute(_story())
+    _execute(_story(), repo)
 
     assert (work / _TEST).read_text(encoding="utf-8") == before
     assert _run(work, "status", "--porcelain") == ""
@@ -255,7 +256,7 @@ def test_a_human_tier_parks_even_when_the_judge_passes(repo, execute_mode, notic
     set_tier("human")
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert story["status"] == "parked"
     assert "existing_test_edit tier is human" in story["parked_reason"]
     assert "triage_diagnosis" not in story
@@ -267,7 +268,7 @@ def test_an_unreadable_matrix_file_is_treated_as_human(repo, execute_mode, notic
     monkeypatch.setenv(ORG_ENV_VAR, str(tmp_path / "missing.json"))
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "existing_test_edit tier is human" in story["parked_reason"]
 
 
@@ -279,7 +280,7 @@ def test_a_malformed_matrix_file_is_treated_as_human(repo, execute_mode, notices
     monkeypatch.setenv(ORG_ENV_VAR, str(broken))
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
 
 
 def test_a_matrix_with_no_rule_for_the_class_is_treated_as_human(repo, execute_mode, notices, set_tier, tmp_path, monkeypatch):
@@ -289,7 +290,7 @@ def test_a_matrix_with_no_rule_for_the_class_is_treated_as_human(repo, execute_m
     empty.write_text(json.dumps({"version": 1, "layer": "org", "rules": []}), encoding="utf-8")
     monkeypatch.setenv(ORG_ENV_VAR, str(empty))
 
-    assert _execute(_story()) == "park_for_human"
+    assert _execute(_story(), repo) == "park_for_human"
 
 
 # --- the judge declines: every decline parks with the reasons ---------------
@@ -301,7 +302,7 @@ def test_a_removed_assertion_parks_with_the_judge_reason(repo, execute_mode, not
         '    assert app.plan_dir() == "plans"\n', "    pass\n")})
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "judge verdict fail" in story["parked_reason"]
     assert "test_default_plan_dir: assertions 1 -> 0" in story["parked_reason"]
     assert any("assertions 1 -> 0" in notice["message"] for notice in notices)
@@ -318,7 +319,7 @@ def test_an_unrelated_test_edit_parks_though_it_shares_a_token_with_the_removed_
     commit({_APP: HEAD_APP, _TEST: head_test})
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "does not reference a removed name" in story["parked_reason"]
 
 
@@ -329,7 +330,7 @@ def test_a_deleted_test_parks_as_deletion_of_pin(repo, execute_mode, notices, se
     commit({_APP: HEAD_APP, _TEST: head})
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "judge verdict deletion_of_pin" in story["parked_reason"]
     assert "test_default_plan_dir" in story["parked_reason"]
 
@@ -343,7 +344,7 @@ def test_an_edit_to_a_test_file_the_failure_does_not_name_parks(repo, execute_mo
     })
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "outside the named test files" in story["parked_reason"]
     assert _OTHER_TEST in story["parked_reason"]
 
@@ -353,7 +354,7 @@ def test_a_branch_without_a_test_edit_parks_because_there_is_nothing_to_judge(re
     commit({_APP: HEAD_APP})
     story = _story()
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "no existing test file changed" in story["parked_reason"]
 
 
@@ -363,14 +364,14 @@ def test_a_branch_without_a_test_edit_parks_because_there_is_nothing_to_judge(re
 def test_a_story_without_a_branch_parks(repo, execute_mode, notices, set_tier):
     story = _story(branch=None)
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "no branch is recorded" in story["parked_reason"]
 
 
 def test_a_branch_missing_on_origin_parks_on_unreadable_evidence(repo, execute_mode, notices, set_tier):
     story = _story(branch="agent/does-not-exist")
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "live git evidence could not be read" in story["parked_reason"]
 
 
@@ -381,5 +382,75 @@ def test_a_pin_with_no_named_test_file_parks(repo, execute_mode, notices, set_ti
         "stdout_tail": "AttributeError: <module 'pipeline.app'> has no attribute 'PLAN_DIR'\n",
     })
 
-    assert _execute(story) == "park_for_human"
+    assert _execute(story, repo) == "park_for_human"
     assert "not named in the live failure" in story["parked_reason"]
+
+
+# --- the plan's repository, never the server's -----------------------------
+
+
+def test_the_judge_reads_the_plan_repo_when_the_server_points_elsewhere(
+    repo, execute_mode, notices, set_tier, monkeypatch, tmp_path
+):
+    commit, _ = repo
+    commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setattr(server, "REPO_ROOT", elsewhere)
+    story = _story()
+
+    assert _execute(story, repo) == "approve_test_edit"
+    assert story["status"] == "todo"
+
+
+def test_the_judge_reads_the_plan_repo_when_the_server_repo_is_an_unrelated_repository(
+    repo, execute_mode, notices, set_tier, monkeypatch, tmp_path
+):
+    commit, _ = repo
+    commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
+    other = tmp_path / "other"
+    other.mkdir()
+    _run(other, "init", "-q", "-b", "main")
+    monkeypatch.setattr(server, "REPO_ROOT", other)
+    story = _story()
+
+    assert _execute(story, repo) == "approve_test_edit"
+    assert story["status"] == "todo"
+
+
+def _unusable_root(case: str, tmp_path: Path):
+    if case == "none":
+        return None
+    if case == "empty":
+        return ""
+    if case == "non_string":
+        return 7
+    if case == "not_a_directory":
+        path = tmp_path / "plan.txt"
+        path.write_text("x", encoding="utf-8")
+        return str(path)
+    assert case == "not_a_git_directory"
+    path = tmp_path / "plain"
+    path.mkdir()
+    return str(path)
+
+
+@pytest.mark.parametrize("case", ["missing", "none", "empty", "non_string", "not_a_directory", "not_a_git_directory"])
+def test_a_plan_without_a_usable_repo_root_parks_and_never_falls_back(
+    case, repo, execute_mode, notices, set_tier, monkeypatch, tmp_path
+):
+    commit, work = repo
+    commit({_APP: HEAD_APP, _TEST: RENAMED_TEST})
+    monkeypatch.setattr(server, "REPO_ROOT", work)
+    story = _story()
+    manifest = {"plan": _PLAN, "stories": {_STORY: story}}
+    if case != "missing":
+        manifest["repo_root"] = _unusable_root(case, tmp_path)
+
+    result = te.execute_approve_test_edit(_PLAN, _STORY, story, {"action": "approve_test_edit"}, manifest)
+
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert story["parked_reason"].startswith("approve_test_edit declined: ")
+    assert "repo_root" in story["parked_reason"]
+    assert "triage_diagnosis" not in story

@@ -25,7 +25,7 @@ from . import triage_rebrief
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .triage_park_classes import _is_test_path, check_ruling_allowed, classify_park
-from .triage_rebrief import DIAGNOSIS_HISTORY, clear_park_for_unpark
+from .triage_rebrief import DIAGNOSIS_HISTORY, clear_park_for_unpark, plan_repo
 
 _park = _ModuleRef("pipeline.triage", "_park")
 _triage_mode = _ModuleRef("pipeline.triage", "_triage_mode")
@@ -129,18 +129,6 @@ def _observe(repo_root, base: str, branch: str) -> dict:
     }
 
 
-def _repo_root():
-    from .server import REPO_ROOT
-
-    return REPO_ROOT
-
-
-def _default_branch() -> str:
-    from .server import _default_branch as default_branch
-
-    return default_branch()
-
-
 def _attempts(story: dict) -> list | None:
     """The story's attempt log, or ``None`` when it is present but unreadable."""
     value = story.get("rebase_attempts", [])
@@ -170,7 +158,7 @@ def _refusal(story: dict, live: dict, attempts: list) -> str | None:
     return None
 
 
-def _pr_blocks_unpark(story: dict) -> str | None:
+def _pr_blocks_unpark(story: dict, repo_root: str) -> str | None:
     """Why a conflict-free story must not be unparked, or ``None`` when it may be.
 
     A branch already merged into the base also merges cleanly, so "no conflict"
@@ -182,7 +170,7 @@ def _pr_blocks_unpark(story: dict) -> str | None:
     if not isinstance(pr_url, str) or not pr_url:
         return None
     try:
-        state = triage_rebrief._pr_state(pr_url)
+        state = triage_rebrief._pr_state(repo_root, pr_url)
     except Exception:  # noqa: BLE001 - fail closed on any forge failure
         return "the PR state could not be read"
     if state == "MERGED":
@@ -228,9 +216,15 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
             plan_name, story_key, story,
             "resolve_rebase declined: rebase_attempts is unreadable; parked for a human",
         )
+    repo = plan_repo(manifest)
+    if isinstance(repo, str):
+        return _park(
+            plan_name, story_key, story,
+            f"resolve_rebase declined: {repo}; parked for a human",
+        )
+    base = repo.default_branch
     try:
-        base = _default_branch()
-        live = _observe(_repo_root(), base, branch)
+        live = _observe(repo.root, base, branch)
     except Exception:  # noqa: BLE001 - fail closed on any git or config failure
         return _park(
             plan_name, story_key, story,
@@ -238,7 +232,7 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
         )
     stamp = datetime.now(UTC).isoformat()
     if not live["paths"]:
-        merged_or_unknown = _pr_blocks_unpark(story)
+        merged_or_unknown = _pr_blocks_unpark(story, repo.root)
         if merged_or_unknown is not None:
             return _park(
                 plan_name, story_key, story,

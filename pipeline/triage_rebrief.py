@@ -17,7 +17,10 @@ fields only, so storing a diagnosis never changes plan approval, and
 from __future__ import annotations
 
 import re
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import NamedTuple
 
 from .branch_guard import remote_branch_exists
 from .forge import get_forge
@@ -47,6 +50,65 @@ REBRIEF_RESET_FIELDS = frozenset(
 )
 
 _DIAGNOSIS_RE = re.compile(r"^\s*DIAGNOSIS\s*:\s*(.*)$", re.MULTILINE)
+_GIT_TIMEOUT_SECONDS = 120
+
+
+class PlanRepo(NamedTuple):
+    """The repository an executor acts on, and that repository's default branch."""
+
+    root: str
+    default_branch: str
+
+
+def _git_in(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=_GIT_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _default_branch_of(root: Path) -> str:
+    """origin's HEAD branch, else the checked-out branch, else ``main``.
+
+    The same order the server's ``_default_branch`` uses, read from ``root``
+    alone and cached nowhere.
+    """
+    symref = _git_in(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if symref.returncode == 0 and symref.stdout.strip():
+        return symref.stdout.strip().split("/", 1)[-1]
+    head = _git_in(root, "rev-parse", "--abbrev-ref", "HEAD")
+    if head.returncode == 0 and head.stdout.strip() not in ("", "HEAD"):
+        return head.stdout.strip()
+    return "main"
+
+
+def plan_repo(manifest: dict) -> PlanRepo | str:
+    """The plan's repository and default branch, or the reason it cannot be used.
+
+    ``manifest["repo_root"]`` is the only source. The server's ``REPO_ROOT`` is
+    never read and its default-branch cache is never touched. The path must be
+    an absolute directory that is the root of a git repository; a subdirectory
+    of one is refused. Git is run inside that directory only.
+    """
+    value = manifest.get("repo_root")
+    if not isinstance(value, str) or not value:
+        return "the plan records no usable repo_root"
+    path = Path(value)
+    if not path.is_absolute():
+        return "the plan's repo_root is not an absolute path"
+    if not path.is_dir():
+        return "the plan's repo_root is not a directory"
+    try:
+        toplevel = _git_in(path, "rev-parse", "--show-toplevel")
+        if toplevel.returncode != 0 or Path(toplevel.stdout.strip()).resolve() != path.resolve():
+            return "the plan's repo_root is not the root of a git repository"
+        return PlanRepo(value, _default_branch_of(path))
+    except (OSError, subprocess.SubprocessError):
+        return "the plan's repo_root could not be checked with git"
 
 
 def _branch_on_origin(repo_root: str, branch: str) -> bool:
@@ -54,17 +116,9 @@ def _branch_on_origin(repo_root: str, branch: str) -> bool:
     return remote_branch_exists(repo_root, branch)
 
 
-def _pr_state(pr_url: str) -> str:
-    """Live check: the forge's view of ``pr_url``. ``UNKNOWN`` on a failed call."""
-    from .server import REPO_ROOT
-
-    return get_forge(REPO_ROOT).pr_state(pr_url)
-
-
-def _repo_root() -> str:
-    from .server import REPO_ROOT
-
-    return REPO_ROOT
+def _pr_state(repo_root: str, pr_url: str) -> str:
+    """Live check: the forge's view of ``pr_url`` in ``repo_root``. ``UNKNOWN`` on a failed call."""
+    return get_forge(repo_root).pr_state(pr_url)
 
 
 def _park_class(story: dict):
@@ -79,16 +133,17 @@ def _retry_count(story: dict) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _live_evidence_refusal(story: dict) -> str | None:
+def _live_evidence_refusal(story: dict, repo_root: str) -> str | None:
     """Return why live evidence does not support a retry, or ``None`` when it does.
 
-    Every check is live. A failed query counts as not confirmed.
+    Every check is live and runs against ``repo_root``, the plan's repository.
+    A failed query counts as not confirmed.
     """
     pr_url = story.get("pr_url")
     if not isinstance(pr_url, str) or not pr_url:
         return "no PR is recorded for this story"
     try:
-        state = _pr_state(pr_url)
+        state = _pr_state(repo_root, pr_url)
     except Exception:  # noqa: BLE001 - fail closed on any forge failure
         return "the PR state could not be read"
     if state == "MERGED":
@@ -99,7 +154,7 @@ def _live_evidence_refusal(story: dict) -> str | None:
     if not isinstance(branch, str) or not branch:
         return "no branch is recorded for this story"
     try:
-        on_origin = _branch_on_origin(_repo_root(), branch)
+        on_origin = _branch_on_origin(repo_root, branch)
     except Exception:  # noqa: BLE001 - fail closed on any git failure
         return "origin could not be queried for the branch"
     if not on_origin:
@@ -138,7 +193,13 @@ def execute_retry_transient(plan_name, story_key, story, ruling, manifest) -> st
             plan_name, story_key, story,
             f"retry_transient cap of {RETRY_TRANSIENT_CAP} reached; parked for a human",
         )
-    refusal = _live_evidence_refusal(story)
+    repo = plan_repo(manifest)
+    if isinstance(repo, str):
+        return _park(
+            plan_name, story_key, story,
+            f"retry_transient declined: {repo}; parked for a human",
+        )
+    refusal = _live_evidence_refusal(story, repo.root)
     if refusal is not None:
         if refusal == "the PR is MERGED":
             return _park(

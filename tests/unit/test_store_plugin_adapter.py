@@ -46,6 +46,12 @@ class _NoReadOutbox(InMemoryRecordStore):
     read_outbox = None
 
 
+class _NoPutSettings(InMemoryRecordStore):
+    """A plugin built before the settings kind: ``put_settings`` is not callable."""
+
+    put_settings = None
+
+
 class _DefaultNamespaceOnly(InMemoryRecordStore):
     """A plugin that refuses every namespace but ``default``, as SqliteRecords does."""
 
@@ -217,6 +223,29 @@ def test_plugin_missing_read_outbox_is_refused_naming_the_method():
 
     assert "read_outbox" in str(excinfo.value)
     assert "missing required methods" in str(excinfo.value)
+
+
+def test_settings_kind_is_part_of_the_required_plugin_surface():
+    assert {"get_settings", "put_settings", "list_settings"} <= set(PLUGIN_STORE_METHODS)
+
+
+def test_plugin_missing_put_settings_is_refused_naming_the_method():
+    with pytest.raises(PluginError) as excinfo:
+        build_plugin_store(_NoPutSettings)
+
+    assert "put_settings" in str(excinfo.value)
+    assert "missing required methods" in str(excinfo.value)
+
+
+def test_settings_calls_pass_through_the_wrapper_to_the_plugin():
+    plugin = InMemoryRecordStore()
+    store = PluginStore(plugin)
+
+    written = store.put_settings("default", "org", "acme", "", {"max_concurrent_agents": 2}, [], "ops", None)
+
+    assert store.get_settings("default", "org", "acme", "") == written
+    assert plugin.get_settings("default", "org", "acme", "") == written
+    assert store.list_settings("default") == [written]
 
 
 def test_refusal_does_not_echo_the_factory_or_its_module():

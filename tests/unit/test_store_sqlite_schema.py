@@ -225,8 +225,8 @@ def test_a_new_database_gets_the_latest_version(db_path):
     with _opened(db_path):
         pass
 
-    assert store_sqlite_schema.latest_version() == 5
-    assert _version(db_path) == [5]
+    assert store_sqlite_schema.latest_version() == 6
+    assert _version(db_path) == [6]
 
 
 def test_the_version_is_recorded_once(db_path):
@@ -299,14 +299,14 @@ def test_a_version_one_database_with_rows_is_migrated(db_path, monkeypatch):
         'MIGRATIONS',
         store_sqlite_schema.MIGRATIONS + (_adds_a_column,),
     )
-    # Five real migrations (the security-audit table is migration 5) plus the
-    # one this test appends.
-    assert store_sqlite_schema.latest_version() == 6
+    # Six real migrations (the settings table is migration 6) plus the one
+    # this test appends.
+    assert store_sqlite_schema.latest_version() == 7
 
     with _opened(db_path):
         pass
 
-    assert _version(db_path) == [6]
+    assert _version(db_path) == [7]
     assert _row_counts(db_path) == before
     with _probe(db_path) as conn:
         columns = {row[1] for row in conn.execute('PRAGMA table_info(notifications)')}
@@ -325,6 +325,32 @@ def test_a_new_database_is_migrated_all_the_way(db_path, monkeypatch):
         pass
 
     assert _version(db_path) == [store_sqlite_schema.latest_version()]
+
+
+def test_a_version_five_database_gains_the_settings_table(db_path):
+    """Migration 6 adds the settings table and keeps every row already stored."""
+    _legacy_database(db_path, version=5)
+    before = _row_counts(db_path)
+    assert 'settings' not in _table_names(db_path)
+
+    with _opened(db_path):
+        pass
+
+    assert _version(db_path) == [store_sqlite_schema.latest_version()]
+    assert 'settings' in _table_names(db_path)
+    assert _row_counts(db_path) == before
+
+
+def test_the_settings_table_holds_one_row_per_key(db_path):
+    """The key is the primary key: a second row for it is refused by the table."""
+    with _opened(db_path):
+        pass
+    row = ('default', 'org', 'acme', '', '{}', '[]', 1, '2026-11-14T00:00:00+00:00', 'ops')
+
+    with _probe(db_path) as conn:
+        conn.execute('INSERT INTO settings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', row)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute('INSERT INTO settings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', row)
 
 
 def test_a_newer_version_is_refused(db_path):

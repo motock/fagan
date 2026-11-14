@@ -639,6 +639,52 @@ class RecordStore(Protocol):
         """
         ...
 
+    def get_settings(
+        self, namespace: str, scope: str, scope_id: str, repo: str
+    ) -> dict | None:
+        """Return the settings record for ``(scope, scope_id, repo)``, or ``None``.
+
+        The key is validated before storage is touched: an unknown ``scope``,
+        a ``scope_id`` that is not an identifier (empty for ``deployment``), or
+        a ``repo`` that is not ``host/org/name`` (empty unless the scope is
+        ``team_repo``) is refused with :class:`InvalidRecordKeyError`. The
+        record holds ``scope``, ``scope_id``, ``repo``, ``values``,
+        ``allow_loosen``, ``version``, ``updated_at`` and ``updated_by``.
+        """
+        ...
+
+    def put_settings(
+        self,
+        namespace: str,
+        scope: str,
+        scope_id: str,
+        repo: str,
+        values: dict,
+        allow_loosen: list[str],
+        updated_by: str,
+        expected_version: int | None,
+    ) -> dict:
+        """Write the settings record for the key and return the stored record.
+
+        ``expected_version`` is compare-and-set: ``None`` creates the record and
+        is refused with :class:`SettingsVersionConflictError` if it exists; an
+        int must equal the stored version, which the write then advances by
+        one, and is refused with :class:`SettingsVersionConflictError` when it
+        does not (or when there is no record). A conflict leaves the stored
+        record unchanged. Malformed input is refused with
+        :class:`TypeError` or :class:`InvalidRecordKeyError` before anything is
+        written.
+        """
+        ...
+
+    def list_settings(self, namespace: str) -> list[dict]:
+        """Return every settings record in ``namespace``, ordered by key.
+
+        The order is ``(scope, scope_id, repo)``. Only the namespace's own
+        records are listed, never another namespace's.
+        """
+        ...
+
 
 RECORD_STORE_METHODS = (
     'get_manifest',
@@ -670,6 +716,9 @@ RECORD_STORE_METHODS = (
     'get_context_snapshot',
     'get_security_audit_state',
     'put_security_audit_state',
+    'get_settings',
+    'put_settings',
+    'list_settings',
     'transaction',
 )
 

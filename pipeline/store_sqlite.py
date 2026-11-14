@@ -54,6 +54,7 @@ from pipeline.store_records import (
     validate_story_key,
     verify_context_digest,
 )
+from pipeline.store_settings import validate_settings_key, validate_settings_write
 
 # How long ``transaction()`` keeps retrying a contended write lock before it
 # gives up and yields ``False``. Bounded on purpose: the ``Store`` contract is
@@ -550,6 +551,45 @@ class SqliteRecords(
         if not isinstance(state, dict):
             raise TypeError('security audit state must be a dict')
         self._store._put_audit_row(namespace, repo_key, json.dumps(state))
+
+    # -- settings (ADR 0015) ---------------------------------------------
+    # One row per ``(namespace, scope, scope_id, repo)`` of the ``settings``
+    # table. A write is compare-and-set on the version it names, inside the
+    # store's write transaction; the key and the write are validated before
+    # anything is read or stored.
+
+    def get_settings(
+        self, namespace: str, scope: str, scope_id: str, repo: str
+    ) -> dict | None:
+        """Return the settings record for the key, or ``None`` when unset."""
+        self._namespace(namespace)
+        validate_settings_key(scope, scope_id, repo)
+        return self._store._settings_row(namespace, scope, scope_id, repo)
+
+    def put_settings(
+        self,
+        namespace: str,
+        scope: str,
+        scope_id: str,
+        repo: str,
+        values: dict,
+        allow_loosen: list[str],
+        updated_by: str,
+        expected_version: int | None,
+    ) -> dict:
+        """Write the settings record for the key and return the stored record."""
+        self._namespace(namespace)
+        validate_settings_key(scope, scope_id, repo)
+        validate_settings_write(values, allow_loosen, updated_by, expected_version)
+        return self._store._put_settings_row(
+            namespace, scope, scope_id, repo, values, allow_loosen,
+            updated_by, expected_version,
+        )
+
+    def list_settings(self, namespace: str) -> list[dict]:
+        """Return every settings record in ``namespace``, ordered by key."""
+        self._namespace(namespace)
+        return self._store._settings_rows(namespace)
 
     def transaction(self, namespace: str, plan_name: str, wait_seconds: float = 0.0):
         """Acquire this plan's write transaction, or report it was refused.

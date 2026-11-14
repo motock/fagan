@@ -161,9 +161,34 @@ def _migration_5(conn: sqlite3.Connection) -> None:
     conn.execute(_SECURITY_AUDIT_STATE_SCHEMA)
 
 
+#: The tenant settings records (ADR 0015): one row per key, the values and the
+#: allow-loosen list as JSON.  The key is the primary key, so a second create of
+#: a key is refused by the row itself, not only by the store's version check.
+_SETTINGS_SCHEMA = (
+    'CREATE TABLE IF NOT EXISTS settings (namespace TEXT NOT NULL, '
+    'scope TEXT NOT NULL, scope_id TEXT NOT NULL, repo TEXT NOT NULL, '
+    'values_json TEXT NOT NULL, allow_loosen_json TEXT NOT NULL, '
+    'version INTEGER NOT NULL, updated_at TEXT NOT NULL, '
+    'updated_by TEXT NOT NULL, '
+    'PRIMARY KEY (namespace, scope, scope_id, repo))'
+)
+
+
+def _migration_6(conn: sqlite3.Connection) -> None:
+    """Store the tenant settings records, one row per key."""
+    conn.execute(_SETTINGS_SCHEMA)
+
+
 #: The migrations, in order.  The version a database is at is how many of them
 #: it has run, so a migration is appended and never renumbered.
-MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4, _migration_5)
+MIGRATIONS = (
+    _migration_1,
+    _migration_2,
+    _migration_3,
+    _migration_4,
+    _migration_5,
+    _migration_6,
+)
 
 
 def latest_version() -> int:

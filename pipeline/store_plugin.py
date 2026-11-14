@@ -17,8 +17,15 @@ from typing import Any
 from app.plugin_loader import require_methods
 from pipeline.store_records import DEFAULT_NAMESPACE, RECORD_STORE_METHODS
 
-#: Every name a plugin record store must provide: the record surface plus the
-#: outbox and audit methods the server calls on the runtime store.
+#: Every name a plugin record store must provide: the record surface
+#: (``RECORD_STORE_METHODS``) plus the outbox and audit methods the server calls
+#: on the runtime store.
+#:
+#: CONTRACT CHANGE (ADR 0015): the record surface now includes the settings kind,
+#: so ``get_settings``, ``put_settings`` and ``list_settings`` are required. A
+#: plugin built before this change is refused at ``build_store`` with those
+#: names among the missing methods, and cannot be selected until it implements
+#: them. ``PluginStore`` serves them by passing the calls through to the plugin.
 PLUGIN_STORE_METHODS = RECORD_STORE_METHODS + (
     "append_outbox",
     "read_outbox",

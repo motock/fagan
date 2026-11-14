@@ -181,13 +181,12 @@ def test_should_merge_manually_when_ci_none(plan_dir, gate_boundaries, monkeypat
 
 
 def test_should_park_scheduler_gate_attempt_when_ci_unreadable(
-    plan_dir, gate_boundaries, monkeypatch
-):
+    plan_dir, gate_boundaries, monkeypatch, seed_merge_gate):
     monkeypatch.setattr(
         p, "_merge_gate_ci_status",
         lambda *a, **k: {"state": "unreadable", "error": "boom"},
     )
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    seed_merge_gate(rework_on_ci_fail=True)
     _manifest(plan_dir, {"P1": _story()})
 
     _advance_pipeline_locked("go")

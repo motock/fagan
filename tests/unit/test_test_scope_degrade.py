@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from pipeline import server as p
+from pipeline import settings_store
 from pipeline import test_scope_dispatch as tsd
+from pipeline.ci import context_from_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO = "/srv/repo"
-REWORK_ENV = "PIPELINE_REWORK_ON_CI_FAIL"
 # A repo_url gives the merge settings a valid repo identity; a bare repo_root
 # path is not a Store key, so the settings read would fall back to safe values.
 SCOPED_MANIFEST = {
@@ -45,8 +46,8 @@ class _ForgeStub:
 
 
 @pytest.fixture(autouse=True)
-def _scoped_survives_by_default(monkeypatch):
-    monkeypatch.setenv(REWORK_ENV, "1")
+def _scoped_survives_by_default(monkeypatch, seed_merge_gate):
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(tsd, "policy_settings", lambda namespace, team: {})
     monkeypatch.delenv(tsd.TEST_SCOPE_ENV, raising=False)
 
@@ -125,67 +126,69 @@ def test_notifies_one_warning_degraded_event_when_ci_gate_is_disabled(
     assert (sent[2]["severity"], sent[2]["story_key"]) == ("warning", "S1")
 
 
-# ---------- ci_rework loop: only the exact "1" enables it ----------
-def test_degrades_when_rework_on_ci_fail_env_is_unset(forge, notifications, monkeypatch):
-    monkeypatch.delenv(REWORK_ENV)
+# ---------- ci_rework loop: the resolved rework_on_ci_fail setting ----------
+def test_degrades_when_rework_on_ci_fail_is_off(forge, notifications, seed_merge_gate):
+    seed_merge_gate(rework_on_ci_fail=False)
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert (result["test_scope"], result["degraded_reason"]) == ("full", "rework_on_ci_fail_off")
 
 
-@pytest.mark.parametrize("value", ["0", "true", "", "yes", " 1"])
-def test_degrades_when_rework_on_ci_fail_env_is_not_exactly_one(
-    forge, notifications, monkeypatch, value
+def test_notifies_degraded_event_when_rework_on_ci_fail_is_off(
+    forge, notifications, seed_merge_gate
 ):
-    monkeypatch.setenv(REWORK_ENV, value)
-    result = _stamp(manifest=dict(SCOPED_MANIFEST))
-    assert (result["test_scope"], result["degraded_reason"]) == ("full", "rework_on_ci_fail_off")
-
-
-def test_notifies_degraded_event_when_rework_on_ci_fail_is_off(forge, notifications, monkeypatch):
-    monkeypatch.setenv(REWORK_ENV, "0")
+    seed_merge_gate(rework_on_ci_fail=False)
     _stamp(manifest=dict(SCOPED_MANIFEST))
     (sent,) = _degraded_events(notifications)
     assert "rework_on_ci_fail_off" in sent[1]
 
 
-def test_keeps_scoped_when_rework_on_ci_fail_env_is_exactly_one(forge, notifications):
+def test_keeps_scoped_when_rework_on_ci_fail_is_on(forge, notifications):
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert result["test_scope"] == "scoped"
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [("1", True), ("0", False), ("true", False), (" 1", False), ("", False)],
-)
-def test_rework_on_ci_fail_enabled_only_for_exact_one(monkeypatch, value, expected):
-    monkeypatch.setenv(REWORK_ENV, value)
-    assert tsd.rework_on_ci_fail_enabled() is expected
+@pytest.mark.parametrize("stored, expected", [(True, True), (False, False)])
+def test_rework_on_ci_fail_enabled_follows_the_stored_setting(
+    seed_merge_gate, stored, expected
+):
+    seed_merge_gate(rework_on_ci_fail=stored)
+    settings = context_from_manifest(dict(SCOPED_MANIFEST))
+    assert tsd.rework_on_ci_fail_enabled(settings) is expected
 
 
-def test_rework_on_ci_fail_disabled_when_env_is_unset(monkeypatch):
-    monkeypatch.delenv(REWORK_ENV)
-    assert tsd.rework_on_ci_fail_enabled() is False
+def test_rework_on_ci_fail_is_resolved_per_repo(seed_merge_gate):
+    seed_merge_gate(rework_on_ci_fail=False)
+    on = context_from_manifest(dict(SCOPED_MANIFEST))
+    off = context_from_manifest({"repo_url": "https://github.com/acme/other.git"})
+    p._store.records().put_settings(
+        "default", "team_repo", on.team, on.repo,
+        {"rework_on_ci_fail": True}, [], "ops", None,
+    )
+    assert tsd.rework_on_ci_fail_enabled(on) is True
+    assert tsd.rework_on_ci_fail_enabled(off) is False
 
 
-def test_rework_on_ci_fail_is_read_at_call_time(monkeypatch):
-    monkeypatch.setenv(REWORK_ENV, "0")
-    assert tsd.rework_on_ci_fail_enabled() is False
-    monkeypatch.setenv(REWORK_ENV, "1")
-    assert tsd.rework_on_ci_fail_enabled() is True
+def test_rework_on_ci_fail_is_off_when_the_store_is_unreadable(monkeypatch):
+    class _UnreadableStore:
+        def records(self):
+            raise OSError("settings store unreadable")
+
+    monkeypatch.setattr(settings_store, "_store", _UnreadableStore())
+    settings = context_from_manifest(dict(SCOPED_MANIFEST))
+    assert tsd.rework_on_ci_fail_enabled(settings) is False
 
 
 # ---------- reason precedence ----------
 def test_reports_ci_gate_disabled_before_rework_off(forge, notifications, monkeypatch, seed_merge_gate):
-    seed_merge_gate(merge_ci_gate=False)
-    monkeypatch.setenv(REWORK_ENV, "0")
+    seed_merge_gate(merge_ci_gate=False, rework_on_ci_fail=False)
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert result["degraded_reason"] == "ci_gate_disabled"
 
 
 def test_reports_rework_off_before_missing_ci_without_forge_call(
-    forge, notifications, monkeypatch
+    forge, notifications, seed_merge_gate
 ):
-    monkeypatch.setenv(REWORK_ENV, "0")
+    seed_merge_gate(rework_on_ci_fail=False)
     forge.has_ci = False
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert (result["degraded_reason"], forge.factory_roots, forge.ci_checks) == (

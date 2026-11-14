@@ -755,7 +755,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 summary["notify"].append(key)
                 continue
 
-            # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
+            # Opt-in (the rework_on_ci_fail setting, per repo): a DEFINITIVE CI test
             # failure - not a transient rebase/push error, not
             # pending/cancelled - can be caused by the agent's own
             # committed test file rather than the reviewed implementation
@@ -768,9 +768,8 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
             # token_bucket: ground-truth-correct code abandoned because the
             # agent's own broken self-test tripped this gate).
-            rework_ok = (
-                ci_definitive_fail
-                and os.environ.get("PIPELINE_REWORK_ON_CI_FAIL", "0") == "1"
+            rework_ok = ci_definitive_fail and bool(
+                settings.value("rework_on_ci_fail")
             )
             if rework_ok:
                 # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts

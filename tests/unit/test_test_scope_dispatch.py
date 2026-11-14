@@ -21,8 +21,8 @@ class _CiForgeStub:
 
 
 @pytest.fixture(autouse=True)
-def _scoped_survives_dispatch(monkeypatch):
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+def _scoped_survives_dispatch(monkeypatch, seed_merge_gate):
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(
         "pipeline.test_scope_dispatch.get_forge", lambda root: _CiForgeStub()
     )
@@ -56,7 +56,12 @@ def notifications(monkeypatch):
 
 
 def _stamp(manifest=None, story=None):
-    manifest = {"repo_root": str(REPO_ROOT), **(manifest or {})}
+    # A valid repo_url gives the merge settings a Store key; see test_test_scope_degrade.
+    manifest = {
+        "repo_root": str(REPO_ROOT),
+        "repo_url": "https://github.com/acme/app.git",
+        **(manifest or {}),
+    }
     return tsd.stamp_test_scope("plan-a", "S1", manifest, story if story is not None else {})
 
 

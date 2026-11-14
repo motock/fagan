@@ -23,8 +23,8 @@ class _CiForgeStub:
 
 
 @pytest.fixture(autouse=True)
-def _scoped_survives_dispatch(monkeypatch):
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+def _scoped_survives_dispatch(plan_dir, monkeypatch, seed_merge_gate):
+    seed_merge_gate(rework_on_ci_fail=True)
     monkeypatch.setattr(
         "pipeline.test_scope_dispatch.get_forge", lambda root: _CiForgeStub()
     )
@@ -129,6 +129,9 @@ def claude_cmds(monkeypatch):
 def _dispatch(plan_dir, repo, branch, monkeypatch, plan_extra=None, plan_name="stamp"):
     manifest = {
         "repo_root": str(repo),
+        # A valid repo identity: the settings read keys on it, and a bare path
+        # would make every merge/rework setting fall back to its safe value.
+        "repo_url": "https://github.com/acme/app.git",
         "epics": {},
         "stories": {"S1": {
             "summary": "Do thing", "agent_instructions": "Build it.",

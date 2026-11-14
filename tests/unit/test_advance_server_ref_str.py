@@ -98,11 +98,10 @@ def test_module_level_ref_bindings_are_untouched():
         assert ref._name == name
 
 
-def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch):
+def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch, seed_merge_gate):
     # Behavioural grading at the real call site: drive the merge-gate CI-fail
     # path the way tests/unit/test_pipeline_mcp_server_usage_and_tools.py does
     # and assert the operator notice shows the cap instead of a memory address.
-    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
@@ -112,6 +111,7 @@ def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch):
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
+    seed_merge_gate(rework_on_ci_fail=True)
     (plan_dir / "cifail.manifest.json").write_text(
         json.dumps(
             {

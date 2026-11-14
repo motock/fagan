@@ -10,6 +10,7 @@ import os
 from datetime import UTC, datetime
 
 from .authorization import DEFAULT_TEAM
+from .ci import SettingsContext, context_from_manifest
 from .file_size_policy_dispatch import stamp_file_size_policy
 from .forge import get_forge
 from .policy_settings import policy_settings
@@ -18,20 +19,19 @@ from .test_scope import resolve_test_scope
 
 _notify_user = _ServerRef("_notify_user")
 TEST_SCOPE_ENV = "PIPELINE_TEST_SCOPE"
-REWORK_ON_CI_FAIL_ENV = "PIPELINE_REWORK_ON_CI_FAIL"
 SETTINGS_NAMESPACE = "default"
 
 
-def rework_on_ci_fail_enabled() -> bool:
-    return os.environ.get(REWORK_ON_CI_FAIL_ENV, "0") == "1"
+def rework_on_ci_fail_enabled(settings: SettingsContext) -> bool:
+    """Whether a definitive CI failure routes to rework, for this repo."""
+    return bool(settings.value("rework_on_ci_fail"))
 
 
 def ci_unavailable_reason(manifest: dict) -> str | None:
-    from .ci import context_from_manifest
-
-    if not context_from_manifest(manifest).value("merge_ci_gate"):
+    settings = context_from_manifest(manifest)
+    if not settings.value("merge_ci_gate"):
         return "ci_gate_disabled"
-    if not rework_on_ci_fail_enabled():
+    if not rework_on_ci_fail_enabled(settings):
         return "rework_on_ci_fail_off"
     repo_root = manifest.get("repo_root")
     if not isinstance(repo_root, str) or not repo_root:

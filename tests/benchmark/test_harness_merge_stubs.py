@@ -67,7 +67,7 @@ def _seed_worktree(root: Path, story_key: str, test_file_content: str) -> Path:
     worktree = root / story_key
     worktree.mkdir(parents=True)
     (worktree / "pyproject.toml").write_text('[project]\nname = "t"\nversion = "0.0.0"\n')
-    (worktree / ".venv").symlink_to(harness.PIPELINE_REPO / ".venv")
+    (worktree / ".venv").symlink_to(Path(sys.prefix))
     (worktree / "test_x.py").write_text(test_file_content)
     return worktree
 

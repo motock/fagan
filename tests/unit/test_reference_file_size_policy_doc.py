@@ -5,7 +5,8 @@ Docs-only story (fsp-08). Two anchored edits to ``REFERENCE.md``:
 1. A new ``## File size policy (`file_size_policy`)`` section, inserted
    between "Test scope" and "Plan-level ``context`` block".
 2. A ``PIPELINE_FILE_SIZE_POLICY`` row in the environment-variable table,
-   directly after the ``PIPELINE_TEST_SCOPE`` row.
+   directly after the ``PIPELINE_SETTINGS_PLUGIN`` row (the retired
+   ``PIPELINE_TEST_SCOPE`` row was removed by ts-12).
 
 Assertions target the documented behavior (layer order, default, unknown
 and error resolution, enforced/advisory effects) and the exact env row cells.
@@ -25,7 +26,7 @@ SECTION_HEADING = "## File size policy (`file_size_policy`)"
 NEXT_SECTION_HEADING = "## Plan-level `context` block"
 PRECEDING_SECTION_HEADING = "## Test scope (`test_scope`)"
 ENV_ROW_PREFIX = "| `PIPELINE_FILE_SIZE_POLICY` |"
-PRECEDING_ENV_ROW_PREFIX = "| `PIPELINE_TEST_SCOPE` |"
+PRECEDING_ENV_ROW_PREFIX = "| `PIPELINE_SETTINGS_PLUGIN` |"
 
 
 def _reference_text() -> str:

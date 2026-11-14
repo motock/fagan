@@ -37,8 +37,15 @@ def _assert_interpreter() -> None:
     assert_interpreter()
 
 
+def _refuse_retired_env() -> None:
+    from pipeline.settings_env_guard import refuse_retired_env
+
+    refuse_retired_env()
+
+
 if __name__ == "__main__":
     _assert_interpreter()
+    _refuse_retired_env()
     configure_logging_from_env()
     # Resolve the authorizer seam before the transport starts serving: a missing
     # or rejected authorizer plugin must stop the process here rather than

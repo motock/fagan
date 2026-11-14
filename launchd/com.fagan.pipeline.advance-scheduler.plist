@@ -42,8 +42,6 @@
 		<string>3</string>
 		<key>PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE</key>
 		<string>3</string>
-		<key>PIPELINE_REWORK_ON_CI_FAIL</key>
-		<string>1</string>
 		<key>PIPELINE_WEEK_PAUSE_THRESHOLD</key>
 		<string>100</string>
 		<key>PIPELINE_WEEK_RESUME_THRESHOLD</key>

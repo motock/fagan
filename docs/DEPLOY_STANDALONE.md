@@ -419,6 +419,24 @@ One row here is rendered rather than authored: the installer writes
 and an `all` route delivering every event to each channel. It holds environment
 variable *names* only; the values stay in the `secrets/` files.
 
+### Tenant settings are not environment variables
+
+The merge gates, the test scope, the merge timeouts, the rework and reverify
+switches and the grading worker count are tenant settings in the settings Store
+(ADR 0015). Set them with the `set_setting` tool, not in `.env`. The eight legacy
+names (`PIPELINE_MERGE_CI_GATE`, `PIPELINE_MERGE_BUILD_GATE`,
+`PIPELINE_TEST_SCOPE`, `PIPELINE_MERGE_CI_TIMEOUT`,
+`PIPELINE_MERGE_READINESS_TIMEOUT`, `PIPELINE_REWORK_ON_CI_FAIL`,
+`PIPELINE_REVERIFY_FULL_SUITE`, `PIPELINE_GRADE_XDIST_WORKERS`) are refused at
+startup: the MCP server and the scheduler daemon in the pipeline container exit
+non-zero while any of them is set in `.env`.
+
+To move an existing `.env` across, run the migration in the CHANGELOG
+(`## [Unreleased]`, "Upgrading"): seed the Store with
+`python -m pipeline.settings_seed` while the variables are still set, remove
+them from `.env`, then recreate the pipeline container. The full key list, kinds
+and safe values are in REFERENCE.md under "Tenant settings".
+
 ### The public origin, worked through
 
 `PUBLIC_HOSTNAME`, `PUBLIC_PORT` and `PIPELINE_MCP_RESOURCE_URL` are one value

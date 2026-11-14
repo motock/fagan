@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from pipeline import server, triage
+from pipeline import server, triage, triage_executors
 
 RESOLVE_REBASE_RULING = (
     "RULING: rebase conflict on a fixture\n"
@@ -162,13 +162,16 @@ def test_shadow_mode_notifies_with_the_action(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Execute mode: a stub executor fails closed to park_for_human
+# Execute mode: an executor that defers fails closed to park_for_human
 # ---------------------------------------------------------------------------
 
 
 def test_execute_mode_with_stub_executor_parks_for_human(monkeypatch):
     monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
     monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "full")
+    # approve_test_edit now has a real executor (ov-5); this test checks the
+    # deferred fallback, so it registers a deferring executor for the action.
+    monkeypatch.setitem(triage_executors.EXECUTORS, "approve_test_edit", lambda *args: "deferred")
     story = copy.deepcopy(REBASE_STORY)
     result = triage._apply_ruling_for_mode(
         "plan-x", "ov-1", story, {"action": "approve_test_edit", "rationale": "r"}, {}

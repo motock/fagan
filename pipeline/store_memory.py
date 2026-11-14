@@ -37,6 +37,12 @@ from pipeline.store_records import (
     validate_usage_record,
     verify_context_digest,
 )
+from pipeline.store_settings import (
+    next_version,
+    settings_record,
+    validate_settings_key,
+    validate_settings_write,
+)
 
 #: Sentinel recorded in the undo log for a key that held no value before the
 #: transaction wrote it, so a rollback knows to delete rather than restore.
@@ -80,6 +86,9 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         self._snapshots: dict[tuple[str, str], dict] = {}
         self._decisions: dict[tuple[str, str], list[dict]] = {}
         self._audit_states: dict[tuple[str, str], dict] = {}
+        # The settings records (ADR 0015), keyed (namespace, scope, scope_id,
+        # repo) and held as deep copies like the audit state above.
+        self._settings: dict[tuple[str, str, str, str], dict] = {}
         # Append-only usage records, in the order they were appended.
         self._usage: dict[tuple[str, str], list[dict]] = {}
         self._journals: dict[tuple[str, str, str], list[dict]] = {}
@@ -364,6 +373,51 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
         with self._lock:
             self._record_undo(self._audit_states, (namespace, repo_key))
             self._audit_states[(namespace, repo_key)] = copy.deepcopy(state)
+
+    # -- settings ------------------------------------------------------
+    def get_settings(
+        self, namespace: str, scope: str, scope_id: str, repo: str
+    ) -> dict | None:
+        """Return a copy of the settings record for the key, or ``None``."""
+        self._draft_namespace(namespace)
+        validate_settings_key(scope, scope_id, repo)
+        with self._lock:
+            record = self._settings.get((namespace, scope, scope_id, repo))
+            return None if record is None else copy.deepcopy(record)
+
+    def put_settings(
+        self,
+        namespace: str,
+        scope: str,
+        scope_id: str,
+        repo: str,
+        values: dict,
+        allow_loosen: list[str],
+        updated_by: str,
+        expected_version: int | None,
+    ) -> dict:
+        """Write the settings record for the key and return a copy of it."""
+        self._draft_namespace(namespace)
+        validate_settings_key(scope, scope_id, repo)
+        validate_settings_write(values, allow_loosen, updated_by, expected_version)
+        key = (namespace, scope, scope_id, repo)
+        with self._lock:
+            version = next_version(self._settings.get(key), expected_version)
+            record = settings_record(
+                scope, scope_id, repo, values, allow_loosen, version, updated_by
+            )
+            self._record_undo(self._settings, key)
+            self._settings[key] = record
+            return copy.deepcopy(record)
+
+    def list_settings(self, namespace: str) -> list[dict]:
+        """Return copies of every settings record in ``namespace``, by key."""
+        self._draft_namespace(namespace)
+        with self._lock:
+            return [
+                copy.deepcopy(self._settings[key])
+                for key in sorted(key for key in self._settings if key[0] == namespace)
+            ]
 
     # -- decisions -----------------------------------------------------
     def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:

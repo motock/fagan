@@ -44,6 +44,7 @@ from pipeline.store_records import (
     validate_usage_record,
 )
 from pipeline.store_security_audit import SecurityAuditRecords
+from pipeline.store_settings import SettingsRecords
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +436,11 @@ class FileStore:
 
 
 class FileRecords(
-    PlanRecords, SecurityAuditRecords, OutboxContract, OutboxSummaryContract
+    PlanRecords,
+    SecurityAuditRecords,
+    SettingsRecords,
+    OutboxContract,
+    OutboxSummaryContract,
 ):
     """The namespaced record view over one :class:`FileStore` (ADR 0012).
 

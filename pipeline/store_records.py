@@ -112,6 +112,15 @@ class UnreadableRecordError(RecordStoreError, ValueError):
         super().__init__(reason)
 
 
+class SettingsVersionConflictError(RecordStoreError):
+    """Raised when a settings write's ``expected_version`` does not match.
+
+    A create (``expected_version=None``) of a record that already exists, and a
+    write whose expected version is stale or names a missing record, both raise
+    this. The stored record is left unchanged.
+    """
+
+
 def validate_namespace(value: str) -> str:
     """Return ``value`` when it is a valid namespace, else raise.
 

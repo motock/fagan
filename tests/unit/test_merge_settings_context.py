@@ -81,6 +81,24 @@ def test_should_name_the_team_and_repo_each_gate_was_resolved_for(records):
         "source": "team_repo",
         "team": "alpha",
         "repo": REPO_A,
+        "lock_rejections": [],
+    }
+
+
+def test_should_record_a_refused_loosening_in_the_merge_gate_record(records):
+    _put(records, "deployment", values={"merge_ci_gate": True})
+    _put(records, "team_repo", "alpha", REPO_A, {"merge_ci_gate": False})
+
+    record = gate_record(context_from_manifest(_manifest(team="alpha")))
+
+    assert record["merge_ci_gate"] == {
+        "value": True,
+        "source": "deployment",
+        "team": "alpha",
+        "repo": REPO_A,
+        "lock_rejections": [
+            {"layer": "team_repo", "requested": False, "by": "deployment"}
+        ],
     }
 
 

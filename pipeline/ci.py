@@ -135,7 +135,8 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
 
 
 def gate_record(settings: SettingsContext) -> dict[str, dict[str, Any]]:
-    """Per merge gate: the value used and the source, team and repo it came from."""
+    """Per merge gate: the value used, its source, team and repo, and any
+    loosening the Store refused (``lock_rejections``) for that gate."""
     record = {}
     for key in MERGE_GATE_KEYS:
         resolved = settings.resolve(key)
@@ -144,6 +145,7 @@ def gate_record(settings: SettingsContext) -> dict[str, dict[str, Any]]:
             "source": resolved["source"],
             "team": resolved["team"],
             "repo": resolved["repo"],
+            "lock_rejections": resolved["lock_rejections"],
         }
     return record
 

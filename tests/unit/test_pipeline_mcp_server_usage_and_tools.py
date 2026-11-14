@@ -8,6 +8,7 @@ from pathlib import Path
 from app import backend
 from pipeline import ci as pci
 from pipeline import server as p
+from pipeline.ci import context_from_manifest as _context
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _clear_caches,
     _hermetic_ollama_seams,
@@ -425,7 +426,7 @@ def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, 
     )
     ci_calls = []
     monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: ci_calls.append(br))
-    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key, **kw: None)
 
     result = p.advance_pipeline("cipushfail")
 
@@ -547,14 +548,14 @@ def test_advance_pipeline_rebase_and_ci_ok_merges(plan_dir, monkeypatch):
     assert result["merged"] == ["P1"]
 
 
-def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
+def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch, seed_merge_gate):
     # PIPELINE_MERGE_CI_GATE=0 is the documented opt-out: the real _ci_status
     # short-circuits to pass without ever calling gh, so a rebase-ok branch
     # merges even if checks would have failed. Prove gh is not consulted by
     # making any subprocess.run raise.
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(pci, "PIPELINE_MERGE_CI_GATE", False)
+    seed_merge_gate(merge_ci_gate=False)
     # Not under test here, but _advance_pipeline_locked unconditionally
     # resolves the review-role resource gate before reaching the merge/CI
     # logic this test targets. With no role_config on this manifest, that
@@ -612,7 +613,7 @@ def test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, 
 
     rerun_calls = []
     monkeypatch.setattr(p, "_ci_status_once", _fake_ci_status)
-    monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
+    monkeypatch.setattr(p, "_ci_rerun", lambda br, **kw: rerun_calls.append(br) or True)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
@@ -672,7 +673,7 @@ def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, mon
 
     rerun_calls = []
     monkeypatch.setattr(p, "_ci_status", _fake_ci_status)
-    monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
+    monkeypatch.setattr(p, "_ci_rerun", lambda br, **kw: rerun_calls.append(br) or True)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
@@ -685,8 +686,8 @@ def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, mon
     assert story["status"] == "done"
 
 
-def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypatch, tmp_path):
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypatch, tmp_path, seed_merge_gate):
+    seed_merge_gate(reverify_full_suite=True)
     # Gap 1: stories without an acceptance block (the common case for
     # real-project stories) get the rebased branch's full test suite
     # re-run before merge, not a silent "none" pass. The 1 MBW in the
@@ -703,7 +704,7 @@ def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypa
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), settings=_context({}))
 
     assert result["state"] == "fail"
     assert "failed" in result["error"]
@@ -712,8 +713,8 @@ def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypa
     assert seen_cmd["cmd"] == ["pytest"]
 
 
-def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path):
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path, seed_merge_gate):
+    seed_merge_gate(reverify_full_suite=True)
     # The "no acceptance block" arm returns pass on rc=0, not "none" -
     # the MBW safety net only catches real failures; a clean suite
     # merges normally.
@@ -724,7 +725,7 @@ def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path)
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert seen_cmd["cmd"] == ["pytest"]
@@ -739,9 +740,8 @@ def test_reverify_acceptance_full_suite_opt_out_restores_none(monkeypatch, tmp_p
         raise AssertionError("must not run tests when opted out")
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
     monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "0")
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
@@ -762,7 +762,7 @@ def test_reverify_acceptance_scopes_cargo_to_acceptance_test_stem(monkeypatch, t
 
     result = p._reverify_acceptance(
         {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
-        str(tmp_path),
+        str(tmp_path), settings=_context({}),
     )
 
     assert result == {"state": "pass", "error": ""}
@@ -782,7 +782,7 @@ def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatc
 
     result = p._reverify_acceptance(
         {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
-        str(tmp_path),
+        str(tmp_path), settings=_context({}),
     )
 
     assert result == {"state": "pass", "error": ""}
@@ -791,9 +791,9 @@ def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatc
 
 
 def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, seed_merge_gate,
 ):
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+    seed_merge_gate(reverify_full_suite=True)
     # Mode 42 done-bar blindspot, merge-gate side: a no-acceptance story
     # whose deliverable lives under tests/ gets its own new tests/test_*.py
     # file appended to the full-suite re-run when story_key is given, so a
@@ -812,7 +812,7 @@ def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1")
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1", settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert seen_cmd["cmd"] == [
@@ -820,9 +820,9 @@ def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
 
 
 def test_reverify_acceptance_no_story_key_leaves_full_suite_unscoped(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, seed_merge_gate,
 ):
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+    seed_merge_gate(reverify_full_suite=True)
     # Backward-compat default: callers that don't pass story_key (the
     # pre-existing 2-arg call shape) get the plain full suite, unchanged.
     seen_cmd = {}
@@ -837,7 +837,7 @@ def test_reverify_acceptance_no_story_key_leaves_full_suite_unscoped(
             AssertionError("must not be called without a story_key")),
     )
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert seen_cmd["cmd"] == ["pytest"]
@@ -862,16 +862,16 @@ def test_reverify_acceptance_does_not_augment_when_acceptance_block_present(
     )
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
 
-    result = p._reverify_acceptance(story, str(tmp_path), "S1")
+    result = p._reverify_acceptance(story, str(tmp_path), "S1", settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert seen_cmd["cmd"] == ["pytest", str(tmp_path / "test_acceptance.py")]
 
 
 def test_reverify_acceptance_skips_augmentation_for_non_pytest_runner(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, seed_merge_gate,
 ):
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+    seed_merge_gate(reverify_full_suite=True)
     # A non-pytest full-suite command (e.g. mvn) must not have
     # _added_pytest_test_paths' output appended - it only knows how to
     # extend a pytest invocation.
@@ -887,7 +887,7 @@ def test_reverify_acceptance_skips_augmentation_for_non_pytest_runner(
             AssertionError("must not be called for a non-pytest runner")),
     )
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1")
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1", settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert seen_cmd["cmd"] == ["mvn", "test"]
@@ -900,7 +900,7 @@ def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
 
-    result = p._reverify_acceptance(story, "/no/such/worktree")
+    result = p._reverify_acceptance(story, "/no/such/worktree", settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
@@ -918,7 +918,7 @@ def test_reverify_acceptance_fails_when_oracle_red(monkeypatch, tmp_path):
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
 
-    result = p._reverify_acceptance(story, str(tmp_path))
+    result = p._reverify_acceptance(story, str(tmp_path), settings=_context({}))
 
     assert result["state"] == "fail"
     assert "available_tokens" in result["error"]
@@ -926,12 +926,12 @@ def test_reverify_acceptance_fails_when_oracle_red(monkeypatch, tmp_path):
 
 
 def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
-    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt, **kw: (wt, ["pytest"]))
     monkeypatch.setattr(p.subprocess, "run",
                         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
 
-    result = p._reverify_acceptance(story, str(tmp_path))
+    result = p._reverify_acceptance(story, str(tmp_path), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
 
@@ -943,11 +943,10 @@ def test_reverify_acceptance_skips_full_suite_by_default(monkeypatch, tmp_path):
     # only unless the operator sets PIPELINE_REVERIFY_FULL_SUITE=1.
     def _boom_run(*a, **k):
         raise AssertionError("the full suite must not run unless opted in")
-    monkeypatch.delenv("PIPELINE_REVERIFY_FULL_SUITE", raising=False)
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
     monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
-    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 

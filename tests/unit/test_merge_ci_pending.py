@@ -20,16 +20,20 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import pipeline.server as p
-from pipeline.server import (
-    MERGE_MAX_ATTEMPTS,
-    PIPELINE_MERGE_CI_TIMEOUT,
-    _advance_pipeline_locked,
-)
-
 
 # ---------------------------------------------------------------------------
 # Manifest helpers (local copies so this file is self-contained).
 # ---------------------------------------------------------------------------
+from pipeline.ci import context_from_manifest as _context
+from pipeline.server import (
+    MERGE_MAX_ATTEMPTS,
+    _advance_pipeline_locked,
+)
+
+# The Store's safe value for merge_ci_timeout_s; no record is seeded here.
+DEFAULT_CI_TIMEOUT_S = 900
+
+
 def _write_manifest(plan_dir, plan_name, stories):
     (plan_dir / f"{plan_name}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": stories}, indent=2)
@@ -68,10 +72,10 @@ def _patch_merge_boundaries(monkeypatch, ci_once):
     )
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda story, worktree, key: {"state": "pass"},
+        lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree: {"state": "pass"},
+        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
@@ -87,24 +91,24 @@ def _patch_merge_boundaries(monkeypatch, ci_once):
 class TestCiPendingExpired:
     def test_returns_false_for_malformed_timestamp(self):
         # A malformed timestamp must never expire a story.
-        assert p._ci_pending_expired("not-a-timestamp") is False
+        assert p._ci_pending_expired("not-a-timestamp", settings=_context({})) is False
 
     def test_returns_false_for_empty_string(self):
-        assert p._ci_pending_expired("") is False
+        assert p._ci_pending_expired("", settings=_context({})) is False
 
     def test_returns_false_for_recent_timestamp(self):
         recent = datetime.now(UTC).isoformat()
-        assert p._ci_pending_expired(recent) is False
+        assert p._ci_pending_expired(recent, settings=_context({})) is False
 
     def test_returns_true_when_older_than_bound(self):
         # Older than the total patience the blocking gate provided.
-        bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+        bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
-        assert p._ci_pending_expired(old) is True
+        assert p._ci_pending_expired(old, settings=_context({})) is True
 
     def test_returns_false_for_none(self):
         # Missing timestamp must not raise.
-        assert p._ci_pending_expired(None) is False
+        assert p._ci_pending_expired(None, settings=_context({})) is False
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +118,7 @@ class TestPendingCi:
     def test_pending_leaves_status_pr_open(self, plan_dir, monkeypatch):
         calls = {"count": 0}
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             calls["count"] += 1
             return {"state": "pending", "error": "checks running"}
 
@@ -126,7 +130,7 @@ class TestPendingCi:
         assert man["stories"]["P1"]["status"] == "pr_open"
 
     def test_pending_does_not_increment_merge_attempts(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -137,7 +141,7 @@ class TestPendingCi:
         assert man["stories"]["P1"]["merge_attempts"] == 2
 
     def test_pending_does_not_park(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -150,7 +154,7 @@ class TestPendingCi:
         assert story["status"] != "parked"
 
     def test_pending_adds_key_to_summary_ci_pending(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -161,7 +165,7 @@ class TestPendingCi:
         assert "P1" in result["ci_pending"]
 
     def test_pending_sets_ci_pending_since_first_observation(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -174,7 +178,7 @@ class TestPendingCi:
     def test_pending_does_not_overwrite_ci_pending_since(self, plan_dir, monkeypatch):
         first = datetime.now(UTC).isoformat()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -188,7 +192,7 @@ class TestPendingCi:
     def test_subsequent_pass_clears_ci_pending_since(self, plan_dir, monkeypatch):
         first = datetime.now(UTC).isoformat()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -202,10 +206,10 @@ class TestPendingCi:
         # A pending result whose ci_pending_since is older than the total
         # patience bound MUST still count against merge_attempts (the bound
         # still fires in time-based form).
-        bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+        bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -218,10 +222,10 @@ class TestPendingCi:
     def test_expired_pending_terminal_fails_at_max(self, plan_dir, monkeypatch):
         # An expired-pending story terminal-fails at MERGE_MAX_ATTEMPTS exactly
         # like any other gate_error.
-        bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+        bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -238,7 +242,7 @@ class TestPendingCi:
 
     def test_fail_still_counts_against_merge_attempts(self, plan_dir, monkeypatch):
         # Regression guard: a 'fail' result still counts exactly as before.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "fail", "error": "tests failed"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -249,7 +253,7 @@ class TestPendingCi:
         assert man["stories"]["P1"]["merge_attempts"] == 2
 
     def test_summary_ci_pending_exists_empty_when_none_pending(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -262,7 +266,7 @@ class TestPendingCi:
     def test_pending_does_not_merge(self, plan_dir, monkeypatch):
         merged = []
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -275,7 +279,7 @@ class TestPendingCi:
     def test_pending_does_not_notify(self, plan_dir, monkeypatch):
         notified = []
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -301,7 +305,7 @@ class TestStructure:
 
     def test_ci_status_once_not_called_as_blocking_in_tick(self, plan_dir, monkeypatch):
         # The blocking _ci_status must not be invoked during a pending tick.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)

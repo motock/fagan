@@ -30,6 +30,8 @@ from pathlib import Path
 # modules), so its PLAN_DIR binding is reused as the repo's documented patch
 # surface for plan-dir resolution. It is read at call time, never cached here.
 from pipeline import host_state, paths
+from pipeline.authorization import DEFAULT_TEAM
+from pipeline.ci import DEFAULT_NAMESPACE, SettingsContext
 
 __all__ = ["PreflightError", "raise_on_failure", "run_preflight", "summarize"]
 
@@ -222,7 +224,14 @@ def _check_scheduler_revision(plan_path):
     }
 
 
-def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
+def run_preflight(
+    plan_dir=None,
+    which=shutil.which,
+    registry_loader=None,
+    *,
+    team=None,
+    repo=None,
+):
     """Run the seven preflight checks; return one result dict per check.
 
     plan_dir: explicit plan directory to check. None resolves the way
@@ -234,6 +243,9 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         (injectable so tests never depend on today's model_registry.json).
         None uses the built-in loader, which json-parses model_registry.json
         directly from the repo root.
+    team, repo: optional settings context for the merge CI gate report. The
+        default namespace and team are used when omitted; an omitted repo
+        reports the deployment and team layers only.
 
     The checks are read-only: nothing is created, written, or executed.
     """
@@ -402,23 +414,30 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         })
 
     # -- check c2: merge CI gate ---------------------------------------------
-    # Read the env var at call time (never at import time), like the
-    # dispatch-backend check above: an operator can disable or re-enable the
-    # gate between preflight runs, and an import-time read would report a
-    # stale state. Warn, never fail: disabling the gate is a legitimate
-    # operator choice during a genuine CI outage, and preflight failing hard
-    # would block work during exactly the outage the escape hatch exists
-    # for. It must be impossible to MISS, not impossible to DO.
-    if os.environ.get("PIPELINE_MERGE_CI_GATE", "1").strip() == "0":
+    # Resolved at call time through the same settings the merge gate reads
+    # (never an import-time value). The default namespace is always reported;
+    # team and repo narrow it when the operator names them. Warn, never fail:
+    # disabling the gate is a legitimate operator choice during a genuine CI
+    # outage, and preflight failing hard would block work during exactly the
+    # outage the escape hatch exists for. It must be impossible to MISS, not
+    # impossible to DO.
+    gate = SettingsContext(
+        namespace=DEFAULT_NAMESPACE,
+        team=team or DEFAULT_TEAM,
+        repo=repo or "",
+    ).resolve("merge_ci_gate")
+    if not gate["value"]:
         results.append({
             "name": "merge CI gate",
             "status": "warn",
             "message": (
-                "PIPELINE_MERGE_CI_GATE=0: the merge gate will NOT consult "
-                "CI, so merges can land on red. Unset PIPELINE_MERGE_CI_GATE "
-                "to restore the gate. This is usually a temporary workaround "
-                "(e.g. a CI outage) and should be removed once CI is green "
-                "again."
+                f"merge_ci_gate is OFF (source={gate['source']}, "
+                f"team={gate['team']}, repo={gate['repo'] or '-'}): the merge "
+                "gate will NOT consult CI, so merges can land on red. Turn it "
+                "back on in the settings store to restore the gate. This is usually "
+                "a temporary "
+                "workaround (e.g. a CI outage) and should be removed once CI "
+                "is green again."
             ),
         })
     else:

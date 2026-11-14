@@ -14,6 +14,7 @@ import pytest
 import pipeline.ci as pci
 import pipeline.server as p
 from pipeline import merge
+from pipeline.ci import context_from_manifest as _context
 from pipeline.server import _advance_pipeline_locked
 
 
@@ -28,14 +29,12 @@ class _Completed:
 def repo_with_ci(tmp_path, monkeypatch):
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(pci, "PIPELINE_MERGE_CI_GATE", True)
     return tmp_path
 
 
 @pytest.fixture
 def repo_without_ci(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(pci, "PIPELINE_MERGE_CI_GATE", True)
     return tmp_path
 
 
@@ -56,7 +55,7 @@ def _stub_gh(monkeypatch, *, failure):
 
 def _call(fn, sha):
     kwargs = {"timeout_s": 5} if fn is pci._ci_status else {}
-    return fn("agent/x", sha=sha, **kwargs)
+    return fn("agent/x", sha=sha, settings=_context({}), **kwargs)
 
 
 FUNCS = [pci._ci_status, pci._ci_status_once]
@@ -89,26 +88,26 @@ def test_should_keep_none_when_gh_fails_and_no_workflows(
 
 def test_should_preserve_error_text_for_nonzero_exit(repo_with_ci, monkeypatch):
     _stub_gh(monkeypatch, failure="nonzero")
-    assert pci._ci_status_once("b", sha="")["error"] == "HTTP 502 from gh"
+    assert pci._ci_status_once("b", sha="", settings=_context({}))["error"] == "HTTP 502 from gh"
 
 
 def test_should_stay_pending_on_empty_result_with_workflows(repo_with_ci, monkeypatch):
     _stub_gh(monkeypatch, failure="empty")
-    assert pci._ci_status_once("b", sha="")["state"] == "pending"
+    assert pci._ci_status_once("b", sha="", settings=_context({}))["state"] == "pending"
 
 
 def test_should_stay_none_on_empty_result_without_workflows(
     repo_without_ci, monkeypatch
 ):
     _stub_gh(monkeypatch, failure="empty")
-    assert pci._ci_status_once("b", sha="")["state"] == "none"
+    assert pci._ci_status_once("b", sha="", settings=_context({}))["state"] == "none"
 
 
 def test_should_stay_none_on_empty_result_without_workflows_blocking(
     repo_without_ci, monkeypatch
 ):
     _stub_gh(monkeypatch, failure="empty")
-    assert pci._ci_status("b", sha="", timeout_s=5)["state"] == "none"
+    assert pci._ci_status("b", sha="", timeout_s=5, settings=_context({}))["state"] == "none"
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +140,9 @@ def gate_boundaries(monkeypatch):
     merged = []
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda w: {"state": "pass"})
-    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k, **kw: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda w, **kw: {"state": "pass"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key, **kw: merged.append(key) or "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.ci import context_from_manifest as _context
+
 BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
@@ -75,7 +77,7 @@ def test_ci_status_stub_fails_when_worktree_tests_fail(tmp_path, monkeypatch):
     _seed_worktree(tmp_path, "SOME-KEY", "def test_fail():\n    assert False\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/some-key")
+    result = p._ci_status("agent/some-key", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"]
@@ -86,7 +88,7 @@ def test_ci_status_stub_passes_when_worktree_tests_pass(tmp_path, monkeypatch):
     _seed_worktree(tmp_path, "SOME-KEY", "def test_ok():\n    assert True\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/some-key")
+    result = p._ci_status("agent/some-key", settings=_context({}))
 
     assert result["state"] == "pass"
 
@@ -106,7 +108,7 @@ def test_ci_status_stub_catches_missing_method_like_the_rli3_incident(tmp_path, 
     (worktree / "thing.py").write_text("class Widget:\n    pass\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/rli-3")
+    result = p._ci_status("agent/rli-3", settings=_context({}))
 
     assert result["state"] == "fail"
 
@@ -138,6 +140,6 @@ def test_ci_status_stub_passes_when_worktree_directory_is_missing(tmp_path, monk
     monkeypatch.setattr(p, "WORKTREE_ROOT", tmp_path)
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/does-not-exist")
+    result = p._ci_status("agent/does-not-exist", settings=_context({}))
 
     assert result["state"] == "pass"

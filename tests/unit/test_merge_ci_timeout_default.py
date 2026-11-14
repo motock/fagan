@@ -1,53 +1,33 @@
 """Regression guard for the merge-gate CI poll default (MERGE-CI-01).
 
-``PIPELINE_MERGE_CI_TIMEOUT`` is read once, at import time, so each test below
-observes a *fresh* import in a *fresh* child process rather than reloading the
-module in-process (reload order and already-bound module references make the
-in-process version flaky).  Every child env is built from its own
-``dict(os.environ)`` copy so the removal never leaks into other tests.
+``merge_ci_timeout_s`` is a tenant setting. Its default is 900 seconds, so a
+six-job matrix (macOS worst case 5m39s) finishes before the merge gate gives
+up. A stored value overrides the default for its (namespace, team, repo).
 """
 
-import os
-import subprocess
-import sys
 from pathlib import Path
+
+from pipeline import ci
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_MD = REPO_ROOT / "REFERENCE.md"
 
-_PRINT_TIMEOUT = "import pipeline.ci; print(pipeline.ci.PIPELINE_MERGE_CI_TIMEOUT)"
 
-
-def _run_child(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-c", _PRINT_TIMEOUT],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(REPO_ROOT),
-        check=False,
+def test_default_ci_timeout_is_900(seed_merge_gate) -> None:
+    timeout = ci.context_from_manifest({}).value("merge_ci_timeout_s")
+    assert timeout == 900, (
+        "merge_ci_timeout_s must default to 900 seconds so a six-job matrix "
+        f"(macOS worst case 5m39s) finishes before the merge gate gives up; "
+        f"got {timeout!r}"
     )
 
 
-def test_default_ci_timeout_is_900() -> None:
-    env = dict(os.environ)
-    env.pop("PIPELINE_MERGE_CI_TIMEOUT", None)
-    result = _run_child(env)
-    assert result.stdout.strip() == "900", (
-        "PIPELINE_MERGE_CI_TIMEOUT must default to 900 seconds so a six-job "
-        f"matrix (macOS worst case 5m39s) finishes before the merge gate gives "
-        f"up; got {result.stdout.strip()!r} (stderr: {result.stderr.strip()!r})"
-    )
-
-
-def test_env_override_still_wins() -> None:
-    env = dict(os.environ)
-    env["PIPELINE_MERGE_CI_TIMEOUT"] = "120"
-    result = _run_child(env)
-    assert result.stdout.strip() == "120", (
-        "An explicit PIPELINE_MERGE_CI_TIMEOUT must still override the 900 "
-        f"default; got {result.stdout.strip()!r} "
-        f"(stderr: {result.stderr.strip()!r})"
+def test_stored_ci_timeout_overrides_the_900_default(seed_merge_gate) -> None:
+    seed_merge_gate(merge_ci_timeout_s=120)
+    timeout = ci.context_from_manifest({}).value("merge_ci_timeout_s")
+    assert timeout == 120, (
+        "A stored merge_ci_timeout_s must still override the 900 default; "
+        f"got {timeout!r}"
     )
 
 

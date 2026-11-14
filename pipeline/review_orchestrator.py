@@ -24,6 +24,7 @@ from typing import Any
 
 from . import git_ops, parsers
 from .branch_names import story_branch
+from .ci import settings_for_plan
 from .parsers import _is_transient_backend_exception
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
 from .review import _first_review_base, build_review_story_context
@@ -802,7 +803,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # gives the next dispatch a fact the reviewer's own text can't convey.
         feedback = reviewer_output
         if story.get("acceptance"):
-            oracle_now = _reverify_acceptance(story, worktree, story_key)
+            oracle_now = _reverify_acceptance(
+                story,
+                worktree,
+                story_key,
+                settings=settings_for_plan(plan_name),
+            )
             if oracle_now.get("state") == "pass":
                 feedback = (
                     "NOTE: the acceptance oracle is currently PASSING against "

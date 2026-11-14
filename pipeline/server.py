@@ -86,19 +86,16 @@ from .checkpoint import (
     _terminate_and_checkpoint,
 )
 
-# CI status polling for the merge gate. PIPELINE_MERGE_CI_GATE /
-# PIPELINE_MERGE_CI_TIMEOUT / PIPELINE_MERGE_BUILD_GATE live here (CI-specific
-# gates, not general config); tests patch pipeline_ci.<name> directly for
-# the gates and p.<name> for _ci_status / _ci_rerun (server call sites use
-# bare names -> re-export -> patch lands). _repo_has_ci_configured reads
+# CI status polling for the merge gate. The merge gates are tenant settings
+# resolved per (namespace, team, repo) by the caller (see pipeline.ci's
+# SettingsContext), so no gate value is re-exported from here. Tests patch
+# p.<name> for _ci_status / _ci_rerun (server call sites use bare names ->
+# re-export -> patch lands). _repo_has_ci_configured reads
 # REPO_ROOT via a lazy import from this module (Option B - see
 # PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 from .ci import (  # noqa: F401
     _PATCHABLE_STORY_FIELDS,
     _VALID_STORY_STATUSES,
-    PIPELINE_MERGE_BUILD_GATE,
-    PIPELINE_MERGE_CI_GATE,
-    PIPELINE_MERGE_CI_TIMEOUT,
     _acceptance_tampered,
     _ci_pending_expired,
     _ci_rerun,

@@ -1,6 +1,7 @@
 import json
 
 from pipeline import ci as p
+from pipeline.ci import context_from_manifest as _context
 
 
 def _run(returncode=0, stdout="", stderr=""):
@@ -22,8 +23,7 @@ def test_ci_status_queries_the_sha_scoped_check_runs_endpoint(monkeypatch):
         return _run(stdout='{"name":"Lint","status":"completed","conclusion":"success"}\n')
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha=sha)
+    result = p._ci_status("agent/x", sha=sha, settings=_context({}))
     assert result == {"state": "pass", "error": ""}
     assert len(calls) == 1
     assert calls[0][:2] == ["gh", "api"]
@@ -39,8 +39,7 @@ def test_ci_status_never_falls_back_to_branch_only_query_when_sha_present(monkey
         return _run(stdout='{"name":"Lint","status":"completed","conclusion":"success"}\n')
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    p._ci_status("agent/x", sha="deadbeef")
+    p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
 
 def test_ci_status_falls_back_to_branch_query_when_sha_empty(monkeypatch):
@@ -53,8 +52,7 @@ def test_ci_status_falls_back_to_branch_query_when_sha_empty(monkeypatch):
         return _run(stdout=json.dumps([{"bucket": "pass"}]))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
     assert result == {"state": "pass", "error": ""}
     assert calls[0] == ["gh", "pr", "checks", "agent/x", "--json", "name,bucket"]
 
@@ -67,8 +65,7 @@ def test_ci_status_sha_scoped_fail_bucket(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    assert p._ci_status("agent/x", sha="deadbeef")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="deadbeef", settings=_context({}))["state"] == "fail"
 
 
 def test_ci_status_sha_scoped_cancelled_bucket(monkeypatch):
@@ -76,8 +73,7 @@ def test_ci_status_sha_scoped_cancelled_bucket(monkeypatch):
         return _run(stdout='{"name":"Lint","status":"completed","conclusion":"cancelled"}\n')
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    assert p._ci_status("agent/x", sha="deadbeef")["state"] == "cancelled"
+    assert p._ci_status("agent/x", sha="deadbeef", settings=_context({}))["state"] == "cancelled"
 
 
 def test_ci_status_sha_scoped_fail_wins_over_cancelled(monkeypatch):
@@ -88,8 +84,7 @@ def test_ci_status_sha_scoped_fail_wins_over_cancelled(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    assert p._ci_status("agent/x", sha="deadbeef")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="deadbeef", settings=_context({}))["state"] == "fail"
 
 
 def test_ci_status_sha_scoped_still_running_polls_then_pending_at_timeout(monkeypatch):
@@ -99,8 +94,7 @@ def test_ci_status_sha_scoped_still_running_polls_then_pending_at_timeout(monkey
     sleeps = []
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05)
+    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05, settings=_context({}))
     assert result["state"] == "pending"
     assert sleeps  # confirms it actually polled at least once, not fast-pathed
 
@@ -108,8 +102,7 @@ def test_ci_status_sha_scoped_still_running_polls_then_pending_at_timeout(monkey
 def test_ci_status_sha_scoped_empty_and_no_ci_configured_returns_none(monkeypatch):
     monkeypatch.setattr(p.subprocess, "run", lambda argv, **_: _run(stdout=""))
     monkeypatch.setattr(p, "_repo_has_ci_configured", lambda: False)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "none"
 
 

@@ -16,6 +16,8 @@ import pytest
 from pipeline import ci as p
 
 # ---------- helpers ----------
+from pipeline.ci import context_from_manifest as _context
+
 
 def _run(returncode=0, stdout="", stderr=""):
     class R:
@@ -70,8 +72,7 @@ def test_pass_when_all_check_runs_success(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "pass"
     assert no_sleep.calls == []
 
@@ -86,8 +87,7 @@ def test_pass_when_conclusions_subset_of_pass_set(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "pass"
     assert no_sleep.calls == []
 
@@ -104,8 +104,7 @@ def test_fail_when_any_check_run_failure(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert "Build" in result["error"]
     assert "failure" in result["error"]
@@ -119,8 +118,7 @@ def test_fail_when_any_check_run_timed_out(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert "Build" in result["error"]
     assert no_sleep.calls == []
@@ -133,8 +131,7 @@ def test_fail_when_any_check_run_action_required(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert "Deploy" in result["error"]
     assert no_sleep.calls == []
@@ -151,8 +148,7 @@ def test_cancelled_on_cancelled_conclusion(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "cancelled"
     assert "Build" in result["error"]
     assert no_sleep.calls == []
@@ -169,8 +165,7 @@ def test_pending_when_check_run_not_completed(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "pending"
     assert no_sleep.calls == [], "must not sleep on a single poll"
 
@@ -182,9 +177,8 @@ def test_pending_when_zero_runs_but_ci_configured(monkeypatch, no_sleep):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr(p, "_repo_has_ci_configured", lambda: True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "pending"
     assert no_sleep.calls == []
 
@@ -197,9 +191,8 @@ def test_none_when_zero_runs_and_no_ci_configured(monkeypatch, no_sleep):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr(p, "_repo_has_ci_configured", lambda: False)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "none"
     assert no_sleep.calls == []
 
@@ -212,9 +205,8 @@ def test_none_when_gh_exits_nonzero(monkeypatch, no_sleep):
         return _run(returncode=1, stderr=long_err)
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "none"
     assert len(result["error"]) <= 200
     assert result["error"] == long_err[:200]
@@ -227,9 +219,8 @@ def test_none_when_gh_raises_oserror(monkeypatch, no_sleep):
         raise OSError("boom")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "none"
     assert result["error"].startswith("gh unavailable:")
     assert "boom" in result["error"]
@@ -243,9 +234,8 @@ def test_none_on_unparseable_output(monkeypatch, no_sleep):
         return _run(stdout="this is not json\n{broken")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr("pipeline.ci._repo_has_ci_configured", lambda: False)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "none"
     assert result["error"]  # non-empty descriptive error
     assert no_sleep.calls == []
@@ -253,15 +243,15 @@ def test_none_on_unparseable_output(monkeypatch, no_sleep):
 
 # ---------- gate disabled ----------
 
-def test_pass_when_gate_disabled(monkeypatch, no_sleep):
+def test_pass_when_gate_disabled(monkeypatch, no_sleep, seed_merge_gate):
     """When PIPELINE_MERGE_CI_GATE is falsy -> state 'pass' with error
     'CI gate disabled', exactly as _ci_status does."""
     def _fake_run(argv, **_):  # pragma: no cover - must not be called
         raise AssertionError("gh must not be invoked when gate is disabled")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", False)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    seed_merge_gate(merge_ci_gate=False)
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert result == {"state": "pass", "error": "CI gate disabled"}
     assert no_sleep.calls == []
 
@@ -278,8 +268,7 @@ def test_never_calls_time_sleep_even_on_pending(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    p._ci_status_once("agent/x", sha="deadbeef")
+    p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert no_sleep.calls == []
 
 
@@ -290,9 +279,8 @@ def test_never_calls_time_sleep_on_zero_runs_configured(monkeypatch, no_sleep):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr(p, "_repo_has_ci_configured", lambda: True)
-    p._ci_status_once("agent/x", sha="deadbeef")
+    p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert no_sleep.calls == []
 
 
@@ -308,8 +296,7 @@ def test_single_poll_makes_one_gh_call(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    p._ci_status_once("agent/x", sha="deadbeef")
+    p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert len(calls) == 1
     assert no_sleep.calls == []
 
@@ -324,8 +311,7 @@ def test_return_value_is_dict_with_state_and_error_keys(monkeypatch, no_sleep):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status_once("agent/x", sha="deadbeef")
+    result = p._ci_status_once("agent/x", sha="deadbeef", settings=_context({}))
     assert isinstance(result, dict)
     assert "state" in result
     assert "error" in result
@@ -355,7 +341,6 @@ def test_ci_status_still_unchanged_behavior(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda s: None)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05)
+    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05, settings=_context({}))
     assert result["state"] == "pending"
     assert result["error"] == "CI did not complete within timeout"

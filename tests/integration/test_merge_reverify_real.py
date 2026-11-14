@@ -23,7 +23,8 @@ import pytest
 
 # isort: off
 # pipeline.server is imported first on purpose: pre-existing import cycle.
-import pipeline.server  # noqa: F401
+import pipeline.persistence
+import pipeline.server
 import pipeline.merge_reverify as mr
 # isort: on
 
@@ -92,16 +93,19 @@ def _poll(job: dict) -> dict:
     pytest.fail(f"merge re-verify job did not finish within {DEADLINE_S:g}s")
 
 
-def test_real_job_reports_pass_then_fail(tmp_path, monkeypatch):
+def test_real_job_reports_pass_then_fail(tmp_path, monkeypatch, seed_merge_gate):
     plan_name = "REALPLAN"
     story_key = "REAL-1"
     plan_dir = tmp_path / "plans"
     monkeypatch.setenv("PIPELINE_SKIP_ENV_FILE", "1")
     monkeypatch.setenv("PLAN_DIR", str(plan_dir))
-    # The full-suite re-verify is opt-in (CI is the default full-suite gate);
-    # this check exists to prove a real suite runs, so opt in for the child
-    # process, which inherits this environment.
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+    # The child process reads the settings Store from PLAN_DIR, so the record
+    # must land there. The full-suite re-verify is opt-in (CI is the default
+    # full-suite gate); this check exists to prove a real suite runs.
+    plan_dir.mkdir()
+    monkeypatch.setattr(pipeline.server, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(pipeline.persistence, "PLAN_DIR", plan_dir)
+    seed_merge_gate(reverify_full_suite=True)
 
     worktree = _make_worktree(
         tmp_path,

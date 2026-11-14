@@ -11,14 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import ci
 from pipeline import server as p
 from pipeline import test_scope_dispatch as tsd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO = "/srv/repo"
 REWORK_ENV = "PIPELINE_REWORK_ON_CI_FAIL"
-SCOPED_MANIFEST = {"test_scope": "scoped", "repo_root": REPO}
+# A repo_url gives the merge settings a valid repo identity; a bare repo_root
+# path is not a Store key, so the settings read would fall back to safe values.
+SCOPED_MANIFEST = {
+    "test_scope": "scoped",
+    "repo_root": REPO,
+    "repo_url": "https://github.com/acme/app.git",
+}
 
 
 class _ForgeStub:
@@ -42,7 +47,6 @@ class _ForgeStub:
 @pytest.fixture(autouse=True)
 def _scoped_survives_by_default(monkeypatch):
     monkeypatch.setenv(REWORK_ENV, "1")
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", True)
     monkeypatch.setattr(tsd, "policy_settings", lambda namespace, team: {})
     monkeypatch.delenv(tsd.TEST_SCOPE_ENV, raising=False)
 
@@ -99,22 +103,23 @@ def test_checks_ci_config_of_manifest_repo_when_scoped(forge, notifications):
 
 
 # ---------- CI merge gate disabled ----------
-def test_degrades_to_full_when_ci_gate_is_disabled(forge, notifications, monkeypatch):
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
+def test_degrades_to_full_when_ci_gate_is_disabled(forge, notifications, monkeypatch, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert (result["test_scope"], result["degraded_reason"]) == ("full", "ci_gate_disabled")
 
 
-def test_records_degraded_from_scoped_when_ci_gate_is_disabled(forge, notifications, monkeypatch):
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
+def test_records_degraded_from_scoped_when_ci_gate_is_disabled(forge, notifications, monkeypatch, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert result["degraded_from"] == "scoped"
 
 
 def test_notifies_one_warning_degraded_event_when_ci_gate_is_disabled(
-    forge, notifications, monkeypatch
+    forge, notifications, monkeypatch,
+    seed_merge_gate,
 ):
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
+    seed_merge_gate(merge_ci_gate=False)
     _stamp(manifest=dict(SCOPED_MANIFEST))
     (sent,) = _degraded_events(notifications)
     assert (sent[2]["severity"], sent[2]["story_key"]) == ("warning", "S1")
@@ -170,8 +175,8 @@ def test_rework_on_ci_fail_is_read_at_call_time(monkeypatch):
 
 
 # ---------- reason precedence ----------
-def test_reports_ci_gate_disabled_before_rework_off(forge, notifications, monkeypatch):
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
+def test_reports_ci_gate_disabled_before_rework_off(forge, notifications, monkeypatch, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     monkeypatch.setenv(REWORK_ENV, "0")
     result = _stamp(manifest=dict(SCOPED_MANIFEST))
     assert result["degraded_reason"] == "ci_gate_disabled"

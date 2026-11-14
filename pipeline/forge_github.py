@@ -28,7 +28,7 @@ import math
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .ci_failing_tests import extract_failing_tests, format_failing_tests
 from .forge import (
@@ -40,6 +40,9 @@ from .forge import (
     CIStatusUnreadable,
     Forge,
 )
+
+if TYPE_CHECKING:
+    from .ci import SettingsContext
 
 # GitHub's legacy commit-status ``bucket`` vocabulary, grouped by the canonical
 # state it maps to. ``skipping`` is a PASS: a skipped check is not a failure
@@ -273,11 +276,13 @@ class GitHubForge(Forge):
     # stay thin delegations to ``pipeline.ci``'s public shims, which in turn
     # delegate back to the ``*_impl`` methods below - so the seam is inverted
     # without a delegation cycle and the S1 contract tests keep passing.
-    def checks_status(self, branch: str, sha: str) -> dict[str, str]:
+    def checks_status(
+        self, branch: str, sha: str, *, settings: SettingsContext
+    ) -> dict[str, str]:
         """ONE CI status for ``branch``/``sha``; never polls (S1-era name)."""
         from .ci import _ci_status_once
 
-        return _ci_status_once(branch, sha=sha)
+        return _ci_status_once(branch, sha=sha, settings=settings)
 
     def failure_excerpt(self, branch: str) -> str | None:
         """A bounded failing-test excerpt, or None (S1-era name)."""

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from pipeline import ci
+from pipeline.ci import context_from_manifest as _context
 
 SOURCE = "def test_x():\n    assert True\n"
 DIGEST = hashlib.sha256(SOURCE.encode()).hexdigest()
@@ -55,7 +56,7 @@ def test_reverify_fails_a_tampered_worktree_without_running_tests(tmp_path, monk
         )
 
     monkeypatch.setattr(ci.subprocess, "run", boom)
-    result = ci._reverify_acceptance(_story(), str(tmp_path))
+    result = ci._reverify_acceptance(_story(), str(tmp_path), settings=_context({}))
     assert result["state"] == "fail"
     assert "oracle.py" in result["error"]
 
@@ -74,7 +75,7 @@ def test_reverify_still_runs_tests_for_an_untouched_worktree(tmp_path, monkeypat
         return R()
 
     monkeypatch.setattr(ci.subprocess, "run", fake_run)
-    result = ci._reverify_acceptance(_story(), str(tmp_path))
+    result = ci._reverify_acceptance(_story(), str(tmp_path), settings=_context({}))
     assert called.get("ran"), "an untouched oracle must still be executed"
     assert result["state"] == "pass"
 
@@ -118,20 +119,20 @@ def _detect_returning(worktree, cmd):
     return _detect
 
 
-def _prepare(tmp_path, monkeypatch, cmd):
+def _prepare(tmp_path, monkeypatch, cmd, seed_merge_gate):
     """Real git worktree + a real, controlled test command."""
-    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "1")
+    seed_merge_gate(reverify_full_suite=True)
     worktree = _git_worktree(tmp_path)
     monkeypatch.setattr(ci, "detect_test_command", _detect_returning(worktree, cmd))
     return worktree
 
 
-def test_reverify_persists_a_failing_run_onto_story(tmp_path, monkeypatch):
+def test_reverify_persists_a_failing_run_onto_story(tmp_path, monkeypatch, seed_merge_gate):
     cmd = [sys.executable, "-c", "import sys; print('1 failed'); sys.exit(1)"]
-    worktree = _prepare(tmp_path, monkeypatch, cmd)
+    worktree = _prepare(tmp_path, monkeypatch, cmd, seed_merge_gate)
     story = {"acceptance": []}
 
-    result = ci._reverify_acceptance(story, str(worktree))
+    result = ci._reverify_acceptance(story, str(worktree), settings=_context({}))
 
     # Return shape is unchanged (additive side effect only).
     assert result["state"] == "fail"
@@ -141,34 +142,34 @@ def test_reverify_persists_a_failing_run_onto_story(tmp_path, monkeypatch):
     assert story["last_test_check"]["cwd"] == str(worktree)
 
 
-def test_reverify_persists_a_passing_run_onto_story(tmp_path, monkeypatch):
+def test_reverify_persists_a_passing_run_onto_story(tmp_path, monkeypatch, seed_merge_gate):
     cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
-    worktree = _prepare(tmp_path, monkeypatch, cmd)
+    worktree = _prepare(tmp_path, monkeypatch, cmd, seed_merge_gate)
     story = {"acceptance": []}
 
-    result = ci._reverify_acceptance(story, str(worktree))
+    result = ci._reverify_acceptance(story, str(worktree), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert story["last_test_check"]["returncode"] == 0
     assert story["last_test_check"]["cmd"] == cmd
 
 
-def test_reverify_persists_the_worktree_head_sha(tmp_path, monkeypatch):
+def test_reverify_persists_the_worktree_head_sha(tmp_path, monkeypatch, seed_merge_gate):
     cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
-    worktree = _prepare(tmp_path, monkeypatch, cmd)
+    worktree = _prepare(tmp_path, monkeypatch, cmd, seed_merge_gate)
     story = {"acceptance": []}
 
-    ci._reverify_acceptance(story, str(worktree))
+    ci._reverify_acceptance(story, str(worktree), settings=_context({}))
 
     assert story["last_test_check"]["sha"] == _head(worktree)
     assert story["last_test_check"]["sha"]
 
 
-def test_reverify_overwrites_a_stale_noop_snapshot(tmp_path, monkeypatch):
+def test_reverify_overwrites_a_stale_noop_snapshot(tmp_path, monkeypatch, seed_merge_gate):
     """Live incident: the manifest kept the portable no-op from an earlier poll
     even though the gate went on to run (and pass on) a real test command."""
     cmd = [sys.executable, "-c", "import sys; print('1 failed'); sys.exit(1)"]
-    worktree = _prepare(tmp_path, monkeypatch, cmd)
+    worktree = _prepare(tmp_path, monkeypatch, cmd, seed_merge_gate)
     (worktree / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     stale = {
         "cmd": [sys.executable, "-c", "pass"],
@@ -181,7 +182,7 @@ def test_reverify_overwrites_a_stale_noop_snapshot(tmp_path, monkeypatch):
     }
     story = {"acceptance": [], "last_test_check": dict(stale)}
 
-    result = ci._reverify_acceptance(story, str(worktree))
+    result = ci._reverify_acceptance(story, str(worktree), settings=_context({}))
 
     assert result["state"] == "fail"
     assert story["last_test_check"]["cmd"] == cmd

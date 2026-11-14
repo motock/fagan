@@ -10,6 +10,7 @@ import pytest
 from pipeline import ci as pci
 from pipeline import server as p
 from pipeline import ticketing as pt
+from pipeline.ci import context_from_manifest as _context
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _clear_caches,
     _hermetic_ollama_seams,
@@ -38,27 +39,27 @@ def _repo_without_ci_workflows(monkeypatch):
 # web-client-epic retro §3.1).
 
 def test_reverify_build_fails_when_build_command_exits_nonzero(monkeypatch, tmp_path):
-    monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt, **kw: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(
         p.subprocess, "run",
         lambda cmd, **k: subprocess.CompletedProcess(
             cmd, 1, stdout="", stderr="Error: Can't resolve 'crypto'"),
     )
 
-    result = p._reverify_build(str(tmp_path))
+    result = p._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result["state"] == "fail"
     assert "crypto" in result["error"]
 
 
 def test_reverify_build_passes_when_build_command_exits_zero(monkeypatch, tmp_path):
-    monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt, **kw: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(
         p.subprocess, "run",
         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
     )
 
-    result = p._reverify_build(str(tmp_path))
+    result = p._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
 
@@ -71,7 +72,7 @@ def test_reverify_build_skips_when_no_build_command_detected(monkeypatch, tmp_pa
     monkeypatch.setattr(pci, "detect_build_command", lambda wt: None)
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
 
-    result = p._reverify_build(str(tmp_path))
+    result = p._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
@@ -81,12 +82,12 @@ def test_reverify_build_returns_none_for_missing_worktree(monkeypatch):
         raise AssertionError("must not attempt a build against a missing worktree")
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
 
-    result = p._reverify_build("/no/such/worktree")
+    result = p._reverify_build("/no/such/worktree", settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
 
-def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path):
+def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path, seed_merge_gate):
     # PIPELINE_MERGE_BUILD_GATE=0 restores the old silent-skip behavior for
     # operators with slow builds who don't want a build re-run at the merge
     # gate. Mirrors the opt-out pattern used by PIPELINE_MERGE_CI_GATE and
@@ -95,9 +96,9 @@ def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path):
         raise AssertionError("must not build when opted out")
     monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
-    monkeypatch.setattr(pci, "PIPELINE_MERGE_BUILD_GATE", False)
+    seed_merge_gate(merge_build_gate=False)
 
-    result = p._reverify_build(str(tmp_path))
+    result = p._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": "build gate disabled"}
 
@@ -118,7 +119,7 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
-                        lambda wt: {"state": "fail", "error": "Error: Can't resolve 'crypto'"})
+                        lambda wt, **kw: {"state": "fail", "error": "Error: Can't resolve 'crypto'"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 
@@ -143,8 +144,8 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_reverify_build", lambda wt, **kw: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key, **kw: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
     result = p.advance_pipeline("buildok")
@@ -167,7 +168,7 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
-                        lambda wt: {"state": "fail", "error": "build broke"})
+                        lambda wt, **kw: {"state": "fail", "error": "build broke"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 

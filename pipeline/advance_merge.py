@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import merge_reverify
+from .ci import gate_record, settings_for_plan
 from .host_state import build_host_state
 from .merge_reverify import (
     cancel_merge_reverify,
@@ -274,7 +275,9 @@ def _readjudicate_parked_merge_hold(
         # exact mistake the round-2 review finding names.
         branch = ""
     try:
-        current = _ci_status_once(branch, sha="")
+        current = _ci_status_once(
+            branch, sha="", settings=settings_for_plan(plan_name)
+        )
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
         logging.getLogger("pipeline").warning(
             "%s merge-park re-adjudication: CI gather failed; keeping the "
@@ -335,14 +338,15 @@ def _merge_reverify_gate(
         # can't (a repo without CI, or a CI-independent slip between
         # tests_passed and review).
         gate_error = ""
-        acc = _reverify_acceptance(story, worktree, key)
+        settings = settings_for_plan(plan_name)
+        acc = _reverify_acceptance(story, worktree, key, settings=settings)
         if acc["state"] == "fail":
             gate_error = f"acceptance reverify fail: {acc['error']}"
         if not gate_error:
             # Independent of tests: a green suite doesn't mean the
             # project actually builds (PR #48 merged with `npm run
             # build` broken - retro §3.1).
-            build = _reverify_build(worktree)
+            build = _reverify_build(worktree, settings=settings)
             if build["state"] == "fail":
                 gate_error = f"build reverify fail: {build['error']}"
         return gate_error, False
@@ -421,6 +425,10 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         deny,
         rebind_after_pipeline_push,
     )
+
+    # The merge gates this tick reads, resolved once from the plan manifest so
+    # every gate call and the merge record name the same (namespace, team, repo).
+    settings = settings_for_plan(plan_name)
 
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
     manifest = _store.records().get_manifest("default", plan_name)
@@ -617,7 +625,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             rebind_after_pipeline_push(story, pushed_sha)
         if not gate_error:
             poll_branch = branch or _degraded_ci_branch(key)
-            ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
+            ci = _merge_gate_ci_status(
+                poll_branch, sha=pushed_sha, settings=settings
+            )
             if ci["state"] == "cancelled" and not story.get(
                 "ci_rerun_attempted"
             ):
@@ -626,7 +636,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 # jobs with no code-quality signal at all.
                 story["ci_rerun_attempted"] = True
                 _ci_rerun(pushed_sha)
-                ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
+                ci = _merge_gate_ci_status(
+                    poll_branch, sha=pushed_sha, settings=settings
+                )
             # Record the gate's own final result for every risk level, so a
             # merged story always carries CI evidence and a blocked one shows
             # why (fail/pending/unreadable included).
@@ -649,7 +661,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             elif ci["state"] == "pending":
                 story.setdefault("ci_pending_since", datetime.now(UTC).isoformat())
                 story["ci_pending_sha"] = pushed_sha
-                if _ci_pending_expired(story["ci_pending_since"]):
+                if _ci_pending_expired(
+                    story["ci_pending_since"], settings=settings
+                ):
                     _notify_user(
                         plan_name,
                         f"{key} CI has been pending since "
@@ -941,6 +955,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             summary["notify"].append(key)
             continue
         story["status"] = "done"
+        story["merge_gates"] = gate_record(settings)
         story.pop("merge_attempts", None)
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)

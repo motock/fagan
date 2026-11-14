@@ -13,7 +13,7 @@ import logging
 import pytest
 
 from pipeline import persistence, server
-from pipeline.merge_settings import (
+from pipeline.ci import (
     DEFAULT_NAMESPACE,
     SettingsContext,
     context_from_manifest,

@@ -29,10 +29,7 @@ registry") and never the total number of checks.
 from __future__ import annotations
 
 import logging
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -61,12 +58,14 @@ def _ok_registry() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_gate_env(monkeypatch):
-    """Scrub every env var the touched code paths consult.
+def _isolated_gate_env(monkeypatch, seed_merge_gate):
+    """Scrub every env var the touched code paths consult, and isolate the Store.
 
-    Each test then sets exactly what it needs via monkeypatch.setenv; the
-    ambient environment (which, inside a dispatched agent's bash tool, may
-    carry PIPELINE_MERGE_CI_GATE=0) must never influence an assertion.
+    The gate is a tenant setting now: each test seeds exactly the record it
+    needs via ``seed_merge_gate``. The ambient environment (which, inside a
+    dispatched agent's bash tool, may carry PIPELINE_MERGE_CI_GATE=0) must
+    never influence an assertion, and the Store must never touch a real plan
+    directory.
     """
     for var in (GATE_VAR, "PIPELINE_BACKEND_DISPATCH", "PLAN_DIR", "WORKTREE_ROOT"):
         monkeypatch.delenv(var, raising=False)
@@ -91,36 +90,35 @@ def _find(results, name):
 # --------------------------------------------------------------------------- #
 # Change 1: the preflight check.
 # --------------------------------------------------------------------------- #
-def test_preflight_warns_when_merge_ci_gate_is_disabled(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "0")
+def test_preflight_warns_when_merge_ci_gate_is_disabled(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     assert entry["status"] == "warn"
 
 
-def test_preflight_reports_ok_when_gate_is_enabled(tmp_path, monkeypatch):
-    # Default path: the var is DELETED, not merely unset-to-something.
-    monkeypatch.delenv(GATE_VAR, raising=False)
+def test_preflight_reports_ok_when_gate_is_enabled(tmp_path, seed_merge_gate):
+    # Default path: no merge_ci_gate record is seeded, so the safe value stands.
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     assert entry["status"] == "ok"
 
 
-def test_preflight_reports_ok_when_gate_explicitly_enabled(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "1")
+def test_preflight_reports_ok_when_gate_explicitly_enabled(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=True)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     assert entry["status"] == "ok"
 
 
-def test_disabled_gate_message_names_the_env_var(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "0")
+def test_disabled_gate_message_names_the_setting(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
-    assert GATE_VAR in entry["message"], (
-        "the warn message must name PIPELINE_MERGE_CI_GATE so the operator "
-        "knows what to unset"
+    assert "merge_ci_gate" in entry["message"], (
+        "the warn message must name the merge_ci_gate setting so the operator "
+        "knows what to turn back on"
     )
 
 
-def test_disabled_gate_is_warn_never_fail(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "0")
+def test_disabled_gate_is_warn_never_fail(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     results = _run_preflight(tmp_path)
     entry = _find(results, CHECK_NAME)
     assert entry["status"] == "warn"
@@ -130,29 +128,23 @@ def test_disabled_gate_is_warn_never_fail(tmp_path, monkeypatch):
     preflight.raise_on_failure(results)
 
 
-def test_preflight_reads_gate_env_at_call_time_not_import_time(
-    tmp_path, monkeypatch
+def test_preflight_ignores_the_legacy_env_var_once_the_setting_is_in_the_store(
+    tmp_path, monkeypatch, seed_merge_gate
 ):
-    monkeypatch.setenv(GATE_VAR, "0")
-    assert _find(_run_preflight(tmp_path), CHECK_NAME)["status"] == "warn"
-    monkeypatch.delenv(GATE_VAR, raising=False)
-    second = _find(_run_preflight(tmp_path), CHECK_NAME)
-    assert second["status"] == "ok", (
-        "PIPELINE_MERGE_CI_GATE appears to be cached at import time; like "
-        "the dispatch-backend check it must be read at call time"
+    # The Store is the source of truth. A legacy env value (here padded, which
+    # the old reader treated as a disable) must not flip the check on its own.
+    monkeypatch.setenv(GATE_VAR, " 0 ")
+    entry = _find(_run_preflight(tmp_path), CHECK_NAME)
+    assert entry["status"] == "ok", (
+        "PIPELINE_MERGE_CI_GATE must not control the gate any more; only the "
+        "merge_ci_gate setting does"
     )
 
 
-def test_preflight_warns_for_whitespace_padded_zero(tmp_path, monkeypatch):
-    # The check compares os.environ.get(...).strip() == "0", so padded
-    # values must warn too.
-    monkeypatch.setenv(GATE_VAR, " 0 ")
-    entry = _find(_run_preflight(tmp_path), CHECK_NAME)
-    assert entry["status"] == "warn"
 
 
-def test_disabled_gate_message_says_merges_can_land_on_red(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "0")
+def test_disabled_gate_message_says_merges_can_land_on_red(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     message = entry["message"]
     assert "red" in message.lower(), "message must say merges can land on red"
@@ -163,9 +155,9 @@ def test_disabled_gate_message_says_merges_can_land_on_red(tmp_path, monkeypatch
 
 
 def test_disabled_gate_message_mentions_temporary_workaround(
-    tmp_path, monkeypatch
+    tmp_path, seed_merge_gate
 ):
-    monkeypatch.setenv(GATE_VAR, "0")
+    seed_merge_gate(merge_ci_gate=False)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     message = entry["message"].lower()
     assert any(
@@ -176,16 +168,15 @@ def test_disabled_gate_message_mentions_temporary_workaround(
     ), "message must say how to restore the gate (unset the env var)"
 
 
-def test_ok_message_says_gate_requires_green_ci(tmp_path, monkeypatch):
-    monkeypatch.delenv(GATE_VAR, raising=False)
+def test_ok_message_says_gate_requires_green_ci(tmp_path, seed_merge_gate):
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     message = entry["message"].lower()
     assert "green" in message, "ok message must confirm green CI is required"
     assert "ci" in message
 
 
-def test_new_check_entry_matches_result_shape(tmp_path, monkeypatch):
-    monkeypatch.setenv(GATE_VAR, "0")
+def test_new_check_entry_matches_result_shape(tmp_path, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     entry = _find(_run_preflight(tmp_path), CHECK_NAME)
     assert set(entry) == {"name", "status", "message"}
     assert entry["status"] in {"ok", "warn", "fail"}
@@ -229,15 +220,10 @@ def test_ci_module_has_a_module_logger():
     assert "getLogger(__name__)" in source
 
 
-def test_ci_status_logs_a_warning_when_gate_disabled(monkeypatch, caplog):
-    # pipeline/ci.py binds PIPELINE_MERGE_CI_GATE into a module-level
-    # constant at import time, so production code reads the module
-    # attribute -- patch that (the repo's own convention, e.g.
-    # tests/unit/test_ci_fail_error_detail.py), not just the env var.
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
-    monkeypatch.delenv(GATE_VAR, raising=False)
+def test_ci_status_logs_a_warning_when_gate_disabled(monkeypatch, caplog, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     with caplog.at_level(logging.WARNING, logger="pipeline.ci"):
-        result = ci._ci_status(BRANCH, sha="")
+        result = ci._ci_status(BRANCH, sha="", settings=ci.context_from_manifest({}))
     # The log line was ADDED; the contract is byte-for-byte unchanged.
     assert result == DISABLED_RETURN
     records = [
@@ -255,11 +241,12 @@ def test_ci_status_logs_a_warning_when_gate_disabled(monkeypatch, caplog):
     assert "without" in message, "message must say the merge proceeds without checking CI"
 
 
-def test_ci_status_once_logs_a_warning_when_gate_disabled(monkeypatch, caplog):
-    monkeypatch.setattr(ci, "PIPELINE_MERGE_CI_GATE", False)
-    monkeypatch.delenv(GATE_VAR, raising=False)
+def test_ci_status_once_logs_a_warning_when_gate_disabled(monkeypatch, caplog, seed_merge_gate):
+    seed_merge_gate(merge_ci_gate=False)
     with caplog.at_level(logging.WARNING, logger="pipeline.ci"):
-        result = ci._ci_status_once(BRANCH, sha="")
+        result = ci._ci_status_once(
+            BRANCH, sha="", settings=ci.context_from_manifest({})
+        )
     assert result == DISABLED_RETURN
     records = [
         record
@@ -275,44 +262,6 @@ def test_ci_status_once_logs_a_warning_when_gate_disabled(monkeypatch, caplog):
     assert "without" in message
 
 
-def test_gate_default_unchanged_env_unset_means_enabled():
-    # The gate's default must stay enabled: the literal default "1" stays
-    # in the source, and a fresh interpreter with no PIPELINE_* env binds
-    # the module constant to True.
-    source = (REPO_ROOT / "pipeline" / "ci.py").read_text(encoding="utf-8")
-    assert 'os.environ.get("PIPELINE_MERGE_CI_GATE", "1")' in source
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("PIPELINE_", "LOCAL_AGENT_"))
-    }
-    env["PIPELINE_SKIP_ENV_FILE"] = "1"
-    # Give the child exactly the import surface this process has: repo root
-    # first (so `pipeline` resolves), then every existing sys.path entry —
-    # on some hosts the third-party site-packages dir (e.g. `mcp`, which
-    # pipeline.server imports) is not on a bare child's default path.
-    entries, seen = [], set()
-    for candidate in [str(REPO_ROOT), *sys.path]:
-        if candidate and Path(candidate).exists() and candidate not in seen:
-            seen.add(candidate)
-            entries.append(candidate)
-    env["PYTHONPATH"] = os.pathsep.join(entries)
-    # Both modules import cold; the order here is kept as authored.
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import pipeline.server, pipeline.ci; "
-                "print(pipeline.ci.PIPELINE_MERGE_CI_GATE)"
-            ),
-        ],
-        cwd=str(REPO_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "True"
+def test_gate_default_is_enabled_when_no_setting_is_stored(seed_merge_gate):
+    # Nothing seeded: the Store's safe value (ON) stands for every context.
+    assert ci.context_from_manifest({}).value("merge_ci_gate") is True

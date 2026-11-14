@@ -44,7 +44,19 @@ def _may_loosen(setting: SettingKey, source: str, layer_maps: dict) -> bool:
     return isinstance(allowed, (list, tuple)) and setting.name in allowed
 
 
-def resolve(key: str, layers: Mapping, *, request: Any = None) -> dict:
+def _allows(setting: SettingKey, name: str, request_layer: str) -> bool:
+    layer = REQUEST_LAYER if name == request_layer else name
+    return layer in setting.allowed_layers
+
+
+def resolve(
+    key: str, layers: Mapping, *, request: Any = None, request_layer: str = REQUEST_LAYER
+) -> dict:
+    """Resolve *key* across *layers*, then the optional *request*.
+
+    *request_layer* names the request in the result (a caller may call it
+    ``plan`` or ``story``); it is still checked against the key's request slot.
+    """
     setting = REGISTRY[key]
     if not isinstance(layers, Mapping) or SETTINGS_ERROR_KEY in layers:
         return _refused(setting, request)
@@ -58,7 +70,7 @@ def resolve(key: str, layers: Mapping, *, request: Any = None) -> dict:
         if name in layer_maps
     ]
     if request is not None:
-        offered.append((REQUEST_LAYER, request))
+        offered.append((request_layer, request))
 
     invalid_layers = []
     lock_rejections = []
@@ -66,10 +78,14 @@ def resolve(key: str, layers: Mapping, *, request: Any = None) -> dict:
     for name, value in offered:
         if value is None:
             continue
-        if name not in setting.allowed_layers or not setting.accepts(value):
+        if not _allows(setting, name, request_layer) or not setting.accepts(value):
             invalid_layers.append(name)
             continue
         if setting.kind == "ceiling" and current is not None:
+            # A request that agrees with the policy in force changes nothing,
+            # so the policy layer keeps the source.
+            if name == request_layer and value == current[0]:
+                continue
             looser = setting.tighter(value, current[0]) != value
             if looser and not _may_loosen(setting, current[1], layer_maps):
                 lock_rejections.append(

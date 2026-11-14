@@ -28,7 +28,7 @@ def _install_store(tmp_path, monkeypatch):
 
 
 def _make_tick(tmp_path, monkeypatch, *, live_pids, env=None, others=None,
-               story_key="mine", test_cmd=None):
+               story_key="mine", test_cmd=None, grade_workers=None):
     """Build one scheduler-tick invocation of the real lifecycle.
 
     Returns (story, plan_name, calls, run_tick); ``run_tick()`` performs a
@@ -36,6 +36,11 @@ def _make_tick(tmp_path, monkeypatch, *, live_pids, env=None, others=None,
     ``others`` maps a plan name to its stored manifest payload.
     """
     store = _install_store(tmp_path, monkeypatch)
+    if grade_workers is not None:
+        store.records().put_settings(
+            "default", "deployment", "", "",
+            {"grade_xdist_workers": grade_workers}, [], "ops", None,
+        )
     plan_name = "mine-plan"
     story = {"status": "in_progress", "pid": 1234}
     manifest = {"stories": {story_key: story}}
@@ -247,7 +252,7 @@ def test_xdist_workers_appended_to_pytest_command(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         live_pids=set(),
-        env={"PIPELINE_GRADE_XDIST_WORKERS": "3"},
+        grade_workers=3,
         test_cmd=[".venv/bin/python", "-m", "pytest", "-q"],
     )
 
@@ -273,13 +278,15 @@ def test_xdist_workers_unset_leaves_command_unchanged_and_does_not_mutate(
         tmp_path,
         monkeypatch,
         live_pids=set(),
-        env={"PIPELINE_GRADE_XDIST_WORKERS": "3"},
+        grade_workers=3,
         test_cmd=shared,
     )
     run_tick()
 
     story.pop("grading_pid", None)
-    monkeypatch.delenv("PIPELINE_GRADE_XDIST_WORKERS")
+    records = pipeline.server._store.records()
+    version = records.get_settings("default", "deployment", "", "")["version"]
+    records.put_settings("default", "deployment", "", "", {}, [], "ops", version)
     run_tick()
 
     assert calls[0]["cmd"] == [".venv/bin/python", "-m", "pytest", "-q", "-n", "3"]
@@ -292,7 +299,7 @@ def test_xdist_workers_ignored_for_non_pytest_command(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         live_pids=set(),
-        env={"PIPELINE_GRADE_XDIST_WORKERS": "3"},
+        grade_workers=3,
         test_cmd=["cargo", "test"],
     )
 
@@ -301,25 +308,20 @@ def test_xdist_workers_ignored_for_non_pytest_command(tmp_path, monkeypatch):
     assert calls[0]["cmd"] == ["cargo", "test"]
 
 
-@pytest.mark.parametrize("bad", ["0", "not-a-number"])
-def test_invalid_xdist_workers_ignored_with_warning(tmp_path, monkeypatch, caplog, bad):
+@pytest.mark.parametrize("bad", [0, "not-a-number"])
+def test_invalid_stored_xdist_workers_are_ignored(tmp_path, monkeypatch, bad):
+    """A malformed stored value resolves as unset: the command is unchanged."""
     _story, _plan_name, calls, run_tick = _make_tick(
         tmp_path,
         monkeypatch,
         live_pids=set(),
-        env={"PIPELINE_GRADE_XDIST_WORKERS": bad},
+        grade_workers=bad,
         test_cmd=[".venv/bin/python", "-m", "pytest", "-q"],
     )
 
-    with caplog.at_level("WARNING"):
-        run_tick()
+    run_tick()
 
     assert calls[0]["cmd"] == [".venv/bin/python", "-m", "pytest", "-q"]
-    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warnings) == 1
-    message = warnings[0].getMessage()
-    assert "PIPELINE_GRADE_XDIST_WORKERS" in message
-    assert bad in message
 
 
 @pytest.mark.parametrize(

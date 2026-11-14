@@ -1,7 +1,10 @@
 """Resolve the effective ``test_scope`` for one dispatch from the policy layers.
 
-Pure: no I/O, no environment reads, no logging. Layers only tighten, except
-that a team may loosen an org ``full`` policy when the org opts in.
+Pure: no I/O, no environment reads, no logging. The policy layers (deployment,
+org, team, team_repo) are combined by ``pipeline.settings_resolve``; this module
+adds the plan/story request on top and keeps the result shape dispatch reports.
+Layers only tighten, except that a layer may loosen an org ``full`` policy when
+the org opts in.
 """
 
 from pipeline.policy_settings import SETTINGS_ERROR_KEY, SETTINGS_PROVIDER_ERROR
@@ -10,7 +13,10 @@ TEST_SCOPE_FULL = "full"
 TEST_SCOPE_SCOPED = "scoped"
 TEST_SCOPE_VALUES = (TEST_SCOPE_FULL, TEST_SCOPE_SCOPED)
 
+TEST_SCOPE_KEY = "test_scope"
 _REQUEST_LAYERS = ("plan", "story", "env")
+_POLICY_LAYERS = ("deployment", "org", "team", "team_repo")
+_DEFAULT_SOURCE = "default"
 
 
 def _read_layer(layer, value, invalid_layers):
@@ -33,6 +39,31 @@ def _tenant_layer(settings, key):
     return layer if isinstance(layer, dict) else {}
 
 
+def _allowed_loosen(name, layer):
+    allowed = list(layer["allow_loosen"]) if isinstance(layer.get("allow_loosen"), list) else []
+    # Legacy spelling: the org's boolean opt-in lets lower layers loosen.
+    if name == "org" and layer.get("allow_team_loosen") is True:
+        allowed.append(TEST_SCOPE_KEY)
+    return allowed
+
+
+def _policy_layers(settings, invalid_layers):
+    """The resolver's layers mapping, with invalid values fail-closed to full."""
+    layers = {}
+    for name in _POLICY_LAYERS:
+        layer = _tenant_layer(settings, name)
+        entry = {}
+        scope = _read_layer(name, layer.get("test_scope"), invalid_layers)
+        if scope is not None:
+            entry["test_scope"] = scope
+        allowed = _allowed_loosen(name, layer)
+        if allowed:
+            entry["allow_loosen"] = allowed
+        if entry:
+            layers[name] = entry
+    return layers
+
+
 def _result(test_scope, source, lock_rejections, invalid_layers):
     return {
         "test_scope": test_scope,
@@ -43,6 +74,11 @@ def _result(test_scope, source, lock_rejections, invalid_layers):
 
 
 def resolve_test_scope(*, settings, plan_value=None, story_value=None, env_value=None):
+    # settings_registry imports TEST_SCOPE_VALUES from this module, so the
+    # resolver modules are imported here, after this module has loaded.
+    from pipeline.settings_registry import REQUEST_LAYER
+    from pipeline.settings_resolve import SAFE_DEFAULT_SOURCE, resolve
+
     invalid_layers = []
     requested = {
         "plan": _read_layer("plan", plan_value, invalid_layers),
@@ -72,44 +108,15 @@ def resolve_test_scope(*, settings, plan_value=None, story_value=None, env_value
             TEST_SCOPE_FULL, SETTINGS_PROVIDER_ERROR, rejections, invalid_layers
         )
 
-    org = _tenant_layer(settings, "org")
-    team = _tenant_layer(settings, "team")
-    org_scope = _read_layer("org", org.get("test_scope"), invalid_layers)
-    team_scope = _read_layer("team", team.get("test_scope"), invalid_layers)
-    lock = org.get("allow_team_loosen") is True
-
-    rejections = []
-    if team_scope is not None:
-        if (
-            team_scope == TEST_SCOPE_SCOPED
-            and org_scope == TEST_SCOPE_FULL
-            and not lock
-        ):
-            rejections.append(
-                {"layer": "team", "requested": TEST_SCOPE_SCOPED, "by": "org"}
-            )
-            policy = (TEST_SCOPE_FULL, "org")
-        else:
-            policy = (team_scope, "team")
-    elif org_scope is not None:
-        policy = (org_scope, "org")
-    else:
-        policy = None
-
-    if policy is None and request is None:
-        return _result(TEST_SCOPE_FULL, "default", rejections, invalid_layers)
-    if policy is None:
-        return _result(request[1], request[0], rejections, invalid_layers)
-    if request is None:
-        return _result(policy[0], policy[1], rejections, invalid_layers)
-
-    request_layer, request_scope = request
-    policy_scope, policy_layer = policy
-    if request_scope == TEST_SCOPE_FULL:
-        return _result(TEST_SCOPE_FULL, request_layer, rejections, invalid_layers)
-    if policy_scope == TEST_SCOPE_FULL:
-        rejections.append(
-            {"layer": request_layer, "requested": TEST_SCOPE_SCOPED, "by": policy_layer}
-        )
-        return _result(TEST_SCOPE_FULL, policy_layer, rejections, invalid_layers)
-    return _result(TEST_SCOPE_SCOPED, policy_layer, rejections, invalid_layers)
+    layers = _policy_layers(settings, invalid_layers)
+    request_layer, request_scope = request or (REQUEST_LAYER, None)
+    resolved = resolve(
+        TEST_SCOPE_KEY,
+        layers,
+        request=request_scope,
+        request_layer=request_layer,
+    )
+    source = _DEFAULT_SOURCE if resolved["source"] == SAFE_DEFAULT_SOURCE else resolved["source"]
+    return _result(
+        resolved["value"], source, resolved["lock_rejections"], invalid_layers
+    )

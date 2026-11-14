@@ -2,7 +2,7 @@
 
 - **Status:** Proposed (draft 2026-11-04, not yet reviewed)
 - **Date:** 2026-11-04
-- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope'); 2026-11-13 (per-repository security-audit state added to the record kinds in decision 3); 2026-11-13 (the plugin surface of decision 7 is published and gated: `PLUGIN_STORE_METHODS` in `pipeline/store_plugin.py`, the outbox, audit-log and transaction conformance suites, and the `PluginStore` wrapper the loader applies)
+- **Amended:** 2026-11-06 (multi-organization deployments are an enterprise concern; see 'What is out of scope'); 2026-11-13 (per-repository security-audit state added to the record kinds in decision 3); 2026-11-13 (the plugin surface of decision 7 is published and gated: `PLUGIN_STORE_METHODS` in `pipeline/store_plugin.py`, the outbox, audit-log and transaction conformance suites, and the `PluginStore` wrapper the loader applies); 2026-11-14 (a `settings` record kind is added to the record kinds in decision 3; see [0015](0015-tenant-settings-in-the-store.md))
 - **Builds on:** [0008](0008-shared-control-plane-per-repo-workers.md) (store is
   the system of record for plan and control state; no write-through),
   [0009](0009-tenancy-and-authorization-model.md) (service-layer policy over a

@@ -102,7 +102,7 @@ def _stub_ci_gather(monkeypatch, value):
     It lazy-imports ``_ci_status_once`` from ``pipeline/ci.py``, so the stub
     must land there (never on ``pipeline.server``).
     """
-    monkeypatch.setattr(ci_mod, "_ci_status_once", lambda branch, sha="": value)
+    monkeypatch.setattr(ci_mod, "_ci_status_once", lambda branch, sha="", settings=None: value)
 
 
 def _parked_story(**overrides):
@@ -199,7 +199,7 @@ def test_direct_call_without_binding_keeps_story_key_none(plan_dir, monkeypatch)
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, PROCEED_REPLY)
     monkeypatch.setattr(
-        server_mod, "_ci_status_once", lambda branch, sha="": None, raising=False
+        server_mod, "_ci_status_once", lambda branch, sha="", settings=None: None, raising=False
     )
     captured = []
     monkeypatch.setattr(

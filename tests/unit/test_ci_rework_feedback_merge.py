@@ -135,13 +135,13 @@ def _stub_tick(monkeypatch):
     )
     monkeypatch.setattr(
         p, "_merge_gate_ci_status",
-        lambda branch, *, sha: {
+        lambda branch, *, sha, settings=None: {
             "state": "fail",
             "error": "ci fail: Lint (ruff): failure",
         },
     )
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(p, "_ci_pending_expired", lambda since: False)
+    monkeypatch.setattr(p, "_ci_pending_expired", lambda since, settings=None: False)
     monkeypatch.setattr(
         p, "_ci_rework_feedback", lambda gate_error, attempts: CI_TEXT,
     )

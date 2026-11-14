@@ -192,7 +192,7 @@ def test_advance_tick_clears_merge_gate_on_alias_head_across_calls(
     recorded = _spy_on_git(monkeypatch)
     ci_calls = []
 
-    def ci_once(branch, *, sha):
+    def ci_once(branch, *, sha, settings=None):
         ci_calls.append((branch, sha))
         return {"state": "success", "error": ""}
 
@@ -212,9 +212,9 @@ def test_advance_tick_clears_merge_gate_on_alias_head_across_calls(
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda story, wt, key: {"state": "pass"},
+        lambda story, wt, key, settings=None: {"state": "pass"},
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)

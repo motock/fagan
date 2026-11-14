@@ -341,13 +341,13 @@ def _stub_tick(monkeypatch, plan_dir, plan_name):
     monkeypatch.setattr(
         advance,
         "_reverify_acceptance",
-        lambda story, worktree, key: {"state": "pass"},
+        lambda story, worktree, key, settings=None: {"state": "pass"},
         raising=False,
     )
     monkeypatch.setattr(
         advance,
         "_reverify_build",
-        lambda worktree: {"state": "pass"},
+        lambda worktree, settings=None: {"state": "pass"},
         raising=False,
     )
 
@@ -417,7 +417,7 @@ class TestStoryMergedBehavioralPath:
         monkeypatch.setattr(
             advance,
             "_merge_gate_ci_status",
-            lambda branch, sha=None: {
+            lambda branch, sha=None, settings=None: {
                 "state": ci_state,
                 "error": "boom" if ci_state == "fail" else "",
             },

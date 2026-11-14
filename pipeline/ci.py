@@ -128,6 +128,8 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
     An unknown plan yields the default context, which resolves every gate to
     its deployment or safe value.
     """
+    if not plan_name:
+        return context_from_manifest({})
     from .server import _store
 
     manifest = _store.records().get_manifest("default", plan_name) or {}

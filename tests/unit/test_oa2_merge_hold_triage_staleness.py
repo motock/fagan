@@ -174,10 +174,10 @@ def test_merge_ruling_pops_timestamp(monkeypatch, plan_dir):
         server_mod, "_merge_decision", lambda s, plan_name=None: {"action": "merge", "reason": "ruling"}
     )
     monkeypatch.setattr(
-        ci_mod, "_ci_status_once", lambda branch, *, sha: {"ci": "pass"}
+        ci_mod, "_ci_status_once", lambda branch, *, sha, settings=None: {"ci": "pass"}
     )
     monkeypatch.setattr(
-        advance_mod, "_ci_status_once", lambda branch, *, sha: {"ci": "pass"}, raising=False
+        advance_mod, "_ci_status_once", lambda branch, *, sha, settings=None: {"ci": "pass"}, raising=False
     )
     monkeypatch.setattr(
         server_mod, "_notify_user", lambda *a, **k: None, raising=False

@@ -125,7 +125,7 @@ class TestApproveMergePushesToScopedRepoNotDefaultRepoRoot:
         recorded = _spy_on_git_cwd(monkeypatch)
         ci_calls = []
 
-        def ci_status(branch, *, sha):
+        def ci_status(branch, *, sha, settings=None):
             ci_calls.append((branch, sha))
             return {"state": "success", "error": ""}
 
@@ -143,9 +143,9 @@ class TestApproveMergePushesToScopedRepoNotDefaultRepoRoot:
         monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
         monkeypatch.setattr(
             p, "_reverify_acceptance",
-            lambda story, wt, key: {"state": "pass"},
+            lambda story, wt, key, settings=None: {"state": "pass"},
         )
-        monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+        monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
         monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
         monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
         monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)

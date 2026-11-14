@@ -35,6 +35,7 @@ from .review_logic import (
     is_unchanged_since_review,
     review_logic_fingerprint,
 )
+from .review_orchestrator_comments import _format_security_comment
 from .review_refs import _ServerRef
 from .review_verdict_binding import bind_verdict
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
@@ -109,15 +110,6 @@ REWORK_MAX_ATTEMPTS = _ServerRef("REWORK_MAX_ATTEMPTS")
 REWORK_MAX_ATTEMPTS_ESCALATED = _ServerRef("REWORK_MAX_ATTEMPTS_ESCALATED")
 REWORK_MAX_ATTEMPTS_ORACLE = _ServerRef("REWORK_MAX_ATTEMPTS_ORACLE")
 _LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
-
-_SECURITY_COMMENT_MAX_CHARS = 8_000
-
-
-def _format_security_comment(report: str) -> str:
-    header = "## Security review (security-engineer): APPROVE\n\n"
-    if len(report) > _SECURITY_COMMENT_MAX_CHARS:
-        return header + report[:_SECURITY_COMMENT_MAX_CHARS] + "\n\n[report truncated]"
-    return header + report
 
 
 def skip_info(story: dict, current_sha: str) -> dict:
@@ -804,10 +796,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         feedback = reviewer_output
         if story.get("acceptance"):
             oracle_now = _reverify_acceptance(
-                story,
-                worktree,
-                story_key,
-                settings=settings_for_plan(plan_name),
+                story, worktree, story_key, settings=settings_for_plan(plan_name)
             )
             if oracle_now.get("state") == "pass":
                 feedback = (

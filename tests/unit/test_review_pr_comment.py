@@ -373,7 +373,7 @@ def test_comment_uses_raw_findings_not_feedback_preamble(
     # The oracle re-verification reports PASS, which triggers the preamble.
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda s, wt, sk="": {"state": "pass", "error": ""},
+        lambda s, wt, sk="", settings=None: {"state": "pass", "error": ""},
     )
     # An acceptance-bearing story uses REWORK_MAX_ATTEMPTS_ORACLE as its
     # rework cap (default 1), which would park on the very first cycle and

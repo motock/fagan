@@ -553,10 +553,10 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
     seen_worktrees = []
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
 
     def _capture_merge(wt, key):
         seen_worktrees.append(wt)
@@ -679,10 +679,10 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 

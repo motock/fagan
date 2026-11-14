@@ -11,6 +11,7 @@ import copy
 import os
 import re
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
@@ -30,6 +31,8 @@ from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalat
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
 from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
+from .triage_digest import sweep_digest
+from .test_scope_run import is_scoped
 from .triage_executors import EXECUTORS
 from .triage_rebrief import parse_diagnosis
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
@@ -419,6 +422,7 @@ def run_triage_sweep(plan_name: str) -> dict:
             return {"ok": True, "triaged": []}
         triaged_keys = []
         actions = {}
+        digest_rows = []
         skipped_cap = []
         changed = False
         # Partition BEFORE the per-tick slice: triage_allowed is computed once
@@ -478,7 +482,8 @@ def run_triage_sweep(plan_name: str) -> dict:
             if action_already_tried(story, ruling["action"]):
                 ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
             record_triage_attempt(story, ruling["action"])
-            action = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest)
+            outcome = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest)
+            digest_rows.append({"story_key": key, "park_class": ruling.get("park_class", "unknown"), "action": ruling["action"], "outcome": outcome})
             triaged_keys.append(key)
             actions[key] = ruling["action"]
             changed = True
@@ -494,6 +499,8 @@ def run_triage_sweep(plan_name: str) -> dict:
             _store.records().put_manifest(
                 "default", plan_name, _merge_sweep_changes(fresh, initial, manifest)
             )
+        if digest := sweep_digest(digest_rows):
+            _notify_user(plan_name, digest, event="triage_sweep_summary")
         return {
             "ok": True,
             "triaged": triaged_keys,
@@ -615,14 +622,23 @@ def triage_candidates(stories: dict) -> list[str]:
 # Helper: run the real test suite against the worktree's CURRENT HEAD
 # ---------------------------------------------------------------------------
 
-def _current_suite_state(worktree: str) -> str:
+def _scoped_suite_cmd(story: dict | None) -> list | None:
+    """The argv the story's last scoped gate ran, when it is scoped with graded targets."""
+    if not story or not is_scoped(story) or not (story.get("test_scope_grade") or {}).get("targets"):
+        return None
+    cmd = (story.get("last_test_check") or {}).get("cmd")
+    return cmd if isinstance(cmd, list) and cmd else None
+
+
+def _current_suite_state(worktree: str, story: dict | None = None) -> str:
     """Run the REAL test suite against the worktree's CURRENT HEAD.
 
     This runs the full test suite against the worktree's current HEAD (unlike
     :func:`collect_failure_evidence`, which only reads cached/stale state) and
     is the fix for the gap found live on story 30e5f9fc-3681-40db-ae54-dd95387dd1e7,
     where a story sat parked with an already‑passing suite because nothing
-    ever re‑checked. Never raises. Fails open to ``""`` (silence) on any problem - silence preserves today's behavior exactly, it never asserts something false.
+    ever re‑checked. A scoped story (see :func:`_scoped_suite_cmd`) runs the
+    scoped argv its gate recorded instead. Never raises. Fails open to ``""`` (silence) on any problem - silence preserves today's behavior exactly, it never asserts something false.
     """
     if not worktree:
         return ""
@@ -635,20 +651,12 @@ def _current_suite_state(worktree: str) -> str:
         return ""
     try:
         test_dir, test_cmd = detect_test_command(Path(worktree))
+        scoped = _scoped_suite_cmd(story)
+        test_cmd = scoped or test_cmd
         if not test_cmd:
             return ""
-        needs_heavy = bool(test_cmd) and _is_heavy(test_cmd)
-        if needs_heavy:
-            with _heavy_lock():
-                r = globals()["subprocess.run"](
-                    test_cmd,
-                    cwd=test_dir,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=timeout_s,
-                )
-        else:
+        label, pass_verb, fail_verb = ("scoped test targets", "PASS", "FAIL") if scoped else ("full test suite", "PASSES", "FAILS")
+        with _heavy_lock() if _is_heavy(test_cmd) else nullcontext():
             r = globals()["subprocess.run"](
                 test_cmd,
                 cwd=test_dir,
@@ -658,10 +666,10 @@ def _current_suite_state(worktree: str) -> str:
                 timeout=timeout_s,
             )
         if r.returncode == 0:
-            return "CURRENT STATE: full test suite PASSES at the worktree's current HEAD."
+            return f"CURRENT STATE: {label} {pass_verb} at the worktree's current HEAD."
         if r.returncode == 5:
             return ""
-        return f"CURRENT STATE: full test suite FAILS at the worktree's current HEAD (rc={r.returncode}):\n{(r.stdout + r.stderr)[-500:]}"
+        return f"CURRENT STATE: {label} {fail_verb} at the worktree's current HEAD (rc={r.returncode}):\n{(r.stdout + r.stderr)[-500:]}"
     except Exception:  # noqa: BLE001
         return ""
 
@@ -838,7 +846,7 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     # _current_suite_state's docstring for why this exists).
     current_state_section = ""
     try:
-        current_state_section = _current_suite_state(worktree)
+        current_state_section = _current_suite_state(worktree, story)
     except Exception:  # noqa: BLE001
         current_state_section = ""
     # Section (b3) – live git state: HEAD sha, new-commits-vs-base and the
@@ -952,6 +960,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
         if not check_ruling_allowed(park, ruling["action"]):
             ruling["rationale"] = f"action {ruling['action']} not allowed for park class {park.name}"
             ruling["action"] = "park_for_human"
+    ruling["park_class"] = park.name
     # Append decision record
     record = {
         "story_key": story_key,

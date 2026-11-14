@@ -289,6 +289,15 @@ themselves are stripped). A response missing either marker, the `DIAGNOSIS:`
 line, or with an empty fixture body is unparseable and fails closed to
 `park_for_human`.
 
+## Enabling the overlord (operator guide)
+
+This section is for the operator, not a ruling instruction. The sweep is off unless `PIPELINE_AUTO_TRIAGE=1` is set. The full procedure is in REFERENCE.md under "Enabling the overlord".
+
+- The four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) run in shadow by default: they are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them, for all four at once.
+- Each sweep sends one `triage_sweep_summary` digest: counts by park class and action, and story keys split into `Executed`, `Shadow` and `Held`. The decisions log holds each ruling with its `park_class` and the `mode` it ran under.
+- Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions once the sweep is on. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges.
+- Promotion rule: set `PIPELINE_TRIAGE_MODE=execute` only after at least 20 shadow decisions have been reviewed against live evidence, with no false proceed and false parks at most 10% of the reviewed decisions. Any false proceed sets the mode back to `shadow`.
+
 ## Output contract
 
 The overlord returns:

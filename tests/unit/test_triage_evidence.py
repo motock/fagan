@@ -418,7 +418,7 @@ def test_current_suite_state_pass_string_appears_after_story_state(monkeypatch):
     """When _current_suite_state returns the pass string, that exact string
     must appear in collect_triage_evidence's result, positioned AFTER the
     'STORY STATE:' section."""
-    monkeypatch.setattr(triage, "_current_suite_state", lambda w: _PASS_STRING)
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w, s=None: _PASS_STRING)
     monkeypatch.setattr(triage, "collect_failure_evidence", lambda w, s, limit=6000: "")
     result = triage.collect_triage_evidence("/nonexistent/worktree", {"status": "parked"})
     assert _PASS_STRING in result
@@ -431,7 +431,7 @@ def test_current_suite_state_pass_string_appears_after_story_state(monkeypatch):
 def test_current_suite_state_empty_omits_current_state_section(monkeypatch):
     """When _current_suite_state returns '', 'CURRENT STATE' must NOT appear
     anywhere in the result."""
-    monkeypatch.setattr(triage, "_current_suite_state", lambda w: "")
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w, s=None: "")
     monkeypatch.setattr(triage, "collect_failure_evidence", lambda w, s, limit=6000: "")
     result = triage.collect_triage_evidence("/nonexistent/worktree", {"status": "parked"})
     assert "CURRENT STATE" not in result
@@ -442,7 +442,7 @@ def test_current_suite_state_raising_does_not_propagate(monkeypatch):
     try/except around the call must catch it (defense in depth, matching how
     format_findings is double-wrapped just below). The result still contains
     'STORY STATE:' and nothing propagates."""
-    def _boom(w):
+    def _boom(w, s=None):
         raise RuntimeError("boom from _current_suite_state")
 
     monkeypatch.setattr(triage, "_current_suite_state", _boom)
@@ -458,7 +458,7 @@ def test_current_suite_state_participates_in_trim_budget(monkeypatch):
     This exercises the pre-existing trim path with the new fixed section
     present (current_state_section participates in fixed_parts/fixed_len
     accounting)."""
-    monkeypatch.setattr(triage, "_current_suite_state", lambda w: _PASS_STRING)
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w, s=None: _PASS_STRING)
     monkeypatch.setattr(
         triage, "collect_failure_evidence", lambda w, s, limit=6000: "X" * 100000
     )

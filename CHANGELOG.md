@@ -119,6 +119,11 @@ in practice.
 
 ### Upgrading
 
+- **BREAKING: tenant settings are no longer read from the environment.** The eight tenant-scoped variables `PIPELINE_MERGE_CI_GATE`, `PIPELINE_MERGE_BUILD_GATE`, `PIPELINE_TEST_SCOPE`, `PIPELINE_MERGE_CI_TIMEOUT`, `PIPELINE_MERGE_READINESS_TIMEOUT`, `PIPELINE_REWORK_ON_CI_FAIL`, `PIPELINE_REVERIFY_FULL_SUITE` and `PIPELINE_GRADE_XDIST_WORKERS` now belong to the settings Store (ADR 0015) and are refused at startup. The MCP server and the scheduler daemon exit non-zero while any of them is set, to any value (the old defaults included), and print one line per variable naming its replacement key without its value. A deployment that sets one does not start until it migrates. Migration order:
+  1. Run `python -m pipeline.settings_seed` once with the variables still set, as the operator, with no scope for container-wide values. Then run it again with `--team T --repo R` for any value meant for one repository only. Use `--dry-run` first; a differing stored value is reported as `already_set` and needs `--overwrite`.
+  2. Remove the eight variables from the compose and env files, the launchd plist and the shell profile of each deployment. The shipped launchd scheduler plist no longer sets `PIPELINE_REWORK_ON_CI_FAIL`, so a host that installs the repo's plist now runs with `rework_on_ci_fail` off unless the Store says otherwise; set it with `set_setting` before you restart.
+  3. Restart the MCP server and the scheduler daemon. Confirm they start, and read the values back with `get_settings` or `list_settings`.
+  Values are never read from the environment after this change, so a change made by editing a variable has no effect; set the key in the Store instead.
 - `ingest_plan` no longer returns `manifest_path`. The manifest is a record in the store, not a file with a path, so the response carries only the manifest fields. Callers that read that key must read the manifest through `get_manifest` instead.
 - A `PIPELINE_STORE=sqlite` deployment does not import its file-store history
   by itself. Before pointing the store at the database, run once, as the

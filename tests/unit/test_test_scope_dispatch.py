@@ -258,11 +258,14 @@ def test_reference_documents_resolution_order():
     assert "Resolution, highest first: team_repo override, team override" in text
 
 
-def test_reference_env_table_has_test_scope_row():
+def test_reference_env_table_no_longer_has_test_scope_row():
+    # ts-12 removed the retired env row; the key is documented as a tenant setting.
     text = (REPO_ROOT / "REFERENCE.md").read_text()
-    assert (
-        "| `PIPELINE_TEST_SCOPE` | *(retired)* | No longer a `test_scope` request: "
-        "dispatch does not read it. `python -m pipeline.settings_seed` copies it "
-        "into the settings Store once; set `test_scope` with `set_setting` instead. "
-        "See \"Test scope\". |"
-    ) in text
+    assert "| `PIPELINE_TEST_SCOPE` |" not in text
+
+
+def test_reference_tenant_settings_documents_test_scope_key():
+    text = (REPO_ROOT / "REFERENCE.md").read_text()
+    section = text.split("## Tenant settings", 1)[1].split("\n## ", 1)[0]
+    assert "| `test_scope` | ceiling," in section
+    assert "`PIPELINE_TEST_SCOPE`" in section

@@ -419,6 +419,7 @@ One row here is rendered rather than authored: the installer writes
 and an `all` route delivering every event to each channel. It holds environment
 variable *names* only; the values stay in the `secrets/` files.
 
+Tenant settings (merge gates, test scope, timeouts) are no longer `.env` variables: set them with `set_setting`; the retired names are refused at startup. See REFERENCE.md "Tenant settings" and the CHANGELOG migration.
 ### The public origin, worked through
 
 `PUBLIC_HOSTNAME`, `PUBLIC_PORT` and `PIPELINE_MCP_RESOURCE_URL` are one value

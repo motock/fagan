@@ -27,19 +27,21 @@ from pipeline.store_records import (
     UnknownNamespaceError,
     UnreadableRecordError,
     context_address,
-    next_version,
-    settings_record,
     snapshot_meta,
     validate_channel,
     validate_namespace,
     validate_notification_record,
     validate_plan_name,
     validate_repo_key,
-    validate_settings_key,
-    validate_settings_write,
     validate_story_key,
     validate_usage_record,
     verify_context_digest,
+)
+from pipeline.store_settings import (
+    next_version,
+    settings_record,
+    validate_settings_key,
+    validate_settings_write,
 )
 
 #: Sentinel recorded in the undo log for a key that held no value before the

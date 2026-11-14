@@ -35,6 +35,7 @@ from pipeline.store_records import (
     DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     PlanRecords,
+    SettingsRecords,
     UnknownNamespaceError,
     validate_channel,
     validate_namespace,
@@ -44,7 +45,6 @@ from pipeline.store_records import (
     validate_usage_record,
 )
 from pipeline.store_security_audit import SecurityAuditRecords
-from pipeline.store_settings import SettingsRecords
 
 logger = logging.getLogger(__name__)
 

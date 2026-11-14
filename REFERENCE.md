@@ -2407,6 +2407,27 @@ not a prefix, not a length. Every resolve logs **one** record carrying
 else about the value. Errors name the reference, the provider or the failure
 class.
 
+## Enabling the overlord
+
+The overlord's failure-triage sweep rules on parked and failed stories. It is off until you turn it on, and the new park-class actions stay in shadow until you promote them.
+
+1. **Turn the sweep on.** Set `PIPELINE_AUTO_TRIAGE=1` in the scheduler's environment. Unset (or any value other than `1`, `true`, `yes` or `on`) means off. The shipped launchd template sets it to `1`; see Launchd Install & Reload.
+2. **Start in shadow.** `PIPELINE_TRIAGE_MODE` defaults to `shadow`. In shadow, the four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them. The switch is global, so it promotes all four at once; see the promotion rule in `overlord-policy.md`.
+3. **Read the digest.** A sweep that ruled on at least one story sends one `triage_sweep_summary` notification. It gives the ruling count, counts by park class and by action, and the story keys split into `Executed`, `Shadow` and `Held`. `Shadow` was recorded but not run. `Held` left the story for a human (`dry-run` autonomy, or a `park_for_human` ruling). `Executed` ran its action. The digest is capped at 1000 characters and carries no rationale text.
+4. **Read the decisions log.** Each ruling is appended to the plan's decisions log with `decided_by: overlord-triage` and the observed `park_class`. Each execution record carries `mode` (`shadow`, `dry-run`, or the autonomy level) and the story's prior status and parked reason, so an action can be reversed by hand.
+5. **Know what executes today.** Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions (`escalate_model`, `split_story`, `repo_issue`, `park_for_human`, `mark_done`, `patch_acceptance`, `amend_scope`) once the sweep is on, whatever `PIPELINE_TRIAGE_MODE` is. That includes the default `gated`. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges. The four new actions are shadow by default because their executors are new. Set `PIPELINE_AUTONOMY=dry-run` to keep the sweep recording and notifying without acting.
+6. **Scoped suite evidence.** For a story dispatched with `test_scope` resolving to `scoped`, the suite check the overlord sees runs that story's recorded scoped targets, not the full suite. A timeout or error fails open to silence (`PIPELINE_TRIAGE_SUITE_TIMEOUT`, default 240 seconds).
+
+### Promotion rule (shadow to execute)
+
+Set `PIPELINE_TRIAGE_MODE=execute` only when all of the following hold, measured over every park class the four actions cover and checked against live evidence (git, PR and suite):
+
+- at least 20 shadow decisions have been reviewed;
+- no reviewed decision is a **false proceed** (a recommended action that was wrong or unsafe to take);
+- **false parks** (a ruling that held a story the reviewer judged safe to act on) are at most 10% of the reviewed decisions.
+
+Any false proceed sets `PIPELINE_TRIAGE_MODE` back to `shadow` until the rule is met again.
+
 ## Configuration (environment variables)
 ### Message broker (NATS JetStream)
 

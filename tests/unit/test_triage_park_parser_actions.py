@@ -2,14 +2,14 @@
 
 Written FIRST (TDD). The parser must accept resolve_rebase, retry_transient,
 rebrief and approve_test_edit; an unrecognised value still fails closed to
-park_for_human. The executor registry holds a shadow-only stub for each new
-action, which returns the string 'deferred'.
+park_for_human. approve_test_edit is registered to its real executor (ov-5).
 """
 
 import pytest
 
 from pipeline import triage_executors
 from pipeline.parsers import TRIAGE_ACTIONS, _parse_ruling
+from pipeline.triage_test_edit import execute_approve_test_edit
 
 NEW_ACTIONS = ("resolve_rebase", "retry_transient", "rebrief", "approve_test_edit")
 
@@ -38,18 +38,9 @@ def test_missing_action_fails_closed_to_park_for_human():
 
 
 # retry_transient and rebrief have real executors (ov-2); resolve_rebase has
-# one (ov-3). Only approve_test_edit still holds the shadow stub.
-STUB_ACTIONS = ("approve_test_edit",)
-
-
-@pytest.mark.parametrize("action", STUB_ACTIONS)
-def test_executor_registry_holds_shadow_stub_for_new_action(action):
-    assert triage_executors.EXECUTORS[action] is triage_executors._shadow_only
-
-
-@pytest.mark.parametrize("action", STUB_ACTIONS)
-def test_shadow_stub_returns_deferred(action):
-    assert triage_executors.EXECUTORS[action]("plan", "ov-1", {}, {}, {}) == "deferred"
+# one (ov-3); approve_test_edit has one (ov-5). The registry has no stub.
+def test_approve_test_edit_is_registered_to_its_executor():
+    assert triage_executors.EXECUTORS["approve_test_edit"] is execute_approve_test_edit
 
 
 def test_register_stores_the_decorated_function():

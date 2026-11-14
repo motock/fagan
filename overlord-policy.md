@@ -227,6 +227,49 @@ Each attempt that reaches step 2 or 3 is appended to `rebase_attempts` as `{base
 the story changes. A refusal does not count. Shadow mode (`PIPELINE_TRIAGE_MODE` unset) records the
 ruling and leaves the story untouched.
 
+### approve_test_edit
+
+`approve_test_edit` (park class `pin_removed_test_failure` only; `pipeline/triage_test_edit.py`)
+handles a story whose branch removed a name that existing tests still patch or import, so the
+failing tests cannot pass until someone edits them. The overlord never edits a test. It only decides
+whether the edit may be made, and the decision is made from the branch's own diff, judged mechanically
+by `pipeline/test_edit_judge.py`.
+
+1. The executor fetches `origin/<base>` and the story's branch, and reads the branch's diff from git
+   against their merge base. The stored failure (`last_test_check.stdout_tail`) supplies the pinned
+   name and the test files it names. The class is re-derived from these live facts, never from
+   `parked_reason` text. A class other than `pin_removed_test_failure`, a name that is not an
+   identifier, or no named test file parks the story for a human.
+2. The judge runs on the merge base to the branch head, with the story's brief. It passes only when
+   all four conditions hold:
+   - **(i)** for each test function that survives, the number of `assert` statements and
+     `pytest.raises`/`pytest.warns` blocks does not decrease;
+   - **(ii)** no `skip`, `xfail`, `importorskip` or `skipif` is added;
+   - **(iii)** no expected literal on a changed assertion changes unless the brief names it (a value
+     the brief does not name, old or new, fails);
+   - **(iv)** every removed or modified test line references an identifier that appears on a removed
+     line of a non-test file in the same diff.
+
+   A deleted or renamed test function is never a pass: the verdict is `deletion_of_pin`, which names
+   the functions and leaves approval to a human.
+3. The `existing_test_edit` tier is read from the authority matrix (`overlord-authority.json`, see
+   REFERENCE.md). Only `auto+notify` or `auto` allows the executor to act. `human`, a missing class,
+   and an unreadable or invalid matrix all resolve to `human`.
+4. **Authorised:** the judge passed, every edited test file is one the failure named, and the tier
+   allows it. The executor appends `Edits to <files> are authorised: they pin <NAME>, which this story
+   removes.` to `triage_diagnosis`, clears `parked_reason`, sets the story to `todo`, and notifies
+   `story_test_edit_approved_by_overlord`. The next dispatch reads the authorisation as its diagnosis.
+5. **Otherwise** the story is parked for a human. The notification names every blocker (the judge
+   verdict, edits outside the named files, or the tier) and the judge's reasons, so the human decision
+   takes one read.
+
+The judge reads test edits that already exist on the branch. `approve_test_edit` authorises an edit;
+it does not create one. A branch that changed only production code has no test edit to judge, so it
+is parked for a human with the reason `no existing test file changed`. A rejected or unreadable
+judgement never changes a story beyond the park.
+
+Shadow mode (`PIPELINE_TRIAGE_MODE` unset) records the ruling and leaves the story untouched.
+
 ### patch_acceptance output format
 
 When `ACTION` is `patch_acceptance`, the overlord's response must carry, in

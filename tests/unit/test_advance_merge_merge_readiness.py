@@ -30,8 +30,9 @@ import json
 import pytest
 
 import pipeline.advance as adv
-from pipeline import advance_merge
+from pipeline import advance_merge, settings_store
 from pipeline import server as p
+from pipeline.ci import settings_for_plan
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _write_manifest,
     plan_dir,
@@ -158,7 +159,6 @@ def _harness(monkeypatch, tmp_path, forge, *, merge_raises=None):
         advance_merge, "_merge_readiness_forge", lambda: forge
     )
     monkeypatch.setattr(advance_merge, "time", clock)
-    monkeypatch.setenv("PIPELINE_MERGE_READINESS_TIMEOUT", "180")
 
     return Harness(clock, merged, notified)
 
@@ -370,23 +370,82 @@ def test_ready_then_refusal_still_spends_an_attempt(plan_dir, monkeypatch):
 # ---------------------------------------------------------------------------
 # The budget knob itself
 # ---------------------------------------------------------------------------
-def test_timeout_is_read_from_the_environment_each_call(monkeypatch):
-    monkeypatch.setenv("PIPELINE_MERGE_READINESS_TIMEOUT", "7")
-    assert advance_merge._merge_readiness_timeout() == 7.0
-    monkeypatch.setenv("PIPELINE_MERGE_READINESS_TIMEOUT", "nonsense")
-    assert advance_merge._merge_readiness_timeout() == 180.0
-    monkeypatch.setenv("PIPELINE_MERGE_READINESS_TIMEOUT", "-5")
-    assert advance_merge._merge_readiness_timeout() == 0.0
+def test_timeout_is_resolved_from_the_settings_store(seed_merge_gate):
+    seed_merge_gate(merge_readiness_timeout_s=7)
+    settings = settings_for_plan(PLAN)
+    assert advance_merge._merge_readiness_timeout(settings) == 7.0
 
 
-def test_pending_with_a_zero_budget_does_not_sleep(plan_dir, monkeypatch):
+def test_timeout_defaults_to_180_when_no_layer_sets_it():
+    settings = settings_for_plan(PLAN)
+    assert advance_merge._merge_readiness_timeout(settings) == 180.0
+
+
+def test_pending_with_a_one_second_budget_sleeps_only_that_budget(
+    plan_dir, monkeypatch, seed_merge_gate
+):
+    seed_merge_gate(merge_readiness_timeout_s=1)
     forge = FakeForge(["pending"])
     harness = _harness(monkeypatch, plan_dir, forge)
-    monkeypatch.setenv("PIPELINE_MERGE_READINESS_TIMEOUT", "0")
     _write_manifest(plan_dir, PLAN, {KEY: _story(worktree=str(plan_dir / "wt"))})
 
     advance_merge._adjudicate_merges(PLAN, _summary())
 
-    assert harness.clock.sleeps == []
+    assert harness.clock.sleeps == [1.0], harness.clock.sleeps
     assert harness.merged == []
     assert _load(plan_dir)["merge_attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The readiness budget and CI gate follow the plan's (namespace, team, repo)
+# ---------------------------------------------------------------------------
+def _write_repo_manifest(plan_dir, repo_url):
+    manifest = {
+        "epics": {},
+        "stories": {KEY: _story(worktree=str(plan_dir / "wt"))},
+        "repo_url": repo_url,
+    }
+    (plan_dir / f"{PLAN}.manifest.json").write_text(json.dumps(manifest))
+
+
+def _put_repo_setting(repo_url_identity, values, allow_loosen=()):
+    p._store.records().put_settings(
+        "default", "team_repo", "local", repo_url_identity, values,
+        list(allow_loosen), "ops", None,
+    )
+
+
+def test_budget_is_resolved_per_repo(plan_dir, monkeypatch):
+    """Two repos on one deployment get their own readiness budgets."""
+    _put_repo_setting("github.com/acme/alpha", {"merge_readiness_timeout_s": 5})
+    _put_repo_setting("github.com/acme/beta", {"merge_readiness_timeout_s": 60})
+    budgets = {}
+    for name in ("alpha", "beta"):
+        forge = FakeForge(["pending"])
+        harness = _harness(monkeypatch, plan_dir, forge)
+        _write_repo_manifest(plan_dir, f"https://github.com/acme/{name}")
+        advance_merge._adjudicate_merges(PLAN, _summary())
+        budgets[name] = sum(harness.clock.sleeps)
+
+    assert budgets == {"alpha": pytest.approx(5.0), "beta": pytest.approx(60.0)}, (
+        budgets
+    )
+
+
+def test_unreadable_store_resolves_gate_on_and_the_180s_budget(
+    plan_dir, monkeypatch
+):
+    """A Store read failure never shortens the readiness budget."""
+
+    class _UnreadableStore:
+        def records(self):
+            raise OSError("settings store unreadable")
+
+    monkeypatch.setattr(settings_store, "_store", _UnreadableStore())
+    forge = FakeForge(["pending"])
+    harness = _harness(monkeypatch, plan_dir, forge)
+    _write_manifest(plan_dir, PLAN, {KEY: _story(worktree=str(plan_dir / "wt"))})
+
+    advance_merge._adjudicate_merges(PLAN, _summary())
+
+    assert sum(harness.clock.sleeps) == pytest.approx(180.0), harness.clock.sleeps

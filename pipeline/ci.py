@@ -38,6 +38,7 @@ from .config_provenance import (
     effective_env_config,
     effective_role_config,
     ignored_env_vars_present,
+    settings_entries,
 )
 from .forge import (
     CANCELLED,
@@ -547,8 +548,15 @@ def _get_effective_config_impl(
         "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
     }
 
+    from .authorization import DEFAULT_TEAM
     from .persistence import _plan_manifest
-    from .test_scope_dispatch import effective_test_scope
+    from .settings_store import effective_settings
+    from .test_scope_dispatch import SETTINGS_NAMESPACE, effective_test_scope
+
+    manifest = _plan_manifest(plan_name) if plan_name else None
+    team = (manifest or {}).get("team") or DEFAULT_TEAM
+    # No repo here: the view shows the deployment, org and team layers only.
+    settings = effective_settings(SETTINGS_NAMESPACE, team, "")
 
     return {
         "ok": True,
@@ -556,7 +564,8 @@ def _get_effective_config_impl(
         "env": env,
         "ignored_env_vars": ignored_env_vars,
         "sources": sources,
-        "test_scope": effective_test_scope(_plan_manifest(plan_name) if plan_name else None),
+        "test_scope": effective_test_scope(manifest),
+        "settings": settings_entries(settings),
     }
 
 

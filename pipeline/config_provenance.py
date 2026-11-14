@@ -399,6 +399,22 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
         results.append(entry)
     return results
 
+def settings_entries(resolved) -> list[dict]:
+    """Flatten resolved tenant settings into one row per key, sorted by name.
+
+    ``resolved`` maps each key to the ``effective_settings`` result for it.
+    Settings are configuration, not secrets, so values are shown as resolved.
+    """
+    return [
+        {
+            "name": name,
+            "value": resolved[name]["value"],
+            "source": resolved[name]["source"],
+        }
+        for name in sorted(resolved)
+    ]
+
+
 def resolve_role_provenance(
     role,
     *,

@@ -48,6 +48,15 @@ def _fail_closed(error_type: str) -> dict:
     return {SETTINGS_ERROR_KEY: SETTINGS_PROVIDER_ERROR}
 
 
+def provider_configured() -> bool:
+    """True when ``PIPELINE_SETTINGS_PLUGIN`` selects a provider.
+
+    Lets a caller tell "no provider" from "a provider that returned no layers":
+    :func:`policy_settings` returns ``{}`` for both.
+    """
+    return _provider() is not None
+
+
 def policy_settings(namespace: str, team: str | None) -> dict:
     """Return {"org": {...}, "team": {...}} (either sub-dict may be absent),
     or {SETTINGS_ERROR_KEY: SETTINGS_PROVIDER_ERROR} when the provider failed."""

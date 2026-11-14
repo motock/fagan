@@ -3694,6 +3694,10 @@ install, and `requirements.txt` gains nothing.
 
 `record_security_audit(repo_root, sha=None)` stamps a repo as security-audited at `sha` (default HEAD, recorded in full) and returns `{ok, repo_root, last_audited_sha, last_audited_at}` or `{ok: false, error}`.
 
+`set_setting(scope, scope_id, repo, key, value, expected_version, allow_loosen=None)` writes one tenant setting at one layer (`deployment`, `org`, `team` or `team_repo`) and returns `{ok, scope, scope_id, repo, key, value, new_version}`, or `{ok: false, reason, error}` for a refusal. It is a host-scoped `config:write`: an agent principal is refused before the authorizer is asked, and the authorizer decides every other caller. A failed authorizer refuses. `expected_version` is `null` to create the layer's record and the stored version to update it; a stale version is refused with `reason: version_conflict` and nothing is written. Keys and types come from the settings registry, and the write also enforces the ranges the resolver relies on: timeouts are 1 to 86400 seconds and `grade_xdist_workers` is 1 to 64. A lock key is deployment-only. While `PIPELINE_SETTINGS_PLUGIN` is set, `org` and `team` writes are refused and the refusal names that variable. `allow_loosen` replaces the layer's list of ceiling keys that the layer below may loosen; `null` keeps the stored list. Every write and every refusal appends one `settings:set` record to the host audit chain, with the actor, layer, key, old and new value, new version and outcome.
+
+`get_settings(scope, scope_id, repo)` returns `{ok, record}` for one layer, with `record` set to `null` when the layer has none, and `list_settings()` returns `{ok, records}` for every stored layer. Neither resolves inheritance; `effective_setting` does that. All three tools are local-only and are refused over the remote transport.
+
 The reminder is optional and off unless a threshold is set. The scheduler sweep
 checks each repo named by an ingested, unpaused plan and sends a
 `security_audit_due` notice filed under the first such plan, at most once per 24

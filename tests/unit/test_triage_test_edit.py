@@ -307,6 +307,21 @@ def test_a_removed_assertion_parks_with_the_judge_reason(repo, execute_mode, not
     assert any("assertions 1 -> 0" in notice["message"] for notice in notices)
 
 
+def test_an_unrelated_test_edit_parks_though_it_shares_a_token_with_the_removed_lines(repo, execute_mode, notices, set_tier):
+    # The removed production lines carry "plans" (from PLAN_DIR = "plans"); an edit
+    # to the pinning test that only shares that token is not a response to PLAN_DIR.
+    commit, _ = repo
+    head_test = RENAMED_TEST.replace(
+        '    assert app.plan_dir() == "plans"\n',
+        '    assert app.plan_dir() == "plans" or app.plan_dir() is None\n',
+    )
+    commit({_APP: HEAD_APP, _TEST: head_test})
+    story = _story()
+
+    assert _execute(story) == "park_for_human"
+    assert "does not reference a removed name" in story["parked_reason"]
+
+
 def test_a_deleted_test_parks_as_deletion_of_pin(repo, execute_mode, notices, set_tier):
     commit, _ = repo
     head = BASE_TEST.replace('app, "PLAN_DIR"', 'app, "PLAN_ROOT"').replace(

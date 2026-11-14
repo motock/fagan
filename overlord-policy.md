@@ -247,8 +247,9 @@ by `pipeline/test_edit_judge.py`.
    - **(ii)** no `skip`, `xfail`, `importorskip` or `skipif` is added;
    - **(iii)** no expected literal on a changed assertion changes unless the brief names it (a value
      the brief does not name, old or new, fails);
-   - **(iv)** every removed or modified test line references an identifier that appears on a removed
-     line of a non-test file in the same diff.
+   - **(iv)** every removed or modified test line references the pinned `<NAME>` (the park's `name`
+     fact), and `<NAME>` appears on a removed line of a non-test file in the same diff. Other tokens
+     shared between the two sides (`return`, `None`, `plans`) explain nothing.
 
    A deleted or renamed test function is never a pass: the verdict is `deletion_of_pin`, which names
    the functions and leaves approval to a human.

@@ -134,7 +134,7 @@ def execute_approve_test_edit(plan_name, story_key, story, ruling, manifest) -> 
             "parked for a human",
         )
 
-    verdict = test_edit_judge.judge(base_sha, head_sha, repo, brief=_brief(story))
+    verdict = test_edit_judge.judge(base_sha, head_sha, repo, name=name, brief=_brief(story))
     tier = resolve_tier()
     outside = sorted(set(verdict.test_files) - set(named))
     blockers: list[str] = []

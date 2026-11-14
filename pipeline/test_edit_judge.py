@@ -8,8 +8,8 @@ file only when every condition holds:
 (ii)  no skip, xfail, ``importorskip`` or ``skipif`` is added;
 (iii) no expected literal on a changed assertion changes unless the brief
       names that literal;
-(iv)  every removed test line references an identifier that appears on a
-      removed line of a non-test file in the same diff.
+(iv)  every removed or changed test line references the pinned ``name``, and
+      that name appears on a removed line of a non-test file in the same diff.
 
 A deleted or renamed test function is never a pass: it yields
 ``deletion_of_pin`` and approval stays with a human. Every reason is one line
@@ -33,6 +33,7 @@ _REF_RE = re.compile(r"^[\w./-]+$")
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 _SKIP_RE = re.compile(r"mark\.(?:skip|skipif|xfail)\b|\b(?:importorskip|skip)\s*\(")
 _EXPECT_ATTRS = frozenset({"raises", "warns"})
+_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
 
 
 @dataclass
@@ -49,32 +50,37 @@ class _JudgeError(Exception):
     """A git read failed or a ref is not a plain ref name; the judge fails closed."""
 
 
-def judge(base_ref: str, head_ref: str, repo_dir, brief: str = "") -> Verdict:
+def judge(base_ref: str, head_ref: str, repo_dir, *, name: str, brief: str = "") -> Verdict:
     """Judge the existing-test edits between ``base_ref`` and ``head_ref``.
 
+    ``name`` is the pinned identifier the story removes (park class fact
+    ``name``); condition (iv) requires every removed test line to reference it.
     ``brief`` is the story's brief; a changed expected literal passes only when
     the brief names it. Never raises: any unexpected failure is a ``fail``.
     """
     try:
-        return _judge(base_ref, head_ref, repo_dir, brief or "")
+        return _judge(base_ref, head_ref, repo_dir, name, brief or "")
     except _JudgeError as exc:
         return Verdict(outcome=FAIL, reasons=[str(exc)])
     except Exception as exc:  # noqa: BLE001 - the judge must never raise
         return Verdict(outcome=FAIL, reasons=[f"could not judge the diff ({type(exc).__name__})"])
 
 
-def _judge(base: str, head: str, repo_dir, brief: str) -> Verdict:
+def _judge(base: str, head: str, repo_dir, name: str, brief: str) -> Verdict:
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        raise _JudgeError("the pinned name is not an identifier")
     changes = _changed_files(base, head, repo_dir)
     test_changes = [(status, path) for status, path in changes if _is_test_path(path) and status != "A"]
     if not test_changes:
         return Verdict(outcome=FAIL, reasons=["no existing test file changed"])
 
-    removed_names = _removed_names_outside_tests(base, head, repo_dir, changes)
+    # A pin is explained only when the diff removes the name itself from production code.
+    pin_removed = name in _removed_names_outside_tests(base, head, repo_dir, changes)
     reasons: list[str] = []
     deleted: list[str] = []
     test_paths = sorted(path for _, path in test_changes)
     for status, path in sorted(test_changes, key=lambda change: change[1]):
-        deleted.extend(_judge_test_file(base, head, repo_dir, path, status, removed_names, brief, reasons))
+        deleted.extend(_judge_test_file(base, head, repo_dir, path, status, name, pin_removed, brief, reasons))
 
     deleted = sorted(set(deleted))
     if deleted:
@@ -83,7 +89,7 @@ def _judge(base: str, head: str, repo_dir, brief: str) -> Verdict:
     return Verdict(outcome=outcome, reasons=reasons, test_files=test_paths)
 
 
-def _judge_test_file(base, head, repo_dir, path, status, removed_names, brief, reasons) -> list[str]:
+def _judge_test_file(base, head, repo_dir, path, status, name, pin_removed, brief, reasons) -> list[str]:
     """Judge one existing test file; append its reasons; return its deleted test names."""
     before = _decode(_blob(base, path, repo_dir))
     after = None if status == "D" else _decode(_blob(head, path, repo_dir))
@@ -100,23 +106,23 @@ def _judge_test_file(base, head, repo_dir, path, status, removed_names, brief, r
     before_funcs = _test_functions(before_tree)
     after_funcs = _test_functions(after_tree)
     gone = sorted(set(before_funcs) - set(after_funcs))
-    for name in gone:
-        reasons.append(f"{name}: test function deleted or renamed; approval stays with a human")
+    for func_name in gone:
+        reasons.append(f"{func_name}: test function deleted or renamed; approval stays with a human")
 
-    for name in sorted(set(before_funcs) & set(after_funcs)):
-        before_units = _assertion_units(before_funcs[name])
-        after_units = _assertion_units(after_funcs[name])
+    for func_name in sorted(set(before_funcs) & set(after_funcs)):
+        before_units = _assertion_units(before_funcs[func_name])
+        after_units = _assertion_units(after_funcs[func_name])
         if len(after_units) < len(before_units):
-            reasons.append(f"{name}: assertions {len(before_units)} -> {len(after_units)}")
+            reasons.append(f"{func_name}: assertions {len(before_units)} -> {len(after_units)}")
         if _literals_changed_without_brief(before_units, after_units, brief):
-            reasons.append(f"{name}: expected value changed on an assertion the brief does not name")
+            reasons.append(f"{func_name}: expected value changed on an assertion the brief does not name")
 
     removed, added = _line_changes(before.splitlines(), (after or "").splitlines())
     if any(_SKIP_RE.search(line) for line in added):
         reasons.append(f"{path}: added skip, xfail or importorskip")
     unexplained = [
         number for number, text in removed
-        if text.strip() and not set(_IDENT_RE.findall(text)) & removed_names
+        if text.strip() and not (pin_removed and name in _IDENT_RE.findall(text))
     ]
     if unexplained:
         numbers = ", ".join(str(number) for number in unexplained)
@@ -139,7 +145,11 @@ def _changed_files(base: str, head: str, repo_dir) -> list[tuple[str, str]]:
 
 
 def _removed_names_outside_tests(base, head, repo_dir, changes) -> set[str]:
-    """Identifiers on removed lines of the non-test files in the diff."""
+    """Identifiers on removed lines of the non-test files in the diff.
+
+    Only ``name`` is checked against this set, so generic tokens here never
+    explain a test edit on their own.
+    """
     names: set[str] = set()
     for status, path in changes:
         if _is_test_path(path) or status == "A":

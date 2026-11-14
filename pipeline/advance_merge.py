@@ -900,7 +900,8 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             if manifest is None:
                 raise FileNotFoundError("manifest not found")
             # A human (or another tick) moved the story on: that wins, no-op.
-            story = manifest["stories"].get(key) or {}
+            stories = manifest["stories"]
+            story = stories.get(key) or {}
             if (story.get("status"), story.get("review_verdict_sha")) != polled:
                 continue
             if readiness == "pending":

@@ -229,3 +229,64 @@ def _load_key(plan_dir, key) -> dict:
 
     path = plan_dir / f"{PLAN}.manifest.json"
     return json.loads(path.read_text())["stories"][key]
+
+
+# ---------------------------------------------------------------------------
+# A later story in the same tick must see the reloaded manifest, not the
+# snapshot taken before the poll (review blocking finding on ts-11).
+# ---------------------------------------------------------------------------
+def test_human_merge_of_later_story_during_poll_is_not_merged_again(
+    plan_dir, monkeypatch, tick_under_lock
+):
+    other = "S11"
+    _write_manifest(
+        plan_dir,
+        PLAN,
+        {
+            KEY: _story(worktree=str(plan_dir / "wt")),
+            other: _story(pr_url="", worktree=""),
+        },
+    )
+
+    def _during_poll():
+        _from_other_thread(_human_sets(plan_dir, other, status="done"))
+
+    harness = tick_under_lock(FakeForge(["pending", "ready"]), _during_poll)
+
+    assert harness.merged == [KEY], (
+        "the tick must not re-merge a later story a human merged during the poll; "
+        f"got {harness.merged!r}"
+    )
+    assert _load_key(plan_dir, other)["status"] == "done"
+
+
+def test_tick_writes_for_later_story_survive_after_poll_reload(
+    plan_dir, monkeypatch, tick_under_lock
+):
+    other = "S11"
+    _write_manifest(
+        plan_dir,
+        PLAN,
+        {
+            KEY: _story(worktree=str(plan_dir / "wt")),
+            other: _story(pr_url="", worktree=""),
+        },
+    )
+
+    def _during_poll():
+        _from_other_thread(
+            _human_sets(plan_dir, other, summary="human edited while poll ran")
+        )
+
+    harness = tick_under_lock(FakeForge(["pending", "ready"]), _during_poll)
+
+    assert harness.merged == [KEY, other], (
+        "the later pr_open story must still be merged by this tick"
+    )
+    story = _load_key(plan_dir, other)
+    assert story["status"] == "done", (
+        "the tick's own status write on the later story must reach the manifest"
+    )
+    assert story["summary"] == "human edited while poll ran", (
+        "the tick's write must not revert the human edit made during the poll"
+    )

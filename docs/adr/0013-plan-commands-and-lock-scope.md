@@ -69,6 +69,11 @@ manifest, independent of how long the advancer's heavy work takes.**
    written. Heavy work therefore never appears in a lock-hold measurement, and
    an operator command never waits behind it.
 
+   The merge-readiness poll (`_await_merge_readiness`, `advance_merge.py`) is
+   such a wait and is not under the plan lock: the tick persists its edits,
+   releases the lock for the poll, then re-reads the manifest and applies the
+   answer only if the story is still `pr_open` for the same reviewed head SHA.
+
 4. **The lock key becomes (namespace, plan).** The plan lock is keyed on the
    pair, so two tenants' plans named the same do not collide and do not
    serialize against each other. Core carries only the opaque namespace

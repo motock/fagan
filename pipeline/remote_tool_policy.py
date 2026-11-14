@@ -123,7 +123,9 @@ _REFUSAL = "This tool is not available over the remote transport."
 #: grant to a plan action (``plan:ingest``) is held by every authenticated
 #: principal on an ownerless resource, so it cannot stand for the decision. They
 #: are refused by default deny before the handler runs.
-REMOTE_HOST_REFUSED = frozenset({"decompose_plan"})
+REMOTE_HOST_REFUSED = frozenset(
+    {"decompose_plan", "get_settings", "list_settings", "set_setting"}
+)
 
 #: Tools that accept a server-side ``workspace`` path, which a remote caller may
 #: not supply. Refused when the argument is present and not ``None``.

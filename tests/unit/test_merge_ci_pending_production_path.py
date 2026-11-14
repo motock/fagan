@@ -7,7 +7,7 @@ That monkeypatching is exactly what flips the
 ``pipeline/server.py`` and *activates* the non-blocking code path. In production
 nothing ever reassigns ``pipeline.server._ci_status_once``, so the identity
 check is always ``True`` (the two names refer to the same object) and the merge
-gate always takes the *blocking* ``return _ci_status(branch, sha=sha)`` branch.
+gate always takes the *blocking* ``return _ci_status(branch, sha=sha, settings=_context({}))`` branch.
 The non-blocking pending branch (``ci_pending_since`` / ``ci_wait = True``) is
 therefore dead code in production - it only runs under test monkeypatching.
 
@@ -30,12 +30,13 @@ import pytest
 
 import pipeline.ci as pci
 import pipeline.server as p
-from pipeline.server import _advance_pipeline_locked
-
 
 # ---------------------------------------------------------------------------
 # Manifest helpers (local copies so this file is self-contained).
 # ---------------------------------------------------------------------------
+from pipeline.server import _advance_pipeline_locked
+
+
 def _write_manifest(plan_dir, plan_name, stories):
     (plan_dir / f"{plan_name}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": stories}, indent=2)
@@ -92,10 +93,10 @@ def _patch_merge_boundaries_production(monkeypatch, ci_state="pending"):
 
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda story, worktree, key: {"state": "pass"},
+        lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree: {"state": "pass"},
+        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
@@ -111,7 +112,7 @@ def _patch_merge_boundaries_production(monkeypatch, ci_state="pending"):
     monkeypatch.setattr(pci, "_repo_has_ci_configured", lambda: True)
 
     # Mock the gh subprocess that the REAL _ci_status_once invokes. The merge
-    # gate calls _ci_status_once(branch, sha="") (worktree is non-existent so
+    # gate calls _ci_status_once(branch, sha="", settings=_context({})) (worktree is non-existent so
     # no git rev-parse runs), so the gh-pr-checks branch path is taken: stdout
     # is a JSON list of {"name","bucket"} entries.
     if ci_state == "pending":

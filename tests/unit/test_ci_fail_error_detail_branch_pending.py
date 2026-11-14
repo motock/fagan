@@ -8,6 +8,7 @@ tight busy‑loop.
 import json
 
 from pipeline import ci as p
+from pipeline.ci import context_from_manifest as _context
 
 
 def _run(returncode=0, stdout="", stderr=""):
@@ -35,7 +36,6 @@ def test_branch_scoped_pending_sleep(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
     assert result["state"] == "pass"
     assert len(sleeps) >= 1

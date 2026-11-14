@@ -136,7 +136,7 @@ class _Harness:
             lambda plan_name, record: self.decisions.append((plan_name, record)),
         )
 
-        def fake_once(branch, *, sha):
+        def fake_once(branch, *, sha, settings=None):
             self.gather_calls.append({"branch": branch, "sha": sha})
             if gather_sequence is not None:
                 # Per-call outcomes: an exception instance raises, anything
@@ -488,7 +488,7 @@ def test_merge_park_evidence_key_set_is_unchanged_by_a_gather_failure(
         lambda prompt, plan_role_config=None: PARK_REPLY,
     )
 
-    def fake_once(branch, *, sha):
+    def fake_once(branch, *, sha, settings=None):
         raise RuntimeError("gh exploded")
 
     monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)

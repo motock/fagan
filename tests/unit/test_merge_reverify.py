@@ -675,13 +675,13 @@ def test_main_passes_and_keeps_the_manifest_untouched(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     git_calls = _patch_git(monkeypatch, sha="cafe1234")
 
-    def _acceptance(story, path, key):
+    def _acceptance(story, path, key, settings=None):
         story["last_test_check"] = "2026-10-28T12:00:00Z"
         return {"state": "pass", "error": ""}
 
     monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path: {"state": "pass", "error": ""}
+        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -711,10 +711,10 @@ def test_main_reports_an_acceptance_failure_without_running_the_build(tmp_path, 
     monkeypatch.setattr(
         server,
         "_reverify_acceptance",
-        lambda story, path, key: {"state": "fail", "error": "2 failed"},
+        lambda story, path, key, settings=None: {"state": "fail", "error": "2 failed"},
     )
 
-    def _build(path):
+    def _build(path, settings=None):
         build_calls.append(path)
         return {"state": "pass", "error": ""}
 
@@ -740,10 +740,10 @@ def test_main_reports_a_build_failure(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     _patch_git(monkeypatch, sha="cafe1234")
     monkeypatch.setattr(
-        server, "_reverify_acceptance", lambda story, path, key: {"state": "pass", "error": ""}
+        server, "_reverify_acceptance", lambda story, path, key, settings=None: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path: {"state": "fail", "error": "lint"}
+        server, "_reverify_build", lambda path, settings=None: {"state": "fail", "error": "lint"}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -763,12 +763,12 @@ def test_main_reports_a_raising_acceptance_as_an_error(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     _patch_git(monkeypatch, sha="cafe1234")
 
-    def _acceptance(story, path, key):
+    def _acceptance(story, path, key, settings=None):
         raise RuntimeError("secret token abc")
 
     monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path: {"state": "pass", "error": ""}
+        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -791,11 +791,11 @@ def test_main_reports_a_raising_build_as_an_error(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     _patch_git(monkeypatch, sha="cafe1234")
 
-    def _acceptance(story, path, key):
+    def _acceptance(story, path, key, settings=None):
         story["last_test_check"] = "2026-10-28T12:00:00Z"
         return {"state": "pass", "error": ""}
 
-    def _build(path):
+    def _build(path, settings=None):
         raise ValueError("internal path /home/someone/secret")
 
     monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
@@ -863,14 +863,14 @@ def test_main_reads_the_story_from_the_record_store_without_a_manifest_file(
     _patch_git(monkeypatch, sha="cafe1234")
     seen: dict = {}
 
-    def _acceptance(story, path, key):
+    def _acceptance(story, path, key, settings=None):
         seen["story"] = dict(story)
         story["last_test_check"] = "2026-10-28T12:00:00Z"
         return {"state": "pass", "error": ""}
 
     monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path: {"state": "pass", "error": ""}
+        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])

@@ -42,8 +42,8 @@ def boundaries(monkeypatch):
     merged = []
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "medium")
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda w: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k, settings=None: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda w, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)

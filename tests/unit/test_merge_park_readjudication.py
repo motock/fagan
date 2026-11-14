@@ -182,7 +182,7 @@ class _Harness:
         monkeypatch.setattr(server_mod, "_merge_decision", fake_merge_decision)
 
         # --- the CI gather: the NON-polling variant, from pipeline/ci.py ---
-        def fake_ci_status_once(branch, *, sha):
+        def fake_ci_status_once(branch, *, sha, settings=None):
             self.ci_calls.append((branch, sha))
             if self.ci_exc is not None:
                 raise self.ci_exc
@@ -193,7 +193,7 @@ class _Harness:
         # ``from .server import _ci_status_once`` would silently bypass the stub
         # above. This second stub records into its own list (and mirrors the
         # failure mode) so the seam is assertable instead of shelling out to gh.
-        def server_seam_ci_status_once(branch, *, sha):
+        def server_seam_ci_status_once(branch, *, sha, settings=None):
             self.server_ci_calls.append((branch, sha))
             if self.ci_exc is not None:
                 raise self.ci_exc
@@ -234,7 +234,7 @@ class _Harness:
         monkeypatch.setattr(
             server_mod,
             "_merge_gate_ci_status",
-            lambda branch, *, sha: {
+            lambda branch, *, sha, settings=None: {
                 "state": self.ci_gate_state,
                 "error": "" if self.ci_gate_state == "pass" else "still running",
             },
@@ -243,11 +243,11 @@ class _Harness:
         monkeypatch.setattr(
             server_mod,
             "_reverify_acceptance",
-            lambda story, wt, key: {"state": "pass"},
+            lambda story, wt, key, settings=None: {"state": "pass"},
             raising=False,
         )
         monkeypatch.setattr(
-            server_mod, "_reverify_build", lambda wt: {"state": "pass"}, raising=False
+            server_mod, "_reverify_build", lambda wt, settings=None: {"state": "pass"}, raising=False
         )
         monkeypatch.setattr(
             server_mod, "_mcp_self_source_touched", lambda wt, base: "", raising=False
@@ -257,7 +257,7 @@ class _Harness:
         )
         monkeypatch.setattr(server_mod, "_ci_rerun", lambda sha: None, raising=False)
         monkeypatch.setattr(
-            server_mod, "_ci_pending_expired", lambda since: False, raising=False
+            server_mod, "_ci_pending_expired", lambda since, settings=None: False, raising=False
         )
         monkeypatch.setattr(
             server_mod, "_mark_plane_done", lambda *a, **k: None, raising=False

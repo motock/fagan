@@ -22,9 +22,11 @@ import pytest
 import pipeline.server as p
 from pipeline.server import (
     MERGE_MAX_ATTEMPTS,
-    PIPELINE_MERGE_CI_TIMEOUT,
     _advance_pipeline_locked,
 )
+
+# The Store's safe value for merge_ci_timeout_s; no record is seeded here.
+DEFAULT_CI_TIMEOUT_S = 900
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +79,10 @@ def _patch_merge_boundaries(monkeypatch, ci_once, *, rebase_push=None):
     monkeypatch.setattr(p, "_rebase_and_push_for_merge", rebase_push)
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda story, worktree, key: {"state": "pass"},
+        lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree: {"state": "pass"},
+        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
@@ -119,7 +121,7 @@ class TestFirstPendingRecordsSha:
     ):
         pushed = "abc123firstpush"
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         def rebase_push(plan_name, key, branch, worktree):
@@ -137,7 +139,7 @@ class TestFirstPendingRecordsSha:
         self, plan_dir, monkeypatch
     ):
         # Both fields are set on the same first pending observation.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -152,7 +154,7 @@ class TestFirstPendingRecordsSha:
     def test_first_pending_polls_the_just_pushed_sha(self, plan_dir, monkeypatch):
         seen = []
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             seen.append(sha)
             return {"state": "pending", "error": "checks running"}
 
@@ -173,7 +175,7 @@ class TestSecondTickSkipsRebase:
     ):
         calls = {"rp": 0}
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         def rebase_push(plan_name, key, branch, worktree):
@@ -195,7 +197,7 @@ class TestSecondTickSkipsRebase:
     ):
         polled = []
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             polled.append(sha)
             return {"state": "pending", "error": "checks running"}
 
@@ -215,7 +217,7 @@ class TestSecondTickSkipsRebase:
         self, plan_dir, monkeypatch
     ):
         # A continued-pending tick must not clobber or clear the recorded SHA.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         def rebase_push(plan_name, key, branch, worktree):
@@ -238,7 +240,7 @@ class TestSecondTickSkipsRebase:
 # ---------------------------------------------------------------------------
 class TestResolvedClearsBoth:
     def test_resolved_pass_clears_both(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -256,7 +258,7 @@ class TestResolvedClearsBoth:
         assert story["status"] == "done"
 
     def test_resolved_fail_clears_both(self, plan_dir, monkeypatch):
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "fail", "error": "tests failed"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -276,7 +278,7 @@ class TestResolvedClearsBoth:
     ):
         # Regression guard: a 'fail' result still counts exactly as before,
         # even when a ci_pending_sha was recorded.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "fail", "error": "tests failed"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -297,7 +299,7 @@ class TestResolvedClearsBoth:
     def test_resolved_cancelled_clears_both(self, plan_dir, monkeypatch):
         # 'cancelled' (after the single rerun is already consumed) is a
         # resolved, non-pending state and must clear both fields.
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "cancelled", "error": "aborted"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -322,10 +324,10 @@ class TestResolvedClearsBoth:
 # ---------------------------------------------------------------------------
 class TestExpiryPath:
     def test_expiry_clears_both_and_counts_attempt(self, plan_dir, monkeypatch):
-        bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+        bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -348,11 +350,11 @@ class TestExpiryPath:
         assert story["merge_attempts"] == 2
 
     def test_expiry_does_not_merge(self, plan_dir, monkeypatch):
-        bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+        bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
         merged = []
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -376,7 +378,7 @@ class TestNoPendingShaStillRebases:
     def test_no_ci_pending_sha_calls_rebase_and_push(self, plan_dir, monkeypatch):
         calls = {"rp": 0}
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         def rebase_push(plan_name, key, branch, worktree):
@@ -397,7 +399,7 @@ class TestNoPendingShaStillRebases:
         # A falsy ci_pending_sha (empty string) must not short-circuit.
         calls = {"rp": 0}
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         def rebase_push(plan_name, key, branch, worktree):

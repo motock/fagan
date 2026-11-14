@@ -28,11 +28,19 @@ from typing import Any
 
 from .audit import record_audit
 from .branch_names import story_branch
+from .ci import (
+    SettingsContext,
+    context_from_manifest,
+    gate_record,
+    settings_for_plan,
+)
 
 _lock_state = {}
 
 
-def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
+def _merge_gate_ci_status(
+    branch: str, *, sha: str, settings: SettingsContext
+) -> dict[str, str]:
     """Single-poll CI status for the merge adjudication phase.
 
     Always uses the non-blocking ``_ci_status_once`` (so a pending result
@@ -43,7 +51,7 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     """
     from .server import _ci_status_once
 
-    return _ci_status_once(branch, sha=sha)
+    return _ci_status_once(branch, sha=sha, settings=settings)
 
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
@@ -263,11 +271,14 @@ def _populate_pr_checks_once(story, story_key: str | None = None):
         from .pr import _convention_branch, _resolve_story_branch
         from .server import _ci_status_once
 
+        plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
         branch = _convention_branch(key)
         worktree = story.get("worktree")
         if worktree and Path(worktree).is_dir():
             branch = _resolve_story_branch(worktree, key)
-        checks = _ci_status_once(branch, sha="")
+        checks = _ci_status_once(
+            branch, sha="", settings=settings_for_plan(plan_name)
+        )
         if checks is not None:
             story["pr_checks"] = checks
             # A fresh readable state supersedes any earlier recorded failure.
@@ -613,8 +624,9 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         try:
             with _scoped_repo_root(plan_name):
                 # Mode 9 gate applies here too: even an explicit human merge must
-                # not land a conflicting or CI-red PR. Disable via
-                # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
+                # not land a conflicting or CI-red PR. The merge_ci_gate setting
+                # (resolved per namespace, team and repo) turns it off, and only
+                # if you intentionally accept that.
                 worktree = story.get("worktree", "")
                 # Resolve the worktree's ACTUAL HEAD branch (a rework round can
                 # leave it on an alias agent/<key>-<suffix>) so rebase -> push
@@ -685,14 +697,15 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     # the review by design: re-bind at the pipeline's own commit
                     # point so a later retry does not deny known-good work.
                     rebind_after_pipeline_push(story, pushed_sha)
-                ci = _ci_status(branch, sha=pushed_sha)
+                settings = context_from_manifest(manifest)
+                ci = _ci_status(branch, sha=pushed_sha, settings=settings)
                 if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
                     # Same one-shot auto-rerun as the scheduler's merge gate:
                     # a queue-delay cancellation carries no code-quality
                     # signal, so give it one automatic retry before failing.
                     story["ci_rerun_attempted"] = True
                     _ci_rerun(pushed_sha)
-                    ci = _ci_status(branch, sha=pushed_sha)
+                    ci = _ci_status(branch, sha=pushed_sha, settings=settings)
                 # Record the gate's final result for every risk level; persisted
                 # now because the blocking returns below skip the final write.
                 story["pr_checks"] = ci
@@ -716,14 +729,16 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         "error": f"ci unreadable: {ci['error']}",
                         "story_key": story_key,
                     }
-                acc = _reverify_acceptance(story, worktree, story_key)
+                acc = _reverify_acceptance(
+                    story, worktree, story_key, settings=settings
+                )
                 if acc["state"] == "fail":
                     return {
                         "ok": False,
                         "error": f"acceptance reverify fail: {acc['error']}",
                         "story_key": story_key,
                     }
-                build = _reverify_build(worktree)
+                build = _reverify_build(worktree, settings=settings)
                 if build["state"] == "fail":
                     return {
                         "ok": False,
@@ -749,7 +764,10 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             action="story.merge",
             outcome="allowed",
             target={"plan": plan_name, "story": story_key},
-            detail={"branch": story_branch(story_key)},
+            detail={
+                "branch": story_branch(story_key),
+                "gates": gate_record(settings),
+            },
         )
 
         from .plan_completion import notify_if_plan_completed

@@ -506,7 +506,7 @@ def install_merge_stubs(p, repo: Path) -> None:
     """
     import pipeline.server as _pserver
 
-    def _ci_status_stub(branch, *, sha=None, timeout_s=None):
+    def _ci_status_stub(branch, *, sha=None, timeout_s=None, settings=None):
         """Actually run the story's worktree test suite, mirroring what a
         real CI pipeline would do -- unlike a rubber-stamp "always pass",
         this is a second, independent check before merge. Without it the

@@ -251,13 +251,13 @@ def test_flag_off_does_not_block_human_approve_merge(monkeypatch, tmp_path):
     monkeypatch.setattr(server_mod, "_default_branch", lambda: "master")
     monkeypatch.setattr(server_mod, "_rebase_onto_master", lambda wt, br: {"ok": True})
     monkeypatch.setattr(
-        server_mod, "_ci_status", lambda branch, sha="": {"state": "pass", "error": ""}
+        server_mod, "_ci_status", lambda branch, sha="", settings=None: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(server_mod, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(
-        server_mod, "_reverify_acceptance", lambda story, wt, key: {"state": "pass"}
+        server_mod, "_reverify_acceptance", lambda story, wt, key, settings=None: {"state": "pass"}
     )
-    monkeypatch.setattr(server_mod, "_reverify_build", lambda wt: {"state": "pass"})
+    monkeypatch.setattr(server_mod, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(
         server_mod, "_mcp_self_source_touched", lambda wt, base: None
     )

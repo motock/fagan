@@ -2,7 +2,7 @@
 merge-gate branch.
 
 Background: when a story's CI has been ``pending`` longer than the merge-gate
-patience bound (``MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT``), the
+patience bound (``MERGE_MAX_ATTEMPTS * merge_ci_timeout_s``), the
 non-blocking merge gate in ``_advance_pipeline_locked`` gives up the wait. It
 previously cleared ``ci_pending_since`` / ``ci_pending_sha`` silently and fell
 through to the ordinary ``gate_error`` accounting path. This story ADDS a
@@ -31,9 +31,11 @@ import pytest
 import pipeline.server as p
 from pipeline.server import (
     MERGE_MAX_ATTEMPTS,
-    PIPELINE_MERGE_CI_TIMEOUT,
     _advance_pipeline_locked,
 )
+
+# The Store's safe value for merge_ci_timeout_s; no record is seeded here.
+DEFAULT_CI_TIMEOUT_S = 900
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +65,7 @@ def _story(**overrides):
 
 def _expired_since():
     """An ISO timestamp old enough that ``_ci_pending_expired`` is True."""
-    bound = MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+    bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
     return (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
 
 
@@ -99,10 +101,10 @@ def _patch_merge_boundaries(monkeypatch, ci_once, *, rebase_push=None):
     monkeypatch.setattr(p, "_rebase_and_push_for_merge", rebase_push)
     monkeypatch.setattr(
         p, "_reverify_acceptance",
-        lambda story, worktree, key: {"state": "pass"},
+        lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree: {"state": "pass"},
+        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
@@ -143,7 +145,7 @@ class TestExpiredPendingWritesWarningRecord:
         key = "P1"
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -169,7 +171,7 @@ class TestExpiredPendingWritesWarningRecord:
         key = "P1"
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -197,7 +199,7 @@ class TestExpiredPendingWritesWarningRecord:
     def test_record_plan_field_matches(self, plan_dir, monkeypatch):
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -223,7 +225,7 @@ class TestStillPendingEmitsNoStalledRecord:
     def test_still_pending_emits_no_stalled_record(self, plan_dir, monkeypatch):
         fresh = _fresh_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -248,7 +250,7 @@ class TestStillPendingEmitsNoStalledRecord:
         # only the expired branch pops them.
         fresh = _fresh_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -274,7 +276,7 @@ class TestPassingCiEmitsNoStalledRecord:
     def test_passing_ci_emits_no_stalled_record(self, plan_dir, monkeypatch):
         fresh = _fresh_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pass", "error": ""}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -301,7 +303,7 @@ class TestExistingGenericGateNotificationStillEmitted:
     def test_generic_gate_notification_still_in_log(self, plan_dir, monkeypatch):
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -333,7 +335,7 @@ class TestExistingGenericGateNotificationStillEmitted:
         # still be present too.
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -363,7 +365,7 @@ class TestPendingFieldsAreStillCleared:
     def test_pending_fields_are_still_cleared(self, plan_dir, monkeypatch):
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -390,7 +392,7 @@ class TestPendingFieldsAreStillCleared:
         # merge_attempts accounting on the expired path.
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)
@@ -419,7 +421,7 @@ class TestFiresOncePerEpisode:
     ):
         old = _expired_since()
 
-        def ci_once(branch, *, sha):
+        def ci_once(branch, *, sha, settings):
             return {"state": "pending", "error": "checks running"}
 
         _patch_merge_boundaries(monkeypatch, ci_once)

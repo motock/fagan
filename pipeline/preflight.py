@@ -402,23 +402,31 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         })
 
     # -- check c2: merge CI gate ---------------------------------------------
-    # Read the env var at call time (never at import time), like the
-    # dispatch-backend check above: an operator can disable or re-enable the
-    # gate between preflight runs, and an import-time read would report a
-    # stale state. Warn, never fail: disabling the gate is a legitimate
-    # operator choice during a genuine CI outage, and preflight failing hard
-    # would block work during exactly the outage the escape hatch exists
-    # for. It must be impossible to MISS, not impossible to DO.
-    if os.environ.get("PIPELINE_MERGE_CI_GATE", "1").strip() == "0":
+    # Resolved at call time through the settings Store, the same resolution
+    # the merge gate uses for the default namespace and team (no repo layer,
+    # so a repo-level override is not reported here). Imported inside the
+    # check: the settings modules load the ``app`` package, which this module
+    # must not import at load time. Warn, never fail: disabling the gate is a
+    # legitimate operator choice during a genuine CI outage, and preflight
+    # failing hard would block work during exactly the outage the escape hatch
+    # exists for. It must be impossible to MISS, not impossible to DO.
+    from pipeline.authorization import DEFAULT_TEAM
+    from pipeline.ci import DEFAULT_NAMESPACE, SettingsContext
+
+    gate = SettingsContext(
+        namespace=DEFAULT_NAMESPACE, team=DEFAULT_TEAM, repo=""
+    ).resolve("merge_ci_gate")
+    if not gate["value"]:
         results.append({
             "name": "merge CI gate",
             "status": "warn",
             "message": (
-                "PIPELINE_MERGE_CI_GATE=0: the merge gate will NOT consult "
-                "CI, so merges can land on red. Unset PIPELINE_MERGE_CI_GATE "
-                "to restore the gate. This is usually a temporary workaround "
-                "(e.g. a CI outage) and should be removed once CI is green "
-                "again."
+                f"merge_ci_gate is OFF (source={gate['source']}, "
+                f"team={gate['team']}): the merge gate will NOT consult CI, "
+                "so merges can land on red. Turn it back on in the settings "
+                "store to restore the gate. This is usually a temporary "
+                "workaround (e.g. a CI outage) and should be removed once CI "
+                "is green again."
             ),
         })
     else:

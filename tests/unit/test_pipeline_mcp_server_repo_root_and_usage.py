@@ -14,6 +14,7 @@ from app import (
 )
 from pipeline import server as p
 from pipeline import ticketing as pt
+from pipeline.ci import context_from_manifest as _context
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _clear_caches,
     _hermetic_ollama_seams,
@@ -823,7 +824,7 @@ def test_ci_status_none_when_gh_unavailable(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    ci = p._ci_status("agent/x", sha="")
+    ci = p._ci_status("agent/x", sha="", settings=_context({}))
     assert ci["state"] == "none"
 
 
@@ -836,7 +837,7 @@ def test_ci_status_fail_on_fail_bucket(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x", sha="")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="", settings=_context({}))["state"] == "fail"
 
 
 def test_ci_status_pass_when_all_pass(monkeypatch):
@@ -848,7 +849,7 @@ def test_ci_status_pass_when_all_pass(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x", sha="")["state"] == "pass"
+    assert p._ci_status("agent/x", sha="", settings=_context({}))["state"] == "pass"
 
 
 def test_ci_status_pending_times_out(monkeypatch):
@@ -863,7 +864,7 @@ def test_ci_status_pending_times_out(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda _s: None)
-    ci = p._ci_status("agent/x", sha="", timeout_s=0)
+    ci = p._ci_status("agent/x", sha="", timeout_s=0, settings=_context({}))
     assert ci["state"] == "pending"
 
 
@@ -875,7 +876,7 @@ def test_ci_status_returns_none_when_gh_missing(monkeypatch):
         raise FileNotFoundError("[Errno 2] No such file or directory: 'gh'")
 
     monkeypatch.setattr(p.subprocess, "run", _raise_run)
-    ci = p._ci_status("agent/x", sha="")
+    ci = p._ci_status("agent/x", sha="", settings=_context({}))
     assert ci["state"] == "none"
     assert "gh unavailable" in ci["error"]
 
@@ -896,7 +897,7 @@ def test_ci_status_none_when_no_workflows_dir_and_no_checks_reported(
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    ci = p._ci_status("agent/x", sha="")
+    ci = p._ci_status("agent/x", sha="", settings=_context({}))
     assert ci["state"] == "none"
 
 
@@ -925,7 +926,7 @@ def test_ci_status_pending_not_none_when_workflows_dir_present_but_checks_not_ye
     # already be past on the first condition check, skipping the loop body
     # (and thus the gh call under test) entirely and falling through to
     # "pending" for free - passing even with the pre-fix "none" bug.
-    ci = p._ci_status("agent/x", sha="", timeout_s=0.05)
+    ci = p._ci_status("agent/x", sha="", timeout_s=0.05, settings=_context({}))
     assert ci["state"] == "pending"
 
 
@@ -941,7 +942,7 @@ def test_ci_status_cancelled_when_only_cancelled_bucket(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x", sha="")["state"] == "cancelled"
+    assert p._ci_status("agent/x", sha="", settings=_context({}))["state"] == "cancelled"
 
 
 def test_ci_status_fail_wins_over_cancelled_when_both_present(monkeypatch):
@@ -956,7 +957,7 @@ def test_ci_status_fail_wins_over_cancelled_when_both_present(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x", sha="")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="", settings=_context({}))["state"] == "fail"
 
 
 def test_ci_rerun_issues_gh_run_rerun_on_success(monkeypatch):

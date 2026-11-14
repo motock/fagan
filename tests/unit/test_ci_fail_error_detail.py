@@ -15,6 +15,7 @@ implementation in pipeline/ci.py is updated to populate `error`.
 import json
 
 from pipeline import ci as p
+from pipeline.ci import context_from_manifest as _context
 
 
 def _run(returncode=0, stdout="", stderr=""):
@@ -39,8 +40,7 @@ def test_sha_scoped_single_fail_names_check_and_conclusion(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert "Lint" in result["error"]
     assert "failure" in result["error"]
@@ -55,8 +55,7 @@ def test_sha_scoped_two_fails_names_both_present(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert "Lint" in result["error"]
     assert "Test" in result["error"]
@@ -72,8 +71,7 @@ def test_sha_scoped_cancelled_only_names_cancelled_check(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "cancelled"
     assert "Build" in result["error"]
 
@@ -87,8 +85,7 @@ def test_sha_scoped_all_pass_unchanged(monkeypatch):
         ))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result == {"state": "pass", "error": ""}
 
 
@@ -104,8 +101,7 @@ def test_branch_scoped_requests_name_and_bucket(monkeypatch):
         return _run(stdout=json.dumps([{"name": "Lint", "bucket": "pass"}]))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    p._ci_status("agent/x", sha="")
+    p._ci_status("agent/x", sha="", settings=_context({}))
     assert calls, "expected at least one gh invocation"
     assert calls[0] == ["gh", "pr", "checks", "agent/x", "--json", "name,bucket"]
 
@@ -117,8 +113,7 @@ def test_branch_scoped_fail_bucket_names_check(monkeypatch):
         return _run(stdout=json.dumps([{"name": "Lint", "bucket": "fail"}]))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
     assert result["state"] == "fail"
     assert "Lint" in result["error"]
 
@@ -129,8 +124,7 @@ def test_branch_scoped_cancelled_bucket_names_check(monkeypatch):
         return _run(stdout=json.dumps([{"name": "Build", "bucket": "cancelled"}]))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
     assert result["state"] == "cancelled"
     assert "Build" in result["error"]
 
@@ -141,8 +135,7 @@ def test_branch_scoped_all_pass_unchanged(monkeypatch):
         return _run(stdout=json.dumps([{"name": "Lint", "bucket": "pass"}]))
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
     assert result == {"state": "pass", "error": ""}
 
 
@@ -162,8 +155,7 @@ def test_error_truncated_at_300_chars(monkeypatch):
         return _run(stdout=lines)
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
     assert result["state"] == "fail"
     assert len(result["error"]) <= 300
 
@@ -180,7 +172,6 @@ def test_timeout_pending_error_message_byte_for_byte(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda s: None)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
-    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05)
+    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05, settings=_context({}))
     assert result["state"] == "pending"
     assert result["error"] == "CI did not complete within timeout"

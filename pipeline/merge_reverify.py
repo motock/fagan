@@ -332,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         # Imported inside the function: pipeline.server pulls in this package's
         # heavy modules, and this module must stay importable on its own.
         from pipeline import server
+        from pipeline.ci import context_from_manifest
 
         manifest = server._store.records().get_manifest("default", plan_name)
         if manifest is None:
@@ -345,7 +346,10 @@ def main(argv: list[str] | None = None) -> int:
             text=True,
         ).stdout.strip()
 
-        acc = server._reverify_acceptance(story, worktree, story_key)
+        settings = context_from_manifest(manifest)
+        acc = server._reverify_acceptance(
+            story, worktree, story_key, settings=settings
+        )
         # Read AFTER the call: _reverify_acceptance refreshes this field on its
         # in-memory copy of the story, and the caller copies that fresh value
         # back into the manifest under the plan lock.
@@ -354,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             result["state"] = "fail"
             result["error"] = "acceptance reverify fail: " + acc.get("error", "")
         else:
-            build = server._reverify_build(worktree)
+            build = server._reverify_build(worktree, settings=settings)
             if build.get("state") == "fail":
                 result["state"] = "fail"
                 result["error"] = "build reverify fail: " + build.get("error", "")

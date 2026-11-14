@@ -139,3 +139,31 @@ def _reset_notification_breakers():
     notification_channels.reset_breakers()
     yield
     notification_channels.reset_breakers()
+
+
+@pytest.fixture
+def seed_merge_gate(tmp_path, monkeypatch):
+    """Seed deployment-level merge gate settings in an isolated settings Store.
+
+    Returns ``seed(**values)``, e.g. ``seed(merge_ci_gate=False)``. The record
+    goes to the plan directory the test already isolates under ``tmp_path``;
+    only when none is set does it redirect the Store to its own directory, so
+    no test writes to a real plan directory and the records land where the
+    test's own manifests are read.
+    """
+    from pipeline import persistence, server
+
+    def seed(**values):
+        plans = Path(server.PLAN_DIR)
+        if not plans.resolve().is_relative_to(tmp_path.resolve()):
+            plans = tmp_path / "gate-plans"
+            plans.mkdir(exist_ok=True)
+            monkeypatch.setattr(server, "PLAN_DIR", plans)
+            monkeypatch.setattr(persistence, "PLAN_DIR", plans)
+        # A ceiling key set OFF is looser than its safe default, so the
+        # deployment layer must list it in allow_loosen for the value to stand.
+        server._store.records().put_settings(
+            "default", "deployment", "", "", values, list(values), "ops", None
+        )
+
+    return seed

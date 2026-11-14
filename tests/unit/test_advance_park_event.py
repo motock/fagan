@@ -156,15 +156,15 @@ def _stub_merge_boundaries(monkeypatch, *, rebase=("", "abc123")):
     monkeypatch.setattr(
         adv,
         "_merge_gate_ci_status",
-        lambda branch, *, sha: {"state": "success", "error": ""},
+        lambda branch, *, sha, settings=None: {"state": "success", "error": ""},
     )
     monkeypatch.setattr(adv, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(adv, "_ci_pending_expired", lambda since: False)
+    monkeypatch.setattr(adv, "_ci_pending_expired", lambda since, settings=None: False)
     monkeypatch.setattr(adv, "_ci_rework_feedback", lambda err, attempts: "feedback")
     monkeypatch.setattr(
-        adv, "_reverify_acceptance", lambda story, wt, key: {"state": "pass", "error": ""}
+        adv, "_reverify_acceptance", lambda story, wt, key, settings=None: {"state": "pass", "error": ""}
     )
-    monkeypatch.setattr(adv, "_reverify_build", lambda wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(adv, "_reverify_build", lambda wt, settings=None: {"state": "pass", "error": ""})
     monkeypatch.setattr(adv, "_mcp_self_source_touched", lambda wt, ref: False)
     monkeypatch.setattr(adv, "_default_branch", lambda: "master")
     monkeypatch.setattr(adv, "_merge_pr", lambda wt, key: None)

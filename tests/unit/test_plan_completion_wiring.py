@@ -188,10 +188,10 @@ def _stub_advance_merge_boundaries(monkeypatch):
     )
     monkeypatch.setattr(
         p, "_merge_gate_ci_status",
-        lambda branch, *, sha: {"state": "success", "error": ""},
+        lambda branch, *, sha, settings=None: {"state": "success", "error": ""},
     )
     monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(p, "_ci_pending_expired", lambda since: False)
+    monkeypatch.setattr(p, "_ci_pending_expired", lambda since, settings=None: False)
     monkeypatch.setattr(
         p, "_ci_rework_feedback",
         lambda gate_error, attempts: "ci rework feedback",

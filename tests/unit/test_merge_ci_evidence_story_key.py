@@ -110,7 +110,7 @@ def _install(monkeypatch, tmp_path, branches, resolve_calls=None, ruling=PROCEED
         persistence_mod, "_append_decision", lambda plan_name, record: None
     )
 
-    def fake_once(branch, *, sha):
+    def fake_once(branch, *, sha, settings=None):
         branches.append(branch)
         return dict(PASS_STATE)
 

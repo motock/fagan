@@ -10,6 +10,7 @@ import subprocess
 
 import pytest
 
+from pipeline.ci import context_from_manifest as _context
 from pipeline.forge_github import GitHubForge
 
 WORKTREE = "/some/worktree"
@@ -204,7 +205,7 @@ def test_ci_verbs_delegate_to_pipeline_ci(monkeypatch, forge):
 
     calls = []
 
-    def _status_once(branch, *, sha):
+    def _status_once(branch, *, sha, settings):
         calls.append(("status", branch, sha))
         return {"state": "pass", "error": ""}
 
@@ -225,7 +226,9 @@ def test_ci_verbs_delegate_to_pipeline_ci(monkeypatch, forge):
     monkeypatch.setattr(ci_mod, "_ci_rerun", _rerun)
     monkeypatch.setattr(ci_mod, "_repo_has_ci_configured", _has_ci)
 
-    assert forge.checks_status(BRANCH, "abc123") == {"state": "pass", "error": ""}
+    assert forge.checks_status(
+        BRANCH, "abc123", settings=_context({})
+    ) == {"state": "pass", "error": ""}
     assert forge.failure_excerpt(BRANCH) == "boom"
     assert forge.rerun_failed("abc123") is True
     assert forge.has_ci_config("/repo") is True

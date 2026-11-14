@@ -151,7 +151,7 @@ class _Harness:
             lambda plan_name, record: self.decisions.append((plan_name, record)),
         )
 
-        def fake_once(branch, *, sha):
+        def fake_once(branch, *, sha, settings=None):
             self.gather_calls.append({"branch": branch, "sha": sha})
             if gather_exc is not None:
                 raise gather_exc
@@ -446,7 +446,7 @@ def test_gather_resolves_ci_status_once_from_pipeline_server(monkeypatch):
     )
     calls = []
 
-    def fake_once(branch, *, sha):
+    def fake_once(branch, *, sha, settings=None):
         calls.append({"branch": branch, "sha": sha})
         return dict(PASS_STATE)
 
@@ -554,7 +554,7 @@ def test_gathered_pr_checks_land_in_the_persisted_manifest(plan_dir, monkeypatch
 
     monkeypatch.setattr(overlord_mod, "_invoke_overlord", fake_invoke)
 
-    def fake_once(branch, *, sha):
+    def fake_once(branch, *, sha, settings=None):
         return dict(PASS_STATE)
 
     monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)

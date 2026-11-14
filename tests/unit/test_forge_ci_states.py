@@ -24,6 +24,7 @@ import subprocess
 import pytest
 
 from pipeline import ci as p
+from pipeline.ci import context_from_manifest as _context
 from pipeline.forge import (
     CANCELLED,
     FAIL,
@@ -112,7 +113,6 @@ def fake_forge(monkeypatch):
     def _install(**kwargs):
         forge = FakeForge(**kwargs)
         monkeypatch.setattr(p, "get_forge", lambda repo_root: forge)
-        monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
         return forge
 
     return _install
@@ -129,41 +129,41 @@ def no_sleep(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_pass_state(fake_forge):
     fake_forge(has_ci=True, snapshots=[{"build": PASS}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == PASS
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == PASS
 
 
 def test_fail_state(fake_forge):
     fake_forge(has_ci=True, snapshots=[{"build": FAIL}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == FAIL
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == FAIL
 
 
 def test_pending_state(fake_forge):
     fake_forge(has_ci=True, snapshots=[{"build": PENDING}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == PENDING
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == PENDING
 
 
 def test_cancelled_state(fake_forge, no_sleep):
     forge = fake_forge(has_ci=True, snapshots=[{"build": CANCELLED}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == CANCELLED
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == CANCELLED
 
     # Going through the poll loop, a cancelled snapshot triggers one rerun.
     forge = fake_forge(
         has_ci=True, snapshots=[{"build": CANCELLED}, {"build": PASS}]
     )
     no_sleep.setattr(p.time, "monotonic", _Clock())
-    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == PASS
+    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10, settings=_context({}))["state"] == PASS
     assert len(forge.method_calls("rerun_failed")) == 1
 
 
 def test_unreadable_state(fake_forge):
     fake_forge(has_ci=True, raises=CIStatusUnreadable("gh exploded"))
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == UNREADABLE
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == UNREADABLE
 
 
 def test_none_state(fake_forge):
     # No CI configured and no checks registered -> NONE, never UNREADABLE.
     fake_forge(has_ci=False, snapshots=[{}])
-    state = p._ci_status_once(BRANCH, sha=SHA)["state"]
+    state = p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"]
     assert state == NONE
     assert state != UNREADABLE
 
@@ -263,14 +263,14 @@ def test_unnamed_checks_do_not_collapse_into_one(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_unreadable_when_workflows_exist_but_status_unreadable(fake_forge):
     fake_forge(has_ci=True, raises=CIStatusUnreadable("HTTP 502"))
-    state = p._ci_status_once(BRANCH, sha=SHA)["state"]
+    state = p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"]
     assert state == UNREADABLE
     assert state != NONE
 
 
 def test_none_when_no_workflows_and_no_checks(fake_forge):
     fake_forge(has_ci=False, snapshots=[{}])
-    state = p._ci_status_once(BRANCH, sha=SHA)["state"]
+    state = p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"]
     assert state == NONE
     assert state != PENDING
 
@@ -278,18 +278,18 @@ def test_none_when_no_workflows_and_no_checks(fake_forge):
 def test_unreadable_never_collapses_to_none(fake_forge):
     # (a) CI configured but unreadable -> UNREADABLE, never NONE.
     fake_forge(has_ci=True, raises=CIStatusUnreadable("boom"))
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == UNREADABLE
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == UNREADABLE
 
     # (b) No CI configured -> NONE, never UNREADABLE. Same call site, no cache.
     fake_forge(has_ci=False, snapshots=[{}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == NONE
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == NONE
 
 
 def test_empty_checks_before_registration_is_pending(fake_forge):
     forge = fake_forge(has_ci=True, snapshots=[{}, {"build": PASS}])
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == PENDING
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == PENDING
     # The empty snapshot leaves no sticky flag: the next poll can pass.
-    assert p._ci_status_once(BRANCH, sha=SHA)["state"] == PASS
+    assert p._ci_status_once(BRANCH, sha=SHA, settings=_context({}))["state"] == PASS
     assert len(forge.method_calls("checks_snapshot")) == 2
 
 
@@ -299,16 +299,16 @@ def test_empty_checks_before_registration_is_pending(fake_forge):
 def test_timeout_yields_pending(fake_forge, no_sleep):
     forge = fake_forge(has_ci=True, snapshots=[{"build": PENDING}])
     no_sleep.setattr(p.time, "monotonic", _Clock())
-    result = p._ci_status(BRANCH, sha=SHA, timeout_s=3)
+    result = p._ci_status(BRANCH, sha=SHA, timeout_s=3, settings=_context({}))
     assert result["state"] == PENDING
     assert len(forge.method_calls("checks_snapshot")) == 2
 
 
-def test_gate_zero_short_circuits_to_pass_without_adapter(monkeypatch):
+def test_gate_zero_short_circuits_to_pass_without_adapter(monkeypatch, seed_merge_gate):
     forge = ExplodingForge()
     monkeypatch.setattr(p, "get_forge", lambda repo_root: forge)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", False)
-    result = p._ci_status(BRANCH, sha=SHA, timeout_s=10)
+    seed_merge_gate(merge_ci_gate=False)
+    result = p._ci_status(BRANCH, sha=SHA, timeout_s=10, settings=_context({}))
     assert result["state"] == PASS
     assert forge.calls == []
 
@@ -320,7 +320,7 @@ def test_cancelled_triggers_exactly_one_rerun(fake_forge, no_sleep):
         has_ci=True, snapshots=[{"build": CANCELLED}, {"build": CANCELLED}]
     )
     no_sleep.setattr(p.time, "monotonic", _Clock())
-    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == CANCELLED
+    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10, settings=_context({}))["state"] == CANCELLED
     assert len(forge.method_calls("rerun_failed")) == 1
 
     # A cancellation the rerun DOES clear resumes polling and passes.
@@ -328,7 +328,7 @@ def test_cancelled_triggers_exactly_one_rerun(fake_forge, no_sleep):
         has_ci=True, snapshots=[{"build": CANCELLED}, {"build": PASS}]
     )
     no_sleep.setattr(p.time, "monotonic", _Clock())
-    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == PASS
+    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10, settings=_context({}))["state"] == PASS
     assert len(forge.method_calls("rerun_failed")) == 1
 
     # A second invocation is a new cancelled episode: the flag is local, so it
@@ -337,5 +337,5 @@ def test_cancelled_triggers_exactly_one_rerun(fake_forge, no_sleep):
         has_ci=True, snapshots=[{"build": CANCELLED}, {"build": PASS}]
     )
     no_sleep.setattr(p.time, "monotonic", _Clock())
-    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10)["state"] == PASS
+    assert p._ci_status(BRANCH, sha=SHA, timeout_s=10, settings=_context({}))["state"] == PASS
     assert len(forge.method_calls("rerun_failed")) == 1

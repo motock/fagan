@@ -25,6 +25,8 @@ from pipeline import ci as p
 # A distinctive pytest-shaped excerpt the implementation must surface verbatim
 # (or as a tail slice of) into `error`.  We assert on a unique marker so the
 # test is robust to whatever bounding/slicing the implementation chooses.
+from pipeline.ci import context_from_manifest as _context
+
 _EXCERPT_MARKER = "ZZZ_ASSERT_FAILED_MARKER_line_42_expected_True_got_False_ZZZ"
 
 _PYTEST_LOG = (
@@ -50,10 +52,6 @@ def _run(returncode=0, stdout="", stderr=""):
     r.stdout = stdout
     r.stderr = stderr
     return r
-
-
-def _set_gate(monkeypatch):
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +100,7 @@ def test_sha_scoped_fail_appends_pytest_excerpt(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     # Original classification preserved.
@@ -137,8 +134,7 @@ def test_branch_scoped_fail_appends_pytest_excerpt(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert result["state"] == "fail"
     assert "Test Py3.12" in result["error"]
@@ -171,8 +167,7 @@ def test_sha_scoped_fail_log_empty_falls_back_to_classification(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     # No excerpt appended -> exactly the classification (truncated to 300).
@@ -193,8 +188,7 @@ def test_branch_scoped_fail_log_empty_falls_back_to_classification(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -217,8 +211,7 @@ def test_sha_scoped_fail_log_errors_falls_back_to_classification(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -241,8 +234,7 @@ def test_sha_scoped_fail_run_list_errors_falls_back_to_classification(monkeypatc
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -265,8 +257,7 @@ def test_sha_scoped_fail_run_list_empty_falls_back_to_classification(monkeypatch
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -288,8 +279,7 @@ def test_sha_scoped_fail_run_list_unparseable_falls_back(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -312,8 +302,7 @@ def test_sha_scoped_fail_log_oserror_falls_back(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -340,8 +329,7 @@ def test_sha_scoped_cancelled_not_enriched(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "cancelled"
     assert "Build" in result["error"]
@@ -366,8 +354,7 @@ def test_branch_scoped_cancelled_not_enriched(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert result["state"] == "cancelled"
     assert "Build" in result["error"]
@@ -390,8 +377,7 @@ def test_sha_scoped_pass_not_enriched(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
     assert not any(_is_run_view_call(c) for c in calls)
@@ -414,8 +400,7 @@ def test_timeout_pending_not_enriched(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda s: None)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05)
+    result = p._ci_status("agent/x", sha="deadbeef", timeout_s=0.05, settings=_context({}))
 
     assert result["state"] == "pending"
     assert result["error"] == "CI did not complete within timeout"
@@ -445,8 +430,7 @@ def test_sha_scoped_fail_log_timeout_falls_back(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -466,8 +450,7 @@ def test_branch_scoped_fail_log_timeout_falls_back(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"] == classification[:300]
@@ -499,8 +482,7 @@ def test_sha_scoped_fail_excerpt_is_bounded(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert "Test Py3.12" in result["error"]
@@ -530,8 +512,7 @@ def test_branch_scoped_fail_excerpt_is_bounded(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="")
+    result = p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert result["state"] == "fail"
     assert "Test Py3.12" in result["error"]
@@ -565,8 +546,7 @@ def test_sha_scoped_fail_falls_back_from_log_failed_to_log(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert "Test Py3.12" in result["error"]
@@ -594,8 +574,7 @@ def test_sha_scoped_fail_falls_back_from_empty_log_failed_to_log(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    result = p._ci_status("agent/x", sha="deadbeef")
+    result = p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert result["state"] == "fail"
     assert _EXCERPT_MARKER in result["error"]
@@ -625,8 +604,7 @@ def test_sha_scoped_fail_uses_gh_run_list_to_resolve_run_id(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    p._ci_status("agent/x", sha="deadbeef")
+    p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert seen_run_view, "expected a `gh run view` call"
     # The run id from `gh run list` (123456) must appear as an argument.
@@ -650,8 +628,7 @@ def test_branch_scoped_fail_uses_gh_run_list_to_resolve_run_id(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    p._ci_status("agent/x", sha="")
+    p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert seen_run_view
     assert any("654321" in c for c in seen_run_view)
@@ -680,8 +657,7 @@ def test_sha_scoped_fail_run_view_passes_a_timeout(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    p._ci_status("agent/x", sha="deadbeef")
+    p._ci_status("agent/x", sha="deadbeef", settings=_context({}))
 
     assert view_kwargs, "expected a `gh run view` call"
     timeouts = [kw.get("timeout") for kw in view_kwargs if kw.get("timeout") is not None]
@@ -707,8 +683,7 @@ def test_branch_scoped_fail_run_view_passes_a_timeout(monkeypatch):
         return _run(stdout="")
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    _set_gate(monkeypatch)
-    p._ci_status("agent/x", sha="")
+    p._ci_status("agent/x", sha="", settings=_context({}))
 
     assert view_kwargs
     timeouts = [kw.get("timeout") for kw in view_kwargs if kw.get("timeout") is not None]

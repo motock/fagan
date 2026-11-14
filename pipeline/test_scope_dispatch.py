@@ -27,9 +27,9 @@ def rework_on_ci_fail_enabled() -> bool:
 
 
 def ci_unavailable_reason(manifest: dict) -> str | None:
-    from . import ci as _ci
+    from .ci import context_from_manifest
 
-    if not _ci.PIPELINE_MERGE_CI_GATE:
+    if not context_from_manifest(manifest).value("merge_ci_gate"):
         return "ci_gate_disabled"
     if not rework_on_ci_fail_enabled():
         return "rework_on_ci_fail_off"

@@ -1,9 +1,10 @@
 """CI status polling and pre-merge re-verification for the merge gate.
 
-The three env-var gates (``PIPELINE_MERGE_CI_GATE``, ``PIPELINE_MERGE_CI_TIMEOUT``,
-``PIPELINE_MERGE_BUILD_GATE``) live here rather than in
-:mod:`pipeline_config` because they are CI‑specific; tests patch the module
-directly.
+The merge gates (``merge_ci_gate``, ``merge_ci_timeout_s``,
+``merge_build_gate``, ``reverify_full_suite``) are tenant settings. Every
+function here takes a :class:`SettingsContext` as a required keyword argument:
+the caller builds it from the plan manifest, so two plans in one process
+resolve their own gates and never share a process-global value.
 """
 
 import hashlib
@@ -13,11 +14,14 @@ import re
 import subprocess
 import time
 import types
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app import role_registry
+
+from .authorization import DEFAULT_TEAM
 
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
@@ -52,15 +56,100 @@ from .forge import (
 )
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
+from .repo_clone import parse_repo_url
+from .settings_store import effective_setting
 
 logger = logging.getLogger(__name__)
 
-# ---------- CI env-var gates ----------
-PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
-PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "900"))
-# Mirrors ``PIPELINE_MERGE_CI_GATE``'s opt‑out pattern for operators with
-# slow builds who don't want a build re‑run at the merge gate.
-PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != "0"
+# ---------- Merge gate settings context ----------
+DEFAULT_NAMESPACE = "default"
+
+# The settings a merge reads. Their values and sources go on the merge record.
+MERGE_GATE_KEYS = (
+    "merge_ci_gate",
+    "merge_ci_timeout_s",
+    "merge_build_gate",
+    "reverify_full_suite",
+)
+
+
+@dataclass(frozen=True)
+class SettingsContext:
+    """One merge's (namespace, team, repo). Every field is required.
+
+    Each key is read from the Store once per context, so one merge attempt
+    sees one consistent value for each gate.
+    """
+
+    namespace: str
+    team: str
+    repo: str
+    _resolved: dict[str, dict[str, Any]] = field(
+        default_factory=dict, init=False, compare=False, repr=False
+    )
+
+    def resolve(self, key: str) -> dict[str, Any]:
+        """Return the resolved value, source, team and repo for ``key``."""
+        if key not in self._resolved:
+            self._resolved[key] = effective_setting(
+                key, namespace=self.namespace, team=self.team, repo=self.repo
+            )
+        return self._resolved[key]
+
+    def value(self, key: str) -> Any:
+        return self.resolve(key)["value"]
+
+
+def _repo_identity(manifest: dict[str, Any]) -> str:
+    """``host/org/name`` for the plan's ``repo_url``, else its ``repo_root``.
+
+    A malformed ``repo_url`` raises :class:`~pipeline.repo_clone.RepoUrlError`
+    so the merge fails closed rather than resolving against the wrong repo.
+    """
+    url = manifest.get("repo_url")
+    if url:
+        host, owner, name = parse_repo_url(url)
+        return f"{host}/{owner}/{name}"
+    return manifest.get("repo_root") or ""
+
+
+def context_from_manifest(manifest: dict[str, Any]) -> SettingsContext:
+    """Build the merge settings context from a plan manifest."""
+    return SettingsContext(
+        namespace=manifest.get("namespace") or DEFAULT_NAMESPACE,
+        team=manifest.get("team") or DEFAULT_TEAM,
+        repo=_repo_identity(manifest),
+    )
+
+
+def settings_for_plan(plan_name: str) -> SettingsContext:
+    """Merge settings context for ``plan_name``, from its stored manifest.
+
+    An unknown plan yields the default context, which resolves every gate to
+    its deployment or safe value.
+    """
+    if not plan_name:
+        return context_from_manifest({})
+    from .server import _store
+
+    manifest = _store.records().get_manifest("default", plan_name) or {}
+    return context_from_manifest(manifest)
+
+
+def gate_record(settings: SettingsContext) -> dict[str, dict[str, Any]]:
+    """Per merge gate: the value used, its source, team and repo, and any
+    loosening the Store refused (``lock_rejections``) for that gate."""
+    record = {}
+    for key in MERGE_GATE_KEYS:
+        resolved = settings.resolve(key)
+        record[key] = {
+            "value": resolved["value"],
+            "source": resolved["source"],
+            "team": resolved["team"],
+            "repo": resolved["repo"],
+            "lock_rejections": resolved["lock_rejections"],
+        }
+    return record
 
 # ---------- Retro backlog cap (RH-06) ----------
 # ``_record_retro_pending`` appends one marker line per completed
@@ -134,7 +223,23 @@ def _aggregate_ci_states(snapshot: dict[str, str]) -> str:
     return UNREADABLE
 
 
-def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
+def _log_gate_disabled(key: str, settings: SettingsContext) -> None:
+    """Warn that a merge gate is off, naming where the value came from."""
+    resolved = settings.resolve(key)
+    logger.warning(
+        "merge gate DISABLED; merge is proceeding without it",
+        extra={
+            "setting": key,
+            "source": resolved["source"],
+            "team": resolved["team"],
+            "repo": resolved["repo"],
+        },
+    )
+
+
+def _ci_status_once(
+    branch: str, *, sha: str, settings: SettingsContext
+) -> dict[str, str]:
     """Return a single-poll CI status for ``branch``/``sha``.
 
     Performs exactly one query and returns immediately instead of sleeping and
@@ -146,11 +251,8 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
     yet" and is ``pending``, never ``none``: no checks is not no CI, and it is
     certainly not a vacuous pass.
     """
-    if not PIPELINE_MERGE_CI_GATE:
-        logger.warning(
-            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
-            "proceeding without checking CI"
-        )
+    if not settings.value("merge_ci_gate"):
+        _log_gate_disabled("merge_ci_gate", settings)
         return {"state": PASS, "error": "CI gate disabled"}
 
     repo_root = _scoped_repo_cwd()
@@ -186,7 +288,11 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
 
 
 def _ci_status(
-    branch: str, *, sha: str, timeout_s: int | None = None
+    branch: str,
+    *,
+    sha: str,
+    settings: SettingsContext,
+    timeout_s: int | None = None,
 ) -> dict[str, str]:
     """Poll GitHub for the status of checks on ``sha`` or ``branch``.
 
@@ -196,29 +302,29 @@ def _ci_status(
         The PR branch name to query when ``sha`` is empty.
     sha:
         Commit SHA to query; if falsy, falls back to a branch‑scoped query.
+    settings:
+        The merge's settings context; supplies ``merge_ci_gate`` and, when
+        ``timeout_s`` is not given, ``merge_ci_timeout_s``.
     timeout_s:
-        Optional override of :data:`PIPELINE_MERGE_CI_TIMEOUT`.
+        Optional override of the resolved ``merge_ci_timeout_s``.
 
     Returns
     -------
     dict[str, str]
         ``{"state": <state>, "error": <message>}``
     """
-    if not PIPELINE_MERGE_CI_GATE:
-        logger.warning(
-            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
-            "proceeding without checking CI"
-        )
+    if not settings.value("merge_ci_gate"):
+        _log_gate_disabled("merge_ci_gate", settings)
         return {"state": PASS, "error": "CI gate disabled"}
 
     deadline = time.monotonic() + (
-        timeout_s if timeout_s is not None else PIPELINE_MERGE_CI_TIMEOUT
+        timeout_s if timeout_s is not None else settings.value("merge_ci_timeout_s")
     )
     # Per-invocation, never module-level: each cancelled episode gets exactly
     # one automatic rerun, and a later call is a new episode.
     rerun_done = False
     while time.monotonic() < deadline:
-        result = _ci_status_once(branch, sha=sha)
+        result = _ci_status_once(branch, sha=sha, settings=settings)
         state = result["state"]
         if state in (PASS, FAIL, NONE, UNREADABLE):
             return result
@@ -280,7 +386,11 @@ def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
 
 
 def _reverify_acceptance(
-    story: dict[str, Any], worktree: str, story_key: str = ""
+    story: dict[str, Any],
+    worktree: str,
+    story_key: str = "",
+    *,
+    settings: SettingsContext,
 ) -> dict[str, str]:
     """Re‑run a story's acceptance oracle against its rebased worktree.
 
@@ -295,7 +405,7 @@ def _reverify_acceptance(
     _reverify_build) and relies on the repository's CI for the suite: every
     merge path polls the PR's checks and fails closed, and CI runs the full
     suite.  An operator may opt back IN to a local full-suite re-run by
-    setting PIPELINE_REVERIFY_FULL_SUITE=1; the default is scoped/skip.
+    setting the ``reverify_full_suite`` setting on; the default is scoped/skip.
 
     ``story_key`` (when given) lets a no-acceptance story additionally pull
     in its own new/modified tests/test_*.py files that the full-suite
@@ -332,7 +442,7 @@ def _reverify_acceptance(
     elif not acceptance:
         # No acceptance block: the local suite run is opt-in (CI is the
         # authoritative full-suite gate), so skip unless the operator opted in.
-        if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "0") == "0":
+        if not settings.value("reverify_full_suite"):
             return {"state": "none", "error": ""}
         if story_key and _is_pytest_cmd(test_cmd):
             from .server import _default_branch
@@ -396,14 +506,14 @@ def _reverify_acceptance(
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
 
 
-def _reverify_build(worktree: str) -> dict[str, str]:
+def _reverify_build(worktree: str, *, settings: SettingsContext) -> dict[str, str]:
     """Run the rebased worktree's build command before merge.
 
     The function returns ``{"state": "pass"}`` on success, ``{"state": "fail"}``
     when the build fails, and ``{"state": "none"}`` when the gate is disabled,
     there is no worktree to build against, or no build command is detectable.
     """
-    if not PIPELINE_MERGE_BUILD_GATE:
+    if not settings.value("merge_build_gate"):
         return {"state": "none", "error": "build gate disabled"}
     if not worktree or not Path(worktree).is_dir():
         return {"state": "none", "error": ""}
@@ -435,10 +545,10 @@ def _reverify_build(worktree: str) -> dict[str, str]:
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
 
 
-def _ci_pending_expired(since_iso: str) -> bool:
+def _ci_pending_expired(since_iso: str, *, settings: SettingsContext) -> bool:
     """True once a story has waited on pending CI longer than the total
     patience the blocking gate used to provide (MERGE_MAX_ATTEMPTS
-    attempts x PIPELINE_MERGE_CI_TIMEOUT each)."""
+    attempts x merge_ci_timeout_s each)."""
     try:
         since = datetime.fromisoformat(since_iso)
     except (TypeError, ValueError):
@@ -447,7 +557,7 @@ def _ci_pending_expired(since_iso: str) -> bool:
     if since.tzinfo is None:
         since = since.replace(tzinfo=UTC)
     elapsed = (now - since).total_seconds()
-    return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+    return elapsed >= MERGE_MAX_ATTEMPTS * settings.value("merge_ci_timeout_s")
 
 
 def _parse_pytest_excerpt(gate_error: str) -> str | None:
@@ -756,11 +866,10 @@ def bind_to_server(server: Any) -> None:
 
 
 __all__ = [
-    "PIPELINE_MERGE_BUILD_GATE",
-    "PIPELINE_MERGE_CI_GATE",
-    "PIPELINE_MERGE_CI_TIMEOUT",
+    "MERGE_GATE_KEYS",
     "_PATCHABLE_STORY_FIELDS",
     "_VALID_STORY_STATUSES",
+    "SettingsContext",
     "_acceptance_tampered",
     "_ci_pending_expired",
     "_ci_rerun",
@@ -775,4 +884,7 @@ __all__ = [
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",
+    "context_from_manifest",
+    "gate_record",
+    "settings_for_plan",
 ]

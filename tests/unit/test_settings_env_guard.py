@@ -37,6 +37,7 @@ EXPECTED_RETIRED = {
     "PIPELINE_REWORK_ON_CI_FAIL": "rework_on_ci_fail",
     "PIPELINE_REVERIFY_FULL_SUITE": "reverify_full_suite",
     "PIPELINE_GRADE_XDIST_WORKERS": "grade_xdist_workers",
+    "": "role_routing",
 }
 
 OLD_DEFAULTS = {

@@ -170,11 +170,17 @@ def resolve_role(
     model_fallback: str | Callable[[], str | None] | None = None,
     registry: dict | None = None,
     default_provider: str = "claude", environ: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> RoleResolution:
     """Resolve (provider, model) for `role`.
 
+    `layer_routing` is the `role_routing` settings value for the caller's
+    scope (role -> {provider, model}). It is consulted after plan_role_config
+    and before the registry; None or an empty mapping changes nothing.
+
     Provider priority: plan_role_config[role]["provider"] ->
-    registry["roles"][role]["provider"] -> PIPELINE_BACKEND_<ROLE> env var
+    layer_routing[role]["provider"] -> registry["roles"][role]["provider"]
+    -> PIPELINE_BACKEND_<ROLE> env var
     (the same var/default get_backend() itself applies; the env var is only
     the EMPTY-STATE fallback, consulted when the registry has no entry for
     the role) -> default_provider ("claude", matching get_backend()'s own
@@ -182,8 +188,9 @@ def resolve_role(
     planner role mirroring whichever provider dispatch already picked).
 
     Model priority: plan_role_config[role]["model"] ->
-    registry["roles"][role]["model"] -> model_fallback (the caller's own
-    bespoke default: persona frontmatter, DEFAULT_MODEL, etc.).
+    layer_routing[role]["model"] -> registry["roles"][role]["model"] ->
+    model_fallback (the caller's own bespoke default: persona frontmatter,
+    DEFAULT_MODEL, etc.).
 
     Both plan- and registry-supplied model values are *friendly names*,
     resolved against providers.<resolved provider>.models — never a raw
@@ -199,19 +206,24 @@ def resolve_role(
         environ = os.environ
     reg = registry if registry is not None else load_registry()
     plan_cfg = (plan_role_config or {}).get(role, {})
+    layer_cfg = (layer_routing or {}).get(role, {})
     reg_role_cfg = reg.get("roles", {}).get(role, {})
 
     provider = (
         plan_cfg.get("provider")
+        or layer_cfg.get("provider")
         or reg_role_cfg.get("provider")
         or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
         or default_provider
     ).strip().lower()
 
+    layer_model = None
+    if layer_cfg.get("model") and layer_cfg.get("provider") in (None, provider):
+        layer_model = layer_cfg["model"]
     registry_model = None
     if reg_role_cfg.get("model") and reg_role_cfg.get("provider") in (None, provider):
         registry_model = reg_role_cfg["model"]
-    model_name = plan_cfg.get("model") or registry_model
+    model_name = plan_cfg.get("model") or layer_model or registry_model
 
     if model_name:
         provider_models = reg.get("providers", {}).get(provider, {}).get("models", {})

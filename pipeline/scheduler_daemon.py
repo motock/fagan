@@ -18,7 +18,9 @@ import sys
 import threading
 import time
 
-from pipeline import config_provenance
+from pipeline import config_provenance, manifest_source  # noqa: F401 - re-exported
+from pipeline.actor import SYSTEM_SCHEDULER, bind_principal  # noqa: F401 - re-exported
+from pipeline.dispatch_fence import mark_worker_abandoned  # noqa: F401 - re-exported
 from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
 from pipeline.events_nats_consumer import start_consumers, stop_consumers

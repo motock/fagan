@@ -9,7 +9,7 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
-from . import cross_plan, plan_approval, triage_rebrief
+from . import access_hooks, cross_plan, plan_approval, triage_rebrief
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
@@ -141,6 +141,8 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 ),
             }
 
+        if (refusal := access_hooks.refuse_dispatch(_store, plan_name, story_key, manifest)) is not None:
+            return refusal
         # W4-logging slice: mint the correlation ID once (the falsy guard keeps
         # it across redispatch) and record the branch, persisting both before
         # ANY subprocess work so a failed launch leaves them for the retry.

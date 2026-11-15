@@ -635,6 +635,12 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             }
         if story.get("review_verdict") != "APPROVE":
             return {"ok": False, "error": "Story was never reviewer-approved"}
+        from . import access_hooks
+
+        # The repo access hook is consulted before any rebase, push or merge.
+        refusal = access_hooks.merge_refusal(plan_name, story)
+        if refusal is not None:
+            return refusal
 
         try:
             with _scoped_repo_root(plan_name):

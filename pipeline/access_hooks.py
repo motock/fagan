@@ -10,6 +10,9 @@ every failure to consult it (an exception, a malformed result, a bad spec)
 refuses. A refusal parks the story with ``access refused: <reason token>`` and
 appends one host audit record carrying the action and the reason token. It
 never carries the plan, the story, the repository or the hook's free text.
+
+External dependency references have their own hook, ``PIPELINE_REFERENCE_PLUGIN``,
+which is the opposite way round: with it unset every reference is refused.
 """
 
 from __future__ import annotations
@@ -32,10 +35,14 @@ from pipeline.audit import append_host_audit
 logger = logging.getLogger("pipeline")
 
 ACCESS_HOOK_PLUGIN_ENV = "PIPELINE_REPO_ACCESS_PLUGIN"
+REFERENCE_HOOK_PLUGIN_ENV = "PIPELINE_REFERENCE_PLUGIN"
 REFUSAL_PREFIX = "access refused: "
 
 _SEAM = "repo_access"
+_REFERENCE_SEAM = "reference"
 _HOOK_ERROR = "hook_error"
+_NO_REFERENCE_PLUGIN = "no_reference_plugin"
+_REFERENCE_DENIED = "reference_denied"
 _UNSPECIFIED = "unspecified"
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -146,6 +153,63 @@ def _hook() -> RepoAccessHook | None:
     require_allowlist(_SEAM)
     hook = load_plugin(_SEAM)()
     require_methods(hook, ("check",), "repo access hook")
+    return hook
+
+
+class ReferenceHook(Protocol):
+    def allow(self, from_namespace: str, to_namespace: str) -> bool: ...
+
+
+def reference_refusal(from_namespace: str, to_namespace: str) -> str | None:
+    """Return the refusal reason token for an external reference, else None.
+
+    Ingest calls this once per external reference, and a refusal is audited.
+    With no ``PIPELINE_REFERENCE_PLUGIN`` selected, every reference is refused.
+    """
+    reason = _reference_reason(from_namespace, to_namespace)
+    if reason is None:
+        return None
+    return _record_refusal("reference", reason)
+
+
+def reference_allowed(from_namespace: str, to_namespace: str) -> bool:
+    """Return True only when the reference hook allows the reference right now.
+
+    Readiness calls this on every check, so it does not audit: a refusal is
+    audited once, at ingest.
+    """
+    return _reference_reason(from_namespace, to_namespace) is None
+
+
+def _reference_reason(from_namespace: str, to_namespace: str) -> str | None:
+    """Return the refusal reason token, or None only when the hook returns True."""
+    try:
+        hook = _reference_hook()
+        if hook is None:
+            return _NO_REFERENCE_PLUGIN
+        allowed = hook.allow(from_namespace, to_namespace)
+    except Exception as exc:  # noqa: BLE001 - any failure to consult must refuse
+        logger.error(
+            "reference hook failed; refusing",
+            extra={"error_type": type(exc).__name__},
+        )
+        return _HOOK_ERROR
+    if allowed is True:
+        return None
+    return _REFERENCE_DENIED
+
+
+def _reference_hook() -> ReferenceHook | None:
+    """Return the configured reference hook, or None when no plugin is selected.
+
+    Unlike the repo access hook, the absence of a plugin is not a pass-through:
+    ``_reference_reason`` turns a None here into a refusal.
+    """
+    if plugin_spec(_REFERENCE_SEAM) is None:
+        return None
+    require_allowlist(_REFERENCE_SEAM)
+    hook = load_plugin(_REFERENCE_SEAM)()
+    require_methods(hook, ("allow",), "reference hook")
     return hook
 
 

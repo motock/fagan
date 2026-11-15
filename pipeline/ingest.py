@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, plan_draft, plan_names, testfiles
+from . import cross_plan, external_refs, plan_draft, plan_names, testfiles
 from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
@@ -686,7 +686,7 @@ def _ingest_plan_impl(
             files_error = _files_field_error(story) or _test_scope_error(story, f"story {story.get('summary')!r}")
             if files_error is not None:
                 return {"ok": False, "error": files_error}
-            blocked_by_error = _blocked_by_error(story)
+            blocked_by_error = external_refs.blocked_by_error(story, _blocked_by_error)
             if blocked_by_error is not None:
                 return {"ok": False, "error": blocked_by_error}
             acceptance_error = _acceptance_field_error(story)

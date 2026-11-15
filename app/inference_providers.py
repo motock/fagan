@@ -26,6 +26,9 @@ from typing import Protocol
 
 import httpx
 
+from app.credentials import CredentialMissing, CredentialRef, resolve_for_injection
+from pipeline.actor import current_namespace
+
 # The 2026-09-02 scheduler freeze (daemon pid 1609 blocked ~40 min in
 # sock_recv on localhost:11434) was caused by an unbounded read somewhere in
 # the scheduler-side chat/complete path. Every outbound chat/complete httpx
@@ -157,7 +160,12 @@ def ollama_auth_kwargs() -> dict:
     value is stripped: a stray trailing space in the env var would otherwise
     produce a malformed token. Never log the returned header.
     """
-    key = os.environ.get("OLLAMA_API_KEY", "").strip()
+    try:
+        key = resolve_for_injection(
+            CredentialRef("model", "ollama_api_key", namespace=current_namespace())
+        ).strip()
+    except CredentialMissing:
+        return {}
     if key:
         return {"headers": {"Authorization": f"Bearer {key}"}}
     return {}

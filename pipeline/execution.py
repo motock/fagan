@@ -121,6 +121,13 @@ def _spawn_ssh(cmd: list[str], *, cwd: Path, log_path: Path, append: bool, env: 
 
 
 from app.backend_types import AgentHandle
+from app.credentials import (
+    CredentialMissing,
+    CredentialRef,
+    is_default_namespace,
+    resolve_for_injection,
+)
+from pipeline.actor import current_namespace
 from pipeline.sandbox import (
     build_docker_command,
     docker_binary_available,
@@ -245,7 +252,27 @@ def _local_agent_env(env: dict | None) -> dict:
     the secrets, so it is materialized here and filtered.
     """
     base = dict(os.environ) if env is None else env
-    return _strip_agent_secrets(base)
+    return _namespace_forge_env(_strip_agent_secrets(base))
+
+
+def _namespace_forge_env(env: dict) -> dict:
+    """Add back only the bound namespace's own forge token, never the process one.
+
+    The forge tokens are stripped in every namespace by ``_strip_agent_secrets``.
+    A non-default namespace gets ``GH_TOKEN`` solely from the credential seam,
+    and no token at all when the seam has none for it. The default namespace
+    keeps the stripped environment unchanged.
+    """
+    namespace = current_namespace()
+    if is_default_namespace(namespace):
+        return env
+    try:
+        token = resolve_for_injection(
+            CredentialRef("forge", "github_token", namespace=namespace)
+        )
+    except CredentialMissing:
+        return env
+    return {**env, "GH_TOKEN": token}
 
 
 def spawn_local(

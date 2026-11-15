@@ -271,3 +271,32 @@ def test_unbound_context_snapshot_is_written_to_the_default_partition(
 
     assert records.get_context_snapshot(DEFAULT_NAMESPACE, digest) is not None
     assert records.get_context_snapshot(NAMESPACE, digest) is None
+
+
+# -- merge manifest paths -----------------------------------------------------
+
+
+def test_bound_pause_is_refused_with_an_explicit_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound pause is denied explicitly; the default manifest is never touched."""
+    store = _FileStoreStub()
+    monkeypatch.setattr(pipeline.server, "_store", store)
+
+    with bind_namespace(NAMESPACE):
+        result = merge._set_plan_paused(PLAN, True)
+
+    assert result == {"ok": False, "error": "unknown namespace"}
+
+
+def test_bound_approve_merge_is_refused_with_an_explicit_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound merge approval is denied explicitly; no default manifest is read or written."""
+    store = _FileStoreStub()
+    monkeypatch.setattr(pipeline.server, "_store", store)
+
+    with bind_namespace(NAMESPACE):
+        result = merge._approve_merge_impl(PLAN, "S1")
+
+    assert result == {"ok": False, "error": "unknown namespace"}

@@ -208,3 +208,56 @@ def test_existing_class_actions_are_unchanged():
         "escalate_model", "split_story", "repo_issue", "park_for_human",
         "mark_done", "patch_acceptance", "amend_scope",
     })
+
+
+# ---------------------------------------------------------------------------
+# Agent failed after pushing: status 'failed', commits on the branch, no verdict
+# ---------------------------------------------------------------------------
+
+
+def test_failed_story_with_pushed_head_and_no_verdict_is_agent_failed_after_push():
+    story = {"status": "failed", "last_commit": "a1b2c3d", "review_verdict_sha": "", "last_reviewed_sha": ""}
+    assert classify_park(story, {}).name == "agent_failed_after_push"
+
+
+def test_verdict_for_an_older_head_does_not_cover_the_pushed_head():
+    story = {"status": "failed", "last_commit": "a1b2c3d", "review_verdict_sha": "0f0e0d0"}
+    assert classify_park(story, {}).name == "agent_failed_after_push"
+
+
+def test_failed_story_without_commits_is_not_agent_failed_after_push():
+    assert classify_park({"status": "failed", "last_commit": ""}, {}).name == "unknown"
+    assert classify_park({"status": "failed"}, {}).name == "unknown"
+
+
+def test_failed_story_with_review_verdict_for_its_head_is_not_agent_failed_after_push():
+    story = {"status": "failed", "last_commit": "a1b2c3d", "review_verdict_sha": "a1b2c3d"}
+    assert classify_park(story, {}).name == "unknown"
+
+
+def test_failed_story_reviewed_at_its_head_is_not_agent_failed_after_push():
+    story = {"status": "failed", "last_commit": "a1b2c3d", "last_reviewed_sha": "a1b2c3d"}
+    assert classify_park(story, {}).name == "unknown"
+
+
+@pytest.mark.parametrize("status", ["parked", "running", "interrupted", "done", None])
+def test_non_failed_story_with_pushed_head_is_not_agent_failed_after_push(status):
+    story = {"status": status, "last_commit": "a1b2c3d", "review_verdict_sha": ""}
+    assert classify_park(story, {}).name == "unknown"
+
+
+def test_non_string_last_commit_is_unknown_without_raising():
+    assert classify_park({"status": "failed", "last_commit": ["a1b2c3d"]}, {}).name == "unknown"
+
+
+def test_agent_failed_after_push_allows_resume_review_and_park_for_human():
+    assert ALLOWED_ACTIONS["agent_failed_after_push"] == frozenset({"resume_review", "park_for_human"})
+
+
+@pytest.mark.parametrize("action", ["amend_scope", "rebrief", "mark_done", "repo_issue"])
+def test_agent_failed_after_push_refuses_other_actions(action):
+    assert not check_ruling_allowed(ParkClass("agent_failed_after_push", {}), action)
+
+
+def test_agent_failed_after_push_allows_resume_review_on_check():
+    assert check_ruling_allowed(ParkClass("agent_failed_after_push", {}), "resume_review")

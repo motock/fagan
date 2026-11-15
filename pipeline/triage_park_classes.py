@@ -43,6 +43,7 @@ ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "high_risk_hold": frozenset({"park_for_human"}),
     "brief_conflicts_existing_test": frozenset({"amend_scope", "approve_test_edit", "rebrief", "park_for_human"}),
     "env_tool_missing": frozenset({"repo_issue", "park_for_human"}),
+    "agent_failed_after_push": frozenset({"resume_review", "park_for_human"}),
     "unknown": EXISTING_ACTIONS,
 }
 
@@ -133,11 +134,17 @@ def _classify(view: dict) -> ParkClass:
         return ParkClass("transient_bookkeeping", {})
     if _HIGH_RISK_MARKER in reason:
         return ParkClass("high_risk_hold", {})
+    if _failed_after_push(view):
+        return ParkClass("agent_failed_after_push", {})
     return ParkClass("unknown", {})
 
 
 def _scope_conflict_paths(view: dict) -> list:
-    """Paths an agent reported as out of scope (the story's ``scope_conflict`` record)."""
+    """Paths an agent reported as out of scope.
+
+    Read from the story's ``scope_conflict`` record, whose ``paths`` list is
+    the ``<path>`` of each ``SCOPE-CONFLICT: <path> :: <why>`` report.
+    """
     record = view.get("scope_conflict")
     if not isinstance(record, dict):
         return []
@@ -152,6 +159,18 @@ def _brief_conflict_facts(reason: str) -> dict | None:
     names, sep, _ = reason[len(_BRIEF_CONFLICT_PREFIX):].partition(_BRIEF_CONFLICT_SUFFIX)
     tests = _unique(name.strip() for name in names.split(",") if name.strip())
     return {"tests": tests} if sep and tests else None
+
+
+def _failed_after_push(view: dict) -> bool:
+    """A failed story whose branch head has no review verdict.
+
+    ``last_commit`` is the branch head the agent left; the view carries no
+    commits-ahead count, so a recorded head stands for "commits beyond base".
+    """
+    head = view.get("last_commit")
+    if view.get("status") != "failed" or not isinstance(head, str) or not head:
+        return False
+    return head not in (view.get("review_verdict_sha"), view.get("last_reviewed_sha"))
 
 
 def _missing_tool_facts(test_output: str) -> dict | None:

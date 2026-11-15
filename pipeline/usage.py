@@ -16,12 +16,14 @@ pipeline_usage.USAGE_STATE_PATH so server-side reads and usage-module reads
 both see the same isolated temp path.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app import backend, role_registry
@@ -103,14 +105,51 @@ def _run_usage_probe() -> dict[str, Any]:
     return usage
 
 
-def _write_usage_state(state: dict[str, Any]) -> None:
-    _atomic_write_json(USAGE_STATE_PATH, state)
+_CREDENTIAL_KEY_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
-def _read_usage_state() -> dict[str, Any]:
-    if not USAGE_STATE_PATH.exists():
+def credential_key(purpose: str, name: str, namespace: str) -> str:
+    """Non-secret key naming one credential's usage state.
+
+    A digest of the credential's identifiers only, so the key carries no
+    secret value and no readable identifier. The JSON encoding keeps field
+    boundaries unambiguous.
+    """
+    fields = (("purpose", purpose), ("name", name), ("namespace", namespace))
+    for field, value in fields:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"credential {field} must be a non-empty string")
+    payload = json.dumps([purpose, name, namespace]).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:32]
+
+
+def keyed_sidecar_path(path: Path, credential: str) -> Path:
+    """`path` renamed to carry `credential`'s key, e.g. usage_state.<key>.json.
+
+    The key is validated against its exact shape, so a malformed value can
+    never steer the file name outside the state directory.
+    """
+    if not isinstance(credential, str) or _CREDENTIAL_KEY_RE.match(credential) is None:
+        raise ValueError("credential key must be 32 lowercase hex characters")
+    return path.with_name(f"{path.stem}.{credential}{path.suffix}")
+
+
+def usage_state_path(credential: str | None = None) -> Path:
+    """Path of the usage state for `credential`; None is the default credential."""
+    if credential is None:
+        return USAGE_STATE_PATH
+    return keyed_sidecar_path(USAGE_STATE_PATH, credential)
+
+
+def _write_usage_state(state: dict[str, Any], credential: str | None = None) -> None:
+    _atomic_write_json(usage_state_path(credential), state)
+
+
+def _read_usage_state(credential: str | None = None) -> dict[str, Any]:
+    path = usage_state_path(credential)
+    if not path.exists():
         return {}
-    return json.loads(USAGE_STATE_PATH.read_text())
+    return json.loads(path.read_text())
 
 
 def _usage_state_age_seconds(prev: dict[str, Any]) -> float | None:

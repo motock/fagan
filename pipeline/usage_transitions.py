@@ -30,22 +30,26 @@ logger = logging.getLogger(__name__)
 ANNOUNCED_FILENAME = "usage_announced.json"
 
 
-def _announced_path():
-    """Path of the announced-state sidecar, next to the usage state file.
+def _announced_path(credential: str | None = None):
+    """Path of the announced-state sidecar for `credential`, next to the usage state file.
 
-    Resolved lazily from :mod:`pipeline.usage` (which imports this module, so a
-    module-level import would be circular) rather than binding
-    ``USAGE_STATE_PATH`` at import time: the suite's autouse
-    ``_isolate_usage_state`` fixture patches ``pipeline.usage.USAGE_STATE_PATH``,
-    and a module-level copy would keep pointing at the developer's real
-    ``~/.claude`` directory, making announcements order- and machine-dependent.
+    None is the default credential's sidecar. Resolved lazily from
+    :mod:`pipeline.usage` (which imports this module, so a module-level import
+    would be circular) rather than binding ``USAGE_STATE_PATH`` at import time:
+    the suite's autouse ``_isolate_usage_state`` fixture patches
+    ``pipeline.usage.USAGE_STATE_PATH``, and a module-level copy would keep
+    pointing at the developer's real ``~/.claude`` directory, making
+    announcements order- and machine-dependent.
     """
     from . import usage as _usage
 
-    return _usage.USAGE_STATE_PATH.parent / ANNOUNCED_FILENAME
+    default = _usage.USAGE_STATE_PATH.parent / ANNOUNCED_FILENAME
+    if credential is None:
+        return default
+    return _usage.keyed_sidecar_path(default, credential)
 
 
-def _read_announced() -> bool:
+def _read_announced(credential: str | None = None) -> bool:
     """Return the last announced paused value; unreadable means "not paused".
 
     A missing file, invalid JSON, a non-object payload, or a non-boolean
@@ -53,7 +57,7 @@ def _read_announced() -> bool:
     rather than silently suppressed by a corrupt sidecar.
     """
     try:
-        data = json.loads(_announced_path().read_text(encoding="utf-8"))
+        data = json.loads(_announced_path(credential).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     if not isinstance(data, dict):
@@ -125,18 +129,22 @@ def _resumed_message(state: dict, reason: str) -> str:
     return message
 
 
-def announce(paused: bool, state: dict, *, reason: str = "") -> str | None:
+def announce(
+    paused: bool, state: dict, *, reason: str = "", credential: str | None = None
+) -> str | None:
     """Announce a usage-gate transition, returning the event name or None.
 
     Emits ``usage_paused`` when the gate transitions to paused and
     ``usage_resumed`` when it transitions back, and nothing when the value is
     unchanged from the last announcement. Never raises: a notification or
     persistence failure is logged at WARNING by exception type only, so the
-    usage poller's tick is never taken down by this side channel.
+    usage poller's tick is never taken down by this side channel. A malformed
+    credential key is a caller bug and raises ValueError before anything runs.
     """
+    sidecar = _announced_path(credential)
     try:
         paused = paused is True
-        if _read_announced() == paused:
+        if _read_announced(credential) == paused:
             return None
 
         event = "usage_paused" if paused else "usage_resumed"
@@ -157,7 +165,7 @@ def announce(paused: bool, state: dict, *, reason: str = "") -> str | None:
         # "usage_gate" pseudo plan (one entry per usage transition).
         _notify_user("usage_gate", message, event=event, severity="warning")
         _atomic_write_json(
-            _announced_path(),
+            sidecar,
             {"paused": paused, "announced_at": datetime.now(UTC).isoformat()},
         )
         return event

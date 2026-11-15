@@ -10,6 +10,7 @@ from collections.abc import Callable
 from .triage_park_classes import NEW_ACTIONS
 from .triage_rebase import execute_resolve_rebase
 from .triage_rebrief import execute_rebrief, execute_retry_transient
+from .triage_resume_review import execute_resume_review
 from .triage_test_edit import execute_approve_test_edit
 
 EXECUTORS: dict[str, Callable] = {}
@@ -30,6 +31,7 @@ _IMPLEMENTED: dict[str, Callable] = {
     "retry_transient": execute_retry_transient,
     "rebrief": execute_rebrief,
     "approve_test_edit": execute_approve_test_edit,
+    "resume_review": execute_resume_review,
 }
 
 for _action in sorted(NEW_ACTIONS):

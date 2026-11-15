@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from pipeline import persistence as ppers
+from pipeline import server
 from pipeline import triage_readiness as tr
 
 _CLASS = "rebase_conflict"
@@ -213,46 +213,56 @@ def test_ruling_without_park_class_is_bucketed_as_unknown() -> None:
 # --- CLI, read-only ---------------------------------------------------------
 
 
+class _FakeStore:
+    """Stands in for the configured Store: plan name -> decision records."""
+
+    def __init__(self, plans: dict[str, list[dict]] | None = None, *, fail: Exception | None = None):
+        self._plans = plans or {}
+        self._fail = fail
+        self.reads: list[str] = []
+
+    def list_manifests(self) -> list[str]:
+        return sorted(self._plans)
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        self.reads.append(plan_name)
+        if self._fail is not None:
+            raise self._fail
+        return self._plans.get(plan_name, [])
+
+
 @pytest.fixture
-def plan_dir(tmp_path, monkeypatch):
-    d = tmp_path / "plans"
-    d.mkdir()
-    monkeypatch.setattr(ppers, "PLAN_DIR", d)
-    return d
+def store(monkeypatch) -> _FakeStore:
+    fake = _FakeStore()
+    monkeypatch.setattr(server, "_store", fake)
+    return fake
 
 
-def _write_decisions(plan_dir, plan: str, records: list[dict]) -> bytes:
-    path = plan_dir / f"{plan}.decisions.json"
-    path.write_text(json.dumps(records))
-    return path.read_bytes()
-
-
-def test_cli_json_output_for_named_plan_is_read_only(plan_dir, capsys) -> None:
-    before = _write_decisions(plan_dir, "forge", _paired_park_agree(20))
+def test_cli_json_output_for_named_plan_reads_through_the_store(store, capsys) -> None:
+    store._plans["forge"] = _paired_park_agree(20)
 
     code = tr.main(["--plan", "forge", "--json"])
 
     report = json.loads(capsys.readouterr().out)
     assert code == 0
     assert report["forge"][_CLASS]["eligible"] is True
-    assert (plan_dir / "forge.decisions.json").read_bytes() == before
+    assert store.reads == ["forge"]
 
 
-def test_cli_all_reads_every_plan_and_writes_nothing(plan_dir, capsys) -> None:
-    _write_decisions(plan_dir, "alpha", _paired_park_agree(3))
-    _write_decisions(plan_dir, "beta", _paired_park_agree(2))
-    before = sorted(p.name for p in plan_dir.iterdir())
+def test_cli_all_reads_every_manifest_from_the_store(store, capsys) -> None:
+    store._plans["alpha"] = _paired_park_agree(3)
+    store._plans["beta"] = _paired_park_agree(2)
 
     code = tr.main(["--all", "--json"])
 
     report = json.loads(capsys.readouterr().out)
     assert code == 0
     assert set(report) == {"alpha", "beta"}
-    assert sorted(p.name for p in plan_dir.iterdir()) == before
+    assert store.reads == ["alpha", "beta"]
 
 
-def test_cli_table_output_names_each_class(plan_dir, capsys) -> None:
-    _write_decisions(plan_dir, "forge", _paired_park_agree(1))
+def test_cli_table_output_names_each_class(store, capsys) -> None:
+    store._plans["forge"] = _paired_park_agree(1)
 
     code = tr.main(["--plan", "forge"])
 
@@ -262,7 +272,7 @@ def test_cli_table_output_names_each_class(plan_dir, capsys) -> None:
     assert "eligible" in out
 
 
-def test_cli_refuses_when_neither_plan_nor_all_is_given(plan_dir, capsys) -> None:
+def test_cli_refuses_when_neither_plan_nor_all_is_given(store, capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         tr.main([])
 
@@ -270,7 +280,7 @@ def test_cli_refuses_when_neither_plan_nor_all_is_given(plan_dir, capsys) -> Non
     assert "--all" in capsys.readouterr().err
 
 
-def test_cli_missing_decisions_log_is_an_explicit_empty_report(plan_dir, capsys) -> None:
+def test_cli_plan_with_no_decisions_is_an_explicit_empty_report(store, capsys) -> None:
     code = tr.main(["--plan", "ghost", "--json"])
 
     report = json.loads(capsys.readouterr().out)
@@ -278,8 +288,8 @@ def test_cli_missing_decisions_log_is_an_explicit_empty_report(plan_dir, capsys)
     assert not any(cls["eligible"] for cls in report["ghost"].values())
 
 
-def test_cli_unreadable_decisions_log_is_refused_not_reported_empty(plan_dir, capsys) -> None:
-    (plan_dir / "broken.decisions.json").write_text("{not json")
+def test_cli_store_read_failure_is_refused_not_reported_empty(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(server, "_store", _FakeStore(fail=ValueError("corrupt payload")))
 
     code = tr.main(["--plan", "broken", "--json"])
 
@@ -289,10 +299,7 @@ def test_cli_unreadable_decisions_log_is_refused_not_reported_empty(plan_dir, ca
     assert "could not be read" in captured.err
 
 
-def test_cli_refuses_a_plan_name_that_escapes_the_plan_directory(plan_dir, capsys) -> None:
-    escaped = plan_dir.parent / "escape.decisions.json"
-    escaped.write_text(json.dumps(_paired_park_agree(20)))
-
+def test_cli_refuses_a_plan_name_that_escapes_before_any_store_read(store, capsys) -> None:
     code = tr.main(["--plan", "../escape", "--json"])
 
     captured = capsys.readouterr()
@@ -300,12 +307,25 @@ def test_cli_refuses_a_plan_name_that_escapes_the_plan_directory(plan_dir, capsy
     assert captured.out == ""
     assert "invalid plan name" in captured.err
     assert "../escape" not in captured.err
+    assert store.reads == []
 
 
-def test_cli_refuses_a_decisions_log_holding_a_non_object_record(plan_dir, capsys) -> None:
-    (plan_dir / "stray.decisions.json").write_text(json.dumps([1, "two"]))
+def test_cli_refuses_a_decisions_list_holding_a_non_object_record(store, capsys) -> None:
+    store._plans["stray"] = [1, "two"]
 
     code = tr.main(["--plan", "stray", "--json"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "could not be read" in captured.err
+
+
+def test_cli_refuses_a_decisions_value_that_is_not_a_list(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(server, "_store", _FakeStore())
+    monkeypatch.setattr(_FakeStore, "get_decisions", lambda self, plan: {"not": "a list"})
+
+    code = tr.main(["--plan", "odd", "--json"])
 
     captured = capsys.readouterr()
     assert code == 1

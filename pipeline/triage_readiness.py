@@ -28,9 +28,13 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
-from . import persistence
+from .module_ref import _ModuleRef
 from .store_records import InvalidRecordKeyError, validate_plan_name
 from .triage_park_classes import ALLOWED_ACTIONS
+
+#: The configured Store. Plans and decision records are read only through it
+#: (ADR 0012), so the report sees the same store the server writes to.
+_store = _ModuleRef("pipeline.server", "_store")
 
 __all__ = ["MAX_FALSE_PARK_PERCENT", "MIN_PAIRED_DECISIONS", "PARK_ACTION", "main", "readiness"]
 
@@ -141,18 +145,10 @@ def readiness(decisions: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def _read_decisions(plan: str) -> list[dict[str, Any]]:
-    path = persistence._decisions_path(plan)
-    if not path.exists():
-        return []
-    records = json.loads(path.read_text())
+    records = _store.get_decisions(plan)
     if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
-        raise TypeError("decisions log is not a list of records")
+        raise TypeError("decisions are not a list of records")
     return records
-
-
-def _plans_with_decisions() -> list[str]:
-    paths = sorted(persistence.PLAN_DIR.glob("*.decisions.json"))
-    return [path.name.removesuffix(".decisions.json") for path in paths]
 
 
 def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
@@ -176,12 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--plan", nargs="+", metavar="PLAN", help="plan name(s) to report")
-    scope.add_argument("--all", action="store_true", help="every plan with a decisions log")
+    scope.add_argument("--all", action="store_true", help="every plan the store lists")
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     args = parser.parse_args(argv)
 
     try:
-        plans = _plans_with_decisions() if args.all else [validate_plan_name(p) for p in args.plan]
+        plans = sorted(_store.list_manifests()) if args.all else [validate_plan_name(p) for p in args.plan]
     except InvalidRecordKeyError:
         print("error: invalid plan name", file=sys.stderr)
         return 1

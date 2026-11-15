@@ -11,7 +11,8 @@ construction. It also makes a timeout real: the advance holds the per-plan
 because the file descriptor is not inheritable (no agent grandchild keeps it
 alive). Abandoning a thread instead leaves the lock held by the daemon.
 
-Protocol: ``argv`` is ``[plan_name, result_path]``. The result path must be
+Protocol: ``argv`` is ``[plan_name, result_path]``, optionally followed by the
+namespace the parent expects the plan to be in; a mismatch is refused. The result path must be
 absolute, in an existing directory, and the payload is written atomically with
 mode 0600 because it is a handoff to the pool runner in the parent process.
 Exit codes: 0 success, 1 advance raised, 2 bad invocation (nothing written).
@@ -31,7 +32,6 @@ import os
 import socket
 import sys
 import tempfile
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -40,25 +40,12 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_namespace,
     bind_principal,
+    current_namespace,
     new_correlation_id,
 )
-from pipeline.store_records import validate_namespace
+from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
 
 __all__ = ["configure_child", "main"]
-
-
-def _plan_namespace(plan_name: str) -> str | None:
-    """Return the namespace the plan's record names, or ``None`` when it names none.
-
-    The value is validated before it is bound, so a record naming a malformed
-    namespace fails this advance instead of binding it. ``None`` leaves the
-    advance unbound, which reads as the default namespace.
-    """
-    from pipeline.persistence import _plan_manifest
-
-    manifest = _plan_manifest(plan_name) or {}
-    named = manifest.get("namespace") or None
-    return None if named is None else validate_namespace(named)
 
 
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
@@ -83,10 +70,10 @@ def _write_result(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _invalid_arguments(args: list[str]) -> bool:
-    """Return whether *args* is unacceptable as ``[plan_name, result_path]``."""
-    if len(args) != 2:
+    """Return whether *args* is unacceptable as ``[plan_name, result_path, namespace?]``."""
+    if len(args) not in (2, 3):
         return True
-    plan_name, raw_result_path = args
+    plan_name, raw_result_path, *_ = args
     from pipeline.parsers import _validate_key
 
     try:
@@ -135,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     if _invalid_arguments(args):
         return 2
 
-    plan_name, raw_result_path = args
+    plan_name, raw_result_path, *rest = args
+    requested = rest[0] if rest else None
     result_path = Path(raw_result_path)
 
     import pipeline.telemetry
@@ -145,8 +133,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
             try:
-                namespace = _plan_namespace(plan_name)
-                with bind_namespace(namespace) if namespace else nullcontext():
+                from pipeline.persistence import _plan_manifest
+
+                namespace, reason = resolve_child_namespace(
+                    _plan_manifest(plan_name) or {}, requested, current_namespace()
+                )
+                if reason is not None:
+                    audit_refusal(reason)
+                    _write_result(result_path, {"ok": False, "error": reason})
+                    return 1
+                with bind_namespace(namespace):
                     result = pipeline.server.advance_pipeline(plan_name)
             except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
                 # Class name only: the message can carry filesystem paths.

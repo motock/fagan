@@ -39,9 +39,12 @@ import pipeline
 from pipeline.actor import (
     SYSTEM_SCHEDULER,
     bind_correlation_id,
+    bind_namespace,
     bind_principal,
+    current_namespace,
     new_correlation_id,
 )
+from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
 
 __all__ = ["main"]
 
@@ -117,15 +120,28 @@ def _valid_plan(request: Any) -> str | None:
     return plan
 
 
-def _advance(plan: str) -> dict[str, Any]:
-    """Advance *plan* under the scheduler identity; report failures by class."""
+def _advance(plan: str, requested: object = None) -> dict[str, Any]:
+    """Advance *plan* under the scheduler identity; report failures by class.
+
+    *requested* is the namespace the parent named, or ``None``. A namespace the
+    plan does not declare is refused and audited, and nothing is advanced.
+    """
     # Import-cycle: pipeline.server must be imported before other pipeline
     # modules, and it is resolved per call so tests can patch advance_pipeline.
     import pipeline.server
 
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
-            return pipeline.server.advance_pipeline(plan)
+            from pipeline.persistence import _plan_manifest
+
+            namespace, reason = resolve_child_namespace(
+                _plan_manifest(plan) or {}, requested, current_namespace()
+            )
+            if reason is not None:
+                audit_refusal(reason)
+                return {"ok": False, "error": reason}
+            with bind_namespace(namespace):
+                return pipeline.server.advance_pipeline(plan)
     except Exception as exc:  # noqa: BLE001 - reported by class name
         # Class name only: the message can carry filesystem paths.
         logger.warning(
@@ -183,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                 logger.info("rejecting an invalid advance worker request")
                 _write_line(out_fd, {"ok": False, "error": "invalid request"})
             else:
-                _write_line(out_fd, _advance(plan))
+                _write_line(out_fd, _advance(plan, request.get("namespace")))
             answered += 1
             pipeline.telemetry.flush()
             if answered >= max_tasks:

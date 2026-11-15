@@ -40,9 +40,12 @@ import pipeline
 from pipeline.actor import (
     SYSTEM_SCHEDULER,
     bind_correlation_id,
+    bind_namespace,
     bind_principal,
+    current_namespace,
     new_correlation_id,
 )
+from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
 from pipeline.parsers import _validate_key
 
 __all__ = [
@@ -328,14 +331,16 @@ def _write_result(result_path: str, result: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Run one detached review and write its result; 0 on a result, else 1.
 
-    Usage: ``python -m pipeline.review_job <plan> <story_key> <result_path>``.
+    Usage: ``python -m pipeline.review_job <plan> <story_key> <result_path> [namespace]``.
+    An optional namespace the plan does not declare is refused (``1``).
     ``1`` means the job itself failed (``state == "error"``); ``2`` means bad
     invocation (nothing written).
     """
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 3:
+    if len(args) not in (3, 4):
         return 2
-    plan_name, story_key, result_path = args
+    plan_name, story_key, result_path, *rest = args
+    requested = rest[0] if rest else None
     try:
         _validate_key(plan_name)
         _validate_key(story_key)
@@ -349,12 +354,21 @@ def main(argv: list[str] | None = None) -> int:
         # Imported inside the function: pipeline.server pulls in this package's
         # heavy modules, and this module must stay importable on its own.
         import pipeline.server
+        from pipeline.persistence import _plan_manifest
 
         # Identity is re-bound here (SYSTEM_SCHEDULER + a fresh correlation id)
         # so the child's records and policy decisions look exactly like the
         # scheduler's own.
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
-            rv = pipeline.server.review_story(plan_name, story_key)
+            namespace, reason = resolve_child_namespace(
+                _plan_manifest(plan_name) or {}, requested, current_namespace()
+            )
+            if reason is not None:
+                audit_refusal(reason)
+                _write_result(result_path, {"state": "error", "error": reason})
+                return 1
+            with bind_namespace(namespace):
+                rv = pipeline.server.review_story(plan_name, story_key)
     except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
         # Class name only: the message can carry filesystem paths or a token.
         _write_result(

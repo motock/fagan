@@ -134,6 +134,7 @@ def _resource_attributes() -> dict[str, str]:
     attributes = {
         "service.name": SERVICE_NAME,
         "service.instance.id": _INSTANCE_ID,
+        # intentional: a process-wide resource attribute, not a per-request value
         "fagan.namespace": DEFAULT_NAMESPACE,
     }
     for pair in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):

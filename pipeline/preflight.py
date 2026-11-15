@@ -402,19 +402,20 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         })
 
     # -- check c2: merge CI gate ---------------------------------------------
-    # Resolved at call time through the settings Store, the same resolution
-    # the merge gate uses for the default namespace and team (no repo layer,
-    # so a repo-level override is not reported here). Imported inside the
+    # Resolved at call time through the settings Store, in the request's
+    # namespace (the default when none is bound), with no repo layer, so a
+    # repo-level override is not reported here. Imported inside the
     # check: the settings modules load the ``app`` package, which this module
     # must not import at load time. Warn, never fail: disabling the gate is a
     # legitimate operator choice during a genuine CI outage, and preflight
     # failing hard would block work during exactly the outage the escape hatch
     # exists for. It must be impossible to MISS, not impossible to DO.
+    from pipeline.actor import current_namespace
     from pipeline.authorization import DEFAULT_TEAM
-    from pipeline.ci import DEFAULT_NAMESPACE, SettingsContext
+    from pipeline.ci import SettingsContext
 
     gate = SettingsContext(
-        namespace=DEFAULT_NAMESPACE, team=DEFAULT_TEAM, repo=""
+        namespace=current_namespace(), team=DEFAULT_TEAM, repo=""
     ).resolve("merge_ci_gate")
     if not gate["value"]:
         results.append({

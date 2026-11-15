@@ -218,12 +218,14 @@ def _plan_samples(records: Any, counts: dict[str, int]) -> list[tuple[dict, int]
     invalid name is skipped: it is neither read nor counted. A manifest that is
     missing or not a JSON object is skipped rather than counted.
     """
+    # intentional: the scrape is process-wide and binds no request namespace
     for name in records.list_plans(DEFAULT_NAMESPACE):
         name = str(name)
         try:
             parsers._validate_key(name)
         except ValueError:
             continue
+        # intentional: the same process-wide scrape, so the default namespace
         manifest = records.get_manifest(DEFAULT_NAMESPACE, name)
         if not isinstance(manifest, dict):
             continue
@@ -310,6 +312,7 @@ def outbox_summary(store: Any) -> dict:
     rather than walking a directory. Kept as this module's own producer seam, so
     ``collect`` calls it through the module attribute and a test can replace it.
     """
+    # intentional: the outbox gauge is process-wide, so it reads the default
     return store.records().outbox_summary(DEFAULT_NAMESPACE)
 
 

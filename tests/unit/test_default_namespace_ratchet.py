@@ -56,6 +56,7 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/manifest_source.py": 3,
     "pipeline/merge.py": 2,
     "pipeline/metrics_exposition.py": 4,
+    "pipeline/namespace_resolver.py": 2,
     "pipeline/notification_outbox.py": 6,
     "pipeline/persistence.py": 2,
     "pipeline/plan_draft.py": 4,

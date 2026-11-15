@@ -79,7 +79,7 @@ def test_agent_with_malformed_team_scope_is_refused(team_scope):
         Principal("agent:x", principal_type="agent", team_scope=team_scope)
 
 
-@pytest.mark.parametrize("team_scope", ["acme/team-1", "acme/team_1"])
+@pytest.mark.parametrize("team_scope", ["acme/team-1"])
 def test_agent_keeps_valid_team_scope_verbatim(team_scope):
     principal = Principal(
         "agent:x",

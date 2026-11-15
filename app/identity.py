@@ -1,17 +1,19 @@
 """Identity types and the shared-secret provider for the tenancy seam (ADR 0009).
 
-This module is deliberately free-standing: it imports nothing from ``app.*``
-or ``pipeline.*`` so that both the dashboard and the service layer can depend
+This module is deliberately free-standing: its only import from ``pipeline.*``
+is the namespace grammar predicate in ``pipeline.namespace_names``, which
+imports nothing itself, so both the dashboard and the service layer can depend
 on it without creating an import cycle. It holds the identity data types, the
 ``IdentityProvider`` protocol and the local shared-secret provider — no
 policy, no wiring and no enforcement.
 """
 
-import re
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+from pipeline.namespace_names import is_segmented_namespace
 
 ROLE_AUTHOR = "author"
 ROLE_OWNER = "owner"
@@ -29,13 +31,6 @@ ROLES = frozenset(
 #: pre-existing construction keeps its meaning; ``agent`` is a machine caller
 #: bound to one team; ``system`` is the deployment acting as itself.
 PRINCIPAL_TYPES = frozenset({"human", "agent", "system"})
-
-#: An agent's ``team_scope`` is an ``<org-id>/<team-id>`` pair. Both segments
-#: start with a letter or digit and continue with letters, digits, ``.``, ``_``
-#: or ``-``. ``fullmatch`` is load-bearing: ``re.match`` with a trailing ``$``
-#: would accept ``"acme/team-1\n"``, because ``$`` also matches before a final
-#: newline.
-TEAM_SCOPE_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*")
 
 
 class IdentityError(Exception):
@@ -70,12 +65,11 @@ class Principal:
             raise IdentityError("invalid principal type")
 
         # ADR 0014 decision 3: an agent is only ever scoped to one team, and
-        # the scope comes from the signed token or operator config. Messages
-        # never echo the scope value.
+        # the scope comes from the signed token or operator config. The scope
+        # must follow the namespace grammar, the same predicate the store uses.
+        # Messages never echo the scope value.
         if self.principal_type == "agent":
-            if not isinstance(self.team_scope, str) or not TEAM_SCOPE_PATTERN.fullmatch(
-                self.team_scope
-            ):
+            if not is_segmented_namespace(self.team_scope):
                 raise IdentityError(
                     "invalid team scope: must be an <org-id>/<team-id> pair"
                 )

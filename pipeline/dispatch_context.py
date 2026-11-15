@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from . import context_sources as ctxsrc
-from .actor import current_namespace
 from .persona import _with_files_pointers
 from .service import _ServerRef
 
@@ -22,6 +21,8 @@ _notify_user = _ServerRef("_notify_user")
 
 def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
     """Return the snapshot for a previously recorded digest, verifying it."""
+    from .actor import current_namespace
+
     digest = recorded["digest"]
     snapshot = _store.records().get_context_snapshot(current_namespace(), digest)
     if snapshot is None:
@@ -64,6 +65,8 @@ def _step_resolve_context(
     required-source failure that must be returned as-is (status unchanged).
     Recorded ``context_digests`` are reused on rework/resume, never refetched.
     """
+    from .actor import current_namespace
+
     context = manifest.get("context")
     sources = ctxsrc.sources_for_phase(context["sources"], "dispatch") if context else []
     if not sources:

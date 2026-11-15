@@ -17,7 +17,6 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .actor import current_namespace
 from .global_rules_install import _write_atomic
 from .live_ref import LiveRef
 from .store_records import context_digest
@@ -329,6 +328,8 @@ def snapshot_context(text: str, meta: dict | None = None) -> str:
     snapshot that is already stored is never rewritten.  *meta* adds provider
     metadata (e.g. a resolved git ``sha``), which the first write keeps.
     """
+    from .actor import current_namespace
+
     digest = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
     _store.records().put_context_snapshot(current_namespace(), digest, text, meta or {})
     return digest

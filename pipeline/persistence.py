@@ -18,7 +18,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .actor import current_namespace
 from .events import EventBus
 from .parsers import _atomic_write_json
 from .paths import PLAN_DIR
@@ -334,6 +333,8 @@ def _append_notification(plan_name: str, record: dict) -> None:
     has exactly one route to durable storage: the record store owns both of its
     on-disk representations, and no writer composes a notifications path.
     """
+    from .actor import current_namespace
+
     namespace = current_namespace()
     store = _notification_records()
     append = getattr(store, "append_notification", None)

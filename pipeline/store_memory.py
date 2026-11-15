@@ -177,6 +177,12 @@ class InMemoryRecordStore(OutboxContract, OutboxSummaryContract):
             }
             return sorted(names)
 
+    def list_namespaces(self) -> list[str]:
+        """Return the sorted namespaces that hold at least one manifest."""
+        with self._lock:
+            namespaces = {stored_namespace for (stored_namespace, _) in self._manifests}
+            return sorted(namespaces)
+
     # -- plan drafts (ADR 0012 decision 3) ------------------------------
     def _draft_path(self, plan_name: str):
         """Return ``<plans dir>/<plan>.json``, resolved per call.

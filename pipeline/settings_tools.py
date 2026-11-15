@@ -5,9 +5,10 @@ through ``authorization.refusal_for_host_config``, as it always has. Any other
 write, and any read or listing by a non-operator caller, is decided per layer:
 the structural agent refusal (ADR 0014 decision 3) comes first, then the
 authorizer is asked ``config:write`` (or ``config:read``) on a resource naming
-the layer's scope id and the repo. The transport refuses the deployment layer to
-a remote caller before the handler runs (``pipeline.remote_tool_policy``). Every write and every refusal appends one
-``settings:set`` record to the host audit chain. A refusal returns an explicit
+the layer's scope id and the repo. The transport refuses the deployment layer
+to a remote caller before the handler runs (``pipeline.remote_tool_policy``).
+Every write and every refusal appends one ``settings:set`` record to the host
+audit chain. A refusal returns an explicit
 ``{"ok": False, "reason": ..., "error": ...}`` dict.
 
 ``get_settings`` and ``list_settings`` read the stored records only. They never

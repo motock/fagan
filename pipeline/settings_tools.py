@@ -1,10 +1,15 @@
 """MCP tools over the tenant settings records (ADR 0015).
 
-``set_setting`` is a host-scoped ``config:write``: it is decided through
-``authorization.refusal_for_host_config``, which refuses an agent principal
-before any authorizer is asked (ADR 0014 decision 3). Every write and every
-refusal appends one ``settings:set`` record to the host audit chain. A refusal
-returns an explicit ``{"ok": False, "reason": ..., "error": ...}`` dict.
+The local operator, and any write to the host-only deployment layer, is decided
+through ``authorization.refusal_for_host_config``, as it always has. Any other
+write, and any read or listing by a non-operator caller, is decided per layer:
+the structural agent refusal (ADR 0014 decision 3) comes first, then the
+authorizer is asked ``config:write`` (or ``config:read``) on a resource naming
+the layer's scope id and the repo. The transport and the handler both refuse the
+deployment layer to a remote caller (``pipeline.remote_tool_policy``).
+Every write and every refusal appends one ``settings:set`` record to the host
+audit chain. A refusal returns an explicit
+``{"ok": False, "reason": ..., "error": ...}`` dict.
 
 ``get_settings`` and ``list_settings`` read the stored records only. They never
 resolve layers; ``pipeline.settings_store.effective_setting`` does that.
@@ -15,9 +20,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.identity import LOCAL_OPERATOR, Principal
+
+from . import authorization
 from .actor import current_principal
 from .audit import append_host_audit
-from .authorization import refusal_for_host_config
+from .authorization import _agent_structural_denial, refusal_for_host_config
 from .live_ref import LiveRef
 from .policy_settings import provider_configured
 from .settings_registry import REGISTRY, SettingKey
@@ -27,6 +35,14 @@ from .store_settings import SettingsVersionConflictError, validate_settings_key
 logger = logging.getLogger("pipeline.settings_tools")
 
 ACTION = "settings:set"
+#: The labels a remote settings call is decided under. ``Action`` has no read
+#: label, so the read travels as the raw string the authorizer seam accepts.
+CONFIG_READ = "config:read"
+CONFIG_WRITE = "config:write"
+#: The layer a remote caller may never read or write, whatever the authorizer says.
+HOST_ONLY_SCOPE = "deployment"
+#: The refusal reason a remote caller gets for the host-only deployment layer.
+HOST_ONLY_REASON = "host_only_scope"
 SETTINGS_PLUGIN_VARIABLE = "PIPELINE_SETTINGS_PLUGIN"
 #: The scopes ``PIPELINE_SETTINGS_PLUGIN`` supplies; the Store must not write them.
 PLUGIN_SCOPES = ("org", "team")
@@ -152,6 +168,64 @@ def _refuse(target: dict, actor: str, value: Any, reason: str, message: str) -> 
     return {"ok": False, "reason": reason, "error": message}
 
 
+def _not_authorized(action: str, reason: str) -> dict:
+    """Return the explicit refusal for a remote caller the layer decision refused."""
+    return {"ok": False, "reason": reason, "error": f"not authorized: {action} ({reason})"}
+
+
+def _layer_refusal_reason(action: str, principal: Principal, scope_id: str, repo: str) -> str:
+    """Return why *principal* may not act on one layer, or ``""`` when it may.
+
+    An agent never writes configuration, and that refusal comes first, so no
+    authorizer is asked for it. The authorizer then decides the layer, on a
+    resource naming the layer's scope id and the repo. A raising authorizer is
+    refused by ``is_allowed``.
+    """
+    if _agent_structural_denial(principal, action):
+        return "agent_principal"
+    # The layer's scope id travels in the existing ``Resource.team`` field.
+    resource = authorization.Resource(team=scope_id, repo=repo)
+    if not authorization.is_allowed(authorization.default_authorizer(), principal, action, resource):
+        return "not_authorized"
+    return ""
+
+
+def _write_refusal(scope: str, scope_id: str, repo: str, key: str) -> dict | None:
+    """Return the refusal for a write, or ``None`` when it may proceed.
+
+    The local operator, and any write to the host-only deployment layer, keep the
+    host-scoped decision. Every other layer is decided on its own resource.
+    """
+    principal = current_principal()
+    if principal is LOCAL_OPERATOR or scope == HOST_ONLY_SCOPE:
+        return refusal_for_host_config(CONFIG_WRITE, f"the {scope} setting {key!r}")
+    reason = _layer_refusal_reason(CONFIG_WRITE, principal, scope_id, repo)
+    return _not_authorized(CONFIG_WRITE, reason) if reason else None
+
+
+def remote_settings_refusal(name: str, principal: Principal, arguments: object) -> dict | None:
+    """Return the refusal for a remote call to a settings tool, or ``None`` to allow.
+
+    The remote transport asks this before the handler runs, so a refused call
+    never reaches a handler. ``list_settings`` names no layer, so it is decided
+    on an empty resource: a caller who may read no layer at all is refused.
+    A call whose layer arguments are missing or not strings is refused.
+    """
+    action = CONFIG_WRITE if name == "set_setting" else CONFIG_READ
+    if name == "list_settings":
+        reason = _layer_refusal_reason(action, principal, "", "")
+    else:
+        layer = arguments if isinstance(arguments, dict) else {}
+        scope, scope_id, repo = (layer.get(field) for field in ("scope", "scope_id", "repo"))
+        if not all(isinstance(value, str) for value in (scope, scope_id, repo)):
+            return _not_authorized(action, "invalid_request")
+        if scope == HOST_ONLY_SCOPE:
+            reason = HOST_ONLY_REASON
+        else:
+            reason = _layer_refusal_reason(action, principal, scope_id, repo)
+    return _not_authorized(action, reason) if reason else None
+
+
 def set_setting(
     scope: str,
     scope_id: str,
@@ -188,9 +262,7 @@ def set_setting(
     if problem is not None:
         return _refuse(target, actor, value, *problem)
 
-    refusal = refusal_for_host_config(
-        "config:write", f"the {scope} setting {key!r}"
-    )
+    refusal = _write_refusal(scope, scope_id, repo, key)
     if refusal is not None:
         _audit("denied", target, {"actor": actor, "new": _loggable(value), "reason": "not_authorized"})
         return refusal
@@ -245,6 +317,13 @@ def get_settings(scope: str, scope_id: str, repo: str) -> dict:
         validate_settings_key(scope, scope_id, repo)
     except InvalidRecordKeyError as exc:
         return {"ok": False, "reason": "invalid_key", "error": str(exc)}
+    principal = current_principal()
+    if principal is not LOCAL_OPERATOR:
+        if scope == HOST_ONLY_SCOPE:
+            return _not_authorized(CONFIG_READ, HOST_ONLY_REASON)
+        reason = _layer_refusal_reason(CONFIG_READ, principal, scope_id, repo)
+        if reason:
+            return _not_authorized(CONFIG_READ, reason)
     try:
         record = _store.records().get_settings(DEFAULT_NAMESPACE, scope, scope_id, repo)
     except RecordStoreError:
@@ -253,12 +332,33 @@ def get_settings(scope: str, scope_id: str, repo: str) -> dict:
 
 
 def list_settings() -> dict:
-    """Return every stored settings record, ordered by layer and key."""
+    """Return every stored settings record the caller may read, by layer and key.
+
+    A remote caller must be allowed ``config:read`` on the whole store (decided
+    on an empty resource), and each record is then kept only if the caller may
+    read its own layer. The host-only deployment layer is never returned to a
+    remote caller.
+    """
+    principal = current_principal()
+    remote = principal is not LOCAL_OPERATOR
+    if remote:
+        reason = _layer_refusal_reason(CONFIG_READ, principal, "", "")
+        if reason:
+            return _not_authorized(CONFIG_READ, reason)
     try:
         records = _store.records().list_settings(DEFAULT_NAMESPACE)
     except RecordStoreError:
         return {"ok": False, "reason": "store_error", "error": "the settings store could not be read"}
+    if remote:
+        records = [record for record in records if _readable_by_remote(principal, record)]
     return {"ok": True, "records": records}
+
+
+def _readable_by_remote(principal: Principal, record: dict) -> bool:
+    """Return whether a remote caller may see one stored record in a listing."""
+    if record["scope"] == HOST_ONLY_SCOPE:
+        return False
+    return not _layer_refusal_reason(CONFIG_READ, principal, record["scope_id"], record["repo"])
 
 
 #: The tools this module provides, in registration order. ``pipeline.server``

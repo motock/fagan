@@ -51,7 +51,11 @@ owns or is a delegate of, per ``app.policy.can_view``:
 * ``save_plan`` is refused when its ``workspace`` argument is set. A server-side
   path from the network is never trusted. ``decompose_plan`` is refused outright:
   it is host-scoped, with no plan to authorize, and ``REMOTE_HOST_REFUSED`` lists
-  it so the refusal is a recorded decision rather than an omission.
+  it so the refusal is a recorded decision rather than an omission;
+* the settings tools (``REMOTE_SETTINGS``) are decided per layer before their
+  handler runs: the authorizer must allow ``config:write`` or ``config:read`` on
+  the layer the call names, and the host-only deployment layer is always refused.
+  With the default policy every remote settings call is refused as before.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ from typing import Any
 from app.identity import LOCAL_OPERATOR, Principal
 from app.policy import can_view
 
-from . import authorization, parsers
+from . import authorization, parsers, settings_tools
 from .actor import ANONYMOUS, bind_principal, current_principal
 from .audit import append_host_audit
 
@@ -88,15 +92,23 @@ REMOTE_ENFORCED = frozenset(
         "patch_story",
         "pause_plan",
         "record_decision",
+        "get_settings",
+        "list_settings",
         "record_security_audit",
         "reject_plan",
         "request_decision",
         "resume_plan",
         "review_story",
         "save_plan",
+        "set_setting",
         "set_story_status",
     }
 )
+
+#: Settings tools a remote caller may reach only for a layer the authorizer
+#: allows. ``settings_tools.remote_settings_refusal`` decides each call before its
+#: handler runs, and the handler decides again for itself.
+REMOTE_SETTINGS = frozenset({"get_settings", "list_settings", "set_setting"})
 
 #: Read-only tools. A remote caller reads only the plans it owns or is a
 #: delegate of: the plan-scoped tools below are gated on their ``plan_name``
@@ -123,9 +135,7 @@ _REFUSAL = "This tool is not available over the remote transport."
 #: grant to a plan action (``plan:ingest``) is held by every authenticated
 #: principal on an ownerless resource, so it cannot stand for the decision. They
 #: are refused by default deny before the handler runs.
-REMOTE_HOST_REFUSED = frozenset(
-    {"decompose_plan", "get_settings", "list_settings", "set_setting"}
-)
+REMOTE_HOST_REFUSED = frozenset({"decompose_plan"})
 
 #: Tools that accept a server-side ``workspace`` path, which a remote caller may
 #: not supply. Refused when the argument is present and not ``None``.
@@ -442,6 +452,11 @@ async def remote_tool_policy(ctx: Any, call_next: Any) -> Any:
             if not _can_view_plan(principal, _plan_name_argument(params)):
                 _audit_denial(name, principal, outcome="hidden")
                 return _hidden_result()
+            return await call_next(ctx)
+        if name in REMOTE_SETTINGS:
+            if settings_tools.remote_settings_refusal(name, principal, params.get("arguments")) is not None:
+                _audit_denial(name, principal)
+                return _refusal_result()
             return await call_next(ctx)
         result = await call_next(ctx)
         if name == "list_plans":

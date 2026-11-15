@@ -15,11 +15,19 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TypeVar
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from app.identity import Principal
+from pipeline.actor import bind_namespace
 from pipeline.audit import append_host_audit
 from pipeline.namespace_resolver import (
+    DefaultNamespaceResolver,
     NamespaceResolver,
     active_namespace_resolver,
     checked_accesses,
@@ -27,6 +35,9 @@ from pipeline.namespace_resolver import (
 from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 logger = logging.getLogger("pipeline.namespace_access")
+
+#: The request header a caller names its namespace in. Every transport reads it.
+NAMESPACE_HEADER = "x-fagan-namespace"
 
 #: Reason tokens. Each denial carries exactly one of these.
 NAMESPACE_MISSING = "namespace_missing"
@@ -57,8 +68,9 @@ def verify_namespace(
 
     An empty *requested* selects the principal's one access, and is a denial
     when there are several. A malformed *requested* is refused before the
-    resolver is consulted. An agent principal reaches only the namespace equal
-    to its ``team_scope``.
+    resolver is consulted. Under a plugin resolver an agent principal reaches
+    only the namespace equal to its ``team_scope``; under the default resolver
+    an agent is scoped by the authorization check instead, as any principal is.
     """
     is_empty = requested is None or requested == ""
     if not is_empty and not _is_valid(requested):
@@ -81,9 +93,93 @@ def verify_namespace(
             return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
         access = matches[0]
 
-    if principal.principal_type == "agent" and access.namespace != principal.team_scope:
+    is_plugin_resolver = not isinstance(active, DefaultNamespaceResolver)
+    if (
+        is_plugin_resolver
+        and principal.principal_type == "agent"
+        and access.namespace != principal.team_scope
+    ):
         return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
     return NamespaceDecision(True, access.namespace, access.roles, "")
+
+
+class NamespaceDenied(Exception):
+    """A request asked for a namespace it may not reach. Carries the reason token only."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@contextmanager
+def enter_request_namespace(
+    principal: Principal, requested: str | None
+) -> Iterator[NamespaceDecision]:
+    """Verify *requested* for *principal*, then bind its namespace for the request.
+
+    A denial raises :class:`NamespaceDenied` before the body runs, so nothing
+    namespace-scoped executes unless the namespace was verified.
+    """
+    decision = verify_namespace(principal, requested)
+    if not decision.allowed:
+        raise NamespaceDenied(decision.reason)
+    with bind_namespace(decision.namespace):
+        yield decision
+
+
+_T = TypeVar("_T")
+
+
+async def serve_in_request_namespace(
+    principal: Principal,
+    header_values: list[str],
+    serve: Callable[[], Awaitable[_T]],
+    refuse: Callable[[str], Awaitable[_T]],
+) -> _T:
+    """Serve one request inside the namespace its header names.
+
+    *header_values* is every value of ``X-Fagan-Namespace``; none means no
+    namespace is named. A repeated header is joined into one value that the
+    namespace grammar refuses, so it is a malformed denial, never a choice
+    between the two. A denial before *serve* runs is answered by ``refuse``
+    with the reason token. A denial raised by *serve* itself propagates.
+    """
+    requested = ",".join(header_values) or None
+    admitted = False
+    try:
+        with enter_request_namespace(principal, requested):
+            admitted = True
+            return await serve()
+    except NamespaceDenied as denied:
+        if admitted:
+            raise
+        return await refuse(denied.reason)
+
+
+async def serve_http_in_namespace(
+    principal: Principal,
+    request: Request,
+    correlation: str,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Serve one Starlette request inside the namespace its header names.
+
+    A refused namespace is answered with a 403 carrying the reason token and
+    *correlation*; the value the caller asked for is never echoed.
+    """
+    return await serve_in_request_namespace(
+        principal,
+        request.headers.getlist(NAMESPACE_HEADER),
+        lambda: call_next(request),
+        lambda reason: _namespace_denied_response(reason, correlation),
+    )
+
+
+async def _namespace_denied_response(reason: str, correlation: str) -> JSONResponse:
+    """Build the 403 for a refused namespace: the reason token and the correlation id."""
+    return JSONResponse(
+        status_code=403, content={"detail": reason, "correlation_id": correlation}
+    )
 
 
 def _is_valid(requested: object) -> bool:

@@ -12,7 +12,6 @@ import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any
 
 from app.plugin_loader import (
@@ -194,57 +193,91 @@ def _validate_plugin_key(
     return entry
 
 
-def _merged_registry(
+def _plugin_keys(
     core: Mapping[str, SettingKey], environ: Mapping[str, str]
-) -> dict[str, SettingKey]:
-    """Return the core keys plus any operator-plugin keys, or raise PluginError."""
+) -> list[SettingKey]:
+    """Return the validated operator-plugin keys, or raise PluginError."""
     if str(environ.get(_PLURAL_PLUGIN_ENV, "")).strip():
         # The loader would ignore this variable; refuse rather than run without it.
         raise PluginError(f"{_PLURAL_PLUGIN_ENV} is not supported; use {_PLUGIN_ENV}")
-    merged = dict(core)
     require_allowlist(SETTINGS_KEYS_SEAM, environ)
     factory = load_plugin(SETTINGS_KEYS_SEAM, environ)
     if factory is None:
-        return merged
+        return []
     try:
         entries = list(factory())
     except Exception as exc:  # any plugin failure fails closed
         raise PluginError("settings key plugin failed while building its keys") from exc
+    known = dict(core)
+    keys = []
     for index, entry in enumerate(entries):
-        key = _validate_plugin_key(index, entry, merged)
-        merged[key.name] = key
-    return merged
+        key = _validate_plugin_key(index, entry, known)
+        known[key.name] = key
+        keys.append(key)
+    return keys
 
 
-class _Registry(Mapping):
-    """Core keys plus operator plugin keys, merged on first access.
+class _Registry(dict):
+    """A plain dict of core keys that merges operator plugin keys on first read.
 
-    Read-only: it offers no way to add or replace an entry. A plugin that fails
-    validation makes every access raise, so the registry never runs without the
-    keys the operator configured.
+    Callers read and patch it as they always have. The plugin keys are validated
+    and merged once; a plugin that fails validation makes every read raise, so
+    the registry never runs without the keys the operator configured.
     """
 
     def __init__(self, core: Mapping[str, SettingKey]) -> None:
+        super().__init__(core)
         self._core = core
-        self._view: Mapping[str, SettingKey] | None = None
+        self._merged = False
+        self._plugin_names: tuple[str, ...] = ()
 
-    def _loaded(self) -> Mapping[str, SettingKey]:
-        if self._view is None:
-            self._view = MappingProxyType(_merged_registry(self._core, os.environ))
-        return self._view
+    def _ensure(self) -> None:
+        if self._merged:
+            return
+        keys = _plugin_keys(self._core, os.environ)
+        for key in keys:
+            dict.__setitem__(self, key.name, key)
+        self._plugin_names = tuple(key.name for key in keys)
+        self._merged = True
 
     def _reset(self) -> None:
-        """Forget the merged view so the next access re-reads the environment."""
-        self._view = None
+        """Drop the plugin keys so the next read re-reads the environment."""
+        for name in self._plugin_names:
+            dict.pop(self, name, None)
+        self._plugin_names = ()
+        self._merged = False
 
     def __getitem__(self, name: str) -> SettingKey:
-        return self._loaded()[name]
+        self._ensure()
+        return super().__getitem__(name)
+
+    def __contains__(self, name: object) -> bool:
+        self._ensure()
+        return super().__contains__(name)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._loaded())
+        self._ensure()
+        return super().__iter__()
 
     def __len__(self) -> int:
-        return len(self._loaded())
+        self._ensure()
+        return super().__len__()
+
+    def get(self, name: str, default: Any = None) -> Any:
+        self._ensure()
+        return super().get(name, default)
+
+    def keys(self):
+        self._ensure()
+        return super().keys()
+
+    def values(self):
+        self._ensure()
+        return super().values()
+
+    def items(self):
+        self._ensure()
+        return super().items()
 
 
-REGISTRY: Mapping[str, SettingKey] = _Registry(CORE_REGISTRY)
+REGISTRY: dict[str, SettingKey] = _Registry(CORE_REGISTRY)

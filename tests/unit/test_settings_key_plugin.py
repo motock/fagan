@@ -7,16 +7,12 @@ extension's keys. With no plugin configured the registry is the core registry.
 
 import sys
 import types
-from dataclasses import replace
 
 import pytest
 
 from app.plugin_loader import PluginError
-from pipeline.settings_registry import LAYERS, REGISTRY, SettingKey
+from pipeline.settings_registry import CORE_REGISTRY, LAYERS, REGISTRY, SettingKey
 from pipeline.settings_resolve import resolve
-
-# Snapshot of the core keys, taken before any test activates a plugin.
-CORE_REGISTRY = dict(REGISTRY)
 
 PLUGIN_ENV = "PIPELINE_SETTINGS_KEYS_PLUGIN"
 PLURAL_ENV = "PIPELINE_SETTINGS_KEYS_PLUGINS"
@@ -293,30 +289,32 @@ def test_plural_plugin_variable_is_refused_rather_than_ignored(
         list(REGISTRY)
 
 
-# --- immutability ----------------------------------------------------------
+# --- registry shape --------------------------------------------------------
 
 
-def test_merged_view_rejects_item_assignment(plugin_keys):
-    plugin_keys([_probe()])
-    with pytest.raises(TypeError):
-        REGISTRY["sf_injected"] = replace(_probe(), name="sf_injected")
-    assert "sf_injected" not in REGISTRY
+def test_registry_accepts_item_patching_as_the_core_dict_does(
+    monkeypatch, fresh_registry
+):
+    probe = _probe(name="sf_patched_probe")
+    monkeypatch.setitem(REGISTRY, "sf_patched_probe", probe)
+    assert REGISTRY["sf_patched_probe"] is probe
+    monkeypatch.undo()
+    assert "sf_patched_probe" not in REGISTRY
 
 
-def test_merged_view_rejects_item_deletion(plugin_keys):
-    plugin_keys([_probe()])
-    with pytest.raises(TypeError):
-        del REGISTRY["sf_probe_flag"]
-    assert "sf_probe_flag" in REGISTRY
+def test_plugin_factory_runs_once_and_its_keys_merge_once(plugin_keys):
+    calls = []
 
+    def keys():
+        calls.append(1)
+        return [_probe()]
 
-def test_core_entries_are_not_replaceable_through_the_view(plugin_keys):
-    plugin_keys([_probe()])
-    with pytest.raises(TypeError):
-        REGISTRY["merge_ci_gate"] = replace(
-            CORE_REGISTRY["merge_ci_gate"], safe_value=False
-        )
-    assert REGISTRY["merge_ci_gate"] is CORE_REGISTRY["merge_ci_gate"]
+    plugin_keys(keys)
+    list(REGISTRY)
+    len(REGISTRY)
+    REGISTRY["sf_probe_flag"]
+    assert calls == [1]
+    assert list(REGISTRY).count("sf_probe_flag") == 1
 
 
 def test_plugin_layers_stay_within_the_policy_layer_names(plugin_keys):

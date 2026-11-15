@@ -54,7 +54,13 @@ _MAX_SCOPE_VALUE = 256
 _LEGACY_ENV = {
     ("model", "anthropic_api_key"): "PIPELINE_ANTHROPIC_API_KEY",
     ("model", "claude_oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN",
+    ("model", "ollama_api_key"): "OLLAMA_API_KEY",
 }
+
+# The one literal that names the default namespace here. It equals the store
+# layer's default-namespace constant; importing that would pull the store into
+# this seam, so a test pins the equality instead.
+_ENV_NAMESPACE = "default"
 
 # The only ``purpose="env"`` credential names the default provider will read.
 # This is an allowlist, not a naming convention: without it ``purpose="env"``
@@ -82,6 +88,23 @@ class CredentialError(RuntimeError):
     Messages never contain a credential value: they name the reference, the
     provider or the failure class, never the secret.
     """
+
+
+class CredentialMissing(CredentialError):
+    """No credential is configured for a non-default namespace.
+
+    This is the explicit refusal for a namespace the process environment does
+    not serve. Its message is always the stable literal ``credential_missing``.
+    """
+
+
+def is_default_namespace(namespace: str) -> bool:
+    """True when ``namespace`` is the default one, the only one that reads env.
+
+    The single default-namespace comparison in the seam: every namespace guard
+    below goes through it.
+    """
+    return namespace == _ENV_NAMESPACE
 
 
 class SecretValue:
@@ -347,6 +370,12 @@ def resolve(
     """
     if ref.purpose == "secret":
         return _resolve_secret(ref, environ=environ)
+    namespaced = not is_default_namespace(ref.namespace)
+    if namespaced and _credentials_plugin_spec(environ) is None:
+        # Without a plugin the only provider is the process environment, which
+        # serves the default namespace alone. Refuse before it is read.
+        _log_outcome(ref, "missing", logging.INFO)
+        raise CredentialMissing("credential_missing")
     provider = credential_provider(environ)
     try:
         result = provider.get(ref)
@@ -366,6 +395,9 @@ def resolve(
         )
         raise CredentialError("credential provider failed") from None
     if result is None:
+        if namespaced:
+            _log_outcome(ref, "missing", logging.INFO)
+            raise CredentialMissing("credential_missing")
         _log_outcome(ref, "unset", logging.INFO)
         return None
     if not isinstance(result, Credential) or not isinstance(
@@ -383,3 +415,22 @@ def resolve(
             raise CredentialError("credential expired")
     _log_outcome(ref, "ok", logging.INFO)
     return result.value
+
+
+def resolve_for_injection(
+    ref: CredentialRef,
+    *,
+    environ=None,
+    now: float | None = None,
+) -> str:
+    """Return the raw text of ``ref`` for ONE named injection point.
+
+    The only callers are the child-environment and request-header builders
+    that must hand a credential to a process. The raw value is revealed here,
+    so no other module calls ``SecretValue.reveal``. Raises
+    :class:`CredentialMissing` when nothing is configured for the namespace.
+    """
+    value = resolve(ref, environ=environ, now=now)
+    if value is None:
+        raise CredentialMissing("credential_missing")
+    return value.reveal()

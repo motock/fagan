@@ -7,7 +7,12 @@ from datetime import UTC
 from pathlib import Path
 
 from app.backend_types import AgentHandle
-from app.credentials import CredentialRef, resolve
+from app.credentials import (
+    CredentialMissing,
+    CredentialRef,
+    is_default_namespace,
+    resolve,
+)
 from app.harness import (
     HarnessRequest,
     aider_binary_available,
@@ -15,6 +20,7 @@ from app.harness import (
     resolve_harness_name,
 )
 from pipeline import claude_log_translate, execution, usage_record
+from pipeline.actor import current_namespace
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
 # (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
@@ -61,7 +67,12 @@ def _validated_operator_key() -> str:
     The value itself is never included in the error -- it must not reach logs,
     tracebacks or the audit sidecar.
     """
-    secret = resolve(CredentialRef("model", "anthropic_api_key"))
+    try:
+        secret = resolve(
+            CredentialRef("model", "anthropic_api_key", namespace=current_namespace())
+        )
+    except CredentialMissing:
+        return ""
     if secret is None:
         return ""
     key = secret.reveal().strip()
@@ -118,7 +129,17 @@ def _first_party_claude_env() -> dict:
         env.pop(var, None)
     if operator_key:
         env["ANTHROPIC_API_KEY"] = operator_key
-    oauth = resolve(CredentialRef("model", "claude_oauth_token"))
+    namespace = current_namespace()
+    if not is_default_namespace(namespace):
+        # The copy above inherits the process OAuth token; a non-default
+        # namespace may only use the one its own reference resolves to.
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    try:
+        oauth = resolve(
+            CredentialRef("model", "claude_oauth_token", namespace=namespace)
+        )
+    except CredentialMissing:
+        oauth = None
     if oauth is not None:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth.reveal()
     return env

@@ -9,6 +9,7 @@ failure to consult the hook refuses.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -427,3 +428,133 @@ class TestLineBudget:
     def test_source_file_is_within_the_cap(self, relative: str) -> None:
         lines = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
         assert len(lines) <= 1000
+
+
+def _manual_merge_story(worktree: str) -> dict[str, Any]:
+    return {
+        "summary": "manual merge story",
+        "status": "parked",
+        "review_verdict": "APPROVE",
+        "review_verdict_sha": "stub-head",
+        "risk": "low",
+        "worktree": worktree,
+    }
+
+
+@pytest.fixture
+def manual_merge_spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+    """Record every side effect the manual merge path could take."""
+    from pipeline import merge, server
+
+    calls: dict[str, list[Any]] = {"rebase": [], "merge_pr": [], "push": []}
+    real_run = subprocess.run
+
+    def _rebase(worktree: str, branch: str) -> dict[str, bool]:
+        calls["rebase"].append(branch)
+        return {"ok": True}
+
+    def _merge_pr(worktree: str, story_key: str) -> str:
+        calls["merge_pr"].append(story_key)
+        return "merged"
+
+    def _spy_run(cmd: list[str], *args: Any, **kwargs: Any) -> Any:
+        if list(cmd[:2]) == ["git", "push"]:
+            calls["push"].append(list(cmd))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(server, "_rebase_onto_master", _rebase)
+    monkeypatch.setattr(server, "_merge_pr", _merge_pr)
+    monkeypatch.setattr(merge.subprocess, "run", _spy_run)
+    return calls
+
+
+def _write_parked_story(plan_dir: Path, plan: str) -> Path:
+    manifest = {
+        "epics": {},
+        "stories": {STORY: _manual_merge_story("/nonexistent-worktree")},
+        "repo_root": "/nonexistent-repo",
+    }
+    path = plan_dir / f"{plan}.manifest.json"
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return path
+
+
+class TestManualMergeRefusal:
+    """The manual approve_merge path consults the hook before any side effect."""
+
+    def test_approve_merge_refused_by_hook_returns_explicit_error(
+        self, plan_dir, tmp_path, monkeypatch, repo_identity, manual_merge_spies
+    ) -> None:
+        from pipeline import merge
+
+        _stub(tmp_path, monkeypatch, REFUSE_MERGE_ONLY)
+        _capture_audit(monkeypatch)
+        _write_parked_story(plan_dir, PLAN)
+
+        result = merge._approve_merge_impl(PLAN, STORY)
+
+        assert result == {"ok": False, "error": f"{REFUSAL_PREFIX}policy_block"}
+
+    def test_refused_approve_merge_leaves_story_branch_and_manifest_untouched(
+        self, plan_dir, tmp_path, monkeypatch, repo_identity, manual_merge_spies
+    ) -> None:
+        from pipeline import merge
+
+        _stub(tmp_path, monkeypatch, REFUSE_MERGE_ONLY)
+        _capture_audit(monkeypatch)
+        manifest_path = _write_parked_story(plan_dir, PLAN)
+        before = manifest_path.read_bytes()
+
+        merge._approve_merge_impl(PLAN, STORY)
+
+        assert manifest_path.read_bytes() == before
+        assert manual_merge_spies == {"rebase": [], "merge_pr": [], "push": []}
+
+    def test_refused_approve_merge_appends_one_refusal_audit_record(
+        self, plan_dir, tmp_path, monkeypatch, repo_identity, manual_merge_spies
+    ) -> None:
+        from pipeline import merge
+
+        _stub(tmp_path, monkeypatch, REFUSE_MERGE_ONLY)
+        recorded = _capture_audit(monkeypatch)
+        _write_parked_story(plan_dir, PLAN)
+
+        merge._approve_merge_impl(PLAN, STORY)
+
+        assert len(recorded) == 1
+        assert recorded[0]["outcome"] == "refused"
+        assert recorded[0]["detail"] == {
+            "access_action": "merge",
+            "reason": "policy_block",
+        }
+
+    def test_approve_merge_hook_error_refuses_without_side_effects(
+        self, plan_dir, tmp_path, monkeypatch, repo_identity, manual_merge_spies
+    ) -> None:
+        from pipeline import merge
+
+        _stub(tmp_path, monkeypatch, RAISE)
+        recorded = _capture_audit(monkeypatch)
+        manifest_path = _write_parked_story(plan_dir, PLAN)
+        before = manifest_path.read_bytes()
+
+        result = merge._approve_merge_impl(PLAN, STORY)
+
+        assert result == {"ok": False, "error": f"{REFUSAL_PREFIX}hook_error"}
+        assert recorded[0]["detail"]["reason"] == "hook_error"
+        assert manifest_path.read_bytes() == before
+        assert manual_merge_spies == {"rebase": [], "merge_pr": [], "push": []}
+
+    def test_approve_merge_with_no_plugin_merges_as_before(
+        self, plan_dir, monkeypatch, repo_identity, manual_merge_spies
+    ) -> None:
+        from pipeline import merge
+
+        recorded = _capture_audit(monkeypatch)
+        _write_parked_story(plan_dir, PLAN)
+
+        result = merge._approve_merge_impl(PLAN, STORY)
+
+        assert result["ok"] is True
+        assert manual_merge_spies["merge_pr"] == [STORY]
+        assert recorded == []

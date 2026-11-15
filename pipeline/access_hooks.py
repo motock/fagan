@@ -78,6 +78,18 @@ def merge_decision(
     return decide(story)
 
 
+def merge_refusal(plan_name: str, story: dict[str, Any]) -> dict[str, str] | None:
+    """Return the error result when the hook refuses a manual merge, else None.
+
+    Unlike ``refuse_dispatch`` this parks nothing: the caller returns the error
+    and the story, its branch and its PR stay exactly as they were.
+    """
+    reason = _refusal_reason("merge", story, lambda: _plan_repo(plan_name))
+    if reason is None:
+        return None
+    return {"ok": False, "error": REFUSAL_PREFIX + reason}
+
+
 def _refusal_reason(
     action: str, story: dict[str, Any], resolve_repo: Callable[[], str]
 ) -> str | None:

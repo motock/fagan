@@ -25,6 +25,7 @@ PUBLIC_MODULE_NAMES = [
     "run_daemon",
     "_report_env_conflicts",
     "_checkout_git_state",
+    "_heartbeat_interval_seconds",
     "_STALE_CHECKOUT_NOTIFIED",
     "signal",
 ]

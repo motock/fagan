@@ -105,6 +105,7 @@ from pipeline.scheduler_timeouts import (  # noqa: F401
     _abandon_worker_grace_seconds,
     _apply_scheduler_role_call_clamp,
     _drain_join_timeout_seconds,
+    _heartbeat_interval_seconds,
     _reconcile_join_timeout_seconds,
     _scan_join_timeout_seconds,
 )

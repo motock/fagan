@@ -64,15 +64,25 @@ def value_problem(setting: SettingKey, value: Any) -> tuple[str, str] | None:
     return None
 
 
-def _allow_loosen_problem(allow_loosen: Any) -> tuple[str, str] | None:
+def allow_loosen_problem(allow_loosen: Any) -> tuple[str, str] | None:
+    """Refuse an ``allow_loosen`` list that names anything but ceiling keys.
+
+    The message names the first offending key and nothing else.
+    """
     if allow_loosen is None:
         return None
-    names_ceilings = isinstance(allow_loosen, list) and all(
-        isinstance(name, str) and name in REGISTRY and REGISTRY[name].kind == "ceiling"
-        for name in allow_loosen
-    )
-    if not names_ceilings:
-        return "invalid_allow_loosen", "allow_loosen must name ceiling settings keys"
+    if not isinstance(allow_loosen, list):
+        return "invalid_allow_loosen", "allow_loosen must be a list of ceiling settings keys"
+    for name in allow_loosen:
+        if not isinstance(name, str) or name not in REGISTRY or REGISTRY[name].kind != "ceiling":
+            return "invalid_allow_loosen", f"allow_loosen must name ceiling settings keys: {_loggable(name)!r}"
+    return None
+
+
+def allow_loosen_layer_problem(scope: str, allow_loosen: Any) -> tuple[str, str] | None:
+    """Refuse ``allow_loosen`` at the layer nothing sits below."""
+    if allow_loosen is not None and scope == "team_repo":
+        return "allow_loosen_layer", "allow_loosen is not writable at the team_repo scope"
     return None
 
 
@@ -95,7 +105,7 @@ def _request_problem(
         or expected_version < 1
     ):
         return "invalid_version", "expected_version must be null or a version of 1 or more"
-    return _allow_loosen_problem(allow_loosen)
+    return allow_loosen_problem(allow_loosen)
 
 
 def _policy_problem(scope: str, key: str) -> tuple[str, str] | None:
@@ -170,7 +180,11 @@ def set_setting(
 
     problem = _request_problem(scope, scope_id, repo, key, value, expected_version, allow_loosen)
     if problem is None:
-        problem = _policy_problem(scope, key) or _plugin_problem(scope)
+        problem = (
+            _policy_problem(scope, key)
+            or allow_loosen_layer_problem(scope, allow_loosen)
+            or _plugin_problem(scope)
+        )
     if problem is not None:
         return _refuse(target, actor, value, *problem)
 

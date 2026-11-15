@@ -41,6 +41,9 @@ ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "ci_red_after_rework": frozenset({"rebrief", "escalate_model", "park_for_human"}),
     "transient_bookkeeping": frozenset({"retry_transient", "park_for_human"}),
     "high_risk_hold": frozenset({"park_for_human"}),
+    "brief_conflicts_existing_test": frozenset({"amend_scope", "approve_test_edit", "rebrief", "park_for_human"}),
+    "env_tool_missing": frozenset({"repo_issue", "park_for_human"}),
+    "agent_failed_after_push": frozenset({"resume_review", "park_for_human"}),
     "unknown": EXISTING_ACTIONS,
 }
 
@@ -56,6 +59,9 @@ _FAILED_RE = re.compile(r"^\s*FAILED\s+(\S+)", re.MULTILINE)
 _NO_COMMIT_RE = re.compile(r"no new commit after (\d+) rework redispatches")
 _TRANSIENT_MARKERS = ("branch head unavailable", "plan lock contended", "unchanged_since_last_review")
 _HIGH_RISK_MARKER = "high risk held for human review"
+_BRIEF_CONFLICT_PREFIX = "plan conflict: pre-existing tests "
+_BRIEF_CONFLICT_SUFFIX = " contradict the brief"
+_MISSING_TOOL_RE = re.compile(r"FileNotFoundError[^\n]*?No such file or directory: '([A-Za-z0-9_.+-]+)'")
 
 
 def classify_park(story: dict, evidence: dict) -> ParkClass:
@@ -88,13 +94,18 @@ def _text(view: dict, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _reason(view: dict) -> str:
+    """The park reason: ``parked_reason``, else the overlord's ``park_reason``."""
+    return _text(view, "parked_reason") or _text(view, "park_reason")
+
+
 def _files(view: dict) -> list:
     value = view.get("files")
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _classify(view: dict) -> ParkClass:
-    reason = _text(view, "parked_reason")
+    reason = _reason(view)
     review = _text(view, "review_feedback")
     test_output = _text(view, "test_output")
     guard = _guard_facts(test_output, _files(view))
@@ -103,11 +114,17 @@ def _classify(view: dict) -> ParkClass:
     pin = _pin_facts(test_output, _text(view, "branch_diff"))
     if pin is not None:
         return ParkClass("pin_removed_test_failure", pin)
-    scope_paths = _unique(_SCOPE_RE.findall(review))
+    scope_paths = _unique(_scope_conflict_paths(view) + _SCOPE_RE.findall(review))
     if scope_paths:
         return ParkClass("scope_gate", {"paths": scope_paths})
     if reason.startswith("rebase conflict:"):
         return ParkClass("rebase_conflict", _rebase_facts(reason))
+    brief = _brief_conflict_facts(reason)
+    if brief is not None:
+        return ParkClass("brief_conflicts_existing_test", brief)
+    missing = _missing_tool_facts(test_output)
+    if missing is not None:
+        return ParkClass("env_tool_missing", missing)
     if _ci_is_red(view):
         return ParkClass("ci_red_after_rework", {"failing_ids": _ci_failing_ids(view)})
     no_commit = _NO_COMMIT_RE.search(reason)
@@ -117,7 +134,49 @@ def _classify(view: dict) -> ParkClass:
         return ParkClass("transient_bookkeeping", {})
     if _HIGH_RISK_MARKER in reason:
         return ParkClass("high_risk_hold", {})
+    if _failed_after_push(view):
+        return ParkClass("agent_failed_after_push", {})
     return ParkClass("unknown", {})
+
+
+def _scope_conflict_paths(view: dict) -> list:
+    """Paths an agent reported as out of scope.
+
+    Read from the story's ``scope_conflict`` record, whose ``paths`` list is
+    the ``<path>`` of each ``SCOPE-CONFLICT: <path> :: <why>`` report.
+    """
+    record = view.get("scope_conflict")
+    if not isinstance(record, dict):
+        return []
+    paths = record.get("paths")
+    return [path for path in paths if isinstance(path, str) and path] if isinstance(paths, list) else []
+
+
+def _brief_conflict_facts(reason: str) -> dict | None:
+    """The pre-existing tests the overlord named when it parked a plan conflict."""
+    if not reason.startswith(_BRIEF_CONFLICT_PREFIX):
+        return None
+    names, sep, _ = reason[len(_BRIEF_CONFLICT_PREFIX):].partition(_BRIEF_CONFLICT_SUFFIX)
+    tests = _unique(name.strip() for name in names.split(",") if name.strip())
+    return {"tests": tests} if sep and tests else None
+
+
+def _failed_after_push(view: dict) -> bool:
+    """A failed story whose branch head has no review verdict.
+
+    ``last_commit`` is the branch head the agent left; the view carries no
+    commits-ahead count, so a recorded head stands for "commits beyond base".
+    """
+    head = view.get("last_commit")
+    if view.get("status") != "failed" or not isinstance(head, str) or not head:
+        return False
+    return head not in (view.get("review_verdict_sha"), view.get("last_reviewed_sha"))
+
+
+def _missing_tool_facts(test_output: str) -> dict | None:
+    """A test run that died because a bare tool binary is not on PATH."""
+    match = _MISSING_TOOL_RE.search(test_output)
+    return {"tool": match.group(1)} if match else None
 
 
 def _rebase_facts(reason: str) -> dict:

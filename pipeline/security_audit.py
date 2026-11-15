@@ -20,7 +20,7 @@ import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 
-from .store_records import DEFAULT_NAMESPACE
+from .actor import current_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def read_audit_state(records, repo_root) -> dict | None:
     ``None`` means no usable record: nothing was recorded, or the store could
     not read a usable one.
     """
-    return records.get_security_audit_state(DEFAULT_NAMESPACE, repo_key(repo_root))
+    return records.get_security_audit_state(current_namespace(), repo_key(repo_root))
 
 
 def record_audit(records, repo_root, sha, now: datetime) -> dict:
@@ -68,7 +68,7 @@ def record_audit(records, repo_root, sha, now: datetime) -> dict:
         "last_audited_sha": sha,
         "last_audited_at": now.isoformat(),
     }
-    records.put_security_audit_state(DEFAULT_NAMESPACE, repo_key(repo_root), state)
+    records.put_security_audit_state(current_namespace(), repo_key(repo_root), state)
     return state
 
 

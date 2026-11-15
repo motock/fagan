@@ -109,6 +109,7 @@ from pipeline.health_freshness import health_extras, register_probes
 from pipeline.host_state import build_host_state
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
+from pipeline.namespace_access import NAMESPACE_HEADER, serve_in_request_namespace
 from pipeline.server import PipelineService
 from pipeline.topology_identity import resolved_runtime, resolved_topology
 from pipeline.usage import collect_backend_status
@@ -241,7 +242,21 @@ async def _enforce_api_key(request: Request, call_next):
     # ANONYMOUS keeps that distinct from the local operator.
     principal = getattr(request.state, "principal", None) or ANONYMOUS
     with bind_principal(principal), bind_correlation_id(correlation):
-        return _tagged(await call_next(request))
+        return _tagged(
+            await serve_in_request_namespace(
+                principal,
+                request.headers.getlist(NAMESPACE_HEADER),
+                lambda: call_next(request),
+                lambda reason: _namespace_denied(reason, correlation),
+            )
+        )
+
+
+async def _namespace_denied(reason: str, correlation: str) -> JSONResponse:
+    """Answer a refused namespace with 403: the reason token and the correlation id."""
+    return JSONResponse(
+        status_code=403, content={"detail": reason, "correlation_id": correlation}
+    )
 
 logger = logging.getLogger(__name__)
 

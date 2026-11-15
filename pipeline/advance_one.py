@@ -37,11 +37,25 @@ from typing import Any
 from pipeline.actor import (
     SYSTEM_SCHEDULER,
     bind_correlation_id,
+    bind_namespace,
     bind_principal,
     new_correlation_id,
 )
+from pipeline.store_records import DEFAULT_NAMESPACE, validate_namespace
 
 __all__ = ["configure_child", "main"]
+
+
+def _plan_namespace(plan_name: str) -> str:
+    """Return the namespace the plan's record names, else the default namespace.
+
+    The value is validated before it is bound, so a record naming a malformed
+    namespace fails this advance instead of binding it.
+    """
+    from pipeline.persistence import _plan_manifest
+
+    manifest = _plan_manifest(plan_name) or {}
+    return validate_namespace(manifest.get("namespace") or DEFAULT_NAMESPACE)
 
 
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
@@ -128,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
             try:
-                result = pipeline.server.advance_pipeline(plan_name)
+                with bind_namespace(_plan_namespace(plan_name)):
+                    result = pipeline.server.advance_pipeline(plan_name)
             except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
                 # Class name only: the message can carry filesystem paths.
                 _write_result(

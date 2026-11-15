@@ -70,6 +70,7 @@ from app.oidc import (
 from .actor import bind_correlation_id, bind_principal, request_correlation_id
 from .audit import append_host_audit
 from .authorization import enforcement_enabled
+from .namespace_access import NAMESPACE_HEADER, serve_in_request_namespace
 from .rate_limit import (
     AUTH_FAIL_ENV,
     DEFAULT_AUTH_FAIL_PER_MIN,
@@ -265,6 +266,23 @@ async def _send_unauthorized(
     await send({"type": "http.response.body", "body": body})
 
 
+async def _send_namespace_denied(send: Any, correlation: str, reason: str) -> None:
+    """Answer a refused namespace with 403: the reason token and the correlation id.
+
+    The reason is one of the fixed tokens in ``namespace_access``. The value the
+    caller asked for is never echoed.
+    """
+    body = json.dumps({"detail": reason, "correlation_id": correlation}).encode("utf-8")
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode("ascii")),
+        (b"x-correlation-id", correlation.encode("latin-1")),
+        (b"cache-control", b"no-store"),
+    ]
+    await send({"type": "http.response.start", "status": 403, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
 async def _send_method_not_allowed(send: Any) -> None:
     """Send the 405 for a non-GET request to the metadata path (RFC 7231 6.5.5)."""
     body = b'{"detail":"Method Not Allowed"}'
@@ -400,7 +418,12 @@ class BearerAuthMiddleware:
             await send(message)
 
         with bind_principal(principal), bind_correlation_id(correlation):
-            await self._app(scope, receive, _tagged)
+            await serve_in_request_namespace(
+                principal,
+                _header_values(scope, NAMESPACE_HEADER),
+                lambda: self._app(scope, receive, _tagged),
+                lambda reason: _send_namespace_denied(send, correlation, reason),
+            )
 
     def _authenticate(self, credential: str | None, reason: str | None) -> Any:
         """Return the authenticated principal, or ``None`` when the request fails."""

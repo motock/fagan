@@ -7,10 +7,20 @@ denial raises NamespaceDenied before the request body runs.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from typing import Any
+
 import pytest
+from fastapi.testclient import TestClient
 
 import pipeline.namespace_access as access_module
-from app.identity import ROLE_AUTHOR, Principal
+import pipeline.server
+from app import dashboard as d
+from app.identity import ROLE_AUTHOR, IdentityError, Principal
+from app.oidc import OidcProvider
+from pipeline import advance_one
+from pipeline import remote_transport as rt
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.namespace_access import (
     NAMESPACE_MALFORMED,
@@ -20,6 +30,7 @@ from pipeline.namespace_access import (
     enter_request_namespace,
 )
 from pipeline.namespace_resolver import NamespaceAccess
+from pipeline.remote_transport import BearerAuthMiddleware
 from pipeline.store_records import DEFAULT_NAMESPACE
 
 ALICE = Principal(
@@ -136,3 +147,282 @@ def test_denial_leaves_the_previously_bound_namespace_unchanged(monkeypatch):
         with pytest.raises(NamespaceDenied), enter_request_namespace(ALICE, "gamma"):
             pass
         assert current_namespace() == "outer-ns"
+
+
+# Entry points: the remote MCP transport, the dashboard and the advance child.
+# Each test drives the real entry point, so removing the wiring fails it.
+
+NAMESPACE_HEADER = "x-fagan-namespace"
+ALICE_TOKEN = "alice-token"
+ALICE_OIDC = Principal(
+    subject="alice", auth_method="oidc", roles=frozenset({ROLE_AUTHOR})
+)
+
+
+class _StubProvider(OidcProvider):
+    """Identity double: accepts Alice's token only. No settings, no network."""
+
+    def __init__(self) -> None:
+        self._settings = None
+
+    def authenticate(self, credential: str | None) -> Principal:
+        if credential != ALICE_TOKEN:
+            raise IdentityError("credential rejected")
+        return ALICE_OIDC
+
+
+class _RecordingApp:
+    """Downstream ASGI app: records the namespace it runs in, then sends 200."""
+
+    def __init__(self) -> None:
+        self.seen_namespaces: list[str] = []
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        self.seen_namespaces.append(current_namespace())
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
+def _drive_transport(
+    app: _RecordingApp, *headers: tuple[bytes, bytes]
+) -> tuple[int, dict[bytes, bytes], bytes]:
+    """Run one authenticated MCP request through the gate: (status, headers, body)."""
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"authorization", f"Bearer {ALICE_TOKEN}".encode("latin-1")),
+            *headers,
+        ],
+        "client": ("203.0.113.9", 4321),
+    }
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    middleware = BearerAuthMiddleware(app, _StubProvider(), environ={})
+    asyncio.run(middleware(scope, receive, send))
+    start = messages[0]
+    body = b"".join(m.get("body", b"") for m in messages[1:])
+    return start["status"], dict(start["headers"]), body
+
+
+def _namespace_header(value: str) -> tuple[bytes, bytes]:
+    return (NAMESPACE_HEADER.encode("latin-1"), value.encode("latin-1"))
+
+
+@pytest.fixture
+def transport_audit(monkeypatch, audit_calls):
+    """Silence the transport's own auth audit; keep the namespace denial audit."""
+    monkeypatch.setattr(rt, "append_host_audit", lambda **kwargs: None)
+    return audit_calls
+
+
+@pytest.fixture
+def two_namespace_resolver(monkeypatch):
+    """A resolver where Alice reaches two namespaces, so no header is ambiguous."""
+    _use_resolver(
+        monkeypatch,
+        _StubResolver(
+            NamespaceAccess("alpha", frozenset({ROLE_AUTHOR})),
+            NamespaceAccess("beta", frozenset({ROLE_AUTHOR})),
+        ),
+    )
+
+
+# Remote MCP transport.
+
+
+def test_transport_without_header_on_default_resolver_runs_in_default_namespace(
+    transport_audit,
+):
+    app = _RecordingApp()
+    status, _, body = _drive_transport(app)
+    assert (status, body) == (200, b"ok")
+    assert app.seen_namespaces == [DEFAULT_NAMESPACE]
+    assert transport_audit == []
+
+
+def test_transport_restores_the_outer_namespace_after_the_request(transport_audit):
+    app = _RecordingApp()
+    with bind_namespace("outer-ns"):
+        _drive_transport(app)
+        assert current_namespace() == "outer-ns"
+
+
+def test_transport_binds_a_header_namespace_the_principal_may_reach(
+    two_namespace_resolver, transport_audit
+):
+    app = _RecordingApp()
+    status, _, _ = _drive_transport(app, _namespace_header("beta"))
+    assert status == 200
+    assert app.seen_namespaces == ["beta"]
+
+
+def test_transport_refuses_missing_header_with_two_accesses(
+    two_namespace_resolver, transport_audit
+):
+    app = _RecordingApp()
+    status, headers, body = _drive_transport(
+        app, (b"x-correlation-id", b"corr-transport-1")
+    )
+    assert status == 403
+    assert json.loads(body) == {
+        "detail": NAMESPACE_MISSING,
+        "correlation_id": "corr-transport-1",
+    }
+    assert headers[b"x-correlation-id"] == b"corr-transport-1"
+    assert app.seen_namespaces == []
+    assert [entry["detail"]["reason"] for entry in transport_audit] == [
+        NAMESPACE_MISSING
+    ]
+
+
+def test_transport_refuses_an_unlisted_namespace_and_audits_it(
+    two_namespace_resolver, transport_audit
+):
+    app = _RecordingApp()
+    status, _, body = _drive_transport(app, _namespace_header("gamma"))
+    assert status == 403
+    assert json.loads(body)["detail"] == NAMESPACE_NOT_PERMITTED
+    assert app.seen_namespaces == []
+    assert len(transport_audit) == 1
+
+
+def test_transport_refuses_a_malformed_header_without_echoing_it(
+    transport_audit,
+):
+    app = _RecordingApp()
+    status, _, body = _drive_transport(app, _namespace_header("Bad Name!"))
+    assert status == 403
+    assert json.loads(body)["detail"] == NAMESPACE_MALFORMED
+    assert b"Bad Name" not in body
+    assert "Bad Name" not in json.dumps(transport_audit)
+    assert app.seen_namespaces == []
+
+
+def test_transport_refuses_a_repeated_header_as_malformed(transport_audit):
+    app = _RecordingApp()
+    status, _, body = _drive_transport(
+        app, _namespace_header("alpha"), _namespace_header("beta")
+    )
+    assert status == 403
+    assert json.loads(body)["detail"] == NAMESPACE_MALFORMED
+    assert app.seen_namespaces == []
+
+
+# Dashboard. The API-key gate is not under test here, so it is stubbed out.
+
+
+@pytest.fixture
+def dashboard_client(monkeypatch, transport_audit):
+    monkeypatch.setattr(d, "require_api_key", lambda *args, **kwargs: None)
+    return TestClient(d.app)
+
+
+def test_dashboard_without_header_on_default_resolver_is_not_refused(
+    dashboard_client,
+):
+    response = dashboard_client.get("/api/health")
+    assert response.status_code != 403
+
+
+def test_dashboard_refuses_missing_header_with_two_accesses(
+    dashboard_client, two_namespace_resolver
+):
+    response = dashboard_client.get(
+        "/api/health", headers={"x-correlation-id": "corr-dash-1"}
+    )
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": NAMESPACE_MISSING,
+        "correlation_id": "corr-dash-1",
+    }
+    assert response.headers["x-correlation-id"] == "corr-dash-1"
+
+
+def test_dashboard_refuses_an_unlisted_header_namespace(
+    dashboard_client, two_namespace_resolver
+):
+    response = dashboard_client.get(
+        "/api/health", headers={NAMESPACE_HEADER: "gamma"}
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_NOT_PERMITTED
+
+
+def test_dashboard_refuses_a_malformed_header_without_echoing_it(dashboard_client):
+    response = dashboard_client.get(
+        "/api/health", headers={NAMESPACE_HEADER: "Bad Name!"}
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_MALFORMED
+    assert "Bad Name" not in response.text
+
+
+def test_dashboard_admits_a_header_namespace_the_principal_may_reach(
+    dashboard_client, two_namespace_resolver
+):
+    response = dashboard_client.get("/api/health", headers={NAMESPACE_HEADER: "alpha"})
+    assert response.status_code != 403
+
+
+# Advance child: binds the plan record's namespace, else the default.
+
+
+@pytest.fixture
+def advance_stub(monkeypatch):
+    seen: list[str] = []
+
+    def stub_advance(plan_name: str) -> dict[str, bool]:
+        seen.append(current_namespace())
+        return {"ok": True}
+
+    monkeypatch.setattr(pipeline.server, "advance_pipeline", stub_advance)
+    monkeypatch.setattr(advance_one, "configure_child", lambda: None)
+    return seen
+
+
+def _set_plan_record(monkeypatch, manifest):
+    import pipeline.persistence
+
+    monkeypatch.setattr(pipeline.persistence, "_plan_manifest", lambda name: manifest)
+
+
+def test_advance_binds_the_default_namespace_when_the_plan_has_none(
+    monkeypatch, advance_stub, tmp_path
+):
+    _set_plan_record(monkeypatch, {"stories": []})
+    assert advance_one.main(["plan-a", str(tmp_path / "out.json")]) == 0
+    assert advance_stub == [DEFAULT_NAMESPACE]
+
+
+def test_advance_binds_the_plan_record_namespace(monkeypatch, advance_stub, tmp_path):
+    _set_plan_record(monkeypatch, {"namespace": "alpha", "stories": []})
+    assert advance_one.main(["plan-a", str(tmp_path / "out.json")]) == 0
+    assert advance_stub == ["alpha"]
+
+
+def test_advance_refuses_an_invalid_plan_namespace_and_reports_class_only(
+    monkeypatch, advance_stub, tmp_path
+):
+    _set_plan_record(monkeypatch, {"namespace": "Bad Name!", "stories": []})
+    result_path = tmp_path / "out.json"
+    assert advance_one.main(["plan-a", str(result_path)]) == 1
+    assert advance_stub == []
+    payload = json.loads(result_path.read_text())
+    assert payload == {
+        "ok": False,
+        "error": "advance raised InvalidRecordKeyError",
+    }

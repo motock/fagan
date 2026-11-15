@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TypeVar
 
 from app.identity import Principal
 from pipeline.actor import bind_namespace
@@ -30,6 +31,9 @@ from pipeline.namespace_resolver import (
 from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 logger = logging.getLogger("pipeline.namespace_access")
+
+#: The request header a caller names its namespace in. Every transport reads it.
+NAMESPACE_HEADER = "x-fagan-namespace"
 
 #: Reason tokens. Each denial carries exactly one of these.
 NAMESPACE_MISSING = "namespace_missing"
@@ -111,6 +115,35 @@ def enter_request_namespace(
         raise NamespaceDenied(decision.reason)
     with bind_namespace(decision.namespace):
         yield decision
+
+
+_T = TypeVar("_T")
+
+
+async def serve_in_request_namespace(
+    principal: Principal,
+    header_values: list[str],
+    serve: Callable[[], Awaitable[_T]],
+    refuse: Callable[[str], Awaitable[_T]],
+) -> _T:
+    """Serve one request inside the namespace its header names.
+
+    *header_values* is every value of ``X-Fagan-Namespace``; none means no
+    namespace is named. A repeated header is joined into one value that the
+    namespace grammar refuses, so it is a malformed denial, never a choice
+    between the two. A denial before *serve* runs is answered by ``refuse``
+    with the reason token. A denial raised by *serve* itself propagates.
+    """
+    requested = ",".join(header_values) or None
+    admitted = False
+    try:
+        with enter_request_namespace(principal, requested):
+            admitted = True
+            return await serve()
+    except NamespaceDenied as denied:
+        if admitted:
+            raise
+        return await refuse(denied.reason)
 
 
 def _is_valid(requested: object) -> bool:

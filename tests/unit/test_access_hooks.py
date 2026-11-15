@@ -350,6 +350,71 @@ class TestFailClosed:
         assert decider.calls == []
 
 
+def _capture_audit(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        access_hooks, "append_host_audit", lambda **kwargs: recorded.append(kwargs)
+    )
+    return recorded
+
+
+class TestRefusalAudit:
+    def test_merge_refusal_appends_one_record_naming_the_action_and_token(
+        self, tmp_path, monkeypatch, repo_identity
+    ) -> None:
+        _stub(tmp_path, monkeypatch, REFUSE_MERGE_ONLY)
+        recorded = _capture_audit(monkeypatch)
+        merge_decision(_Decider(), PLAN, _manifest()["stories"][STORY])
+        assert len(recorded) == 1
+        assert recorded[0]["outcome"] == "refused"
+        assert recorded[0]["detail"] == {
+            "access_action": "merge",
+            "reason": "policy_block",
+        }
+
+    def test_dispatch_refusal_record_names_the_dispatch_action(
+        self, tmp_path, monkeypatch, repo_identity
+    ) -> None:
+        _stub(tmp_path, monkeypatch, REFUSE_ALL)
+        recorded = _capture_audit(monkeypatch)
+        refuse_dispatch(_Store(), PLAN, STORY, _manifest())
+        assert recorded[0]["outcome"] == "refused"
+        assert recorded[0]["detail"]["access_action"] == "dispatch"
+
+    def test_hook_error_refusal_is_audited_as_hook_error(
+        self, tmp_path, monkeypatch, repo_identity
+    ) -> None:
+        _stub(tmp_path, monkeypatch, RAISE)
+        recorded = _capture_audit(monkeypatch)
+        refuse_dispatch(_Store(), PLAN, STORY, _manifest())
+        assert len(recorded) == 1
+        assert recorded[0]["detail"]["reason"] == "hook_error"
+
+    def test_allowed_merge_appends_no_audit_record(
+        self, tmp_path, monkeypatch, repo_identity
+    ) -> None:
+        _stub(tmp_path, monkeypatch, ALLOW_ALL)
+        recorded = _capture_audit(monkeypatch)
+        decider = _Decider()
+        merge_decision(decider, PLAN, _manifest()["stories"][STORY])
+        assert len(decider.calls) == 1
+        assert recorded == []
+
+    def test_failing_audit_append_does_not_allow_a_refused_merge(
+        self, tmp_path, monkeypatch, repo_identity
+    ) -> None:
+        _stub(tmp_path, monkeypatch, REFUSE_MERGE_ONLY)
+
+        def _broken(**_kwargs: Any) -> None:
+            raise OSError("audit disk full")
+
+        monkeypatch.setattr(access_hooks, "append_host_audit", _broken)
+        decider = _Decider()
+        result = merge_decision(decider, PLAN, _manifest()["stories"][STORY])
+        assert result == {"action": "park", "reason": f"{REFUSAL_PREFIX}policy_block"}
+        assert decider.calls == []
+
+
 class TestLineBudget:
     @pytest.mark.parametrize(
         "relative",

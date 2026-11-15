@@ -379,8 +379,10 @@ class SchedulerDaemon:
     def _run_with_watchdog(self, fn, *, timeout_s, label):
         """Run ``fn`` under the bounded-join watchdog (see scheduler_daemon_health).
 
-        KNOWN LIMITATION: an abandoned worker leaves any plan ``_plan_lock`` it
-        holds locked until the process dies; the LOCKSTARVE-C2 escape hatch
+        KNOWN LIMITATION (do not fix here): abandoning the worker leaves any
+        plan ``_plan_lock`` held by the wedged call locked until the process
+        dies; the watchdog converts a total freeze into a degraded-but-alive
+        scheduler. The LOCKSTARVE-C2 escape hatch
         (``PIPELINE_SCAN_ABANDON_RESTART_THRESHOLD``) bounds that damage.
         """
         return run_with_watchdog(self, fn, timeout_s=timeout_s, label=label)

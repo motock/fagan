@@ -187,3 +187,11 @@ def test_stale_notice_with_behind_and_no_upstream_stays_silent(monkeypatch):
         lambda *a, **k: SimpleNamespace(returncode=128, stdout="", stderr=""),
     )
     daemon._notify_if_checkout_stale({"checkout_behind_origin": 3})
+
+
+def test_daemon_keeps_the_known_limitation_marker_on_the_watchdog_wrapper():
+    # test_reconcile_join_watchdog pins this literal in the daemon module
+    # source, so the marker must stay on SchedulerDaemon._run_with_watchdog.
+    source = DAEMON_PATH.read_text(encoding="utf-8")
+    assert "KNOWN LIMITATION (do not fix here)" in source
+    assert "_plan_lock" in source

@@ -164,8 +164,10 @@ def test_run_daemon_still_passes_advance_all_plans_as_reconcile_fn(
         def run_forever(self, stop_event) -> None:
             return None
 
+    default_calls: list = []
+
     def fake_advance_all_plans():
-        return None
+        default_calls.append(True)
 
     monkeypatch.setattr(server_mod, "PLAN_DIR", tmp_path)
     if hasattr(daemon_mod, "PLAN_DIR"):
@@ -181,4 +183,7 @@ def test_run_daemon_still_passes_advance_all_plans_as_reconcile_fn(
     assert daemon_mod.run_daemon() == 0
 
     assert len(instances) == 1
-    assert instances[0].kwargs["reconcile_fn"] is fake_advance_all_plans
+    # The tick wraps the default advance: with no other namespace holding plans,
+    # calling it runs the patched default advance exactly once and nothing else.
+    instances[0].kwargs["reconcile_fn"]()
+    assert default_calls == [True]

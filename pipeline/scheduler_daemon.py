@@ -835,10 +835,13 @@ def run_daemon() -> int:
     # ``pipeline.server.advance_all_plans`` land on this call site.
     from .server import advance_all_plans  # noqa: I001  -- must stay first
     from .advance_runtime import build_runtime
-    advance_all_plans, stop_runtime = build_runtime(bus, advance_all_plans)
+    from .scheduler_namespaces import advance_all_namespaces
+    tick_fn, stop_runtime = build_runtime(
+        bus, lambda: advance_all_namespaces(advance_all_plans)
+    )
 
     daemon = SchedulerDaemon(
-        reconcile_fn=advance_all_plans,
+        reconcile_fn=tick_fn,
         scan_fn=scan_fn,
         bus=bus,
         interval_s=interval_s,

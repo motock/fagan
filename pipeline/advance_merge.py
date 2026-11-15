@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import merge_reverify
+from . import access_hooks, merge_reverify
 from .ci import SettingsContext, gate_record, settings_for_plan
 from .concurrency import _released_plan_lock
 from .host_state import build_host_state
@@ -284,7 +284,7 @@ def _readjudicate_parked_merge_hold(
     )
     story["pr_checks"] = current
     with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(key):
-        decision = _merge_decision(story)
+        decision = access_hooks.merge_decision(_merge_decision, plan_name, story)
     if decision["action"] == "merge":
         story.pop("merge_park_evidence", None)
         story.pop("merge_parked_at", None)
@@ -454,7 +454,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(
                 key
             ):
-                decision = _merge_decision(story)
+                decision = access_hooks.merge_decision(_merge_decision, plan_name, story)
         if decision["action"] != "merge":
             # A detached re-verify may still be running; it must not outlive
             # the story leaving pr_open.

@@ -17,9 +17,10 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .actor import current_namespace
 from .global_rules_install import _write_atomic
 from .live_ref import LiveRef
-from .store_records import DEFAULT_NAMESPACE, context_digest
+from .store_records import context_digest
 
 #: The process store, resolved per call on ``pipeline.server`` so the store a
 #: test patches is the one the snapshot is written through.
@@ -329,7 +330,7 @@ def snapshot_context(text: str, meta: dict | None = None) -> str:
     metadata (e.g. a resolved git ``sha``), which the first write keeps.
     """
     digest = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
-    _store.records().put_context_snapshot(DEFAULT_NAMESPACE, digest, text, meta or {})
+    _store.records().put_context_snapshot(current_namespace(), digest, text, meta or {})
     return digest
 
 

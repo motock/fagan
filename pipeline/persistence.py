@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .actor import current_namespace
 from .events import EventBus
 from .parsers import _atomic_write_json
 from .paths import PLAN_DIR
@@ -25,6 +26,7 @@ from .store_records import (
     DEFAULT_NAMESPACE,
     LEGACY_OUTBOX_CHANNEL,
     InvalidRecordKeyError,
+    UnknownNamespaceError,
     validate_channel,
 )
 
@@ -315,6 +317,16 @@ def _notification_records(store=None):
     return records() if callable(records) else store
 
 
+def require_default_namespace(namespace: str) -> None:
+    """Refuse *namespace* unless it is the default one.
+
+    The file layout and its legacy writers hold only the default partition, so
+    a write or read bound to any other namespace is refused, never redirected.
+    """
+    if namespace != DEFAULT_NAMESPACE:
+        raise UnknownNamespaceError("unknown namespace")
+
+
 def _append_notification(plan_name: str, record: dict) -> None:
     """Append one notification record to *plan_name*'s history.
 
@@ -322,15 +334,17 @@ def _append_notification(plan_name: str, record: dict) -> None:
     has exactly one route to durable storage: the record store owns both of its
     on-disk representations, and no writer composes a notifications path.
     """
+    namespace = current_namespace()
     store = _notification_records()
     append = getattr(store, "append_notification", None)
     if callable(append):
-        append(DEFAULT_NAMESPACE, plan_name, record)
+        append(namespace, plan_name, record)
         return
     # A stand-in store that models no record view at all (the merge-gate tests
     # patch ``server._store`` with a double that only answers ``get_manifest``):
     # the write still happens, through the legacy writer the store itself uses,
     # rather than being dropped.
+    require_default_namespace(namespace)
     _write_notification(plan_name, record)
 
 

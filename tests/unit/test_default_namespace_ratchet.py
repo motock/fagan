@@ -49,13 +49,10 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/actor.py": 3,
     "pipeline/audit_anchor.py": 8,
     "pipeline/audit_file.py": 3,
-    "pipeline/context_sources.py": 2,
-    "pipeline/dispatch_context.py": 2,
     "pipeline/events_nats_consumer.py": 2,
     "pipeline/health_freshness.py": 2,
     "pipeline/ci.py": 3,
     "pipeline/manifest_source.py": 3,
-    "pipeline/merge.py": 2,
     "pipeline/metrics_exposition.py": 4,
     "pipeline/namespace_resolver.py": 2,
     "pipeline/persistence.py": 2,
@@ -77,6 +74,40 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/tools/backfill_plan_source.py": 6,
     "pipeline/tools/import_file_store.py": 3,
     "pipeline/audit_contract.py": 69,
+}
+
+#: Why each allowlisted module may name ``DEFAULT_NAMESPACE``: one line per entry.
+#: An allowlist entry without a reason, or whose module no longer names the
+#: constant, fails ``test_every_allowlist_entry_has_a_reason_and_a_live_use``.
+ALLOWLIST_REASONS: dict[str, str] = {
+    "pipeline/actor.py": "request-namespace fallback: current_namespace() resolves to the default when none is bound",
+    "pipeline/audit_anchor.py": "audit anchoring is default-only: it reads and publishes the default chains",
+    "pipeline/audit_file.py": "file audit layout holds only the default namespace; other namespaces are refused",
+    "pipeline/ci.py": "merge CI gate and manifest namespace plumbing; routing the gate is a separate change",
+    "pipeline/manifest_source.py": "file fallback reads the default partition; routing it is a separate change",
+    "pipeline/metrics_exposition.py": "process-wide metrics reads; no request namespace is bound",
+    "pipeline/namespace_resolver.py": "built-in resolver maps a request with no namespace plugin to the default namespace",
+    "pipeline/persistence.py": "file-layout refusal check: legacy notification and decision writers hold only the default partition",
+    "pipeline/plan_draft.py": "draft list helpers default to the default namespace; bound draft reads are refused upstream",
+    "pipeline/settings_tools.py": "settings plumbing: settings are read and written in the default namespace",
+    "pipeline/store.py": "store-layer parameter defaults and the legacy FileStore surface, which is default-only",
+    "pipeline/store_contract.py": "record-store contract definition: the contract names the default namespace",
+    "pipeline/store_contract_notifications.py": "notification contract definition: the namespace its cases exercise",
+    "pipeline/store_contract_transactions.py": "transaction contract definition: default-namespace contract cases",
+    "pipeline/store_contract_usage.py": "usage contract definition: default-namespace contract cases",
+    "pipeline/store_import_audit.py": "audit import tool: the default namespace is the import target",
+    "pipeline/store_memory.py": "in-memory store: default-only legacy surface that refuses other namespaces",
+    "pipeline/store_plugin.py": "store plugin binds the default namespace for its legacy surface",
+    "pipeline/store_records.py": "defines DEFAULT_NAMESPACE and the namespace validators that check against it",
+    "pipeline/store_sqlite.py": "SQLite store legacy surface: default-only, refuses other namespaces",
+    "pipeline/store_sqlite_notifications.py": "SQLite notification legacy reads and writes use the default namespace",
+    "pipeline/store_sqlite_records.py": "SQLite record legacy decision and journal helpers use the default namespace",
+    "pipeline/telemetry.py": "telemetry's own process-wide label for the default namespace, not a request scope",
+    "pipeline/tools/backfill_plan_source.py": "backfill tool: moves file-layout plans into the default namespace",
+    "pipeline/tools/import_file_store.py": "import tool: file-layout data is imported into the default namespace",
+    "pipeline/events_nats_consumer.py": "background consumer: reads the default partition; no request is bound",
+    "pipeline/health_freshness.py": "background consumer: outbox probe reads the default partition; no request is bound",
+    "pipeline/audit_contract.py": "audit contract definition: the contract names the default chain namespace",
 }
 
 
@@ -110,6 +141,29 @@ def ratchet_violations(counts: dict[str, int], allowlist: dict[str, int]) -> lis
                 "lower the number by selecting the namespace with current_namespace()"
             )
     return violations
+
+
+def allowlist_problems(
+    counts: dict[str, int], allowlist: dict[str, int], reasons: dict[str, str]
+) -> list[str]:
+    """Return one message per allowlist entry that lacks a reason or has no use.
+
+    A reason must be a single non-empty line, and every reason must belong to
+    an allowlist entry: a reason left behind by a removed entry is also a
+    problem.
+    """
+    problems = []
+    for relative in sorted(allowlist):
+        reason = reasons.get(relative, "")
+        if not reason.strip() or "\n" in reason:
+            problems.append(f"{relative}: allowlist entry needs a one-line reason")
+        if counts.get(relative, 0) == 0:
+            problems.append(f"{relative}: names {TOKEN} zero times; remove its entry")
+    for relative in sorted(reasons.keys() - allowlist.keys()):
+        problems.append(
+            f"{relative}: reason given for a module that is not allowlisted"
+        )
+    return problems
 
 
 def _write_module(root: Path, relative: str, uses: int) -> None:
@@ -169,6 +223,58 @@ def test_ratchet_ignores_the_testing_package(tmp_path: Path) -> None:
     _write_module(tmp_path, "pipeline/testing/fixture_support.py", uses=4)
 
     assert count_uses(tmp_path) == {}
+
+
+# -- the allowlist reasons ----------------------------------------------------
+
+
+def test_every_allowlist_entry_has_a_reason_and_a_live_use() -> None:
+    """Each allowlisted module has a one-line reason and still names the constant."""
+    problems = allowlist_problems(count_uses(REPO_ROOT), ALLOWLIST, ALLOWLIST_REASONS)
+
+    assert problems == []
+
+
+def test_allowlist_entry_without_a_reason_is_reported() -> None:
+    """An entry with no reason fails, naming the module."""
+    problems = allowlist_problems(
+        {"pipeline/listed.py": 1}, {"pipeline/listed.py": 1}, {}
+    )
+
+    assert problems == ["pipeline/listed.py: allowlist entry needs a one-line reason"]
+
+
+def test_allowlist_reason_spanning_two_lines_is_reported() -> None:
+    """A reason is one line; a reason with a line break fails."""
+    problems = allowlist_problems(
+        {"pipeline/listed.py": 1},
+        {"pipeline/listed.py": 1},
+        {"pipeline/listed.py": "first line\nsecond line"},
+    )
+
+    assert problems == ["pipeline/listed.py: allowlist entry needs a one-line reason"]
+
+
+def test_allowlist_entry_for_a_module_without_the_constant_is_reported() -> None:
+    """An entry whose module no longer names the constant fails, even with a reason."""
+    problems = allowlist_problems(
+        {},
+        {"pipeline/listed.py": 1},
+        {"pipeline/listed.py": "was a background consumer"},
+    )
+
+    assert problems == [
+        "pipeline/listed.py: names DEFAULT_NAMESPACE zero times; remove its entry"
+    ]
+
+
+def test_reason_for_a_module_not_on_the_allowlist_is_reported() -> None:
+    """A reason left behind by a removed entry fails."""
+    problems = allowlist_problems({}, {}, {"pipeline/gone.py": "removed module"})
+
+    assert problems == [
+        "pipeline/gone.py: reason given for a module that is not allowlisted"
+    ]
 
 
 # -- the request namespace ---------------------------------------------------

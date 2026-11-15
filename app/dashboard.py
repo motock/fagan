@@ -74,6 +74,7 @@ from app.dashboard_routes_plan import (
     checkpoint,
     decompose_route,
     ingest_plan,
+    plan_view_gate,
     save_plan,
 )
 from app.dashboard_routes_story import (
@@ -166,6 +167,8 @@ _service = PipelineService()
 _identity = build_identity_provider(get_or_create_api_key)
 
 
+# Registered before _enforce_api_key, so it runs inside the principal and namespace bindings.
+app.middleware("http")(plan_view_gate)
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
     server = request.scope.get("server") or ()

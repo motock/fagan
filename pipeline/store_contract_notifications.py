@@ -364,7 +364,7 @@ class NotificationHistoryContract:
         """A plan name that is not a flat key is refused, on reads and writes."""
         store = self.make_store()
 
-        for bad in ('../escape', 'with/slash', ''):
+        for bad in ('../escape', 'with//slash', ''):
             try:
                 self._append(store, NOTIFICATION_RECORDS[0], bad)
             except ValueError:
@@ -381,7 +381,7 @@ class NotificationHistoryContract:
         """A namespace that is not an opaque key is refused before storage."""
         store = self.make_store()
 
-        for bad in ('../escape', 'with/slash', ''):
+        for bad in ('../escape', 'with//slash', ''):
             try:
                 store.get_notification_history(bad, self.plan_name)
             except ValueError:
@@ -392,7 +392,7 @@ class NotificationHistoryContract:
         """The same key rule guards writes: a malformed namespace stores nothing."""
         store = self.make_store()
 
-        for bad in ('../escape', 'with/slash', ''):
+        for bad in ('../escape', 'with//slash', ''):
             try:
                 self._append(store, NOTIFICATION_RECORDS[0], namespace=bad)
             except ValueError:

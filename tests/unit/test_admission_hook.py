@@ -211,6 +211,36 @@ class TestRefusalPerKind:
             "reason": "policy_block",
         }
 
+    def test_concurrent_refusals_are_all_counted(
+        self, tmp_path, monkeypatch, sent, audits
+    ) -> None:
+        import sys
+        import threading
+
+        _install_plugin(tmp_path, monkeypatch, REFUSE_NOTIFICATION_ONLY)
+        workers, per_worker = 8, 250
+        before = notification_sinks.dropped_notification_count()
+        start = threading.Barrier(workers)
+
+        def refuse_many() -> None:
+            start.wait()
+            for _ in range(per_worker):
+                notification_sinks.file_log_sink(_event())
+
+        # A tiny switch interval makes a lost increment likely if the counter is unguarded.
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            threads = [threading.Thread(target=refuse_many) for _ in range(workers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+        assert sent == []
+        assert notification_sinks.dropped_notification_count() == before + workers * per_worker
+
     def test_free_text_reason_is_not_echoed_into_the_audit(
         self, tmp_path, monkeypatch, audits
     ) -> None:

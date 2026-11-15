@@ -37,6 +37,7 @@ behaviour of the in‑process event bus.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,6 +47,7 @@ from .access_hooks import admit
 logger = logging.getLogger(__name__)
 
 _dropped_notifications = 0
+_dropped_lock = threading.Lock()
 
 
 def dropped_notification_count() -> int:
@@ -80,7 +82,8 @@ def file_log_sink(event: dict[str, Any]) -> None:
         # Losing an alert is worse than sending one, so only an explicit refusal
         # drops a notification.
         if not admit("notification", {}, fail_open=True):
-            _dropped_notifications += 1
+            with _dropped_lock:
+                _dropped_notifications += 1
             return
 
         payload = event.get("payload") or {}

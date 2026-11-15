@@ -223,3 +223,93 @@ def _manifest_repo(manifest: dict[str, Any]) -> str:
     from .ci import context_from_manifest
 
     return context_from_manifest(manifest).repo
+
+
+# ---------- Admission hook (dispatch, spend, notification) ----------
+#
+# A second, independent seam. ``admit`` is consulted by the spend gate and the
+# notification sink, and is the single decision point the dispatch path will
+# call. With ``PIPELINE_ADMISSION_PLUGIN`` unset every call admits and changes
+# nothing. A refusal is audited with its reason token. A failure to consult the
+# hook is decided per caller by ``fail_open``: a notification passes, because a
+# lost alert is worse than a sent one; every other kind fails closed.
+
+ADMISSION_HOOK_PLUGIN_ENV = "PIPELINE_ADMISSION_PLUGIN"
+ADMISSION_KINDS = frozenset({"dispatch", "spend", "notification"})
+
+_ADMISSION_SEAM = "admission"
+
+
+@dataclass(frozen=True)
+class AdmissionDecision:
+    admitted: bool
+    reason: str
+
+
+class AdmissionHook(Protocol):
+    def admit(
+        self, kind: str, namespace: str, context: dict[str, Any]
+    ) -> AdmissionDecision: ...
+
+
+def admit(kind: str, context: dict[str, Any], *, fail_open: bool = False) -> bool:
+    """Return whether ``kind`` may proceed.
+
+    ``context`` carries only counts or percentages the caller already holds,
+    never secrets or payloads. ``fail_open`` is the answer when the hook cannot
+    be consulted: the caller states it, because the safe side differs per kind.
+    """
+    if kind not in ADMISSION_KINDS:
+        raise ValueError(f"unknown admission kind {kind!r}")
+    try:
+        hook = _admission_hook()
+        if hook is None:
+            return True
+        decision = hook.admit(kind, current_namespace(), dict(context))
+    except Exception as exc:  # noqa: BLE001 - any failure to consult takes the caller's safe side
+        logger.error(
+            "admission hook failed",
+            extra={"admission_kind": kind, "error_type": type(exc).__name__},
+        )
+        return _hook_failed(kind, fail_open=fail_open)
+    if not isinstance(decision, AdmissionDecision) or not isinstance(
+        decision.admitted, bool
+    ):
+        return _hook_failed(kind, fail_open=fail_open)
+    if decision.admitted:
+        return True
+    is_token = isinstance(decision.reason, str) and _TOKEN_RE.match(decision.reason)
+    token = decision.reason if is_token else _UNSPECIFIED
+    _audit_admission("admission_refused", "refused", kind, token)
+    return False
+
+
+def _hook_failed(kind: str, *, fail_open: bool) -> bool:
+    outcome = "admitted" if fail_open else "refused"
+    _audit_admission("admission_hook_failed", outcome, kind, _HOOK_ERROR)
+    return fail_open
+
+
+def _audit_admission(action: str, outcome: str, kind: str, reason: str) -> None:
+    try:
+        append_host_audit(
+            action=action,
+            outcome=outcome,
+            detail={"admission_kind": kind, "reason": reason},
+        )
+    except Exception:  # noqa: BLE001 - a failed audit append never changes the decision
+        logger.warning("admission audit append failed", extra={"admission_kind": kind})
+
+
+def _admission_hook() -> AdmissionHook | None:
+    """Return the configured admission hook, or None when no plugin is selected.
+
+    Same fail-closed loading as the repo access hook: the allowlist is checked
+    before the plugin is imported, and any error propagates to ``admit``.
+    """
+    if plugin_spec(_ADMISSION_SEAM) is None:
+        return None
+    require_allowlist(_ADMISSION_SEAM)
+    hook = load_plugin(_ADMISSION_SEAM)()
+    require_methods(hook, ("admit",), "admission hook")
+    return hook

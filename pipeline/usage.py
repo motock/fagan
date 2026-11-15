@@ -26,6 +26,7 @@ from typing import Any
 
 from app import backend, role_registry
 
+from .access_hooks import admit
 from .config import (
     _LOCAL_BACKEND_NAMES,
     _RISK_ORDER,
@@ -143,6 +144,18 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     return bool(prev_paused and (session_pct >= SESSION_RESUME_THRESHOLD or week_pct >= WEEK_RESUME_THRESHOLD))
 
 
+def _apply_spend_admission(state: dict[str, Any]) -> None:
+    """Pause the spend gate when the admission hook refuses the spend.
+
+    Only tightens the poll's decision: a refusal or an unconsulted hook sets
+    ``paused``, and nothing here ever clears it. With no hook configured
+    ``admit`` returns True and the state is left exactly as the gate set it.
+    """
+    context = {"session_pct": state.get("session_pct"), "week_pct": state.get("week_pct")}
+    if not admit("spend", context):
+        state["paused"] = True
+
+
 def _check_usage_impl() -> dict[str, Any]:
     """
     Probe current subscription usage (current session + current week) via a
@@ -228,6 +241,7 @@ def _check_usage_impl() -> dict[str, Any]:
                     f"{status}; cost gate is now BLIND since {state.get('blind_since')}",
                     file=sys.stderr,
                 )
+        _apply_spend_admission(state)
         _write_usage_state(state)
         # A frozen prev reading may predate the "paused" key; treat that as
         # not-paused so a hand-edited state file can't break the poller.
@@ -243,6 +257,7 @@ def _check_usage_impl() -> dict[str, Any]:
     state["consecutive_parse_failures"] = 0
     state["gate_blind"] = False
     state["stale"] = False
+    _apply_spend_admission(state)
     _write_usage_state(state)
     announce(state["paused"], state)
     return state

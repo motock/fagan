@@ -41,8 +41,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import persistence
+from .access_hooks import admit
 
 logger = logging.getLogger(__name__)
+
+_dropped_notifications = 0
+
+
+def dropped_notification_count() -> int:
+    """Return how many notifications the admission hook has refused so far."""
+    return _dropped_notifications
 
 
 def file_log_sink(event: dict[str, Any]) -> None:
@@ -61,10 +69,18 @@ def file_log_sink(event: dict[str, Any]) -> None:
         The function always returns ``None``; any error is logged but not
         raised.
     """
+    global _dropped_notifications
     try:
         plan = event.get("plan")
         if not plan:
             logger.error("Missing or falsy 'plan' in notification event: %s", event)
+            return
+
+        # fail_open: if the hook cannot be consulted the alert is still sent.
+        # Losing an alert is worse than sending one, so only an explicit refusal
+        # drops a notification.
+        if not admit("notification", {}, fail_open=True):
+            _dropped_notifications += 1
             return
 
         payload = event.get("payload") or {}

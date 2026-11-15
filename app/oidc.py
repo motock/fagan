@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import threading
 import time
@@ -103,6 +104,15 @@ OIDC_AGENT_CLIENTS_ENV = "PIPELINE_OIDC_AGENT_CLIENTS"
 OIDC_AGENT_SCOPE_CLAIM_ENV = "PIPELINE_OIDC_AGENT_SCOPE_CLAIM"
 DEFAULT_AGENT_SCOPE_CLAIM = "team_scope"
 
+#: Comma-separated token claim names to carry, uninterpreted, on the verified
+#: principal. Empty (the default) carries nothing. Each name is an identifier.
+OIDC_EXTRA_CLAIMS_ENV = "PIPELINE_OIDC_EXTRA_CLAIMS"
+_CLAIM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+#: Bounds on what a configured extra claim may add to a principal.
+MAX_EXTRA_CLAIMS = 256
+MAX_EXTRA_CLAIMS_BYTES = 16 * 1024
+
 #: The prefix reserved for agent subjects, alongside ``system:``.
 AGENT_SUBJECT_PREFIX = "agent:"
 
@@ -169,6 +179,8 @@ class OidcSettings:
     #: what keeps a misconfigured ``jwks_url`` from probing loopback or a cloud
     #: metadata endpoint (see :func:`_is_internal_target`).
     allow_private_jwks: bool = False
+    #: Token claim names to carry on the principal (see ``OIDC_EXTRA_CLAIMS_ENV``).
+    extra_claims: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("issuer", "audience", "jwks_url"):
@@ -483,6 +495,37 @@ def _roles_from_claims(claims: dict[str, Any]) -> frozenset[str]:
     return frozenset(role for role in raw if isinstance(role, str) and role in ROLES)
 
 
+def _freeze(value: Any) -> Any:
+    """Return ``value`` with every list and dict replaced by an immutable tuple."""
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze(item)) for key, item in value.items()))
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _extra_claims_from_token(
+    claims: dict[str, Any], names: tuple[str, ...]
+) -> tuple[tuple[str, Any], ...]:
+    """Copy the configured claims the token carries as immutable pairs.
+
+    Refusal reports only the fixed reason; the claim values never reach the
+    message. Absent names are skipped, so an empty ``names`` costs nothing.
+    """
+    present = [name for name in names if name in claims]
+    if not present:
+        return ()
+    serialised = json.dumps(
+        {name: claims[name] for name in present}, separators=(",", ":")
+    )
+    if (
+        len(present) > MAX_EXTRA_CLAIMS
+        or len(serialised.encode("utf-8")) > MAX_EXTRA_CLAIMS_BYTES
+    ):
+        raise IdentityError("claim too large")
+    return tuple((name, _freeze(claims[name])) for name in present)
+
+
 def _scopes_from_claims(claims: dict[str, Any]) -> tuple[str, ...]:
     """Return the token's scopes from a space-separated ``scope`` or ``scp`` list.
 
@@ -624,6 +667,7 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
     # ``azp`` is set by the IdP from the authenticated client, never by the
     # caller, which is why the allowlist check is trustworthy. Any other token
     # is a human principal and its scope claim is ignored outright.
+    extra_claims = _extra_claims_from_token(claims, settings.extra_claims)
     azp = claims.get("azp")
     if isinstance(azp, str) and azp in _agent_clients():
         scope_claim = (
@@ -646,6 +690,7 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
                 principal_type="agent",
                 client_id=azp,
                 team_scope=team_scope,
+                extra_claims=extra_claims,
             )
         except IdentityError:
             # ``Principal`` owns the team-scope grammar; the message stays a
@@ -667,6 +712,7 @@ def verify_token(token: str | None, settings: OidcSettings) -> Principal:
         auth_method="oidc",
         principal_type="human",
         client_id=azp if isinstance(azp, str) else "",
+        extra_claims=extra_claims,
     )
 
 
@@ -732,13 +778,28 @@ def _oidc_settings_from_env(env: dict[str, str]) -> OidcSettings:
         "1",
         "true",
     )
+    extra_claims = _extra_claim_names_from_env(env)
     return OidcSettings(
         issuer=str(env[OIDC_ISSUER_ENV]).strip(),
         audience=str(env[OIDC_AUDIENCE_ENV]).strip(),
         jwks_url=str(env[OIDC_JWKS_URL_ENV]).strip(),
         clock_skew_s=skew,
         allow_private_jwks=allow_private,
+        extra_claims=extra_claims,
     )
+
+
+def _extra_claim_names_from_env(env: dict[str, str]) -> tuple[str, ...]:
+    """Parse ``PIPELINE_OIDC_EXTRA_CLAIMS``; refuse the whole list on any bad name.
+
+    Blank entries are dropped and duplicates collapse to their first position.
+    The error names the variable only, never the offending entry.
+    """
+    raw = str(env.get(OIDC_EXTRA_CLAIMS_ENV, ""))
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if any(not _CLAIM_NAME.match(name) for name in names):
+        raise IdentityError("invalid oidc configuration: " + OIDC_EXTRA_CLAIMS_ENV)
+    return tuple(dict.fromkeys(names))
 
 
 def build_identity_provider(

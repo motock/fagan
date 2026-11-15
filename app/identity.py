@@ -11,7 +11,7 @@ policy, no wiring and no enforcement.
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pipeline.namespace_names import is_segmented_namespace
 
@@ -59,6 +59,10 @@ class Principal:
     client_id: str = ""
     #: An agent's ``<org-id>/<team-id>`` binding. Empty for non-agents.
     team_scope: str = ""
+    #: Operator-configured token claims, as ``(name, value)`` pairs in
+    #: configured order. Values are immutable (lists become tuples, dicts
+    #: become sorted item tuples). Core never reads them; empty by default.
+    extra_claims: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.principal_type not in PRINCIPAL_TYPES:

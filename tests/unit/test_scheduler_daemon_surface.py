@@ -1,7 +1,7 @@
 """Characterisation of the scheduler daemon's public surface across the split.
 
 The watchdog helpers and the stale-checkout notice move out of
-``pipeline/scheduler_daemon.py`` into sibling modules. These tests pin that
+``pipeline/scheduler_daemon.py`` into ``pipeline/scheduler_daemon_health.py``. These tests pin that
 every name callers reach through ``scheduler_daemon`` still resolves, that the
 moved objects are the same objects (no copies), that the daemon stays under
 the target size, and that the unchanged path (no plugin, clean checkout)
@@ -53,23 +53,29 @@ def test_scheduler_daemon_keeps_method(name):
     assert callable(getattr(sd.SchedulerDaemon, name))
 
 
-def test_watchdog_helpers_live_in_the_watchdog_module():
-    from pipeline import scheduler_daemon_watchdog as wd
+def test_watchdog_helpers_live_in_the_health_module():
+    from pipeline import scheduler_daemon_health as health
 
-    assert callable(wd.run_with_watchdog)
-    assert callable(wd.join_with_heartbeat)
-
-
-def test_stale_checkout_notice_lives_in_the_checkout_module():
-    from pipeline import scheduler_daemon_checkout as checkout
-
-    assert callable(checkout.notify_if_checkout_stale)
+    assert callable(health.run_with_watchdog)
+    assert callable(health.join_with_heartbeat)
 
 
-def test_stale_checkout_set_is_the_same_object_as_the_checkout_module_set():
-    from pipeline import scheduler_daemon_checkout as checkout
+def test_stale_checkout_notice_lives_in_the_health_module():
+    from pipeline import scheduler_daemon_health as health
 
-    assert sd._STALE_CHECKOUT_NOTIFIED is checkout.STALE_CHECKOUT_NOTIFIED
+    assert callable(health.notify_if_checkout_stale)
+
+
+def test_stale_checkout_set_is_the_same_object_as_the_health_module_set():
+    from pipeline import scheduler_daemon_health as health
+
+    assert sd._STALE_CHECKOUT_NOTIFIED is health.STALE_CHECKOUT_NOTIFIED
+
+
+def test_health_module_keeps_the_daemon_logger_name():
+    from pipeline import scheduler_daemon_health as health
+
+    assert health.logger.name == "pipeline.scheduler_daemon"
 
 
 def test_daemon_module_is_under_the_split_target():
@@ -98,7 +104,7 @@ def test_daemon_module_has_no_watchdog_loop_body():
         ),
     )
     assert "worker.join(" not in body, (
-        "the heartbeat join loop must live in scheduler_daemon_watchdog"
+        "the heartbeat join loop must live in scheduler_daemon_health"
     )
 
 

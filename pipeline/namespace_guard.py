@@ -16,11 +16,7 @@ import logging
 
 from pipeline.actor import current_correlation_id, current_namespace
 from pipeline.audit import append_host_audit
-from pipeline.store_records import (
-    DEFAULT_NAMESPACE,
-    InvalidRecordKeyError,
-    validate_namespace,
-)
+from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 logger = logging.getLogger("pipeline.namespace_guard")
 
@@ -60,7 +56,8 @@ def resolve_child_namespace(
 def read_plan_namespace(plan_name: str, requested: object) -> tuple[str, str | None]:
     """Return ``(namespace to bind, refusal reason)``, reading the plan where *requested* says.
 
-    Nothing requested, or the default namespace, reads the manifest exactly as
+    Nothing requested, or the namespace this process is bound to (the default:
+    a child binds nothing before this check), reads the manifest exactly as
     before (``pipeline.persistence._plan_manifest``), so a default-only install
     is unchanged. Any other requested namespace reads the manifest from that
     namespace through the configured store's record view: the legacy file
@@ -74,7 +71,7 @@ def read_plan_namespace(plan_name: str, requested: object) -> tuple[str, str | N
         wanted = None if requested is None else validate_namespace(requested)
     except InvalidRecordKeyError:
         return current_namespace(), NAMESPACE_MALFORMED
-    if wanted is None or wanted == DEFAULT_NAMESPACE:
+    if wanted is None or wanted == current_namespace():
         from pipeline.persistence import _plan_manifest
 
         return resolve_child_namespace(_plan_manifest(plan_name) or {}, wanted, current_namespace())

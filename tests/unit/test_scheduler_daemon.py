@@ -706,7 +706,11 @@ def test_run_daemon_wires_advance_all_plans_as_reconcile_fn(run_daemon_env, monk
 
     assert len(FakeSchedulerDaemon.instances) == 1
     daemon = FakeSchedulerDaemon.instances[0]
-    assert daemon.kwargs["reconcile_fn"] is run_daemon_env["fake_advance_all_plans"]
+    # The tick wraps the default advance so other namespaces can follow it: with
+    # no other namespace holding plans, one call runs the patched default once.
+    daemon.kwargs["reconcile_fn"]()
+    assert run_daemon_env["reconcile_calls"] == [True]
+    run_daemon_env["reconcile_calls"].clear()
     # Never invoked directly by run_daemon() itself.
     assert run_daemon_env["reconcile_calls"] == []
 

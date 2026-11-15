@@ -16,6 +16,7 @@ the unchanged path and gets back the unchanged result object.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from pipeline.actor import bind_namespace, current_namespace
@@ -53,13 +54,17 @@ def _advance_namespace(server: Any, records: Any, namespace: str) -> tuple[dict,
     return plans, refusals
 
 
-def advance_all_namespaces() -> dict[str, Any]:
-    """Advance the default namespace, then every other namespace that holds plans."""
+def advance_all_namespaces(advance_default: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Advance the default namespace via *advance_default*, then every other namespace.
+
+    *advance_default* is ``server.advance_all_plans``, passed in by the daemon's
+    composition root so the default path stays the same function object.
+    """
     from pipeline import server
 
     records = _record_view(server)
     if records is None:
-        return server.advance_all_plans()
+        return advance_default()
 
     try:
         others = [
@@ -69,11 +74,11 @@ def advance_all_namespaces() -> dict[str, Any]:
         ]
     except Exception as exc:  # noqa: BLE001 - enumeration failure is reported, default still runs
         logger.error("namespace enumeration failed error_class=%s", type(exc).__name__)
-        result = server.advance_all_plans()
+        result = advance_default()
         result["namespace_error"] = "namespace_enumeration_failed"
         return result
 
-    result = server.advance_all_plans()
+    result = advance_default()
     if not others:
         return result
 

@@ -74,6 +74,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: object) -> None:
     monkeypatch.setattr(pipeline.server, "_store", store)
 
 
+def _tick() -> dict:
+    """Run one scheduler tick, resolving the default advance at call time."""
+    return scheduler_namespaces.advance_all_namespaces(pipeline.server.advance_all_plans)
+
+
 # ---------------------------------------------------------------------------
 # scheduler tick: namespaces advance independently
 # ---------------------------------------------------------------------------
@@ -97,7 +102,7 @@ def test_two_namespaces_advance_their_own_plans_and_see_only_their_records(
 
     monkeypatch.setattr(pipeline.server, "advance_pipeline", fake_advance)
 
-    result = scheduler_namespaces.advance_all_namespaces()
+    result = _tick()
 
     assert advance_calls == [("alpha", "p-alpha"), ("beta", "p-beta")]
     assert visible == {"alpha": ["p-alpha"], "beta": ["p-beta"]}
@@ -115,7 +120,7 @@ def test_a_plan_declaring_another_namespace_is_refused_and_audited(
     records.put_manifest("alpha", "plan-zeta", {"namespace": "beta", "stories": {}})
     _install(monkeypatch, _FakeStore(records))
 
-    result = scheduler_namespaces.advance_all_namespaces()
+    result = _tick()
 
     assert advance_calls == []
     assert result["namespaces"]["alpha"]["plans"]["plan-zeta"] == {
@@ -139,7 +144,7 @@ def test_default_only_records_return_the_unchanged_default_result(
     records.put_manifest("default", "p", {"stories": {}})
     _install(monkeypatch, _FakeStore(records))
 
-    result = scheduler_namespaces.advance_all_namespaces()
+    result = _tick()
 
     assert result == SENTINEL
     assert "namespaces" not in result
@@ -151,9 +156,28 @@ def test_a_store_without_a_record_view_returns_the_unchanged_default_result(
 ) -> None:
     _install(monkeypatch, _FakeStore(None))
 
-    result = scheduler_namespaces.advance_all_namespaces()
+    result = _tick()
 
     assert result == SENTINEL
+    assert advance_calls == []
+
+
+def test_the_default_namespace_advance_is_the_function_passed_in(
+    monkeypatch, advance_calls
+) -> None:
+    records = _Namespaced()
+    records.put_manifest("default", "p", {"stories": {}})
+    _install(monkeypatch, _FakeStore(records))
+    passed_in: list[str] = []
+
+    def default_advance() -> dict:
+        passed_in.append(current_namespace())
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert result == SENTINEL
+    assert passed_in == ["default"]
     assert advance_calls == []
 
 
@@ -169,7 +193,7 @@ def test_an_invalid_reported_namespace_is_not_skipped_silently(
     records.put_manifest("alpha", "p", {"namespace": "alpha", "stories": {}})
     _install(monkeypatch, _FakeStore(records))
 
-    result = scheduler_namespaces.advance_all_namespaces()
+    result = _tick()
 
     assert advance_calls == []
     assert result["namespace_error"] == "namespace_enumeration_failed"

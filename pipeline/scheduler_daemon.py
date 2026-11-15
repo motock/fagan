@@ -832,15 +832,16 @@ def run_daemon() -> int:
     _apply_scheduler_role_call_clamp()
 
     # Resolved at call time (not at module load) so tests patching
-    # ``pipeline.server.advance_all_plans`` land on this call site. The tick
-    # advances the default namespace through that function, then every other
-    # namespace that holds plans (pipeline.scheduler_namespaces).
+    # ``pipeline.server.advance_all_plans`` land on this call site.
+    from .server import advance_all_plans  # noqa: I001  -- must stay first
     from .advance_runtime import build_runtime
     from .scheduler_namespaces import advance_all_namespaces
-    advance_all_plans, stop_runtime = build_runtime(bus, advance_all_namespaces)
+    tick_fn, stop_runtime = build_runtime(
+        bus, lambda: advance_all_namespaces(advance_all_plans)
+    )
 
     daemon = SchedulerDaemon(
-        reconcile_fn=advance_all_plans,
+        reconcile_fn=tick_fn,
         scan_fn=scan_fn,
         bus=bus,
         interval_s=interval_s,

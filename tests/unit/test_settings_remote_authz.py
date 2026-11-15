@@ -397,6 +397,81 @@ def test_remote_listing_omits_deployment_records_and_keeps_team_repo_records(
     assert "team_repo" in scopes
 
 
+class _WholeStoreOrOneLayer:
+    """Allows one action on the empty whole-store resource and on one layer."""
+
+    def __init__(self, action: str, team: str) -> None:
+        self.action = action
+        self.team = team
+
+    def allow(self, principal, action, resource=None):
+        return (
+            action == self.action
+            and resource is not None
+            and resource.team in ("", self.team)
+            and resource.repo in ("", REPO)
+        )
+
+
+def test_remote_listing_withholds_records_of_layers_the_caller_may_not_read(
+    install_authorizer,
+) -> None:
+    settings_tools.set_setting(**_set_args(scope_id="layer-1"))
+    settings_tools.set_setting(**_set_args(scope_id="layer-2"))
+    install_authorizer(_WholeStoreOrOneLayer("config:read", "layer-1"))
+
+    with bind_principal(ALICE):
+        result = settings_tools.list_settings()
+
+    assert result["ok"] is True
+    assert [record["scope_id"] for record in result["records"]] == ["layer-1"]
+
+
+def test_remote_get_settings_refuses_the_deployment_layer_at_the_handler(
+    install_authorizer,
+) -> None:
+    install_authorizer(_AllowAll())
+    settings_tools.set_setting(
+        scope="deployment",
+        scope_id="",
+        repo="",
+        key="merge_ci_timeout_s",
+        value=600,
+        expected_version=None,
+    )
+
+    with bind_principal(ALICE):
+        result = settings_tools.get_settings("deployment", "", "")
+
+    assert result == {
+        "ok": False,
+        "reason": "host_only_scope",
+        "error": result["error"],
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        None,
+        "team_repo",
+        {"scope": "team_repo", "scope_id": "layer-1"},
+        {"scope": "team_repo", "scope_id": 7, "repo": REPO},
+    ],
+)
+def test_remote_get_settings_with_malformed_arguments_is_refused_before_its_handler(
+    arguments: object, install_authorizer
+) -> None:
+    install_authorizer(_AllowAll())
+
+    result, recorder = _through_middleware(
+        {"name": "get_settings", "arguments": arguments}, ALICE
+    )
+
+    assert result == REFUSED
+    assert recorder.calls == 0
+
+
 # --- agent principals and failing authorizers stay refused ----------------
 
 

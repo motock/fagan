@@ -82,6 +82,29 @@ def _accepts_role_routing(value: Any) -> bool:
     return True
 
 
+def _accepts_notification_routes(value: Any) -> bool:
+    """True when *value* is a well-formed layer ``notification_routes`` value for
+    the namespace bound to this write.
+
+    Every deny path returns False: a malformed value, an inline secret, an
+    environment name outside the default namespace, or a route to an instance
+    the layer does not declare.
+    """
+    # Imported here: the notification modules load channel types and must not
+    # run at module import (see the import guard in test_preflight).
+    from pipeline.actor import current_namespace
+    from pipeline.notification_routing import (
+        NotificationConfigError,
+        parse_layer_routes,
+    )
+
+    try:
+        parse_layer_routes(value, current_namespace())
+    except NotificationConfigError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class SettingKey:
     name: str
@@ -101,6 +124,8 @@ class SettingKey:
             return isinstance(value, int) and not isinstance(value, bool) and value >= 1
         if self.type == "routing":
             return _accepts_role_routing(value)
+        if self.type == "notification_routes":
+            return _accepts_notification_routes(value)
         return isinstance(value, str) and value in self.choices
 
 
@@ -175,6 +200,18 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=_ALL_LAYERS,
             legacy_env="PIPELINE_GRADE_XDIST_WORKERS",
             tighter=_lower_is_tighter,
+        ),
+        # Before role_routing: both have an empty legacy name, and the env guard
+        # maps each legacy name to the last registry key that declares it.
+        SettingKey(
+            name="notification_routes",
+            type="notification_routes",
+            kind="pref",
+            safe_value={},
+            # The deployment layer is the host's own file, so it never holds these.
+            allowed_layers=LAYERS[1:],
+            # A new key has no retired environment name to refuse.
+            legacy_env="",
         ),
         SettingKey(
             name="role_routing",

@@ -17,6 +17,7 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "reverify_full_suite",
         "grade_xdist_workers",
         "role_routing",
+        "notification_routes",
     }
 
 
@@ -75,6 +76,7 @@ def test_legacy_env_names_are_the_plan_names():
         "reverify_full_suite": "PIPELINE_REVERIFY_FULL_SUITE",
         "grade_xdist_workers": "PIPELINE_GRADE_XDIST_WORKERS",
         "role_routing": "",
+        "notification_routes": "",
     }
 
 

@@ -37,6 +37,14 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH_ENV = "PIPELINE_NOTIFY_CONFIG_PATH"
 MAX_CONFIG_BYTES = 256 * 1024
+# A layer's ``notification_routes`` value holds the file's instances and routes
+# and nothing else (no ``version``: the deployment file owns that).
+_LAYER_KEYS = ("instances", "routes")
+_ENV_KEY_SUFFIX = "_env"
+# The store's default namespace name. Only this namespace may read environment
+# variables. A literal, not the store constant: importing the store here would
+# grow the default-namespace ratchet.
+_ENV_NAMESPACE = "default"
 
 
 class NotificationConfigError(ValueError):
@@ -193,13 +201,7 @@ def _config_path(path: Path | str | None, env: Mapping[str, str]) -> Path:
 _REGISTERED_CHANNEL_PLUGINS: set[Callable] = set()
 
 
-def load_notification_config(
-    path: Path | str | None = None, env: Mapping[str, str] = os.environ
-) -> NotificationConfig | None:
-    """Load and validate the config; None when the file is absent (legacy mode).
-
-    Raises NotificationConfigError on any invalid file.
-    """
+def _register_channel_types() -> None:
     # Channel types register on import; config load must not depend on who
     # imported what first (the spool side never imports these modules).
     from . import notification_email, notification_slack  # noqa: F401
@@ -215,6 +217,16 @@ def load_notification_config(
         if registrar not in _REGISTERED_CHANNEL_PLUGINS:
             registrar(register_channel_type)
             _REGISTERED_CHANNEL_PLUGINS.add(registrar)
+
+
+def load_notification_config(
+    path: Path | str | None = None, env: Mapping[str, str] = os.environ
+) -> NotificationConfig | None:
+    """Load and validate the config; None when the file is absent (legacy mode).
+
+    Raises NotificationConfigError on any invalid file.
+    """
+    _register_channel_types()
 
     cfg_path = _config_path(path, env)
     try:
@@ -259,3 +271,86 @@ def safe_load_notification_config(
     except NotificationConfigError as exc:
         logger.error("notification config invalid; delivering nothing: error=%s", exc)
         return NotificationConfig()
+
+
+def _refuse_env_names_outside_default(instances: Any) -> None:
+    """Refuse a ``*_env`` setting: it reads the process environment, which only
+    the default namespace may use. The message names the key path only."""
+    if not isinstance(instances, dict):
+        return
+    for name, settings in instances.items():
+        if not isinstance(settings, dict):
+            continue
+        for key in settings:
+            if isinstance(key, str) and key.endswith(_ENV_KEY_SUFFIX):
+                raise _fail(
+                    f"instances.{name}.{key}",
+                    "environment names are refused outside the default namespace; "
+                    "use a *_ref name",
+                )
+
+
+def parse_layer_routes(value: Any, namespace: str) -> NotificationConfig:
+    """Validate a non-deployment layer's ``notification_routes`` value.
+
+    The value is ``{"instances": {...}, "routes": [...]}``, both optional, with
+    the file's per-instance and per-route schema. Its instances form a table of
+    their own: a layer route may name only the layer's instances, never a
+    deployment instance. A ``*_env`` setting is refused unless *namespace* is
+    the default namespace. Every deny path raises NotificationConfigError, which
+    names the key path and never a value.
+    """
+    _register_channel_types()
+    value = _require_object(value, "notification_routes")
+    if set(value) - set(_LAYER_KEYS):
+        raise _fail("notification_routes", "only 'instances' and 'routes' are allowed")
+    raw_instances = value.get("instances", {})
+    if namespace != _ENV_NAMESPACE:
+        _refuse_env_names_outside_default(raw_instances)
+    # Instance settings are validated for shape only; the env argument is
+    # never read at build time, so an empty mapping is correct for both cases.
+    instances = _build_instances(raw_instances, {})
+    routes_raw = value.get("routes", [])
+    if not isinstance(routes_raw, list):
+        raise _fail("notification_routes.routes", "must be a list")
+    routes = tuple(_build_route(r, i, instances) for i, r in enumerate(routes_raw))
+    return NotificationConfig(instances=instances, routes=routes)
+
+
+def namespace_notification_config(
+    read_layer_routes: Callable[[str], Any],
+    namespace: str | None = None,
+    path: Path | str | None = None,
+    env: Mapping[str, str] = os.environ,
+) -> NotificationConfig | None:
+    """Return the config that routes *namespace*'s events.
+
+    The deployment file is merged with the namespace's own layer routes.
+    ``read_layer_routes(namespace)`` returns that namespace's ``notification_routes``
+    value, or None when unset. The namespace defaults to the bound request
+    namespace. When the value is unset or empty the result is exactly
+    ``load_notification_config``'s, so an unset layer changes nothing.
+
+    Deployment routes come first and the first matching route wins, so a host
+    route is never shadowed by a layer route. Layer instance names must not
+    collide with deployment instance names. Raises NotificationConfigError on an
+    invalid deployment file or layer value.
+    """
+    if namespace is None:
+        from pipeline.actor import current_namespace
+
+        namespace = current_namespace()
+    base = load_notification_config(path, env)
+    raw = read_layer_routes(namespace)
+    if raw is None or raw == {}:
+        return base
+    layer = parse_layer_routes(raw, namespace)
+    deployment = base if base is not None else NotificationConfig()
+    if set(layer.instances) & set(deployment.instances):
+        raise _fail(
+            "notification_routes.instances", "name collides with a deployment instance"
+        )
+    return NotificationConfig(
+        instances={**deployment.instances, **layer.instances},
+        routes=deployment.routes + layer.routes,
+    )

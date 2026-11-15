@@ -38,6 +38,7 @@ from app.identity import (
     SYSTEM_SCHEDULER,  # noqa: F401 (re-exported)
     Principal,
 )
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 #: A caller whose transport refused to identify them. Distinct from "no
 #: transport at all": this one must never be treated as the local operator.
@@ -53,6 +54,8 @@ _BOUND: ContextVar[Principal | None] = ContextVar("pipeline_actor", default=None
 _CORRELATION: ContextVar[str | None] = ContextVar(
     "pipeline_correlation", default=None
 )
+
+_NAMESPACE: ContextVar[str | None] = ContextVar("pipeline_namespace", default=None)
 
 
 @contextmanager
@@ -114,3 +117,20 @@ def bind_correlation_id(value: str) -> Iterator[None]:
 def current_correlation_id() -> str:
     """Return the bound correlation id, or "" outside a request."""
     return _CORRELATION.get() or ""
+
+
+@contextmanager
+def bind_namespace(namespace: str) -> Iterator[None]:
+    """Bind *namespace* as the namespace for the current request."""
+    if not isinstance(namespace, str) or not namespace:
+        raise ValueError("namespace must be a non-empty string")
+    token = _NAMESPACE.set(namespace)
+    try:
+        yield
+    finally:
+        _NAMESPACE.reset(token)
+
+
+def current_namespace() -> str:
+    """Return the bound namespace, or ``DEFAULT_NAMESPACE`` when nothing is bound."""
+    return _NAMESPACE.get() or DEFAULT_NAMESPACE

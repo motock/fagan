@@ -141,9 +141,8 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 ),
             }
 
-        access_refusal = access_hooks.refuse_dispatch(_store, plan_name, story_key, manifest)
-        if access_refusal is not None:
-            return access_refusal
+        if (refusal := access_hooks.refuse_dispatch(_store, plan_name, story_key, manifest)) is not None:
+            return refusal
         # W4-logging slice: mint the correlation ID once (the falsy guard keeps
         # it across redispatch) and record the branch, persisting both before
         # ANY subprocess work so a failed launch leaves them for the retry.

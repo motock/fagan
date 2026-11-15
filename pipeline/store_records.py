@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from typing import Any, Protocol
 
+from pipeline.namespace_names import is_segmented_namespace
+
 DEFAULT_NAMESPACE = 'default'
 
 #: The complete, closed field set of a usage record (ADR 0012 decision 3,
@@ -118,7 +120,9 @@ def validate_namespace(value: str) -> str:
     The error message is deliberately generic: the offending value may be a
     path and is never echoed back.
     """
-    if not isinstance(value, str) or _NAMESPACE_RE.fullmatch(value) is None:
+    if not isinstance(value, str) or (
+        _NAMESPACE_RE.fullmatch(value) is None and not is_segmented_namespace(value)
+    ):
         raise InvalidRecordKeyError('invalid namespace')
     return value
 

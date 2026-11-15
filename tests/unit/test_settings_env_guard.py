@@ -26,7 +26,11 @@ from pipeline.settings_registry import REGISTRY
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SENTINEL = "SENTINEL-do-not-echo-7f3a"
 
-RETIRED = {setting.legacy_env: setting.name for setting in REGISTRY.values()}
+RETIRED = {
+    setting.legacy_env: setting.name
+    for setting in REGISTRY.values()
+    if setting.legacy_env
+}
 
 EXPECTED_RETIRED = {
     "PIPELINE_MERGE_CI_GATE": "merge_ci_gate",
@@ -37,7 +41,6 @@ EXPECTED_RETIRED = {
     "PIPELINE_REWORK_ON_CI_FAIL": "rework_on_ci_fail",
     "PIPELINE_REVERIFY_FULL_SUITE": "reverify_full_suite",
     "PIPELINE_GRADE_XDIST_WORKERS": "grade_xdist_workers",
-    "": "role_routing",
 }
 
 OLD_DEFAULTS = {
@@ -88,6 +91,12 @@ def test_blank_retired_variable_still_refuses(value):
     assert [
         f["name"] for f in guard.retired_env_present({"PIPELINE_TEST_SCOPE": value})
     ] == ["PIPELINE_TEST_SCOPE"]
+
+
+def test_setting_without_a_legacy_name_is_never_reported_for_an_empty_name():
+    # Keys with no retired name store "" as legacy_env. An empty-named variable
+    # must not be reported as retiring them.
+    assert guard.retired_env_present({"": SENTINEL}) == []
 
 
 def test_no_retired_variable_reports_nothing():

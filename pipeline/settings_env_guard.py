@@ -25,10 +25,11 @@ from pipeline.settings_registry import REGISTRY
 
 def retired_env_present(environ: Mapping[str, str]) -> list[dict[str, str]]:
     """Return ``{name, replacement}`` for each retired variable present in *environ*."""
+    # A key with no retired name has legacy_env "" and is never reported.
     return [
         {"name": setting.legacy_env, "replacement": setting.name}
         for setting in REGISTRY.values()
-        if setting.legacy_env in environ
+        if setting.legacy_env and setting.legacy_env in environ
     ]
 
 

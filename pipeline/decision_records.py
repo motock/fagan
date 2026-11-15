@@ -46,6 +46,7 @@ from .actor import (
     actor_id,
     client_id,
     current_correlation_id,
+    current_namespace,
     current_principal,
     principal_type,
 )
@@ -54,10 +55,6 @@ logger = logging.getLogger("pipeline.decision_records")
 
 #: The record schema this module writes. Bumped when a field changes meaning.
 SCHEMA_VERSION = 2
-
-#: The only namespace the core pipeline writes. Tenant isolation is a later
-#: layer; the reader already filters on it so a shared stream stays separable.
-DEFAULT_NAMESPACE = "default"
 
 #: The decision classes an autonomous ruling may claim.
 DECISION_CLASSES = frozenset(
@@ -219,6 +216,11 @@ def _plan_key(plan_name: Any) -> str:
     return plan_name
 
 
+def _bound_or(namespace: str | None) -> str:
+    """Return *namespace* when given, else the namespace bound for the request."""
+    return current_namespace() if namespace is None else namespace
+
+
 def _namespace_key(namespace: Any) -> str:
     if not isinstance(namespace, str) or not namespace:
         raise DecisionRecordError("namespace: must be a non-empty string")
@@ -286,9 +288,11 @@ def _chain_head(path: Path) -> dict[str, Any] | None:
 def append_decision_record(
     plan_name: str,
     record: dict[str, Any],
-    namespace: str = DEFAULT_NAMESPACE,
+    namespace: str | None = None,
 ) -> dict[str, Any]:
     """Append one validated decision record to ``plan_name``'s chain.
+
+    *namespace* defaults to the namespace bound for the request.
 
     Validation (including the refusal of caller-supplied identity) runs to
     completion *before* the stream is opened, so a rejected record leaves the
@@ -307,7 +311,7 @@ def append_decision_record(
             caller may not supply, or names a field data minimisation forbids.
     """
     payload = _validated(record)
-    namespace_key = _namespace_key(namespace)
+    namespace_key = _namespace_key(_bound_or(namespace))
     path = decision_stream_path(plan_name)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,9 +360,11 @@ def append_decision_record(
 
 
 def read_decision_records(
-    plan_name: str, namespace: str = DEFAULT_NAMESPACE
+    plan_name: str, namespace: str | None = None
 ) -> list[dict[str, Any]]:
     """Return ``plan_name``'s records in *namespace*, oldest first.
+
+    *namespace* defaults to the namespace bound for the request.
 
     A missing stream is an empty one. A corrupt line is skipped and logged by
     line number and plan - never by content - and is *not* repaired or counted
@@ -366,7 +372,7 @@ def read_decision_records(
     reader has no side effects at all. :func:`verify_decision_chain` is the call
     that reports the damage.
     """
-    namespace_key = _namespace_key(namespace)
+    namespace_key = _namespace_key(_bound_or(namespace))
     path = decision_stream_path(plan_name)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()

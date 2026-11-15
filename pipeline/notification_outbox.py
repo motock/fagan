@@ -68,10 +68,11 @@ from pathlib import Path
 from typing import Any
 
 from . import persistence
+from .actor import current_namespace
 from .live_ref import LiveRef as _ServerRef
 from .notification_channels import as_sender
 from .notification_routing import safe_load_notification_config
-from .store_records import DEFAULT_NAMESPACE, LEGACY_OUTBOX_CHANNEL
+from .store_records import LEGACY_OUTBOX_CHANNEL
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def _append_rotating(path: Path, line: str) -> None:
     """
     plan, channel = _queue_identity(path)
     _store.records().append_outbox(
-        DEFAULT_NAMESPACE, plan, channel, json.loads(line)
+        current_namespace(), plan, channel, json.loads(line)
     )
 
 
@@ -166,7 +167,7 @@ def _plan_owner(plan: str) -> str:
         # Read through the process's SHARED store: a second store connection
         # (``store.build_store()``) would contend for the write lock the caller
         # may be holding while it enqueues its outbox entry.
-        manifest = _store.records().get_manifest(DEFAULT_NAMESPACE, plan)
+        manifest = _store.records().get_manifest(current_namespace(), plan)
     except Exception as exc:  # noqa: BLE001 - an unreadable manifest means "no owner"
         logger.warning(
             "Could not read plan owner for notification routing: error_type=%s",
@@ -416,7 +417,7 @@ def _queues_by_channel() -> dict[str, list[str]]:
     (or was never created) is not listed: there is nothing to drain.
     """
     queues: dict[str, list[str]] = {}
-    for plan, channel in _store.records().list_outboxes(DEFAULT_NAMESPACE):
+    for plan, channel in _store.records().list_outboxes(current_namespace()):
         plans = queues.setdefault(channel, [])
         if plan not in plans:
             plans.append(plan)
@@ -438,7 +439,7 @@ def _drain_queue(plan_name: str, channel: str, sender) -> int:
     malformed lines, and acknowledging only the ids this drain actually saw
     keeps a record appended between the read and the ack.
     """
-    entries = _store.records().read_outbox(DEFAULT_NAMESPACE, plan_name, channel)
+    entries = _store.records().read_outbox(current_namespace(), plan_name, channel)
     now = datetime.now(UTC)
     acked: list[str] = []
     delivered = 0
@@ -468,7 +469,7 @@ def _drain_queue(plan_name: str, channel: str, sender) -> int:
             delivered += 1
             if entry_id is not None:
                 acked.append(entry_id)
-    _store.records().ack_outbox(DEFAULT_NAMESPACE, plan_name, channel, acked)
+    _store.records().ack_outbox(current_namespace(), plan_name, channel, acked)
     return delivered
 
 

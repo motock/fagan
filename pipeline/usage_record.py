@@ -42,9 +42,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import telemetry_usage
-from .actor import current_correlation_id
+from .actor import current_correlation_id, current_namespace
 from .concurrency import _ServerRef
-from .store_records import DEFAULT_NAMESPACE, USAGE_RECORD_FIELDS
+from .store_records import USAGE_RECORD_FIELDS
 
 #: The complete, closed key set of a usage record. Anything not listed here is
 #: not an accounting fact and must not be written.  This is the *same object* as
@@ -172,7 +172,7 @@ def record_usage(
             "cost_usd": _measure(cost_usd),
             "duration_ms": _measure(duration_ms),
         }
-        _records().append_usage(DEFAULT_NAMESPACE, record["plan"], record)
+        _records().append_usage(current_namespace(), record["plan"], record)
         telemetry_usage.record(record)
     except Exception as exc:  # noqa: BLE001 - accounting must never break a call
         logger.warning("usage record dropped", extra={"error_type": type(exc).__name__})

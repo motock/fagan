@@ -18,6 +18,7 @@ from app import backend, role_registry
 from pipeline.review_base import resolve_review_base
 
 from . import context_sources as ctxsrc
+from .actor import current_namespace
 from .config import (
     _LOCAL_BACKEND_NAMES,
     DEFAULT_MODEL,
@@ -30,7 +31,6 @@ from .live_ref import LiveRef
 from .persona import _persona_body, _persona_default_model
 from .review_rework_scope import scoped_rework_diff
 from .store_records import (
-    DEFAULT_NAMESPACE,
     InvalidRecordKeyError,
     validate_context_digest,
 )
@@ -80,7 +80,7 @@ def _read_recorded_snapshot(recorded: dict) -> str | None:
         validate_context_digest(digest)
     except InvalidRecordKeyError:
         return None
-    snapshot = _store.records().get_context_snapshot(DEFAULT_NAMESPACE, digest)
+    snapshot = _store.records().get_context_snapshot(current_namespace(), digest)
     if snapshot is None:
         return None
     text = snapshot["content"]

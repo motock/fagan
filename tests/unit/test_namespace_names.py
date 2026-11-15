@@ -87,7 +87,7 @@ def test_validate_namespace_accepts_two_segments(value):
 
 def test_validate_namespace_still_accepts_the_single_segment_default():
     assert validate_namespace(DEFAULT_NAMESPACE) == DEFAULT_NAMESPACE
-    assert validate_namespace('org-1') == 'org-1'
+    assert validate_namespace('ns-1') == 'ns-1'
 
 
 @pytest.mark.parametrize('value', INVALID_TWO_SEGMENT)
@@ -117,17 +117,13 @@ def test_memory_default_namespace_cannot_see_a_two_segment_manifest():
     assert store.list_plans(DEFAULT_NAMESPACE) == []
 
 
-def test_sqlite_store_round_trips_a_two_segment_manifest(tmp_path, plan_dir):
+def test_sqlite_refuses_a_two_segment_namespace_and_writes_nothing(tmp_path, plan_dir):
+    """SqliteStore serves only the default namespace, by design (ADR 0012)."""
     records = SqliteStore(str(tmp_path / 'records.db')).records()
-    records.put_manifest(TWO_SEGMENT, PLAN, MANIFEST)
-    assert records.get_manifest(TWO_SEGMENT, PLAN) == MANIFEST
-    assert records.list_plans(TWO_SEGMENT) == [PLAN]
-
-
-def test_sqlite_default_namespace_cannot_see_a_two_segment_manifest(tmp_path, plan_dir):
-    records = SqliteStore(str(tmp_path / 'records.db')).records()
-    records.put_manifest(TWO_SEGMENT, PLAN, MANIFEST)
-    assert records.get_manifest(DEFAULT_NAMESPACE, PLAN) is None
+    with pytest.raises(UnknownNamespaceError):
+        records.put_manifest(TWO_SEGMENT, PLAN, MANIFEST)
+    with pytest.raises(UnknownNamespaceError):
+        records.get_manifest(TWO_SEGMENT, PLAN)
     assert records.list_plans(DEFAULT_NAMESPACE) == []
 
 

@@ -11,6 +11,7 @@ and ``==`` comparisons, never in an assertion message.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -265,4 +266,118 @@ def test_plugin_result_is_still_wrapped_in_a_secret_value(
 
     assert isinstance(value, SecretValue)
     assert repr(value) == "<redacted>"
+
+
+# -- a two-segment namespace is an opaque key ---------------------------------
+
+ACME_WEB = "acme/web"
+TWO_SEGMENT_VALUE = "two-segment-value-for-acme-web"
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        pytest.param("acme/web", id="acme-web"),
+        pytest.param("a-b/c-d", id="hyphenated-segments"),
+    ],
+)
+def test_credential_ref_keeps_a_two_segment_namespace_verbatim(namespace) -> None:
+    ref = CredentialRef("model", "ollama_api_key", namespace=namespace)
+
+    assert ref.namespace == namespace
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        pytest.param("default", id="default"),
+        pytest.param("tenant-a", id="single-segment"),
+        pytest.param("a.b", id="dotted-single-segment"),
+    ],
+)
+def test_credential_ref_still_accepts_a_single_segment_namespace(namespace) -> None:
+    ref = CredentialRef("model", "ollama_api_key", namespace=namespace)
+
+    assert ref.namespace == namespace
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        pytest.param("a/b/c", id="three-segments"),
+        pytest.param("/b", id="leading-separator"),
+        pytest.param("a/", id="trailing-separator"),
+        pytest.param("a/b/", id="trailing-separator-after-two-segments"),
+        pytest.param("A/b", id="upper-case-first-segment"),
+        pytest.param("a/B", id="upper-case-second-segment"),
+        pytest.param("a//b", id="empty-middle-segment"),
+        pytest.param("a b/c", id="space-in-segment"),
+        pytest.param("../x", id="parent-traversal"),
+        pytest.param("", id="empty"),
+        pytest.param("a" * 65 + "/web", id="sixty-five-character-segment"),
+    ],
+)
+def test_credential_ref_refuses_a_malformed_namespace(namespace) -> None:
+    with pytest.raises(CredentialError) as excinfo:
+        CredentialRef("model", "ollama_api_key", namespace=namespace)
+
+    assert str(excinfo.value) == "invalid credential reference: namespace"
+
+
+def test_credential_ref_refuses_a_none_namespace() -> None:
+    with pytest.raises(CredentialError) as excinfo:
+        CredentialRef("model", "ollama_api_key", namespace=None)
+
+    assert str(excinfo.value) == "invalid credential reference: namespace"
+
+
+def _write_two_segment_plugin(tmp_path, monkeypatch) -> None:
+    """Install a credentials plugin that serves only the ``acme/web`` namespace.
+
+    A namespace that reached the plugin altered would find nothing and the
+    resolve would raise, so a passing resolve proves the key arrived unchanged.
+    """
+    name = f"nsref_plugin_{uuid.uuid4().hex}"
+    (tmp_path / f"{name}.py").write_text(
+        "from app.credentials import Credential, SecretValue\n"
+        "class _Provider:\n"
+        "    def get(self, ref):\n"
+        "        if ref.namespace != 'acme/web' or ref.name != 'ollama_api_key':\n"
+        "            return None\n"
+        f"        return Credential(SecretValue({TWO_SEGMENT_VALUE!r}))\n"
+        "def factory():\n"
+        "    return _Provider()\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("PIPELINE_CREDENTIALS_PLUGIN", f"{name}:factory")
+
+
+def test_plugin_receives_a_two_segment_namespace_unchanged(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_two_segment_plugin(tmp_path, monkeypatch)
+    ref = CredentialRef("model", "ollama_api_key", namespace=ACME_WEB)
+
+    value = resolve(ref)
+
+    assert ref.namespace == ACME_WEB
+    assert isinstance(value, SecretValue)
+    assert value.reveal() == TWO_SEGMENT_VALUE
+
+
+def test_two_segment_namespace_without_a_plugin_is_credential_missing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ref = CredentialRef("model", "ollama_api_key", namespace=ACME_WEB)
+
+    with caplog.at_level(logging.INFO, logger="app.credentials"), pytest.raises(
+        CredentialMissing
+    ) as info:
+        resolve(ref, environ={})
+
+    assert str(info.value) == "credential_missing"
+    records = [r for r in caplog.records if r.name == "app.credentials"]
+    assert len(records) == 1
+    assert records[0].credential_namespace == ACME_WEB
+    assert records[0].credential_outcome == "missing"
 

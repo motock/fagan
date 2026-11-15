@@ -40,6 +40,7 @@ from app.plugin_loader import (
     plugin_spec,
     require_methods,
 )
+from pipeline.namespace_names import is_segmented_namespace
 from pipeline.secret_refs import SecretRefError, parse_body, read_secret
 
 _LOGGER = logging.getLogger("app.credentials")
@@ -156,6 +157,13 @@ def _invalid(field: str) -> CredentialError:
     return CredentialError(f"invalid credential reference: {field}")
 
 
+def _is_namespace(value: object) -> bool:
+    """True for a single identifier or a two-segment key, kept as an opaque string."""
+    if isinstance(value, str) and _IDENTIFIER_RE.match(value) is not None:
+        return True
+    return is_segmented_namespace(value)
+
+
 def _check_pattern(field: str, value: object, pattern: re.Pattern[str]) -> str:
     """Return ``value`` if it is a string matching ``pattern``, else raise."""
     if not isinstance(value, str) or pattern.match(value) is None:
@@ -174,7 +182,8 @@ class CredentialRef:
 
     def __post_init__(self) -> None:
         _check_pattern("purpose", self.purpose, _IDENTIFIER_RE)
-        _check_pattern("namespace", self.namespace, _IDENTIFIER_RE)
+        if not _is_namespace(self.namespace):
+            raise _invalid("namespace")
         if self.purpose == "secret":
             # A secret name is ``provider/name``; the grammar lives with the
             # resolver so the two cannot drift.

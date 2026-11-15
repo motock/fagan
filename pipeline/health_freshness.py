@@ -218,7 +218,7 @@ def health_extras(
     )
     try:
         records = (build_store() if store is None else store).records()
-        summary = records.outbox_summary(DEFAULT_NAMESPACE)
+        summary = records.outbox_summary(DEFAULT_NAMESPACE)  # intentional: background consumer
     except Exception:  # noqa: BLE001 (read-only probe: an unreadable store is "no outbox")
         # A rejected PIPELINE_STORE selection must not turn the health probe
         # into a 500; the runtime block reports it as "invalid" instead.

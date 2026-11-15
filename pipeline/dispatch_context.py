@@ -14,7 +14,6 @@ from typing import Any
 from . import context_sources as ctxsrc
 from .persona import _with_files_pointers
 from .service import _ServerRef
-from .store_records import DEFAULT_NAMESPACE
 
 _store = _ServerRef("_store")
 _notify_user = _ServerRef("_notify_user")
@@ -22,8 +21,10 @@ _notify_user = _ServerRef("_notify_user")
 
 def _load_recorded_context(source: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
     """Return the snapshot for a previously recorded digest, verifying it."""
+    from .actor import current_namespace
+
     digest = recorded["digest"]
-    snapshot = _store.records().get_context_snapshot(DEFAULT_NAMESPACE, digest)
+    snapshot = _store.records().get_context_snapshot(current_namespace(), digest)
     if snapshot is None:
         # Snapshot lost: refetch, but only accept byte-identical content.
         text = ctxsrc.resolve_dir_source(source)["text"]
@@ -64,6 +65,8 @@ def _step_resolve_context(
     required-source failure that must be returned as-is (status unchanged).
     Recorded ``context_digests`` are reused on rework/resume, never refetched.
     """
+    from .actor import current_namespace
+
     context = manifest.get("context")
     sources = ctxsrc.sources_for_phase(context["sources"], "dispatch") if context else []
     if not sources:
@@ -84,7 +87,7 @@ def _step_resolve_context(
             if source.get("required", True):
                 reason = f"required context source failed: {exc}"
                 story["dispatch_block_reason"] = reason
-                _store.records().put_manifest("default", plan_name, manifest)
+                _store.records().put_manifest(current_namespace(), plan_name, manifest)
                 logging.getLogger("pipeline").warning(
                     "dispatch blocked by required context source",
                     extra={"plan": plan_name, "story_key": story_key},
@@ -110,7 +113,7 @@ def _step_resolve_context(
                 if source.get("required", True):
                     reason = f"required context source failed: {exc}"
                     story["dispatch_block_reason"] = reason
-                    _store.records().put_manifest("default", plan_name, manifest)
+                    _store.records().put_manifest(current_namespace(), plan_name, manifest)
                     return "", {"ok": False, "error": reason, "story_key": story_key}
                 continue
             files = json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))["files"]
@@ -118,7 +121,7 @@ def _step_resolve_context(
             continue
         resolved.append(entry)
     if story["context_digests"]:
-        _store.records().put_manifest("default", plan_name, manifest)
+        _store.records().put_manifest(current_namespace(), plan_name, manifest)
     max_total = context.get("max_total_chars", ctxsrc.DEFAULT_MAX_TOTAL_CHARS)
     block = ctxsrc.render_context_block(resolved, max_total_chars=max_total)
     return _with_files_pointers(block, pointers), None

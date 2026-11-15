@@ -372,10 +372,11 @@ def _append_adjudication_decision(
     an audit write must never break the merge gate.
     """
     from . import persistence
+    from .actor import current_namespace
     from .server import _store
     from .store import FileStore
-    from .store_records import DEFAULT_NAMESPACE
 
+    namespace = current_namespace()
     # The file store's record view and its legacy surface are both exactly
     # ``persistence._append_decision``; resolve that writer here rather than
     # hop through a store layer that would shadow it.
@@ -384,20 +385,23 @@ def _append_adjudication_decision(
         append = getattr(records(), "append_decision", None) if records else None
         if append is None:
             # A store that only carries the legacy surface still owns the
-            # record: ``append_decision(plan_name, record)``.
+            # record: ``append_decision(plan_name, record)``. It holds only the
+            # default partition, so it refuses any other namespace.
             legacy = getattr(_store, "append_decision", None)
             if legacy is not None:
 
                 def append(_namespace, plan, rec, _legacy=legacy):
+                    persistence.require_default_namespace(_namespace)
                     _legacy(plan, rec)
         if append is not None:
             try:
-                append(DEFAULT_NAMESPACE, plan_name, record)
+                append(namespace, plan_name, record)
                 return
             except (TypeError, ValueError):
                 # The store refused the key (an unvalidatable plan name): the
                 # legacy writer still records what the gate ruled on.
                 pass
+    persistence.require_default_namespace(namespace)
     persistence._append_decision(plan_name, record)
 
 
@@ -562,6 +566,8 @@ def _merge_decision(
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    from . import persistence
+    from .actor import current_namespace
     from .authorization import authorize
     from .pr import _resolve_story_branch
     from .review_merge_binding import (
@@ -586,6 +592,15 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         _store,
         _validate_key,
     )
+    from .store_records import UnknownNamespaceError
+
+    # The manifest reads and writes below are default-partition only, so a bound
+    # request is denied up front, before authorization can audit into the
+    # default chain.
+    try:
+        persistence.require_default_namespace(current_namespace())
+    except UnknownNamespaceError:
+        return {"ok": False, "error": "unknown namespace"}
 
     # Validate the caller-supplied keys BEFORE anything reads or writes a path
     # built from them. ``authorize`` is not inert on bad input: it reads the
@@ -797,9 +812,19 @@ def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
+    from . import persistence
+    from .actor import current_namespace
     from .authorization import authorize
     from .server import _store, _validate_key
+    from .store_records import UnknownNamespaceError
 
+    # The manifest reads and writes below are default-partition only, so a bound
+    # request is denied up front, before authorization can audit into the
+    # default chain.
+    try:
+        persistence.require_default_namespace(current_namespace())
+    except UnknownNamespaceError:
+        return {"ok": False, "error": "unknown namespace"}
     # ``authorize`` is not inert on bad input -- it reads the manifest by
     # ``plan_name`` and, on denial, appends to the plan's notification sidecar.
     # Reject a traversal here so the denial-write path is safe regardless of

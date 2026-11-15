@@ -582,7 +582,7 @@ def _record_exists(plan: str, event_id) -> bool:
     )
     if read is None:
         return False
-    records, _malformed = read(DEFAULT_NAMESPACE, plan)
+    records, _malformed = read(DEFAULT_NAMESPACE, plan)  # intentional: background consumer
     return any(
         isinstance(record, dict)
         and record.get("event") == DEAD_LETTER_RECORD_EVENT

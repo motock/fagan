@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from app.identity import Principal
+from pipeline.actor import bind_namespace
 from pipeline.audit import append_host_audit
 from pipeline.namespace_resolver import (
     NamespaceResolver,
@@ -84,6 +87,30 @@ def verify_namespace(
     if principal.principal_type == "agent" and access.namespace != principal.team_scope:
         return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
     return NamespaceDecision(True, access.namespace, access.roles, "")
+
+
+class NamespaceDenied(Exception):
+    """A request asked for a namespace it may not reach. Carries the reason token only."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@contextmanager
+def enter_request_namespace(
+    principal: Principal, requested: str | None
+) -> Iterator[NamespaceDecision]:
+    """Verify *requested* for *principal*, then bind its namespace for the request.
+
+    A denial raises :class:`NamespaceDenied` before the body runs, so nothing
+    namespace-scoped executes unless the namespace was verified.
+    """
+    decision = verify_namespace(principal, requested)
+    if not decision.allowed:
+        raise NamespaceDenied(decision.reason)
+    with bind_namespace(decision.namespace):
+        yield decision
 
 
 def _is_valid(requested: object) -> bool:

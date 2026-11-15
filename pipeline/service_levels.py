@@ -28,8 +28,9 @@ import math
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from pipeline.actor import current_namespace
 from pipeline.audit_log import HOST_CHAIN_ID
-from pipeline.store_records import DEFAULT_NAMESPACE
+from pipeline.store_records import UnknownNamespaceError
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,9 @@ def _chain_names(log: AuditLogLike) -> list[str]:
     trusted to be last in the enumeration.
     """
     try:
-        chains = log.list_chains(DEFAULT_NAMESPACE)
+        chains = log.list_chains(current_namespace())
+    except UnknownNamespaceError:
+        raise
     except Exception:
         logger.warning("listing the audit chains failed", exc_info=True)
         return []
@@ -90,7 +93,9 @@ def _chain_names(log: AuditLogLike) -> list[str]:
 def _records(log: AuditLogLike, chain: str) -> list[dict[str, Any]]:
     """Return *chain*'s well-formed records in storage order, skipping bad ones."""
     try:
-        entries = log.read_chain(DEFAULT_NAMESPACE, chain)
+        entries = log.read_chain(current_namespace(), chain)
+    except UnknownNamespaceError:
+        raise
     except Exception:
         logger.warning("reading an audit chain failed", exc_info=True)
         return []

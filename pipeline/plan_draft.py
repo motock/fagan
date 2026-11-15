@@ -12,7 +12,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.store_records import DEFAULT_NAMESPACE, UnreadableRecordError
+from pipeline.actor import current_namespace
+from pipeline.store_records import (
+    DEFAULT_NAMESPACE,
+    UnknownNamespaceError,
+    UnreadableRecordError,
+)
 
 
 def _records() -> Any:
@@ -42,8 +47,8 @@ def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, An
     """
     records = _records()
     try:
-        plan = records.get_plan_draft(DEFAULT_NAMESPACE, plan_name)
-    except UnreadableRecordError as exc:
+        plan = records.get_plan_draft(current_namespace(), plan_name)
+    except (UnknownNamespaceError, UnreadableRecordError) as exc:
         return None, {'ok': False, 'error': str(exc)}
     if plan is None:
         return None, {'ok': False, 'error': f'No plan named {plan_name}'}

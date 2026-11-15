@@ -16,16 +16,19 @@ bound namespace refuses rather than falling back to the default.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import pipeline.server
-from pipeline import audit, security_audit
+from pipeline import audit, plan_draft, security_audit
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.audit_file import FileAuditLog
 from pipeline.audit_log import HOST_CHAIN_ID
+from pipeline.service import PipelineService
+from pipeline.service_levels import read_story_timeline
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE, UnknownNamespaceError
 from pipeline.store_sqlite import SqliteStore
@@ -52,18 +55,15 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/events_nats_consumer.py": 2,
     "pipeline/health_freshness.py": 2,
     "pipeline/ci.py": 3,
-    "pipeline/ingest.py": 7,
     "pipeline/manifest_source.py": 3,
     "pipeline/merge.py": 2,
     "pipeline/metrics_exposition.py": 4,
     "pipeline/namespace_resolver.py": 2,
     "pipeline/notification_outbox.py": 6,
     "pipeline/persistence.py": 2,
-    "pipeline/plan_draft.py": 4,
+    "pipeline/plan_draft.py": 3,
     "pipeline/preflight.py": 2,
     "pipeline/review.py": 2,
-    "pipeline/service.py": 3,
-    "pipeline/service_levels.py": 3,
     "pipeline/settings_tools.py": 5,
     "pipeline/store.py": 5,
     "pipeline/store_contract.py": 101,
@@ -277,3 +277,145 @@ def test_bound_namespace_holds_the_security_audit_state() -> None:
     assert bound_state is not None
     assert records.get_security_audit_state(NAMESPACE, key) is not None
     assert records.get_security_audit_state(DEFAULT_NAMESPACE, key) is None
+
+
+# -- plan paths under the request namespace ----------------------------------
+
+DRAFT = {"epics": []}
+
+
+class _NullAuditLog:
+    """An audit log that accepts appends and keeps none, for paths that audit."""
+
+    def append(self, namespace: str, chain: str, body: dict) -> dict:
+        return {}
+
+
+class _RecordStore:
+    """A store stand-in whose record view is one in-memory record store."""
+
+    def __init__(self, records: InMemoryRecordStore) -> None:
+        self._records = records
+
+    def records(self) -> InMemoryRecordStore:
+        return self._records
+
+    def audit_log(self) -> _NullAuditLog:
+        return _NullAuditLog()
+
+
+class _NamespaceRecordingLog:
+    """An audit log that records each namespace it is asked to read."""
+
+    def __init__(self) -> None:
+        self.namespaces: list[str] = []
+
+    def list_chains(self, namespace: str) -> list[str]:
+        self.namespaces.append(namespace)
+        return []
+
+    def read_chain(self, namespace: str, chain: str) -> list[dict]:
+        self.namespaces.append(namespace)
+        return []
+
+
+class _RefusingLog(_NamespaceRecordingLog):
+    """An audit log that refuses every namespace but the default one."""
+
+    def list_chains(self, namespace: str) -> list[str]:
+        raise UnknownNamespaceError("unknown namespace")
+
+
+@pytest.fixture
+def memory_records(monkeypatch: pytest.MonkeyPatch) -> InMemoryRecordStore:
+    """Hand the plan paths an in-memory record store of its own for one test."""
+    records = InMemoryRecordStore()
+    monkeypatch.setattr(pipeline.server, "_store", _RecordStore(records))
+    return records
+
+
+def test_bound_save_plan_is_refused_and_writes_no_default_draft(
+    memory_records: InMemoryRecordStore,
+) -> None:
+    """A bound save is refused with an explicit denial; the default draft is untouched."""
+    plan_json = json.dumps(DRAFT)
+
+    with bind_namespace(NAMESPACE):
+        result = PipelineService().save_plan("plan-x", plan_json)
+
+    assert result == {"ok": False, "error": "unknown namespace"}
+    assert memory_records.get_plan_draft(DEFAULT_NAMESPACE, "plan-x") is None
+
+
+def test_unbound_save_plan_stages_the_default_draft(
+    memory_records: InMemoryRecordStore,
+) -> None:
+    """Unbound, save_plan stages the draft in the default namespace, as before."""
+    result = PipelineService().save_plan("plan-x", json.dumps(DRAFT))
+
+    assert result["ok"] is True
+    assert memory_records.get_plan_draft(DEFAULT_NAMESPACE, "plan-x") == DRAFT
+
+
+def test_bound_draft_read_is_refused_not_redirected(
+    memory_records: InMemoryRecordStore,
+) -> None:
+    """Drafts are default-only, so a bound draft read is refused, never read from default."""
+    memory_records.put_plan_draft(DEFAULT_NAMESPACE, "plan-x", DRAFT)
+
+    with bind_namespace(NAMESPACE):
+        plan, refusal = plan_draft.read_plan_draft("plan-x")
+
+    assert plan is None
+    assert refusal == {"ok": False, "error": "unknown namespace"}
+
+
+def test_unbound_draft_read_serves_the_default_draft(
+    memory_records: InMemoryRecordStore,
+) -> None:
+    """Unbound, the draft read returns the default namespace's draft, as before."""
+    memory_records.put_plan_draft(DEFAULT_NAMESPACE, "plan-x", DRAFT)
+
+    plan, refusal = plan_draft.read_plan_draft("plan-x")
+
+    assert plan == DRAFT
+    assert refusal is None
+
+
+def test_bound_ingest_is_refused_before_it_writes_the_default_partition(
+    memory_records: InMemoryRecordStore,
+) -> None:
+    """Ingest under a bound namespace refuses at the draft read and writes nothing."""
+    memory_records.put_plan_draft(DEFAULT_NAMESPACE, "plan-x", DRAFT)
+
+    with bind_namespace(NAMESPACE):
+        result = pipeline.server.ingest_plan("plan-x")
+
+    assert result == {"ok": False, "error": "unknown namespace"}
+    assert memory_records.get_manifest(DEFAULT_NAMESPACE, "plan-x") is None
+    assert memory_records.get_manifest(NAMESPACE, "plan-x") is None
+
+
+def test_bound_story_timeline_reads_only_the_bound_namespace() -> None:
+    """With ``a/b`` bound the timeline asks the audit log for that namespace only."""
+    log = _NamespaceRecordingLog()
+
+    with bind_namespace(NAMESPACE):
+        read_story_timeline(log)
+
+    assert set(log.namespaces) == {NAMESPACE}
+
+
+def test_unbound_story_timeline_reads_the_default_namespace() -> None:
+    """Unbound, the timeline asks the audit log for the default namespace, as before."""
+    log = _NamespaceRecordingLog()
+
+    read_story_timeline(log)
+
+    assert set(log.namespaces) == {DEFAULT_NAMESPACE}
+
+
+def test_bound_story_timeline_propagates_a_refused_namespace() -> None:
+    """A log that refuses the bound namespace fails the timeline, never empties it."""
+    with bind_namespace(NAMESPACE), pytest.raises(UnknownNamespaceError):
+        read_story_timeline(_RefusingLog())

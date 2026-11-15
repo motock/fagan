@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import cross_plan, plan_draft, plan_names, testfiles
-from .actor import actor_id
+from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
 from .build_detect import _lint_acceptance_fixtures
 from .context_sources import (
@@ -51,7 +51,7 @@ from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
-from .store_records import DEFAULT_NAMESPACE, UnreadableRecordError
+from .store_records import UnreadableRecordError
 
 # Server-sourced names the function body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -388,7 +388,7 @@ def _acceptance_field_error(story: dict) -> str | None:
 
 
 def _neighbour_manifests(plan_name: str) -> dict[str, dict]:
-    manifests = _store.records().get_manifests(DEFAULT_NAMESPACE)
+    manifests = _store.records().get_manifests(current_namespace())
     return {name: manifest for name, manifest in manifests.items() if name != plan_name}
 
 
@@ -532,7 +532,7 @@ def _story_extra_fields(story: dict) -> dict:
 
 def _consume_plan_draft(plan_name: str) -> None:
     """Delete the staged draft: after a full ingest the manifest is the plan."""
-    plan_draft._records().delete_plan_draft(plan_draft.DEFAULT_NAMESPACE, plan_name)
+    plan_draft._records().delete_plan_draft(current_namespace(), plan_name)
 
 
 def _keyless_reingest_error(
@@ -575,7 +575,7 @@ def _ingest_plan_impl(
         missing = f"No plan named {plan_name}"
         # A plan whose draft a full ingest consumed names the way out (ADR 0012).
         if refusal.get("error") == missing and plan_name in _store.records().list_plans(
-            plan_draft.DEFAULT_NAMESPACE
+            current_namespace()
         ):
             return {"ok": False, "error": (
                 f"plan '{plan_name}' has no staged draft: save_plan it "
@@ -749,7 +749,7 @@ def _ingest_plan_impl(
     if description_refusal is not None:
         return description_refusal
 
-    already_ingested = plan_name in _store.records().list_plans(plan_draft.DEFAULT_NAMESPACE)
+    already_ingested = plan_name in _store.records().list_plans(current_namespace())
     keyless_error = _keyless_reingest_error(plan, only_epics, already_ingested, overwrite)
     if keyless_error is not None:
         return {"ok": False, "error": keyless_error}
@@ -768,7 +768,7 @@ def _ingest_plan_impl(
         # Any caller can rewrite a plan file, so resolve ownership against the
         # manifest on disk even when overwriting, before any provider call.
         try:
-            stored = _store.records().get_manifest(plan_draft.DEFAULT_NAMESPACE, plan_name)
+            stored = _store.records().get_manifest(current_namespace(), plan_name)
         except UnreadableRecordError as exc:
             return {"ok": False, "error": str(exc)}
         # A listed plan with no readable manifest refuses rather than resets as new.
@@ -888,7 +888,7 @@ def _ingest_plan_impl(
             previous_approval = final_manifest.get("approval")
             final_manifest["approval"] = on_ingest(final_manifest)
             notify_pending = pending_notice_due(previous_approval, final_manifest["approval"])
-        _store.records().put_manifest(plan_draft.DEFAULT_NAMESPACE, plan_name, final_manifest)
+        _store.records().put_manifest(current_namespace(), plan_name, final_manifest)
         # ADR 0012 decision 5: a full ingest consumes the draft. A crash between
         # this write and the delete leaves it, and the next ingest re-applies
         # identical content by explicit story key - which is idempotent.

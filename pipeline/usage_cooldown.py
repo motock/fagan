@@ -34,13 +34,20 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _cooldown_path() -> Path:
-    """The latch file, resolved at call time.
+def _cooldown_path(credential: str | None = None) -> Path:
+    """The latch file for `credential`, resolved at call time.
 
     `USAGE_STATE_PATH` is looked up as a module global on every call (never
-    cached at import) so tests and callers can repoint it.
+    cached at import) so tests and callers can repoint it. None is the default
+    credential's latch; a key gets its own latch file beside it. A malformed
+    key raises ValueError here, before any read or write.
     """
-    return Path(USAGE_STATE_PATH).parent / _COOLDOWN_FILENAME
+    default = Path(USAGE_STATE_PATH).parent / _COOLDOWN_FILENAME
+    if credential is None:
+        return default
+    from pipeline.usage import keyed_sidecar_path  # local: usage imports this package
+
+    return keyed_sidecar_path(default, credential)
 
 
 def _cooldown_seconds() -> int:
@@ -61,19 +68,20 @@ def _cooldown_seconds() -> int:
     return seconds
 
 
-def trip(seconds: int | None = None) -> None:
-    """Latch a cooldown of `seconds` (default: the configured length).
+def trip(seconds: int | None = None, credential: str | None = None) -> None:
+    """Latch a cooldown of `seconds` (default: the configured length) for `credential`.
 
     Writes atomically via a sibling temp file + `os.replace`, so a concurrent
-    `active()` never reads a half-written file. Never raises: a cooldown that
-    cannot be recorded must not break the caller that just saw the cap.
+    `active()` never reads a half-written file. Never raises on runtime state:
+    a cooldown that cannot be recorded must not break the caller that just saw
+    the cap. A malformed credential key is a caller bug and raises ValueError.
     """
+    path = _cooldown_path(credential)
     tmp: Path | None = None
     try:
         if seconds is None:
             seconds = _cooldown_seconds()
         until = _utcnow() + timedelta(seconds=seconds)
-        path = _cooldown_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
         tmp.write_text(json.dumps({"until": until.isoformat()}))
@@ -89,15 +97,17 @@ def trip(seconds: int | None = None) -> None:
                 pass
 
 
-def active() -> bool:
-    """True only when the latch file parses and its `until` is in the future.
+def active(credential: str | None = None) -> bool:
+    """True only when `credential`'s latch file parses and its `until` is in the future.
 
     Pure read: no writes, no deletes, no mkdir. Anything unexpected - missing
     file, bad JSON, a non-string or unparsable `until` - is reported as not
-    active (fail open).
+    active (fail open). A malformed credential key raises ValueError instead,
+    so it can never be mistaken for "no cooldown".
     """
+    path = _cooldown_path(credential)
     try:
-        data = json.loads(_cooldown_path().read_text())
+        data = json.loads(path.read_text())
         if not isinstance(data, dict):
             return False
         raw_until = data.get("until")

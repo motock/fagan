@@ -287,3 +287,27 @@ def test_cli_unreadable_decisions_log_is_refused_not_reported_empty(plan_dir, ca
     assert code == 1
     assert captured.out == ""
     assert "could not be read" in captured.err
+
+
+def test_cli_refuses_a_plan_name_that_escapes_the_plan_directory(plan_dir, capsys) -> None:
+    escaped = plan_dir.parent / "escape.decisions.json"
+    escaped.write_text(json.dumps(_paired_park_agree(20)))
+
+    code = tr.main(["--plan", "../escape", "--json"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "invalid plan name" in captured.err
+    assert "../escape" not in captured.err
+
+
+def test_cli_refuses_a_decisions_log_holding_a_non_object_record(plan_dir, capsys) -> None:
+    (plan_dir / "stray.decisions.json").write_text(json.dumps([1, "two"]))
+
+    code = tr.main(["--plan", "stray", "--json"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "could not be read" in captured.err

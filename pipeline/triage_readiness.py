@@ -29,6 +29,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from . import persistence
+from .store_records import InvalidRecordKeyError, validate_plan_name
 from .triage_park_classes import ALLOWED_ACTIONS
 
 __all__ = ["MAX_FALSE_PARK_PERCENT", "MIN_PAIRED_DECISIONS", "PARK_ACTION", "main", "readiness"]
@@ -144,8 +145,8 @@ def _read_decisions(plan: str) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     records = json.loads(path.read_text())
-    if not isinstance(records, list):
-        raise TypeError("decisions log is not a list")
+    if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+        raise TypeError("decisions log is not a list of records")
     return records
 
 
@@ -179,7 +180,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     args = parser.parse_args(argv)
 
-    plans = _plans_with_decisions() if args.all else args.plan
+    try:
+        plans = _plans_with_decisions() if args.all else [validate_plan_name(p) for p in args.plan]
+    except InvalidRecordKeyError:
+        print("error: invalid plan name", file=sys.stderr)
+        return 1
     try:
         report = {plan: readiness(_read_decisions(plan)) for plan in plans}
     except (OSError, TypeError, ValueError):

@@ -12,9 +12,10 @@ because the file descriptor is not inheritable (no agent grandchild keeps it
 alive). Abandoning a thread instead leaves the lock held by the daemon.
 
 Protocol: ``argv`` is ``[plan_name, result_path]``, optionally followed by the
-namespace the parent expects the plan to be in; a mismatch is refused. The result path must be
-absolute, in an existing directory, and the payload is written atomically with
-mode 0600 because it is a handoff to the pool runner in the parent process.
+namespace the parent expects the plan to be in; a mismatch is refused. The
+result path must be absolute, in an existing directory, and the payload is
+written atomically with mode 0600 because it is a handoff to the pool runner in
+the parent process.
 Exit codes: 0 success, 1 advance raised, 2 bad invocation (nothing written).
 
 Identity is re-bound here (``SYSTEM_SCHEDULER`` + a fresh correlation id) so the
@@ -40,10 +41,9 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_namespace,
     bind_principal,
-    current_namespace,
     new_correlation_id,
 )
-from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
+from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 
 __all__ = ["configure_child", "main"]
 
@@ -133,11 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
             try:
-                from pipeline.persistence import _plan_manifest
-
-                namespace, reason = resolve_child_namespace(
-                    _plan_manifest(plan_name) or {}, requested, current_namespace()
-                )
+                namespace, reason = read_plan_namespace(plan_name, requested)
                 if reason is not None:
                     audit_refusal(reason)
                     _write_result(result_path, {"ok": False, "error": reason})

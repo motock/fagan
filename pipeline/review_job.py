@@ -42,10 +42,9 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_namespace,
     bind_principal,
-    current_namespace,
     new_correlation_id,
 )
-from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
+from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
 
 __all__ = [
@@ -354,15 +353,12 @@ def main(argv: list[str] | None = None) -> int:
         # Imported inside the function: pipeline.server pulls in this package's
         # heavy modules, and this module must stay importable on its own.
         import pipeline.server
-        from pipeline.persistence import _plan_manifest
 
         # Identity is re-bound here (SYSTEM_SCHEDULER + a fresh correlation id)
         # so the child's records and policy decisions look exactly like the
         # scheduler's own.
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
-            namespace, reason = resolve_child_namespace(
-                _plan_manifest(plan_name) or {}, requested, current_namespace()
-            )
+            namespace, reason = read_plan_namespace(plan_name, requested)
             if reason is not None:
                 audit_refusal(reason)
                 _write_result(result_path, {"state": "error", "error": reason})

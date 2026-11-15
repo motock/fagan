@@ -187,6 +187,21 @@ def _worker():
     return pipeline.advance_worker
 
 
+def _install_plan(
+    monkeypatch: pytest.MonkeyPatch, stored_in: str, plan_name: str, declared: str | None = None
+) -> _Namespaced:
+    """Install a real record store holding *plan_name* under *stored_in*.
+
+    The manifest declares *declared* when given; reads are never patched, so a
+    child's lookup in the requested namespace is exercised for real.
+    """
+    records = _Namespaced()
+    manifest = {"stories": {}} if declared is None else {"namespace": declared, "stories": {}}
+    records.put_manifest(stored_in, plan_name, manifest)
+    _install(monkeypatch, _FakeStore(records))
+    return records
+
+
 @pytest.fixture
 def manifest(monkeypatch: pytest.MonkeyPatch) -> dict:
     """The manifest the child reads for its plan; tests set its contents."""
@@ -198,11 +213,11 @@ def manifest(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 
 def test_worker_refuses_a_tampered_namespace_without_advancing(
-    manifest, advance_calls, audits
+    monkeypatch, advance_calls, audits
 ) -> None:
-    manifest["manifest"] = {"stories": {}}
+    _install_plan(monkeypatch, "beta", "demo-plan", declared="alpha")
 
-    result = _worker()._advance("demo-plan", "other")
+    result = _worker()._advance("demo-plan", "beta")
 
     assert result == {"ok": False, "error": "namespace_mismatch"}
     assert advance_calls == []
@@ -221,9 +236,9 @@ def test_worker_refuses_a_malformed_requested_namespace(
 
 
 def test_worker_binds_the_requested_namespace_when_the_plan_declares_it(
-    manifest, advance_calls, audits
+    monkeypatch, advance_calls, audits
 ) -> None:
-    manifest["manifest"] = {"namespace": "alpha", "stories": {}}
+    _install_plan(monkeypatch, "alpha", "demo-plan", declared="alpha")
 
     result = _worker()._advance("demo-plan", "alpha")
 
@@ -256,9 +271,9 @@ def _advance_one():
 
 
 def test_advance_one_refuses_a_mismatched_namespace_argument_with_an_audit(
-    tmp_path: Path, manifest, advance_calls, audits
+    tmp_path: Path, monkeypatch, advance_calls, audits
 ) -> None:
-    manifest["manifest"] = {"namespace": "alpha", "stories": {}}
+    _install_plan(monkeypatch, "beta", "demo-plan", declared="alpha")
     result_path = tmp_path / "out.json"
 
     assert _advance_one().main(["demo-plan", str(result_path), "beta"]) == 1
@@ -289,9 +304,9 @@ def _review_job():
 
 
 def test_review_job_refuses_a_mismatched_namespace_without_reviewing(
-    tmp_path: Path, monkeypatch, manifest, audits
+    tmp_path: Path, monkeypatch, audits
 ) -> None:
-    manifest["manifest"] = {"namespace": "alpha", "stories": {}}
+    _install_plan(monkeypatch, "beta", "P", declared="alpha")
     calls: list[str] = []
     monkeypatch.setattr(
         pipeline.server, "review_story", lambda *a: calls.append("ran") or {}
@@ -309,9 +324,9 @@ def test_review_job_refuses_a_mismatched_namespace_without_reviewing(
 
 
 def test_review_job_reviews_under_the_matching_namespace(
-    tmp_path: Path, monkeypatch, manifest, audits
+    tmp_path: Path, monkeypatch, audits
 ) -> None:
-    manifest["manifest"] = {"namespace": "alpha", "stories": {}}
+    _install_plan(monkeypatch, "alpha", "P", declared="alpha")
     seen: list[str] = []
 
     def fake_review(plan, story):
@@ -331,3 +346,92 @@ def test_review_job_rejects_more_than_one_namespace_argument(tmp_path: Path) -> 
     assert _review_job().main(
         ["P", "S-1", str(tmp_path / "out.json"), "alpha", "extra"]
     ) == 2
+
+
+# ---------------------------------------------------------------------------
+# children read the manifest from the namespace the parent requested
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def alpha_only_store(monkeypatch: pytest.MonkeyPatch) -> _Namespaced:
+    """A real record store holding plans under ``alpha`` only; reads are unpatched."""
+    records = _Namespaced()
+    records.put_manifest("alpha", "demo-plan", {"stories": {}})
+    records.put_manifest("alpha", "P", {"stories": {}})
+    _install(monkeypatch, _FakeStore(records))
+    return records
+
+
+def test_worker_binds_a_plan_stored_only_under_the_requested_namespace(
+    alpha_only_store, advance_calls, audits
+) -> None:
+    result = _worker()._advance("demo-plan", "alpha")
+
+    assert result == {"ok": True, "plan": "demo-plan"}
+    assert advance_calls == [("alpha", "demo-plan")]
+    assert audits == []
+
+
+def test_advance_one_binds_a_plan_stored_only_under_the_requested_namespace(
+    tmp_path: Path, alpha_only_store, advance_calls, audits
+) -> None:
+    result_path = tmp_path / "out.json"
+
+    assert _advance_one().main(["demo-plan", str(result_path), "alpha"]) == 0
+
+    assert advance_calls == [("alpha", "demo-plan")]
+    assert json.loads(result_path.read_text()) == {"ok": True, "plan": "demo-plan"}
+    assert audits == []
+
+
+def test_review_job_reviews_a_plan_stored_only_under_the_requested_namespace(
+    tmp_path: Path, monkeypatch, alpha_only_store, audits
+) -> None:
+    seen: list[str] = []
+
+    def fake_review(plan, story):
+        seen.append(current_namespace())
+        return {"status": "pass"}
+
+    monkeypatch.setattr(pipeline.server, "review_story", fake_review)
+    result_path = tmp_path / "out.json"
+
+    assert _review_job().main(["P", "S-1", str(result_path), "alpha"]) == 0
+
+    assert seen == ["alpha"]
+    assert audits == []
+
+
+def test_worker_refuses_a_plan_the_requested_namespace_does_not_hold(
+    alpha_only_store, advance_calls, audits
+) -> None:
+    result = _worker()._advance("demo-plan", "beta")
+
+    assert result == {"ok": False, "error": "namespace_mismatch"}
+    assert advance_calls == []
+    assert [a["detail"]["reason"] for a in audits] == ["namespace_mismatch"]
+
+
+def test_worker_refuses_a_non_string_namespace_and_audits_it(
+    manifest, advance_calls, audits
+) -> None:
+    manifest["manifest"] = {"stories": {}}
+
+    result = _worker()._advance("demo-plan", 7)
+
+    assert result == {"ok": False, "error": "namespace_malformed"}
+    assert advance_calls == []
+    assert [a["detail"]["reason"] for a in audits] == ["namespace_malformed"]
+
+
+def test_worker_refuses_a_namespace_the_store_cannot_serve(
+    monkeypatch, advance_calls, audits
+) -> None:
+    _install(monkeypatch, _FakeStore(None))
+
+    result = _worker()._advance("demo-plan", "alpha")
+
+    assert result == {"ok": False, "error": "namespace_unavailable"}
+    assert advance_calls == []
+    assert [a["detail"]["reason"] for a in audits] == ["namespace_unavailable"]

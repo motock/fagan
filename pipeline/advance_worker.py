@@ -41,10 +41,9 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_namespace,
     bind_principal,
-    current_namespace,
     new_correlation_id,
 )
-from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
+from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 
 __all__ = ["main"]
 
@@ -132,11 +131,7 @@ def _advance(plan: str, requested: object = None) -> dict[str, Any]:
 
     try:
         with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
-            from pipeline.persistence import _plan_manifest
-
-            namespace, reason = resolve_child_namespace(
-                _plan_manifest(plan) or {}, requested, current_namespace()
-            )
+            namespace, reason = read_plan_namespace(plan, requested)
             if reason is not None:
                 audit_refusal(reason)
                 return {"ok": False, "error": reason}

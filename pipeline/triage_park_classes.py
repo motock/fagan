@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 # Actions the triage vocabulary added with the park classes. Each has only a
 # shadow-only executor stub until its own story replaces it.
-NEW_ACTIONS = frozenset({"resolve_rebase", "retry_transient", "rebrief", "approve_test_edit"})
+NEW_ACTIONS = frozenset({"resolve_rebase", "retry_transient", "rebrief", "approve_test_edit", "resume_review"})
 
 # The actions every triage ruling could carry before the park classes landed.
 EXISTING_ACTIONS = frozenset({

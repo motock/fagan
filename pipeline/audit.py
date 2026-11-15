@@ -34,9 +34,15 @@ from pathlib import Path
 from typing import Any
 
 from . import audit_chain, persistence
-from .actor import actor_id, client_id, current_correlation_id, principal_type
+from .actor import (
+    actor_id,
+    client_id,
+    current_correlation_id,
+    current_namespace,
+    principal_type,
+)
 from .audit_log import HOST_CHAIN_ID
-from .store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError
+from .store_records import InvalidRecordKeyError
 
 logger = logging.getLogger("pipeline.audit")
 
@@ -136,7 +142,7 @@ def append_audit(
     otherwise put the chain outside the plan directory.
     """
     return _audit_log().append(
-        DEFAULT_NAMESPACE,
+        current_namespace(),
         plan_name,
         _body(action=action, outcome=outcome, target=target, detail=detail),
     )
@@ -151,7 +157,7 @@ def append_host_audit(
 ) -> dict[str, Any]:
     """Append one record to the host-scoped chain (no plan exists to scope it)."""
     return _audit_log().append(
-        DEFAULT_NAMESPACE,
+        current_namespace(),
         HOST_CHAIN_ID,
         _body(action=action, outcome=outcome, target=target, detail=detail),
     )
@@ -196,7 +202,7 @@ def record_audit(
 def verify_audit_chain(plan_name: str) -> int | None:
     """Return the seq of the first altered record, or ``None`` when intact."""
     return audit_chain.verify_entries(
-        _audit_log().read_chain(DEFAULT_NAMESPACE, plan_name)
+        _audit_log().read_chain(current_namespace(), plan_name)
     )
 
 
@@ -210,14 +216,14 @@ def verify_audit_log() -> tuple[dict[str, int | None], int | None]:
     """
     log = _audit_log()
     plans: dict[str, int | None] = {}
-    for chain in log.list_chains(DEFAULT_NAMESPACE):
+    for chain in log.list_chains(current_namespace()):
         if chain == HOST_CHAIN_ID:
             continue
         plans[chain] = audit_chain.verify_entries(
-            log.read_chain(DEFAULT_NAMESPACE, chain)
+            log.read_chain(current_namespace(), chain)
         )
     host = audit_chain.verify_entries(
-        log.read_chain(DEFAULT_NAMESPACE, HOST_CHAIN_ID)
+        log.read_chain(current_namespace(), HOST_CHAIN_ID)
     )
     return plans, host
 
@@ -225,7 +231,7 @@ def verify_audit_log() -> tuple[dict[str, int | None], int | None]:
 def verify_host_audit_chain() -> int | None:
     """Return the seq of the first altered host record, or ``None`` when intact."""
     return audit_chain.verify_entries(
-        _audit_log().read_chain(DEFAULT_NAMESPACE, HOST_CHAIN_ID)
+        _audit_log().read_chain(current_namespace(), HOST_CHAIN_ID)
     )
 
 

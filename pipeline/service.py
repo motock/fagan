@@ -24,7 +24,7 @@ from typing import Any
 
 from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline.plan_approval import PlanApprovalMixin
-from pipeline.store_records import DEFAULT_NAMESPACE
+from pipeline.store_records import UnknownNamespaceError
 from pipeline.telemetry import record_dispatch_attempt
 from pipeline.usage_record import scoped_story_call
 from pipeline.workspace import (
@@ -164,7 +164,7 @@ _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
 from . import plan_draft, plan_export, plan_names, remote_scope, review_audit
-from .actor import current_principal
+from .actor import current_namespace, current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
     _patch_plan_impl,
@@ -303,7 +303,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         before the store is touched.
         """
         _validate_key(plan_name)
-        return _store.records().get_notification_history(DEFAULT_NAMESPACE, plan_name)
+        return _store.records().get_notification_history(current_namespace(), plan_name)
 
     def list_plans(self) -> list[str]:
         return plan_draft.list_plan_names(_store.records())
@@ -763,7 +763,10 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return {"ok": False, "error": "Plan must contain 'epics' key"}
 
         records = _store.records()
-        records.put_plan_draft(DEFAULT_NAMESPACE, plan_name, plan)
+        try:
+            records.put_plan_draft(current_namespace(), plan_name, plan)
+        except UnknownNamespaceError:
+            return {"ok": False, "error": "unknown namespace"}
 
         story_count = sum(len(e.get("stories", [])) for e in plan["epics"])
         return {

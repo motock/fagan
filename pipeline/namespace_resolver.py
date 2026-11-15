@@ -82,7 +82,7 @@ class DefaultNamespaceResolver:
     """With no plugin configured: the default namespace with the principal's roles."""
 
     def accesses(self, principal: Principal) -> tuple[NamespaceAccess, ...]:
-        return (NamespaceAccess(DEFAULT_NAMESPACE, principal.roles),)
+        return (NamespaceAccess(DEFAULT_NAMESPACE, frozenset(principal.roles)),)
 
 
 def checked_accesses(

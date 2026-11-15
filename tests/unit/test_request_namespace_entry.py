@@ -29,7 +29,7 @@ from pipeline.namespace_access import (
     NamespaceDenied,
     enter_request_namespace,
 )
-from pipeline.namespace_resolver import NamespaceAccess
+from pipeline.namespace_resolver import DefaultNamespaceResolver, NamespaceAccess
 from pipeline.remote_transport import BearerAuthMiddleware
 from pipeline.store_records import DEFAULT_NAMESPACE
 
@@ -426,3 +426,20 @@ def test_advance_refuses_an_invalid_plan_namespace_and_reports_class_only(
         "ok": False,
         "error": "advance raised InvalidRecordKeyError",
     }
+
+
+# The default resolver accepts a principal whose roles arrive as a tuple.
+# Principal does not coerce roles, and decision callers build them as tuples.
+
+
+def test_default_resolver_accepts_a_principal_with_tuple_roles():
+    principal = Principal(subject="carol", roles=(ROLE_AUTHOR,))
+    (access,) = DefaultNamespaceResolver().accesses(principal)
+    assert access.namespace == DEFAULT_NAMESPACE
+    assert access.roles == frozenset({ROLE_AUTHOR})
+
+
+def test_default_resolver_gives_tuple_roles_as_a_frozenset():
+    principal = Principal(subject="carol", roles=(ROLE_AUTHOR,))
+    (access,) = DefaultNamespaceResolver().accesses(principal)
+    assert isinstance(access.roles, frozenset)

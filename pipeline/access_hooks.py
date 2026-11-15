@@ -301,6 +301,17 @@ def _audit_admission(action: str, outcome: str, kind: str, reason: str) -> None:
         logger.warning("admission audit append failed", extra={"admission_kind": kind})
 
 
+def admit_dispatch(story: dict[str, Any]) -> bool:
+    """Return whether ``story`` may take a dispatch slot this tick.
+
+    A refusal or a hook failure returns False, and the caller defers the story:
+    it stays dispatch-eligible, is not parked, and claims no lease or slot. The
+    refusal itself is audited by ``admit``.
+    """
+    attempts = int(story.get("dispatch_attempts") or 0)
+    return admit("dispatch", {"dispatch_attempts": attempts})
+
+
 def _admission_hook() -> AdmissionHook | None:
     """Return the configured admission hook, or None when no plugin is selected.
 

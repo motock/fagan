@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Any
 
-from . import cross_plan, plan_approval, review_job
+from . import access_hooks, cross_plan, plan_approval, review_job
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -564,6 +564,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     event="dispatch_in_progress",
                     story_key=key,
                 )
+                continue
+            if not access_hooks.admit_dispatch(fresh_story):
+                # Deferred for this tick only: no lease, no slot, not parked.
                 continue
             if not claim_dispatch_lease(fresh_story):
                 continue

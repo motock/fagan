@@ -40,6 +40,7 @@ from app.plugin_loader import (
     plugin_spec,
     require_methods,
 )
+from pipeline.secret_refs import SecretRefError, parse_body, read_secret
 
 _LOGGER = logging.getLogger("app.credentials")
 
@@ -151,8 +152,16 @@ class CredentialRef:
     def __post_init__(self) -> None:
         _check_pattern("purpose", self.purpose, _IDENTIFIER_RE)
         _check_pattern("namespace", self.namespace, _IDENTIFIER_RE)
-        name_pattern = _ENV_NAME_RE if self.purpose == "env" else _IDENTIFIER_RE
-        _check_pattern("name", self.name, name_pattern)
+        if self.purpose == "secret":
+            # A secret name is ``provider/name``; the grammar lives with the
+            # resolver so the two cannot drift.
+            try:
+                parse_body(self.name)
+            except SecretRefError:
+                raise _invalid("name") from None
+        else:
+            name_pattern = _ENV_NAME_RE if self.purpose == "env" else _IDENTIFIER_RE
+            _check_pattern("name", self.name, name_pattern)
         if isinstance(self.scope, (str, bytes)) or not isinstance(
             self.scope, (tuple, list)
         ):
@@ -296,6 +305,29 @@ def _log_outcome(ref: CredentialRef, outcome: str, level: int, **extra) -> None:
     )
 
 
+def _resolve_secret(ref: CredentialRef, *, environ=None) -> SecretValue | None:
+    """Resolve a ``secret://`` reference; logs outcome only, never the name."""
+    try:
+        raw = read_secret(parse_body(ref.name), environ=environ)
+    except SecretRefError as exc:
+        _LOGGER.warning(
+            "credential lookup",
+            extra={"credential_purpose": ref.purpose, "credential_outcome": "error"},
+        )
+        raise CredentialError(str(exc)) from None
+    if raw is None:
+        _LOGGER.info(
+            "credential lookup",
+            extra={"credential_purpose": ref.purpose, "credential_outcome": "unset"},
+        )
+        return None
+    _LOGGER.info(
+        "credential lookup",
+        extra={"credential_purpose": ref.purpose, "credential_outcome": "ok"},
+    )
+    return SecretValue(raw)
+
+
 def resolve(
     ref: CredentialRef,
     *,
@@ -308,7 +340,13 @@ def resolve(
     ``credential_*`` fields. Provider failures and expired values raise
     :class:`CredentialError`; None means "not configured", which is different
     from an error.
+
+    A ``purpose="secret"`` reference (``name`` is ``provider/name``) bypasses
+    the operator credential provider and is read by :mod:`pipeline.secret_refs`.
+    Its log records carry no name, because a secret name is an identifier.
     """
+    if ref.purpose == "secret":
+        return _resolve_secret(ref, environ=environ)
     provider = credential_provider(environ)
     try:
         result = provider.get(ref)

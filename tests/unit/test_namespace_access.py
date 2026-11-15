@@ -232,10 +232,17 @@ def test_agent_with_no_requested_namespace_gets_only_its_own_scope() -> None:
     assert decision.reason == NAMESPACE_NOT_PERMITTED
 
 
-def test_agent_on_the_default_namespace_is_not_permitted() -> None:
-    # The default namespace is never an agent's team_scope, so an agent with
-    # the default resolver is refused rather than handed the store default.
-    decision = verify_namespace(AGENT, DEFAULT_NAMESPACE, DefaultNamespaceResolver())
+def test_agent_on_the_default_resolver_gets_the_default_namespace(audit_recorder) -> None:
+    # Agents keep today's behaviour with no resolver plugin; the team_scope
+    # restriction is a plugin-resolver rule.
+    decision = verify_namespace(AGENT, None, DefaultNamespaceResolver())
+    assert decision.allowed is True
+    assert decision.namespace == DEFAULT_NAMESPACE
+    assert audit_recorder == []
+
+
+def test_agent_requesting_non_default_namespace_on_default_resolver_is_refused() -> None:
+    decision = verify_namespace(AGENT, "initech", DefaultNamespaceResolver())
     assert decision.allowed is False
     assert decision.reason == NAMESPACE_NOT_PERMITTED
 

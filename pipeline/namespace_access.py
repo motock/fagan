@@ -20,10 +20,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TypeVar
 
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
 from app.identity import Principal
 from pipeline.actor import bind_namespace
 from pipeline.audit import append_host_audit
 from pipeline.namespace_resolver import (
+    DefaultNamespaceResolver,
     NamespaceResolver,
     active_namespace_resolver,
     checked_accesses,
@@ -64,8 +68,9 @@ def verify_namespace(
 
     An empty *requested* selects the principal's one access, and is a denial
     when there are several. A malformed *requested* is refused before the
-    resolver is consulted. An agent principal reaches only the namespace equal
-    to its ``team_scope``.
+    resolver is consulted. Under a plugin resolver an agent principal reaches
+    only the namespace equal to its ``team_scope``; under the default resolver
+    an agent is scoped by the authorization check instead, as any principal is.
     """
     is_empty = requested is None or requested == ""
     if not is_empty and not _is_valid(requested):
@@ -88,7 +93,12 @@ def verify_namespace(
             return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
         access = matches[0]
 
-    if principal.principal_type == "agent" and access.namespace != principal.team_scope:
+    is_plugin_resolver = not isinstance(active, DefaultNamespaceResolver)
+    if (
+        is_plugin_resolver
+        and principal.principal_type == "agent"
+        and access.namespace != principal.team_scope
+    ):
         return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
     return NamespaceDecision(True, access.namespace, access.roles, "")
 
@@ -144,6 +154,32 @@ async def serve_in_request_namespace(
         if admitted:
             raise
         return await refuse(denied.reason)
+
+
+async def serve_http_in_namespace(
+    principal: Principal,
+    request: Request,
+    correlation: str,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Serve one Starlette request inside the namespace its header names.
+
+    A refused namespace is answered with a 403 carrying the reason token and
+    *correlation*; the value the caller asked for is never echoed.
+    """
+    return await serve_in_request_namespace(
+        principal,
+        request.headers.getlist(NAMESPACE_HEADER),
+        lambda: call_next(request),
+        lambda reason: _namespace_denied_response(reason, correlation),
+    )
+
+
+async def _namespace_denied_response(reason: str, correlation: str) -> JSONResponse:
+    """Build the 403 for a refused namespace: the reason token and the correlation id."""
+    return JSONResponse(
+        status_code=403, content={"detail": reason, "correlation_id": correlation}
+    )
 
 
 def _is_valid(requested: object) -> bool:

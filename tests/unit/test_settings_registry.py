@@ -16,6 +16,7 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "rework_on_ci_fail",
         "reverify_full_suite",
         "grade_xdist_workers",
+        "role_routing",
     }
 
 
@@ -73,6 +74,7 @@ def test_legacy_env_names_are_the_plan_names():
         "rework_on_ci_fail": "PIPELINE_REWORK_ON_CI_FAIL",
         "reverify_full_suite": "PIPELINE_REVERIFY_FULL_SUITE",
         "grade_xdist_workers": "PIPELINE_GRADE_XDIST_WORKERS",
+        "role_routing": "",
     }
 
 

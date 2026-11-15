@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from app.role_registry import RoleRegistryError, resolve_role
 from pipeline.settings_registry import REGISTRY
 from pipeline.settings_resolve import SAFE_DEFAULT_SOURCE, resolve
 
@@ -96,3 +97,62 @@ def test_unset_routing_at_every_layer_resolves_to_the_empty_default(live_registr
     result = resolve(KEY, {"team": {}, "org": {}, "team_repo": {}})
     assert (result["value"], result["source"]) == ({}, SAFE_DEFAULT_SOURCE)
     assert result["invalid_layers"] == []
+
+
+ROLE_REGISTRY = {
+    "providers": MODEL_REGISTRY["providers"],
+    "roles": {"review": {"provider": "claude", "model": "sonnet"}},
+}
+RESOLVED_REGISTRY_DEFAULT = ("claude", "claude-sonnet-5-5")
+RESOLVED_LAYER_ROUTING = ("ollama", "gpt-oss:20b")
+
+
+def test_layer_routing_beats_the_registry_default():
+    resolution = resolve_role("review", registry=ROLE_REGISTRY, layer_routing=ROUTING)
+    assert (resolution.provider, resolution.model) == RESOLVED_LAYER_ROUTING
+
+
+def test_plan_role_config_beats_layer_routing():
+    plan = {"review": {"provider": "claude", "model": "sonnet"}}
+    resolution = resolve_role(
+        "review", registry=ROLE_REGISTRY, plan_role_config=plan, layer_routing=ROUTING
+    )
+    assert (resolution.provider, resolution.model) == RESOLVED_REGISTRY_DEFAULT
+
+
+def test_layer_model_is_not_paired_with_a_plan_provider_override():
+    plan = {"review": {"provider": "claude"}}
+    resolution = resolve_role(
+        "review",
+        registry={"providers": MODEL_REGISTRY["providers"], "roles": {}},
+        plan_role_config=plan,
+        layer_routing=ROUTING,
+        model_fallback="caller-default",
+    )
+    assert (resolution.provider, resolution.model) == ("claude", "caller-default")
+
+
+@pytest.mark.parametrize("layer_routing", [None, {}])
+def test_unset_layer_routing_keeps_the_registry_default(layer_routing):
+    resolution = resolve_role(
+        "review", registry=ROLE_REGISTRY, layer_routing=layer_routing
+    )
+    assert (resolution.provider, resolution.model) == RESOLVED_REGISTRY_DEFAULT
+
+
+def test_layer_routing_for_another_role_leaves_this_role_on_its_default():
+    resolution = resolve_role(
+        "review", registry=ROLE_REGISTRY, layer_routing={"planner": ROUTING["review"]}
+    )
+    assert (resolution.provider, resolution.model) == RESOLVED_REGISTRY_DEFAULT
+
+
+def test_layer_routing_must_be_passed_by_keyword():
+    with pytest.raises(TypeError):
+        resolve_role("review", ROUTING, registry=ROLE_REGISTRY)
+
+
+def test_layer_routing_naming_an_undeclared_model_is_refused():
+    bad = {"review": {"provider": "ollama", "model": "sonnet"}}
+    with pytest.raises(RoleRegistryError, match="not declared under"):
+        resolve_role("review", registry=ROLE_REGISTRY, layer_routing=bad)

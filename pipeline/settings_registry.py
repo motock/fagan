@@ -48,6 +48,40 @@ def _test_scope_tighter(a: str, b: str) -> str:
     return min(a, b, key=TEST_SCOPE_VALUES.index)
 
 
+def _accepts_role_routing(value: Any) -> bool:
+    """True when *value* pins each role to a provider and model declared in the
+    live model registry (``PIPELINE_MODEL_REGISTRY_PATH`` or the repo default).
+
+    Every deny path returns False: a malformed value, an undeclared provider or
+    model, or a registry that cannot be read.
+    """
+    # Imported here: app.* must not load at module import (see test_preflight).
+    from app.role_registry import RoleRegistryError, load_registry
+
+    if not isinstance(value, dict):
+        return False
+    try:
+        providers = load_registry().get("providers", {})
+    except (OSError, RoleRegistryError):
+        return False
+    if not isinstance(providers, dict):
+        return False
+    for role, pin in value.items():
+        if not isinstance(role, str) or not role or not isinstance(pin, dict):
+            return False
+        if set(pin) != {"provider", "model"}:
+            return False
+        provider, model = pin["provider"], pin["model"]
+        if not isinstance(provider, str) or not isinstance(model, str):
+            return False
+        provider_cfg = providers.get(provider)
+        if not isinstance(provider_cfg, dict):
+            return False
+        if model not in provider_cfg.get("models", {}):
+            return False
+    return True
+
+
 @dataclass(frozen=True)
 class SettingKey:
     name: str
@@ -65,6 +99,8 @@ class SettingKey:
         if self.type == "int":
             # Timeouts and worker counts are positive; 0 and negatives are invalid.
             return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+        if self.type == "routing":
+            return _accepts_role_routing(value)
         return isinstance(value, str) and value in self.choices
 
 
@@ -139,6 +175,16 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=_ALL_LAYERS,
             legacy_env="PIPELINE_GRADE_XDIST_WORKERS",
             tighter=_lower_is_tighter,
+        ),
+        SettingKey(
+            name="role_routing",
+            type="routing",
+            kind="pref",
+            safe_value={},
+            # Every layer except the host-only deployment layer, which LAYERS lists first.
+            allowed_layers=LAYERS[1:],
+            # A new key has no retired environment name to refuse.
+            legacy_env="",
         ),
     )
 }

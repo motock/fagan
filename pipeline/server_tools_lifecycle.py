@@ -19,6 +19,12 @@ from typing import Any
 from . import audit, audit_anchor, security_audit
 from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
+from .unpark import (
+    _VALID_STATUSES,
+    UNPARKABLE_FIELDS,
+    _validate_added_files,
+    unpark_story,
+)
 
 _service = _ModuleRef("pipeline.server", "_service")
 _store = _ModuleRef("pipeline.server", "_store")
@@ -336,6 +342,145 @@ def verify_audit() -> dict[str, Any]:
     return result
 
 
+#: Longest note ``unblock_story`` appends to a story's brief.
+UNBLOCK_NOTE_MAX_CHARS = 8000
+
+
+def _unblock_refusal(reason: str) -> dict[str, Any]:
+    """A refusal that names the problem class, never the refused value."""
+    return {"ok": False, "error": reason}
+
+
+def _validate_unblock_arguments(
+    clear_fields: list[str],
+    status: str | None,
+    add_files: list[str] | None,
+    note: str | None,
+) -> dict[str, Any] | None:
+    """Return a value-free refusal for a malformed request, or ``None``."""
+    if not isinstance(clear_fields, list) or not all(
+        isinstance(name, str) for name in clear_fields
+    ):
+        return _unblock_refusal("clear_fields must be a list of field names")
+    if any(name not in UNPARKABLE_FIELDS for name in clear_fields):
+        return _unblock_refusal(
+            f"a clear_fields entry is not clearable: only {sorted(UNPARKABLE_FIELDS)} may be cleared"
+        )
+    if status is not None and status not in _VALID_STATUSES:
+        return _unblock_refusal(
+            f"invalid status: must be one of {sorted(_VALID_STATUSES)}"
+        )
+    if add_files is not None:
+        if not isinstance(add_files, list):
+            return _unblock_refusal("add_files must be a list of paths")
+        try:
+            _validate_added_files(add_files)
+        except ValueError as exc:
+            return _unblock_refusal(str(exc).replace("--add-files", "add_files"))
+    if note is not None and (
+        not isinstance(note, str) or len(note) > UNBLOCK_NOTE_MAX_CHARS
+    ):
+        return _unblock_refusal(
+            f"note must be a string of at most {UNBLOCK_NOTE_MAX_CHARS} characters"
+        )
+    return None
+
+
+def unblock_story(
+    plan_name: str,
+    story_key: str,
+    clear_fields: list[str],
+    status: str | None = None,
+    add_files: list[str] | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Unblock a parked story, recording the manual intervention.
+
+    Authorized like set_story_status (the plan's owner or a delegate; anyone
+    else is refused). Clears the named retry/review fields, optionally sets
+    ``status`` and appends ``add_files`` to the story's ``files``, exactly as
+    ``python -m pipeline.unpark`` does, and records the caller as the human
+    action. All of it happens under the plan lock.
+
+    plan_name / story_key: the parked story.
+    clear_fields: names to delete; only the retry counters and review records
+        in pipeline.unpark.UNPARKABLE_FIELDS are accepted.
+    status: one of the statuses the pipeline assigns (default: unchanged).
+    add_files: repo-relative production paths (no leading '/', no backslash,
+        no NUL, no '..') appended to the story's files.
+    note: up to 8000 characters appended to the story's agent_instructions.
+        It is written together with the unblock notice, or not at all.
+
+    Changing the brief or files resets the plan's approval exactly as
+    patch_story does; the result says so with ``approval_reset``. A refused
+    value is never echoed. If the plan lock is busy the result carries
+    ``skipped: "locked"`` and ``retry_after_seconds``: call again.
+    """
+    from copy import deepcopy
+
+    from .actor import actor_id
+    from .authorization import authorize
+    from .concurrency import command_lock_wait_seconds
+    from .parsers import _validate_key
+    from .plan_approval import approval_enabled, reset_if_changed
+    from .unpark import _record_resolution
+
+    try:
+        _validate_key(plan_name)
+        _validate_key(story_key)
+    except ValueError:
+        return _unblock_refusal("invalid plan_name or story_key")
+    refusal = authorize("story:patch", plan_name=plan_name, story_key=story_key)
+    if refusal is not None:
+        return refusal
+    refusal = _validate_unblock_arguments(clear_fields, status, add_files, note)
+    if refusal is not None:
+        return refusal
+
+    wait_seconds = command_lock_wait_seconds()
+    with _store.transaction(plan_name, wait_seconds) as acquired:
+        if not acquired:
+            return {
+                "ok": True,
+                "skipped": "locked",
+                "retry_after_seconds": wait_seconds,
+                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+            }
+        manifest = _store.get_manifest(plan_name)
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return _unblock_refusal("no such story")
+        snapshot = deepcopy(manifest)
+        if note:
+            story["agent_instructions"] = (
+                f"{story.get('agent_instructions') or ''}\n\n{note}".lstrip("\n")
+            )
+            _store.save_manifest(plan_name, manifest)
+        try:
+            result = unpark_story(
+                plan_name,
+                story_key,
+                clear_fields,
+                status=status,
+                add_files=add_files or (),
+            )
+        except (ValueError, KeyError, RuntimeError, OSError) as exc:
+            if note:
+                _store.save_manifest(plan_name, snapshot)
+            return _unblock_refusal(f"unblock failed: {type(exc).__name__}")
+        approval_reset = False
+        if approval_enabled():
+            manifest = _store.get_manifest(plan_name)
+            if reset_if_changed(manifest):
+                _store.save_manifest(plan_name, manifest)
+                from .plan_approval_notice import notify_approval_event
+
+                notify_approval_event(plan_name, manifest, "plan_pending_approval")
+                approval_reset = True
+    _record_resolution(result, principal=actor_id())
+    return {"ok": True, **result, "approval_reset": approval_reset}
+
+
 # The tools this module provides, in registration order. pipeline.server
 # iterates this tuple to register each one on its FastMCP instance and to
 # re-export it under the same name, so adding a tool here is the only edit
@@ -355,4 +500,5 @@ TOOLS = (
     verify_audit,
     record_decision,
     export_plan,
+    unblock_story,
 )

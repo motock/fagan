@@ -14,8 +14,8 @@ default partition in the record-store calls this story moves, and each one
 must reach for the shared ``bound_records`` wrappers.
 
 With nothing bound the wrappers select the default partition, so the
-background paths and the single-namespace installs keep writing exactly where
-they wrote before; that is pinned here too, for both a read and a write.
+background paths and the single-namespace installs keep reading and writing
+exactly where they did before; that is pinned here too.
 """
 
 from __future__ import annotations
@@ -41,27 +41,23 @@ PLAN = "plan-x"
 STORY = "S1"
 
 #: The seven modules the story names, each with the record-store methods whose
-#: calls this story moves off the default partition.
+#: calls this story moves off the default partition, and the number of sites
+#: of each method the story moves.
 STORY_PATH_MODULES = {
-    "story_status.py": ("get_manifest", "put_manifest"),
-    "checkpoint.py": ("append_journal", "put_manifest"),
-    "no_progress.py": ("put_manifest",),
-    "triage.py": ("get_manifest",),
-    "triage_scope_actions.py": ("put_manifest",),
-    "plan_conflict_ruling.py": ("put_manifest",),
-    "escalation.py": ("put_manifest",),
+    "story_status.py": {"get_manifest": 1, "put_manifest": 12},
+    "checkpoint.py": {"append_journal": 1, "put_manifest": 1},
+    "no_progress.py": {"put_manifest": 3},
+    "triage.py": {"get_manifest": 2},
+    "triage_scope_actions.py": {"put_manifest": 1},
+    "plan_conflict_ruling.py": {"put_manifest": 1},
+    "escalation.py": {"put_manifest": 2},
 }
 
 #: A record-store call that names the default partition literally.
 _DEFAULT_PARTITION_CALL = re.compile(r'records\(\)\s*\.\s*(\w+)\(\s*"default"')
 
-#: The import of the shared wrappers, in either of the two shapes that name
-#: the module: ``from . import bound_records`` or ``from .bound_records
-#: import ...``.
-_BOUND_RECORDS_IMPORT = re.compile(
-    r"from\s+\.\s+import\s+[^\n]*\bbound_records\b"
-    r"|from\s+\.bound_records\s+import\b"
-)
+#: The import of the shared wrappers this story names.
+_BOUND_RECORDS_IMPORT = re.compile(r"from\s+\.\s+import\s+[^\n]*\bbound_records\b")
 
 
 class _RecordingRecords:
@@ -127,7 +123,7 @@ def _module_source(module_name: str) -> str:
     return (Path(story_status.__file__).parent / module_name).read_text()
 
 
-# -- checkpoint: the journal and the manifest -------------------------------
+# -- checkpoint: the journal entry ------------------------------------------
 
 
 def test_checkpoint_journal_is_written_to_the_bound_partition(store, records) -> None:
@@ -159,7 +155,9 @@ def _capacity_case(tmp_path, monkeypatch):
     )
     story = {"summary": "s", "status": "tests_passed", "rework_attempts": 0}
     manifest = {"epics": {}, "stories": {STORY: story}}
-    monkeypatch.setattr(no_progress, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(no_progress.usage_cooldown, "trip", lambda *a, **k: None)
+    monkeypatch.setattr(no_progress.usage_transitions, "announce", lambda *a, **k: None)
     return story, manifest, str(worktree)
 
 
@@ -206,7 +204,7 @@ def test_no_progress_never_writes_into_another_namespace(
 
 
 def _triage_sweep(monkeypatch, records, namespace):
-    """Run one triage sweep with the plan held in *namespace*."""
+    """Hold one plan in *namespace* and stub the sweep's triage seams."""
     manifest = {"epics": {}, "stories": {STORY: {"summary": "s", "status": "queued"}}}
     monkeypatch.setattr(triage, "_auto_triage_enabled", lambda: True)
     monkeypatch.setattr(triage, "triage_candidates", lambda stories: [])
@@ -270,7 +268,7 @@ def _escalation_manifest() -> dict:
 
 @pytest.fixture
 def fake_git(monkeypatch):
-    """Stub the git boundary so no real git is ever shelled out."""
+    """Stub the git boundary and the diagnosis, so nothing is spawned."""
 
     class _FakeSubprocess:
         def run(self, cmd, **kwargs):
@@ -278,6 +276,9 @@ def fake_git(monkeypatch):
 
     monkeypatch.setattr(escalation, "subprocess", _FakeSubprocess())
     monkeypatch.setattr(escalation, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(escalation, "collect_attempt_facts", lambda *a, **k: "")
+    monkeypatch.setattr(escalation, "collect_failure_evidence", lambda *a, **k: "")
+    monkeypatch.setattr(escalation, "diagnose_failure", lambda *a, **k: None)
 
 
 def _escalate_to_claude(manifest):
@@ -320,76 +321,63 @@ def test_escalation_manifest_is_written_to_the_default_partition_when_unbound(
 # -- the regression guard ---------------------------------------------------
 
 
-@pytest.mark.parametrize("module_name", sorted(STORY_PATH_MODULES))
-def test_story_path_module_never_names_the_default_partition(module_name: str) -> None:
+def test_no_story_path_module_names_the_default_partition() -> None:
     """No story-path module may name the default partition in a record call.
 
     A literal ``"default"`` in a record-store call is the defect this story
     removes; it is the regression guard against it creeping back.
     """
-    source = _module_source(module_name)
-    methods = STORY_PATH_MODULES[module_name]
-    offenders = [
-        match
-        for match in _DEFAULT_PARTITION_CALL.findall(source)
-        if match in methods
-    ]
+    offenders = {}
+    for module_name, methods in STORY_PATH_MODULES.items():
+        hits = [
+            match
+            for match in _DEFAULT_PARTITION_CALL.findall(_module_source(module_name))
+            if match in methods
+        ]
+        if hits:
+            offenders[module_name] = sorted(set(hits))
 
     assert not offenders, (
-        f"pipeline/{module_name} names the default partition in a record-store "
-        f"call ({sorted(set(offenders))}); it must select the namespace bound "
-        "for the call instead"
+        "these modules still name the default partition in a record-store call; "
+        f"they must select the namespace bound for the call instead: {offenders}"
     )
 
 
-@pytest.mark.parametrize("module_name", sorted(STORY_PATH_MODULES))
-def test_story_path_module_uses_the_bound_records_wrappers(module_name: str) -> None:
-    """Each story-path module reaches for the shared bound-namespace wrappers."""
-    source = _module_source(module_name)
+def test_every_story_path_module_reaches_the_bound_namespace() -> None:
+    """Each story-path module selects the namespace through the wrappers."""
+    missing_wrappers = [
+        module_name
+        for module_name in STORY_PATH_MODULES
+        if "bound_records" not in _module_source(module_name)
+    ]
+    missing_import = [
+        module_name
+        for module_name in STORY_PATH_MODULES
+        if not _BOUND_RECORDS_IMPORT.search(_module_source(module_name))
+    ]
 
-    assert "bound_records" in source, (
-        f"pipeline/{module_name} must select the namespace through the "
-        "pipeline.bound_records wrappers"
-    )
-    assert _BOUND_RECORDS_IMPORT.search(source), (
-        f"pipeline/{module_name} must import the bound_records wrappers"
-    )
+    assert not missing_wrappers, f"no bound-namespace wrappers in: {missing_wrappers}"
+    assert not missing_import, f"no 'from . import bound_records' in: {missing_import}"
 
 
-@pytest.mark.parametrize("module_name", sorted(STORY_PATH_MODULES))
-def test_story_path_module_migrates_every_site_of_its_record_calls(
-    module_name: str,
-) -> None:
-    """Every record-store call of a migrated method goes through the wrappers.
+def test_every_story_path_site_goes_through_the_wrapper() -> None:
+    """Every record-store call this story moves goes through the wrapper.
 
     The wrapper call is counted per method, so a site left behind on the old
-    form (or a call that lost its wrapper) shows up as a missing one.
+    form - or a call that lost its wrapper - shows up as a missing one.
     """
-    source = _module_source(module_name)
+    shortfalls = {}
+    for module_name, methods in STORY_PATH_MODULES.items():
+        source = _module_source(module_name)
+        for method, expected in methods.items():
+            found = len(re.findall(rf"bound_records\s*\.\s*{method}\(", source))
+            if found != expected:
+                shortfalls[f"{module_name}:{method}"] = (found, expected)
 
-    for method in STORY_PATH_MODULES[module_name]:
-        on_the_old_form = len(
-            re.findall(rf'records\(\)\s*\.\s*{method}\(\s*"default"', source)
-        )
-        through_the_wrapper = len(
-            re.findall(rf"bound_records\s*\.\s*{method}\\(", source)
-        )
-
-        assert on_the_old_form == 0, (
-            f"pipeline/{module_name} still names the default partition in a "
-            f"{method} call"
-        )
-        assert through_the_wrapper >= 1, (
-            f"pipeline/{module_name} must reach for bound_records.{method}()"
-        )
-
-
-def test_story_status_keeps_its_manifest_writes_through_the_store() -> None:
-    """``story_status`` persists all twelve of its manifest writes via the store."""
-    source = _module_source("story_status.py")
-
-    assert len(re.findall(r"bound_records\s*\.\s*put_manifest\(", source)) == 12
-    assert len(re.findall(r"bound_records\s*\.\s*get_manifest\(", source)) == 1
+    assert not shortfalls, (
+        "these record-store sites do not go through the bound_records wrapper "
+        f"(found, expected): {shortfalls}"
+    )
 
 
 def test_story_status_keeps_its_undefined_name_suppressions() -> None:

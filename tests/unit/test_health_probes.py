@@ -29,14 +29,21 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+import pipeline.namespace_resolver as resolver_module
+from app import auth
 from app import dashboard as d
 from app.identity import IdentityError
 from app.oidc import OidcProvider
+from app.plugin_loader import ALLOWLIST_ENV
 from pipeline import events_nats_consumer, health_freshness, paths
+from pipeline.actor import ANONYMOUS, current_correlation_id, current_principal
+from pipeline.namespace_resolver import NAMESPACE_RESOLVER_PLUGIN_ENV
 from tests.unit._dashboard_helpers import client, plan_dir
 
 __all__ = ["client", "plan_dir"]
@@ -408,3 +415,227 @@ def test_probes_need_no_credential_in_oidc_mode(client, plan_dir, monkeypatch):
 def test_probes_are_not_under_the_api_prefix(client):
     assert client.get("/api/livez").status_code == 404
     assert client.get("/api/readyz").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Liveness must never depend on tenancy
+# --------------------------------------------------------------------------- #
+#
+# A deployment may install a namespace resolver plugin
+# (``PIPELINE_NAMESPACE_RESOLVER_PLUGIN``). Such a resolver maps a principal to
+# the namespaces it may reach, and an unauthenticated probe principal reaches
+# none of them: the resolver answers with an empty tuple, which the namespace
+# layer refuses rather than reads as "everything". The dashboard middleware
+# wraps every request in that namespace check, so without an exemption the two
+# probes would be answered 403 ``namespace_error`` -- and a liveness probe that
+# fails on tenancy restarts a healthy container for the wrong reason.
+#
+# The probes therefore answer directly, without the namespace wrapper, while
+# every other path keeps it: an ``/api/`` route under the very same resolver is
+# still refused with 403 ``namespace_error``.
+
+#: The reason token a refused namespace answers with.
+NAMESPACE_ERROR = "namespace_error"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_resolver_plugins(monkeypatch):
+    """Keep the process-wide namespace-resolver plugin cache out of the tests.
+
+    The active resolver is cached for the life of the process, and the cache is
+    consulted before the environment, so a plugin installed by one test would
+    otherwise answer the next test's requests.
+    """
+    monkeypatch.delenv(NAMESPACE_RESOLVER_PLUGIN_ENV, raising=False)
+    monkeypatch.delenv(ALLOWLIST_ENV, raising=False)
+    monkeypatch.setattr(resolver_module, "_PLUGIN_RESOLVERS", {})
+    yield
+
+
+def _install_resolver_plugin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> str:
+    """Write *source* as a fresh module, select it as the resolver, return its name.
+
+    The module name is unique per call, so ``sys.modules`` never hands a later
+    test an earlier test's stub. The allowlist names the module: the resolver
+    seam is security-sensitive, so a plugin is refused without one.
+    """
+    name = "probe_nsr_" + uuid.uuid4().hex
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(NAMESPACE_RESOLVER_PLUGIN_ENV, f"{name}:build")
+    monkeypatch.setenv(ALLOWLIST_ENV, name)
+    return name
+
+
+def _stub_resolver_source(accesses_body: str) -> str:
+    """Return plugin source whose ``accesses`` method body is *accesses_body*.
+
+    The body is spliced into the source verbatim, so it may use braces freely:
+    only the template text is subject to f-string rules.
+    """
+    return f'''
+from pipeline.namespace_resolver import NamespaceAccess
+
+
+class StubResolver:
+    def accesses(self, principal):
+        {accesses_body}
+
+
+def build():
+    return StubResolver()
+'''
+
+
+def _api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point the dashboard gate at a throwaway key file and return the secret.
+
+    The real repository key file is never read or written by these tests.
+    """
+    path = tmp_path / ".dashboard_api_key"
+    monkeypatch.setattr(auth, "API_KEY_PATH", path)
+    return auth.get_or_create_api_key()
+
+
+def test_probes_answer_200_when_the_resolver_reports_no_namespaces(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """A resolver that reaches no namespace must not make the probes fail."""
+    monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    _assert_probe(client.get("/livez"), kind="livez", ok=True, plan_dir=plan_dir)
+    _assert_probe(client.get("/readyz"), kind="readyz", ok=True, plan_dir=plan_dir)
+
+
+def test_probes_answer_200_when_the_resolver_raises(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """A resolver that blows up must not make the probes fail either."""
+    monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    _install_resolver_plugin(
+        tmp_path,
+        monkeypatch,
+        _stub_resolver_source("raise RuntimeError('resolver exploded')"),
+    )
+
+    _assert_probe(client.get("/livez"), kind="livez", ok=True, plan_dir=plan_dir)
+    _assert_probe(client.get("/readyz"), kind="readyz", ok=True, plan_dir=plan_dir)
+
+
+def test_api_routes_are_still_refused_by_the_namespace_wrapper(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """Only the probes are exempt: an ``/api/`` route still gets the wrapper."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+    key = _api_key(tmp_path, monkeypatch)
+
+    response = client.get("/api/health", headers={"x-pipeline-api-key": key})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
+
+
+def test_api_routes_still_require_the_credential_under_a_plugin_resolver(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """The credential gate is not skipped for ``/api/`` routes."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+    _api_key(tmp_path, monkeypatch)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "unauthorized"
+
+
+def test_metrics_route_is_still_refused_by_the_namespace_wrapper(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """``/api/metrics`` keeps the namespace wrapper like every other route."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+    key = _api_key(tmp_path, monkeypatch)
+
+    response = client.get("/api/metrics", headers={"x-pipeline-api-key": key})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
+
+
+def test_a_non_probe_path_outside_api_is_still_refused_by_the_namespace_wrapper(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """The exemption covers the two probe paths and nothing else."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
+
+
+def test_the_probe_exemption_does_not_extend_to_near_miss_paths(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """A path that merely resembles a probe is not exempted."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    for path in ("/livez/", "/api/livez", "/readyz/extra"):
+        response = client.get(path)
+        assert response.status_code == 403, path
+        assert response.json()["detail"] == NAMESPACE_ERROR, path
+
+
+def test_probes_still_bind_the_principal_and_the_correlation_id(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """Skipping the namespace wrapper must not skip the request bindings.
+
+    The probe handler is the only place the bound actor can be observed from
+    inside the request, so the freshness reader records what is bound while the
+    probe runs. The resolver plugin is installed so the probe is served through
+    the exempted path: the bindings must survive the exemption.
+    """
+    monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+    seen: list[tuple[object, str]] = []
+    original = health_freshness.health_extras
+
+    def _spy(*args, **kwargs):
+        seen.append((current_principal(), current_correlation_id()))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(health_freshness, "health_extras", _spy)
+
+    response = client.get("/livez", headers={"x-correlation-id": "probe-corr-1"})
+
+    assert response.status_code == 200
+    assert seen, "the probe never read the freshness extras"
+    for principal, correlation in seen:
+        assert principal == ANONYMOUS
+        assert correlation == "probe-corr-1"
+    assert response.headers["X-Correlation-ID"] == "probe-corr-1"
+
+
+def test_the_dashboard_declares_the_two_probe_paths():
+    """The exemption is a named constant, so it is greppable and reviewable."""
+    assert hasattr(d, "LIVENESS_PATHS")
+    assert set(d.LIVENESS_PATHS) == {"/livez", "/readyz"}

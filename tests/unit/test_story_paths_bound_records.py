@@ -600,7 +600,6 @@ def test_neighbour_manifests_read_the_default_partition_when_unbound(
 
     assert neighbours == {"plan-default": {"where": "default"}}
 
-
 # -- wedge_io: the journal keys the probe inspects ----------------------------
 
 

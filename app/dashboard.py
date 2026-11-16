@@ -169,6 +169,11 @@ _identity = build_identity_provider(get_or_create_api_key)
 
 # Registered before _enforce_api_key, so it runs inside the principal and namespace bindings.
 app.middleware("http")(plan_view_gate)
+# The orchestrator's probes must never depend on tenancy: an unauthenticated
+# probe principal resolves to no namespace at all, which the namespace wrapper
+# refuses with 403. These exact paths (no prefixes, no trailing-slash variants)
+# are answered without the namespace wrapper; every other path keeps it.
+LIVENESS_PATHS = frozenset({"/livez", "/readyz"})
 @app.middleware("http")
 async def _enforce_api_key(request: Request, call_next):
     server = request.scope.get("server") or ()
@@ -245,6 +250,8 @@ async def _enforce_api_key(request: Request, call_next):
     # ANONYMOUS keeps that distinct from the local operator.
     principal = getattr(request.state, "principal", None) or ANONYMOUS
     with bind_principal(principal), bind_correlation_id(correlation):
+        if request.url.path in LIVENESS_PATHS:
+            return _tagged(await call_next(request))
         return _tagged(
             await serve_http_in_namespace(principal, request, correlation, call_next)
         )

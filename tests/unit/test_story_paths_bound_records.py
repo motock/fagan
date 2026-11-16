@@ -239,7 +239,9 @@ def test_triage_sweep_reads_the_default_partition_when_unbound(
     assert ("default", PLAN) in records.manifest_reads
 
 
-def test_triage_sweep_never_reads_a_foreign_namespace(monkeypatch, store, records) -> None:
+def test_triage_sweep_never_reads_a_foreign_namespace(
+    monkeypatch, store, records
+) -> None:
     """The sweep under one binding reads that namespace and no other."""
     _triage_sweep(monkeypatch, records, NAMESPACE)
 

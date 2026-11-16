@@ -13,6 +13,12 @@ this story names - ``story_status``, ``checkpoint``, ``no_progress``,
 default partition in the record-store calls this story moves, and each one
 must reach for the shared ``bound_records`` wrappers.
 
+The same guard covers the six modules whose bulk manifest read, journal clear
+and journal-key listing this story moves as well - ``advance``,
+``concurrency``, ``cross_plan``, ``detached_grade``, ``escalation`` and
+``wedge_io`` - and their behaviour is driven through their public entry
+points with a namespace bound and with nothing bound.
+
 With nothing bound the wrappers select the default partition, so the
 background paths and the single-namespace installs keep reading and writing
 exactly where they did before; that is pinned here too.

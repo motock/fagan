@@ -467,6 +467,7 @@ def unblock_story(
                 clear_fields,
                 status=status,
                 add_files=add_files or (),
+                store=_store,
             )
         except (ValueError, KeyError, RuntimeError, OSError) as exc:
             if note:

@@ -9,6 +9,8 @@ import logging
 import threading
 from pathlib import Path
 
+from . import bound_records
+
 __all__ = [
     "ACTIVE_STATUSES",
     "blocked_by_gaps",
@@ -183,7 +185,7 @@ def neighbour_manifests(store, plan_name: str) -> dict[str, dict]:
     """
     return {
         name: manifest
-        for name, manifest in store.records().get_manifests("default").items()
+        for name, manifest in bound_records.get_manifests(store).items()
         if name != plan_name
     }
 

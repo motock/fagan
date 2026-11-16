@@ -177,7 +177,7 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
         subprocess.run(["git", "branch", "-D", resolved],
                         check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so Claude starts fresh (not from a broken local checkpoint).
-    _store.records().clear_journal("default", plan_name, story_key)
+    bound_records.clear_journal(_store, plan_name, story_key)
     # Reset the story: escalation-target dispatch on next tick. The target is
     # Claude by default; PIPELINE_ESCALATION_BACKEND/MODEL retarget it (e.g. to
     # a non-Claude provider while Claude usage is capped). Only set the model
@@ -250,7 +250,7 @@ def _escalate_to_local_fallback_model(
                         check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so the fallback model starts fresh, not from a broken
     # checkpoint left by the model that just failed.
-    _store.records().clear_journal("default", plan_name, story_key)
+    bound_records.clear_journal(_store, plan_name, story_key)
     # Reset the story: fallback-model dispatch on next tick. backend is left
     # untouched (stays "local") - only the model changes.
     story["model"] = fallback_model

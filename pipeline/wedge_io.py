@@ -46,7 +46,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config
+from . import bound_records, config
 
 # Server-owned names are resolved at CALL time through the live
 # pipeline.server binding (the _ServerRef pattern from pipeline/concurrency.py
@@ -127,7 +127,7 @@ def _list_journal_keys(plan_name: str) -> list[str]:
     OSError branch this replaces).
     """
     try:
-        return list(_store.records().list_journal_keys("default", plan_name))
+        return list(bound_records.list_journal_keys(_store, plan_name))
     except Exception:  # noqa: BLE001 - fail open, this module never raises
         return []
 

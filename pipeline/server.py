@@ -977,6 +977,7 @@ get_story_diff = mcp.tool()(_read_tools.get_story_diff)
 get_story_log = mcp.tool()(_read_tools.get_story_log)
 get_story_journal = mcp.tool()(_read_tools.get_story_journal)
 get_story_worktree = mcp.tool()(_read_tools.get_story_worktree)
+get_story_events = mcp.tool()(_read_tools.get_story_events)
 
 if __name__ == "__main__":
     mcp.run()

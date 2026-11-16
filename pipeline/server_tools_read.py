@@ -6,7 +6,12 @@ from typing import Any
 
 from . import story_worktree_status
 from .module_ref import _ModuleRef
-from .story_evidence import REDACTED, is_secret_name, redact
+from .story_evidence import (  # noqa: F401  (get_story_events is re-exported)
+    REDACTED,
+    get_story_events,
+    is_secret_name,
+    redact,
+)
 from .workspace_reader import STORY_LOG_TAIL_DEFAULT, STORY_LOG_TAIL_MAX
 
 _service = _ModuleRef("pipeline.server", "_service")

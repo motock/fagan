@@ -789,6 +789,18 @@ def _oidc_settings_from_env(env: dict[str, str]) -> OidcSettings:
     )
 
 
+def extra_claim_names(environ: dict[str, str] | None = None) -> tuple[str, ...]:
+    """Return the configured extra claim names for a caller that builds its own settings.
+
+    The browser login verifies the ID token against its own audience, so it
+    builds an ``OidcSettings`` itself and must carry the same
+    ``PIPELINE_OIDC_EXTRA_CLAIMS`` the API identity provider does. Raises
+    IdentityError on a malformed list, exactly like the startup path.
+    """
+    source = dict(os.environ) if environ is None else dict(environ)
+    return _extra_claim_names_from_env(source)
+
+
 def _extra_claim_names_from_env(env: dict[str, str]) -> tuple[str, ...]:
     """Parse ``PIPELINE_OIDC_EXTRA_CLAIMS``; refuse the whole list on any bad name.
 

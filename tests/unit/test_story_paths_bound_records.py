@@ -633,6 +633,11 @@ def _live_story() -> dict:
     return {"status": "in_progress", "pid": os.getpid()}
 
 
+def _two_live_stories() -> dict:
+    """Two stories that look like running dispatched agents."""
+    return {"stories": {"s2": _live_story(), "s3": _live_story()}}
+
+
 def test_in_progress_agents_are_counted_in_the_bound_partition_only(
     store, records
 ) -> None:
@@ -640,9 +645,7 @@ def test_in_progress_agents_are_counted_in_the_bound_partition_only(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _live_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _live_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
 
     with bind_namespace(NAMESPACE):
         count = concurrency._count_in_progress_agents()
@@ -657,11 +660,9 @@ def test_in_progress_agents_are_counted_in_the_default_partition_when_unbound(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _live_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _live_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
 
-    assert concurrency._count_in_progress_agents() == 1
+    assert concurrency._count_in_progress_agents() == 2
 
 
 def test_on_device_agents_are_counted_in_the_bound_partition_only(
@@ -671,9 +672,7 @@ def test_on_device_agents_are_counted_in_the_bound_partition_only(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _live_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _live_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
 
     with bind_namespace(NAMESPACE):
         count = advance._count_on_device_in_progress_agents()
@@ -688,11 +687,9 @@ def test_on_device_agents_are_counted_in_the_default_partition_when_unbound(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _live_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _live_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
 
-    assert advance._count_on_device_in_progress_agents() == 1
+    assert advance._count_on_device_in_progress_agents() == 2
 
 
 # -- detached_grade: the grades that hold a slot ------------------------------
@@ -703,14 +700,17 @@ def _grading_story() -> dict:
     return {"grading_pid": os.getpid()}
 
 
+def _two_grading_stories() -> dict:
+    """Two stories that look like they hold a live detached grade."""
+    return {"stories": {"s2": _grading_story(), "s3": _grading_story()}}
+
+
 def test_live_grades_are_counted_in_the_bound_partition_only(store, records) -> None:
     """The grade counter reads the live grades of the bound partition."""
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _grading_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _grading_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_grading_stories()
 
     with bind_namespace(NAMESPACE):
         count = detached_grade.live_grade_count()
@@ -725,11 +725,9 @@ def test_live_grades_are_counted_in_the_default_partition_when_unbound(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _grading_story()}
     }
-    records.manifests[("default", "plan-default")] = {
-        "stories": {"s2": _grading_story()}
-    }
+    records.manifests[("default", "plan-default")] = _two_grading_stories()
 
-    assert detached_grade.live_grade_count() == 1
+    assert detached_grade.live_grade_count() == 2
 
 
 # -- escalation: the journal the reset clears ---------------------------------

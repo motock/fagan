@@ -438,6 +438,7 @@ def test_should_leave_every_other_read_tool_classified_as_before() -> None:
         "export_plan",
         "get_effective_config",
         "get_story_diff",
+        "get_story_events",
         "get_story_journal",
         "get_story_log",
         "get_story_worktree",

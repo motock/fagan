@@ -34,6 +34,7 @@ from pipeline import (
 )
 from pipeline import server as p
 from pipeline.actor import bind_namespace
+
 NAMESPACE = "a/b"
 OTHER_NAMESPACE = "c/d"
 PLAN = "plan-x"

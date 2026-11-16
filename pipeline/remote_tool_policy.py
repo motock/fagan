@@ -121,6 +121,8 @@ REMOTE_READ = frozenset(
         "export_plan",
         "get_effective_config",
         "get_story_diff",
+        "get_story_journal",
+        "get_story_log",
         "list_decisions",
         "list_plans",
         "list_ready_stories",
@@ -153,6 +155,8 @@ PLAN_SCOPED_READ = frozenset(
         "export_plan",
         "get_effective_config",
         "get_story_diff",
+        "get_story_journal",
+        "get_story_log",
         "list_decisions",
         "list_ready_stories",
     }

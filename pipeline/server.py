@@ -974,6 +974,8 @@ for _tool in (*_lifecycle_tools.TOOLS, *_settings_tools.TOOLS):
     globals()[_tool.__name__] = _tool
     mcp.tool()(_tool)
 get_story_diff = mcp.tool()(_read_tools.get_story_diff)
+get_story_log = mcp.tool()(_read_tools.get_story_log)
+get_story_journal = mcp.tool()(_read_tools.get_story_journal)
 
 if __name__ == "__main__":
     mcp.run()

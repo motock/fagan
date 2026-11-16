@@ -363,7 +363,7 @@ def test_each_escalation_function_resolves_and_uses_the_plan_repo_root(name):
     # _atomic_write_json binding): exactly one put_manifest, keyed by the
     # "default" store and the plan name, with the manifest just mutated.
     assert (
-        '_store.records().put_manifest("default", plan_name, manifest)' in segment
+        'bound_records.put_manifest(_store, plan_name, manifest)' in segment
     ), "the manifest write must go through the record store"
     assert "_atomic_write_json(manifest_path, manifest)" not in segment, (
         "the legacy module-local writer binding must be gone: it bypasses the "

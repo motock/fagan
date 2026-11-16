@@ -11,6 +11,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
+from . import bound_records
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .plan_approval import (
@@ -304,7 +305,7 @@ def _execute_amend_scope(plan_name, story_key, story, ruling, manifest) -> str:
     # (run_triage_sweep, under the advance tick's plan lock) owns the lock.
     from .server import _store
 
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
 
     cid = story.get("correlation_id")
     try:

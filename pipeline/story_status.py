@@ -17,6 +17,7 @@ from typing import Any
 
 from pipeline.dispatch import _find_dead_new_functions
 
+from . import bound_records
 from .build_detect import (
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -84,7 +85,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest = _store.records().get_manifest("default", plan_name)  # noqa: F821
+    manifest = bound_records.get_manifest(_store, plan_name)  # noqa: F821
     if manifest is None:
         return {"ok": False, "error": "Plan not found"}
     story = manifest["stories"].get(story_key)
@@ -222,13 +223,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                                 event="escalated",
                                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                             )
-                            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+                            bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
                             return {
                                 "status": "todo",
                                 "reason": "step_cap_escalated_to_claude",
                                 "pid": pid,
                             }
-                    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+                    bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
                     return {
                         "status": "interrupted",
                         "pid": pid,
@@ -273,10 +274,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} failed to launch {attempts}x; "
                 f"giving up - needs human intervention.",
             )
-            _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+            bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
             return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
-        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid}
 
     # Step-cap exit routing (regression guard for PR #49 / commit 90a3cf1):
@@ -385,7 +386,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 "reason": "infra_failure_escalated_to_claude",
                 "pid": pid,
             }
-        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
 
     if last_log_line in STEP_CAP_MARKERS:
@@ -493,7 +494,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     "reason": "step_cap_escalated_to_claude",
                     "pid": pid,
                 }
-        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     # The read-only oracle is described as read-only in prompt text only;
@@ -509,7 +510,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             f"{story_key} acceptance fixture modified since dispatch: "
             f"{', '.join(tampered)} - refusing tests_passed",
         )
-        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {
             "status": "changes_requested",
             "reason": "acceptance_tampered",
@@ -756,7 +757,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             f"tests passed but agent branch has no new commits vs {base}; "
             "agent likely parked without writing code."
         )
-        _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
@@ -845,7 +846,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"no new commit after {attempts} rework redispatches",
                     )
                     story["status"] = "changes_requested"
-                    _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+                    bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
                     return {
                         "status": "changes_requested",
                         "reason": "no_new_commit_escalated_to_claude",
@@ -855,7 +856,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"no new commit after {attempts} rework redispatches - "
                     "agent keeps parking/crashing without writing code."
                 )
-                _store.records().put_manifest("default", plan_name, manifest)  # noqa: F821
+                bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
                 _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} parked: no new commit after {attempts} rework "
@@ -878,7 +879,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
                 plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
-            _store.records().put_manifest("default", plan_name,  # noqa: F821
+            bound_records.put_manifest(_store, plan_name,  # noqa: F821
                 merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
                     manifest, keys_at_entry=_story_keys))
             return {
@@ -896,7 +897,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     else:
         story.pop("failure_kind", None)
 
-    _store.records().put_manifest("default", plan_name,  # noqa: F821
+    bound_records.put_manifest(_store, plan_name,  # noqa: F821
         merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
             manifest, drop=("failure_kind",), keys_at_entry=_story_keys))
 
@@ -965,6 +966,7 @@ def bind_to_server(_server: Any) -> None:
     # be reachable there - same reason the detached-grade primitives below are
     # exported.
     _server._baseline_exempted_failures = _baseline_exempted_failures
+    _server.bound_records = bound_records  # rebound body's manifest I/O
 
     # BASELINE-1 path C: the grade-result write merges onto a fresh read, so a
     # baseline the dispatch recorded meanwhile survives it.

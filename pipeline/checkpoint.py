@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import bound_records
 from .git_ops import _commit_wip
 from .store_records import InvalidRecordKeyError
 
@@ -43,7 +44,7 @@ def _append_journal(plan_name: str, story_key: str, record: dict) -> None:
     """
     from .server import _store
 
-    _store.records().append_journal("default", plan_name, story_key, record)
+    bound_records.append_journal(_store, plan_name, story_key, record)
 
 
 # last_log_line is truncated to this many characters before it is journalled.
@@ -239,7 +240,7 @@ def _terminate_and_checkpoint(
     story["interrupted_at"] = interrupted_at
     from .server import _store
 
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
     return sha
 
 

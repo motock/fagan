@@ -9,7 +9,7 @@ from typing import Any
 
 from app import backend, role_registry  # noqa: F401
 
-from . import access_hooks, cross_plan, plan_approval, triage_rebrief
+from . import access_hooks, bound_records, cross_plan, plan_approval, triage_rebrief
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
@@ -152,7 +152,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             return {"ok": False, "error": str(exc), "story_key": story_key}
         if not story.get("correlation_id"):
             story["correlation_id"] = uuid.uuid4().hex[:12]
-        _store.records().put_manifest("default", plan_name, manifest)
+        bound_records.put_manifest(_store, plan_name, manifest)
         worktree_path = WORKTREE_ROOT / worktree_dir_name(story_key)
         # Branch and worktree derive from the key alone, so a key another plan
         # still holds would adopt that plan's worktree (as a "resume") and
@@ -297,7 +297,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                     f"worktree still behind "
                                     f"origin/{_default_branch()}"
                                 )
-                                _store.records().put_manifest("default", plan_name, manifest)
+                                bound_records.put_manifest(_store, plan_name, manifest)
                                 _notify_user(
                                     plan_name,
                                     f"story {story_key} parked: rebase conflict "
@@ -432,7 +432,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         journal: list[dict] = []
         if resuming:
             try:
-                journal = _store.records().get_journal("default", plan_name, story_key)
+                journal = bound_records.get_journal(_store, plan_name, story_key)
             except InvalidRecordKeyError:
                 logger.warning("no resume journal for %s/%s", plan_name, story_key)
 
@@ -618,7 +618,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} not dispatched: acceptance oracle is "
                     f"unusable ({oracle_check['state']}) - {oracle_check['detail']}",
                 )
-                _store.records().put_manifest("default", plan_name, manifest)
+                bound_records.put_manifest(_store, plan_name, manifest)
                 return {
                     "status": "blocked_oracle",
                     "oracle_gate": oracle_check,
@@ -959,7 +959,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # so the baseline is always current regardless of how the next rework
         # is routed.
         story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
-        _store.records().put_manifest("default", plan_name, manifest)
+        bound_records.put_manifest(_store, plan_name, manifest)
 
         # W4-logging slice: stamp the success event with the story's
         # correlation ID (plus the role/model context already in scope here)

@@ -397,7 +397,11 @@ def test_dispatch_reads_the_resume_journal_from_the_bound_partition(
     """The resume journal comes from the bound partition."""
     _write_plan_manifest(dispatch_env)
     (dispatch_env / STORY).mkdir()
-    records.append_journal(NAMESPACE, PLAN, STORY, {"step": "s1"})
+    # A real checkpoint entry carries the summary the resume prompt renders;
+    # the namespace-binding assertion below is what this test is about.
+    records.append_journal(
+        NAMESPACE, PLAN, STORY, {"step": "s1", "summary": "bound journal entry"}
+    )
 
     with bind_namespace(NAMESPACE):
         result = p.dispatch_story(PLAN, STORY)

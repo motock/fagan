@@ -98,6 +98,7 @@ from pipeline.local_agent_common import (
     _trim_resumed_transcript,
     destructive_git_op,
 )
+from pipeline.worker_scope import worker_namespace
 from scripts.local_agent_oracle_done_marker import restore_tampered_oracle_files_impl
 from scripts.local_agent_oracle_guards import _no_tool_nudge
 from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_tool references these as bare names)
@@ -960,7 +961,8 @@ def main() -> int:
 
     Written last, so its existence means the agent has genuinely finished. A
     marker failure never changes the run's exit code."""
-    rc = _main_impl()
+    with worker_namespace():
+        rc = _main_impl()
     write_done_marker(rc)
     return rc
 

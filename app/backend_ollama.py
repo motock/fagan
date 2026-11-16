@@ -667,6 +667,12 @@ class OllamaDriver:
             **os.environ,
             **command.env,
         }
+        # The agent loop runs its tool calls in this child process, so the
+        # namespace the dispatcher is bound to must travel with it: without
+        # this, checkpoint and patch calls land in the default partition.
+        from pipeline.actor import current_namespace
+
+        env["PIPELINE_WORKER_NAMESPACE"] = current_namespace()
         # num_ctx/temperature are resolved per dispatch (env override >
         # per-model tuning table > constructor default) so a per-model
         # override (e.g. tests/benchmark/models.py's gptoss row, or an entry

@@ -88,6 +88,17 @@ def _provision_worktree_venv(worktree: Path) -> None:
         [str(venv_python), "-m", "pip", "install", "--quiet", "-r", req],
         cwd=worktree, check=True, capture_output=True, text=True, timeout=300,
     )
+    # An overlay repository pins the core it runs against in .core-pin; the
+    # core's own dependencies (mcp, httpx, ...) are not in the overlay's
+    # requirements, and the tests import core modules, so install them too.
+    core_req = worktree / ".core-pin" / "requirements.txt"
+    if core_req.exists():
+        subprocess.run(
+            [str(venv_python), "-m", "pip", "install", "--quiet", "-r",
+             str(core_req)],
+            cwd=worktree, check=True, capture_output=True, text=True,
+            timeout=300,
+        )
 
 
 # pytest's short summary reports both failures and collection/setup/teardown

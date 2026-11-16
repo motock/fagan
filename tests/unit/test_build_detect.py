@@ -94,6 +94,55 @@ def test_prefers_requirements_dev_over_plain_requirements(tmp_path, monkeypatch)
     assert calls[1][-1] == "requirements-dev.txt"
 
 
+def test_installs_pinned_core_requirements_after_the_project_requirements(
+        tmp_path, monkeypatch):
+    # An overlay repository (e.g. fagan-enterprise) pins the core it runs
+    # against in .core-pin. The core's own dependencies (mcp, httpx, ...) are
+    # not in the overlay's requirements, yet the overlay's tests import core
+    # modules - without this second install the test gate dies with
+    # ModuleNotFoundError (observed live 2026-11-16).
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
+    core_req = tmp_path / ".core-pin" / "requirements.txt"
+    core_req.parent.mkdir()
+    core_req.write_text("mcp\nhttpx\n")
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(bd.subprocess, "run", fake_run)
+    bd._provision_worktree_venv(tmp_path)
+
+    pip_installs = [cmd for cmd in calls if cmd[:3] == [
+        str(tmp_path / ".venv" / "bin" / "python3"), "-m", "pip"]]
+    assert len(pip_installs) == 2
+    assert pip_installs[0][-1] == "requirements-dev.txt"
+    assert pip_installs[1][-1] == str(core_req)
+    assert pip_installs[1][-2] == "-r"
+
+
+def test_installs_only_the_project_requirements_without_a_core_pin(
+        tmp_path, monkeypatch):
+    # No .core-pin directory (a normal, non-overlay repository): the
+    # provisioning behaviour must be exactly as before - one pip install.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(bd.subprocess, "run", fake_run)
+    bd._provision_worktree_venv(tmp_path)
+
+    pip_installs = [cmd for cmd in calls if "pip" in cmd]
+    assert len(pip_installs) == 1
+    assert pip_installs[0][-1] == "requirements-dev.txt"
+
+
 def test_venv_creation_uses_check_true_and_propagates_failure(tmp_path, monkeypatch):
     # A real setup failure (no python3, network down, broken requirements
     # file) must fail loudly - dispatch_story's caller retries the whole

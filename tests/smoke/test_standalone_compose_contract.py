@@ -335,3 +335,63 @@ def test_docs_document_the_bare_and_wildcard_allowed_hosts_form() -> None:
         "the §8 troubleshooting example must show both forms for every host, "
         "otherwise an operator who copies it still gets 421 on the default 443"
     )
+
+
+EXTRA_ROUTES_IMPORT = "import /etc/caddy/extra-routes/*.caddy"
+EXTRA_ROUTES_DIR = STANDALONE / "extra-routes"
+
+
+def _routes_snippet(caddy: str) -> list[str]:
+    """Non-blank body lines of the ``(routes)`` snippet, in file order."""
+    match = re.search(r"^\(routes\) \{\n(.*?)^\}", caddy, re.MULTILINE | re.DOTALL)
+    assert match, "no (routes) snippet"
+    return [ln.strip() for ln in match.group(1).splitlines() if ln.strip()]
+
+
+def test_caddy_routes_snippet_imports_extra_routes_first() -> None:
+    statements = [
+        ln for ln in _routes_snippet(_text(CADDYFILE)) if not ln.startswith("#")
+    ]
+
+    assert statements[0] == EXTRA_ROUTES_IMPORT, statements[0]
+
+
+def test_caddy_routes_order_is_unchanged_after_the_extra_routes_import() -> None:
+    body = "\n".join(_routes_snippet(_text(CADDYFILE)))
+
+    handles = [h.strip() for h in re.findall(r"^(handle[^\n{]*)\{", body, re.MULTILINE)]
+    matchers = re.findall(r"^(@\w+)\s", body, re.MULTILINE)
+    assert handles == ["handle @mcp", "handle @identity", "handle"]
+    assert matchers == ["@mcp", "@identity"]
+    assert body.count(EXTRA_ROUTES_IMPORT) == 1
+
+
+def test_proxy_mounts_the_extra_routes_dir_read_only() -> None:
+    block = _service(_text(COMPOSE), "proxy")
+
+    assert (
+        "${STANDALONE_EXTRA_ROUTES_DIR:-./extra-routes}:/etc/caddy/extra-routes:ro"
+        in block
+    )
+
+
+def test_extra_routes_mount_comment_says_files_must_end_in_caddy() -> None:
+    block = _service(_text(COMPOSE), "proxy")
+    comment = " ".join(
+        ln.strip() for ln in block.splitlines() if ln.strip().startswith("#")
+    )
+
+    assert "extra-routes" in block
+    assert ".caddy" in comment, "the proxy block must say route files end in .caddy"
+
+
+def test_default_extra_routes_dir_exists_with_no_caddy_file() -> None:
+    assert (EXTRA_ROUTES_DIR / ".gitkeep").is_file()
+    assert list(EXTRA_ROUTES_DIR.glob("*.caddy")) == []
+
+
+def test_env_example_documents_extra_routes_dir_as_optional() -> None:
+    env = _text(ENV_EXAMPLE)
+
+    assert re.search(r"^#?\s*STANDALONE_EXTRA_ROUTES_DIR=", env, re.MULTILINE)
+    assert re.search(r"optional", env, re.IGNORECASE)

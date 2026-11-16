@@ -5,7 +5,7 @@ at call time so tests patching pipeline.server._service keep landing."""
 from typing import Any
 
 from .module_ref import _ModuleRef
-from .story_evidence import redact
+from .story_evidence import REDACTED, is_secret_name, redact
 from .workspace_reader import STORY_LOG_TAIL_DEFAULT, STORY_LOG_TAIL_MAX
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -47,12 +47,18 @@ def _known_story(plan_name: str, story_key: str) -> dict[str, Any] | None:
 
 
 def _redact_value(value: Any) -> Any:
+    """Return a masked copy; never mutate the store's own lists or dicts."""
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, list):
         return [_redact_value(item) for item in value]
     if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
+        return {
+            key: REDACTED
+            if isinstance(item, str) and is_secret_name(key)
+            else _redact_value(item)
+            for key, item in value.items()
+        }
     return value
 
 

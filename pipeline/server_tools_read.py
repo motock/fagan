@@ -4,11 +4,13 @@ at call time so tests patching pipeline.server._service keep landing."""
 
 from typing import Any
 
+from . import story_worktree_status
 from .module_ref import _ModuleRef
 from .story_evidence import REDACTED, is_secret_name, redact
 from .workspace_reader import STORY_LOG_TAIL_DEFAULT, STORY_LOG_TAIL_MAX
 
 _service = _ModuleRef("pipeline.server", "_service")
+_worktree_root = _ModuleRef("pipeline.server", "WORKTREE_ROOT")
 
 # Filesystem PATH_MAX; no real repo-relative path is longer.
 MAX_PATH_LENGTH = 4096
@@ -83,6 +85,29 @@ def get_story_log(plan_name: str, story_key: str, lines: int = STORY_LOG_TAIL_DE
     # Redact the joined text so a multi-line PEM block is masked whole.
     masked = redact("\n".join(result.get("lines", []))) if result.get("lines") else ""
     return {**result, "lines": masked.split("\n") if masked else []}
+
+
+def get_story_worktree(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Return the story's worktree status: branch, head, commits ahead of the
+    default branch (max 10), uncommitted paths (max 200) and the agent's
+    scratchpad with secret values masked (max 20000 characters).
+
+    plan_name: the plan's name this story belongs to.
+    story_key: the story's key within that plan's manifest.
+
+    The worktree is resolved from the story record and contain-checked under
+    the worktrees root; there is no path argument. A story with no worktree
+    returns {"available": False, "reason": "no_worktree"}, a git failure
+    {"available": False, "reason": "git_failed"}. An unknown plan/story
+    returns {"ok": False, "status": 404, "error": ...}.
+    """
+    manifest = _known_story(plan_name, story_key)
+    if manifest is None:
+        return dict(_NOT_FOUND)
+    return story_worktree_status.collect(
+        manifest["stories"][story_key], _worktree_root._value()
+    )
 
 
 def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:

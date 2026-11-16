@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from pipeline.actor import current_namespace
 from pipeline.server import _store
 
 # Default line cap when the modal fetches the log tail. Capped at
@@ -230,7 +231,7 @@ def _plan_summary(
     *, include_notification_summary: bool = False,
 ) -> dict[str, Any]:
     stories = manifest.get("stories", {})
-    updated_at = _store.records().get_manifest_updated_at("default", plan_name)
+    updated_at = _store.records().get_manifest_updated_at(current_namespace(), plan_name)
     # A manifest that vanished under a race with a concurrent write has no
     # timestamp - sort it last rather than 500ing the whole list over one
     # plan's timestamp.

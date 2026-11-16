@@ -21,6 +21,7 @@ import pytest
 import pipeline.server  # noqa: F401
 from app.plugin_loader import PluginError
 from pipeline import store
+from pipeline.actor import bind_namespace
 from pipeline.store_plugin import PluginStore
 from pipeline.store_records import RECORD_STORE_METHODS
 
@@ -111,3 +112,32 @@ def test_reported_kind_degrades_a_bad_spec_without_echoing_it(spec):
     reported = store.reported_store_kind({STORE_ENV: "plugin", PLUGIN_ENV: spec})
 
     assert reported == store.STORE_INVALID
+
+
+def test_facade_writes_and_reads_the_bound_namespace():
+    built = _build({STORE_ENV: "plugin", PLUGIN_ENV: GOOD_SPEC})
+
+    with bind_namespace("a/b"):
+        built.save_manifest("p", {"stories": {}})
+
+    assert built.records().get_manifest("a/b", "p") == {"stories": {}}
+    assert built.records().get_manifest("default", "p") is None
+
+
+def test_facade_lists_only_the_bound_namespace():
+    built = _build({STORE_ENV: "plugin", PLUGIN_ENV: GOOD_SPEC})
+    built.records().put_manifest("a/b", "b-plan", {"stories": {}})
+    built.records().put_manifest("default", "d-plan", {"stories": {}})
+
+    with bind_namespace("a/b"):
+        assert built.list_manifests() == ["b-plan"]
+
+    assert built.list_manifests() == ["d-plan"]
+
+
+def test_facade_with_no_namespace_bound_uses_the_default():
+    built = _build({STORE_ENV: "plugin", PLUGIN_ENV: GOOD_SPEC})
+
+    built.save_manifest("p", {"stories": {}})
+
+    assert built.records().get_manifest("default", "p") == {"stories": {}}

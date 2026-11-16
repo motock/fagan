@@ -53,6 +53,18 @@ STORY_PATH_MODULES = {
     "escalation.py": {"put_manifest": 2},
 }
 
+#: The modules whose bulk manifest read, journal clear and journal-key listing
+#: this story moves off the default partition, each with the record-store
+#: methods whose calls it moves and the number of sites of each method.
+BOUND_RECORD_READ_MODULES = {
+    "advance.py": {"get_manifests": 2},
+    "concurrency.py": {"get_manifests": 1},
+    "cross_plan.py": {"get_manifests": 1},
+    "detached_grade.py": {"get_manifests": 1},
+    "escalation.py": {"clear_journal": 2},
+    "wedge_io.py": {"list_journal_keys": 1},
+}
+
 #: A record-store call that names the default partition literally.
 _DEFAULT_PARTITION_CALL = re.compile(r'records\(\)\s*\.\s*(\w+)\(\s*"default"')
 

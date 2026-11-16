@@ -290,7 +290,9 @@ def _escalate_to_claude(manifest):
 
 
 def _escalate_to_fallback(manifest):
-    escalation._escalate_to_local_fallback_model(manifest, PLAN, STORY, "fallback-model")
+    escalation._escalate_to_local_fallback_model(
+        manifest, PLAN, STORY, "fallback-model"
+    )
 
 
 ESCALATIONS = (_escalate_to_claude, _escalate_to_fallback)

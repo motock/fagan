@@ -9,6 +9,7 @@ import json
 import os
 from typing import Any
 
+from . import bound_records
 from .plan_approval import reset_if_changed
 
 
@@ -58,7 +59,7 @@ def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | 
     with _store.transaction(plan_name) as acquired:
         if not acquired:
             return {"ok": True, "skipped": "locked"}
-        if plan_name not in _store.records().list_plans("default"):
+        if plan_name not in bound_records.list_plans(_store):
             return {"ok": False, "error": f"No such plan {plan_name!r}"}
         manifest = _store.get_manifest(plan_name)
         new_role_config = {
@@ -152,7 +153,7 @@ def _patch_plan_impl(self, plan_name: str, fields: dict[str, Any]):
                 "retry_after_seconds": wait_seconds,
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
-        if plan_name not in _store.records().list_plans("default"):
+        if plan_name not in bound_records.list_plans(_store):
             return {"ok": False, "error": f"No such plan {plan_name!r}"}
         manifest = _store.get_manifest(plan_name)
         manifest.update(fields)

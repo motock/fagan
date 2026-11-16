@@ -14,6 +14,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import bound_records
 from .build_detect import failed_node_ids
 from .host_state import build_host_state
 from .settings_resolve import SAFE_DEFAULT_SOURCE
@@ -37,7 +38,7 @@ def _put_manifest(plan_name, manifest) -> None:
     """
     from .server import _store
 
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
 
 
 def _fresh_manifest(plan_name, story_key, story, manifest, keys_at_entry=()):

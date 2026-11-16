@@ -21,6 +21,7 @@ from typing import Any
 
 from app import role_registry
 
+from . import bound_records
 from .authorization import DEFAULT_TEAM
 
 # Import helpers for test detection and scoping.  These imports are used in
@@ -132,7 +133,7 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
         return context_from_manifest({})
     from .server import _store
 
-    manifest = _store.records().get_manifest("default", plan_name) or {}
+    manifest = bound_records.get_manifest(_store, plan_name) or {}
     return context_from_manifest(manifest)
 
 

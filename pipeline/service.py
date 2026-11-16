@@ -163,7 +163,14 @@ _mark_story_done_impl = _ServerRef("_mark_story_done_impl")
 _check_usage_impl = _ServerRef("_check_usage_impl")
 
 
-from . import plan_draft, plan_export, plan_names, remote_scope, review_audit
+from . import (
+    bound_records,
+    plan_draft,
+    plan_export,
+    plan_names,
+    remote_scope,
+    review_audit,
+)
 from .actor import current_namespace, current_principal
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -691,7 +698,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     def list_ready_stories(self, plan_name: str) -> list[dict]:
         _validate_key(plan_name)
-        if plan_name not in _store.records().list_plans("default"):
+        if plan_name not in bound_records.list_plans(_store):
             return []
 
         manifest = _store.get_manifest(plan_name)

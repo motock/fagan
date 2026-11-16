@@ -20,17 +20,24 @@ exactly where they did before; that is pinned here too.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 import pytest
 
 from pipeline import (
+    advance,
+    bound_records,
     checkpoint,
+    concurrency,
+    cross_plan,
+    detached_grade,
     escalation,
     no_progress,
     story_status,
     triage,
+    wedge_io,
 )
 from pipeline import server as p
 from pipeline.actor import bind_namespace

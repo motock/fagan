@@ -105,6 +105,7 @@ from pipeline.local_agent_common import (
 from pipeline.local_agent_common import (  # noqa: F401 (kept: moved recover_tool_calls_impl reads it via origin["_recover_tool_calls_shared"])
     recover_tool_calls as _recover_tool_calls_shared,
 )
+from pipeline.worker_scope import worker_namespace
 
 # LA-CHAT: the chars/token estimate constant itself moved to
 # scripts/local_agent_chat.py; the name is re-exported here (tests read
@@ -959,7 +960,8 @@ def main() -> int:
 
     Written last, so its existence means the agent has genuinely finished. A
     marker failure never changes the run's exit code."""
-    rc = _main_impl()
+    with worker_namespace():
+        rc = _main_impl()
     write_done_marker(rc)
     return rc
 

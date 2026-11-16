@@ -4,6 +4,8 @@
 using the accesses the namespace resolver reports for it. The check is fail
 closed: a malformed request, an empty or unreadable resolver answer, and a
 namespace outside the principal's accesses are all denials with a reason token.
+The instance scope (``pipeline.scheduler_scope``) further refuses a namespace
+the instance does not serve, and a malformed scope refuses every request.
 
 Each denial appends one host audit record carrying the subject, the reason and
 the requested value. A malformed value is recorded only as a SHA-256 prefix,
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +35,7 @@ from pipeline.namespace_resolver import (
     active_namespace_resolver,
     checked_accesses,
 )
+from pipeline.scheduler_scope import SchedulerScopeError, load_scope
 from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 logger = logging.getLogger("pipeline.namespace_access")
@@ -44,6 +48,7 @@ NAMESPACE_MISSING = "namespace_missing"
 NAMESPACE_MALFORMED = "namespace_malformed"
 NAMESPACE_NOT_PERMITTED = "namespace_not_permitted"
 NAMESPACE_ERROR = "namespace_error"
+NAMESPACE_OUT_OF_SCOPE = "namespace_out_of_scope"
 
 _AUDIT_ACTION = "namespace:verify"
 _DIGEST_CHARS = 16
@@ -73,7 +78,17 @@ def verify_namespace(
     an agent is scoped by the authorization check instead, as any principal is.
     """
     is_empty = requested is None or requested == ""
-    if not is_empty and not _is_valid(requested):
+    is_valid = is_empty or _is_valid(requested)
+
+    # The instance scope is read on every call, so a change to the environment
+    # applies without a restart. A malformed scope denies every request.
+    try:
+        scope = load_scope(os.environ)
+    except SchedulerScopeError:
+        logger.error("namespace scope rejected reason=%s", NAMESPACE_ERROR)
+        return _deny(principal, NAMESPACE_ERROR, requested, malformed=not is_valid)
+
+    if not is_valid:
         return _deny(principal, NAMESPACE_MALFORMED, requested, malformed=True)
 
     try:
@@ -100,6 +115,9 @@ def verify_namespace(
         and access.namespace != principal.team_scope
     ):
         return _deny(principal, NAMESPACE_NOT_PERMITTED, requested)
+
+    if scope is not None and not scope.allows(access.namespace):
+        return _deny(principal, NAMESPACE_OUT_OF_SCOPE, requested)
     return NamespaceDecision(True, access.namespace, access.roles, "")
 
 

@@ -51,6 +51,21 @@ def list_plans(store: Any) -> list[str]:
     return store.records().list_plans(current_namespace())
 
 
+def get_manifests(store: Any) -> dict[str, dict]:
+    """Return every manifest held in the bound namespace."""
+    return store.records().get_manifests(current_namespace())
+
+
+def clear_journal(store: Any, plan_name: str, story_key: str) -> None:
+    """Clear the story journal in the bound namespace."""
+    store.records().clear_journal(current_namespace(), plan_name, story_key)
+
+
+def list_journal_keys(store: Any, plan_name: str) -> list[str]:
+    """Return the journal keys held in the bound namespace."""
+    return store.records().list_journal_keys(current_namespace(), plan_name)
+
+
 def refuses_bound_namespace(store: Any) -> bool:
     """Whether *store* holds only the default partition end to end.
 

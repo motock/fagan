@@ -356,7 +356,7 @@ def test_each_escalation_function_resolves_and_uses_the_plan_repo_root(name):
         f"{name} makes three git calls; all three must use cwd=repo_root"
     )
     assert "cwd=REPO_ROOT" not in segment
-    assert '_store.records().clear_journal("default", plan_name, story_key)' in (
+    assert "bound_records.clear_journal(_store, plan_name, story_key)" in (
         segment
     ), "the journal must be cleared through the record store"
     # The reset is persisted through the record store (not the module-local

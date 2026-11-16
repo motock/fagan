@@ -223,7 +223,7 @@ def live_grade_count(exclude_plan: str | None = None) -> int:
     from .server import _store
 
     count = 0
-    for plan_name, data in _store.records().get_manifests("default").items():
+    for plan_name, data in bound_records.get_manifests(_store).items():
         if plan_name == exclude_plan:
             continue
         stories: list[dict] = []

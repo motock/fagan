@@ -26,12 +26,15 @@ STORY = "story-1"
 
 WRAPPERS = (
     "get_manifest",
+    "get_manifests",
     "put_manifest",
     "get_journal",
     "append_journal",
+    "clear_journal",
     "append_decision",
     "get_decisions",
     "list_plans",
+    "list_journal_keys",
     "refuses_bound_namespace",
 )
 

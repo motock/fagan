@@ -128,7 +128,7 @@ def _count_in_progress_agents() -> int:
     has a chance to grade it.
     """
     count = 0
-    for manifest in _store.records().get_manifests("default").values():
+    for manifest in bound_records.get_manifests(_store).values():
         for story in manifest.get("stories", {}).values():
             if _has_live_test_author_phase(story):
                 count += 1

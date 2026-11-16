@@ -13,6 +13,12 @@ this story names - ``story_status``, ``checkpoint``, ``no_progress``,
 default partition in the record-store calls this story moves, and each one
 must reach for the shared ``bound_records`` wrappers.
 
+The same guard covers the six modules whose bulk manifest read, journal clear
+and journal-key listing this story moves as well - ``advance``,
+``concurrency``, ``cross_plan``, ``detached_grade``, ``escalation`` and
+``wedge_io`` - and their behaviour is driven through their public entry
+points with a namespace bound and with nothing bound.
+
 With nothing bound the wrappers select the default partition, so the
 background paths and the single-namespace installs keep reading and writing
 exactly where they did before; that is pinned here too.
@@ -20,17 +26,24 @@ exactly where they did before; that is pinned here too.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 import pytest
 
 from pipeline import (
+    advance,
+    bound_records,
     checkpoint,
+    concurrency,
+    cross_plan,
+    detached_grade,
     escalation,
     no_progress,
     story_status,
     triage,
+    wedge_io,
 )
 from pipeline import server as p
 from pipeline.actor import bind_namespace
@@ -53,6 +66,18 @@ STORY_PATH_MODULES = {
     "escalation.py": {"put_manifest": 2},
 }
 
+#: The modules whose bulk manifest read, journal clear and journal-key listing
+#: this story moves off the default partition, each with the record-store
+#: methods whose calls it moves and the number of sites of each method.
+BOUND_RECORD_READ_MODULES = {
+    "advance.py": {"get_manifests": 2},
+    "concurrency.py": {"get_manifests": 1},
+    "cross_plan.py": {"get_manifests": 1},
+    "detached_grade.py": {"get_manifests": 1},
+    "escalation.py": {"clear_journal": 2},
+    "wedge_io.py": {"list_journal_keys": 1},
+}
+
 #: A record-store call that names the default partition literally.
 _DEFAULT_PARTITION_CALL = re.compile(r'records\(\)\s*\.\s*(\w+)\(\s*"default"')
 
@@ -66,9 +91,12 @@ class _RecordingRecords:
     def __init__(self) -> None:
         self.manifest_writes: list[tuple[str, str]] = []
         self.manifest_reads: list[tuple[str, str]] = []
+        self.manifest_bulk_reads: list[str] = []
         self.journal_writes: list[tuple[str, str, str]] = []
         self.journal_clears: list[tuple[str, str, str]] = []
+        self.journal_key_reads: list[tuple[str, str]] = []
         self.manifests: dict[tuple[str, str], dict] = {}
+        self.journals: dict[tuple[str, str, str], list[dict]] = {}
 
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None:
         self.manifest_writes.append((namespace, plan_name))
@@ -78,16 +106,34 @@ class _RecordingRecords:
         self.manifest_reads.append((namespace, plan_name))
         return self.manifests.get((namespace, plan_name))
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        self.manifest_bulk_reads.append(namespace)
+        return {
+            name: manifest
+            for (held_namespace, name), manifest in self.manifests.items()
+            if held_namespace == namespace
+        }
+
     def append_journal(
         self, namespace: str, plan_name: str, story_key: str, record: dict
     ) -> None:
         self.journal_writes.append((namespace, plan_name, story_key))
+        self.journals.setdefault((namespace, plan_name, story_key), []).append(record)
 
     def get_journal(self, namespace: str, plan_name: str, story_key: str) -> list[dict]:
-        return []
+        return list(self.journals.get((namespace, plan_name, story_key), []))
 
     def clear_journal(self, namespace: str, plan_name: str, story_key: str) -> None:
         self.journal_clears.append((namespace, plan_name, story_key))
+        self.journals.pop((namespace, plan_name, story_key), None)
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        self.journal_key_reads.append((namespace, plan_name))
+        return sorted(
+            key
+            for (held_namespace, held_plan, key) in self.journals
+            if held_namespace == namespace and held_plan == plan_name
+        )
 
 
 class _Store:
@@ -449,4 +495,337 @@ def test_story_status_keeps_its_undefined_name_suppressions() -> None:
     assert all("# noqa: F821" in call for call in calls), (
         "every bound_records call in story_status must keep its "
         "'# noqa: F821' suppression: _store is injected at runtime"
+    )
+
+
+# -- the bound record reads: manifests, journals and journal keys --------------
+#
+# The bulk manifest read, the journal clear and the journal-key listing each
+# used to name the default partition.  Under a bound namespace that reads (or
+# clears) the wrong partition: the concurrency counter would size its slots
+# against another namespace's agents, the wedge probe would inspect the wrong
+# journal, and an escalation reset would clear the default team's journal
+# while leaving the plan's own in place.
+
+
+def test_get_manifests_returns_the_manifests_of_the_bound_partition(
+    store, records
+) -> None:
+    """``bound_records.get_manifests`` reads the bound partition only."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {"where": "bound"}
+    records.manifests[("default", "plan-default")] = {"where": "default"}
+
+    with bind_namespace(NAMESPACE):
+        manifests = bound_records.get_manifests(store)
+
+    assert manifests == {"plan-bound": {"where": "bound"}}
+
+
+def test_get_manifests_reads_the_default_partition_when_unbound(store, records) -> None:
+    """With nothing bound the bulk read still reads the default partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {"where": "bound"}
+    records.manifests[("default", "plan-default")] = {"where": "default"}
+
+    manifests = bound_records.get_manifests(store)
+
+    assert manifests == {"plan-default": {"where": "default"}}
+
+
+def test_clear_journal_clears_the_bound_partition_only(store, records) -> None:
+    """``bound_records.clear_journal`` forgets the bound partition's journal."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, STORY)] = [{"event": "other team"}]
+
+    with bind_namespace(NAMESPACE):
+        bound_records.clear_journal(store, PLAN, STORY)
+
+    assert records.journals.get((NAMESPACE, PLAN, STORY)) is None
+    assert records.journals[("default", PLAN, STORY)] == [{"event": "other team"}]
+
+
+def test_clear_journal_clears_the_default_partition_when_unbound(store, records) -> None:
+    """With nothing bound the clear still clears the default partition."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, STORY)] = [{"event": "other team"}]
+
+    bound_records.clear_journal(store, PLAN, STORY)
+
+    assert records.journals.get(("default", PLAN, STORY)) is None
+    assert records.journals[(NAMESPACE, PLAN, STORY)] == [{"event": "boom"}]
+
+
+def test_list_journal_keys_lists_the_bound_partition_only(store, records) -> None:
+    """``bound_records.list_journal_keys`` lists the bound partition's keys."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, "other-story")] = [{"event": "x"}]
+
+    with bind_namespace(NAMESPACE):
+        keys = bound_records.list_journal_keys(store, PLAN)
+
+    assert keys == [STORY]
+
+
+def test_list_journal_keys_lists_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the key listing still lists the default partition."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, "other-story")] = [{"event": "x"}]
+
+    assert bound_records.list_journal_keys(store, PLAN) == ["other-story"]
+
+
+# -- cross_plan: the neighbour manifests --------------------------------------
+
+
+def test_neighbour_manifests_are_read_from_the_bound_partition(store, records) -> None:
+    """``neighbour_manifests`` reads the neighbours of the bound partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {"where": "bound"}
+    records.manifests[("default", "plan-default")] = {"where": "default"}
+
+    with bind_namespace(NAMESPACE):
+        neighbours = cross_plan.neighbour_manifests(store, PLAN)
+
+    assert neighbours == {"plan-bound": {"where": "bound"}}
+
+
+def test_neighbour_manifests_read_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the neighbour read still reads the default one."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {"where": "bound"}
+    records.manifests[("default", "plan-default")] = {"where": "default"}
+
+    neighbours = cross_plan.neighbour_manifests(store, PLAN)
+
+    assert neighbours == {"plan-default": {"where": "default"}}
+
+# -- wedge_io: the journal keys the probe inspects ----------------------------
+
+
+def test_wedge_journal_keys_are_read_from_the_bound_partition(store, records) -> None:
+    """The wedge probe lists the journal keys of the bound partition."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, "other-story")] = [{"event": "x"}]
+
+    with bind_namespace(NAMESPACE):
+        keys = wedge_io._list_journal_keys(PLAN)
+
+    assert keys == [STORY]
+
+
+def test_wedge_journal_keys_read_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the wedge probe still lists the default partition."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, "other-story")] = [{"event": "x"}]
+
+    assert wedge_io._list_journal_keys(PLAN) == ["other-story"]
+
+
+# -- concurrency and advance: the agents that hold a slot ---------------------
+
+
+def _live_story() -> dict:
+    """A story that looks like a running dispatched agent."""
+    return {"status": "in_progress", "pid": os.getpid()}
+
+
+def _two_live_stories() -> dict:
+    """Two stories that look like running dispatched agents."""
+    return {"stories": {"s2": _live_story(), "s3": _live_story()}}
+
+
+def test_in_progress_agents_are_counted_in_the_bound_partition_only(
+    store, records
+) -> None:
+    """The concurrency counter sizes its slots from the bound partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _live_story()}
+    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
+
+    with bind_namespace(NAMESPACE):
+        count = concurrency._count_in_progress_agents()
+
+    assert count == 1
+
+
+def test_in_progress_agents_are_counted_in_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the counter still counts the default partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _live_story()}
+    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
+
+    assert concurrency._count_in_progress_agents() == 2
+
+
+def test_on_device_agents_are_counted_in_the_bound_partition_only(
+    store, records
+) -> None:
+    """The on-device counter sizes its slots from the bound partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _live_story()}
+    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
+
+    with bind_namespace(NAMESPACE):
+        count = advance._count_on_device_in_progress_agents()
+
+    assert count == 1
+
+
+def test_on_device_agents_are_counted_in_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the on-device counter reads the default partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _live_story()}
+    }
+    records.manifests[("default", "plan-default")] = _two_live_stories()
+
+    assert advance._count_on_device_in_progress_agents() == 2
+
+
+# -- detached_grade: the grades that hold a slot ------------------------------
+
+
+def _grading_story() -> dict:
+    """A story that looks like it holds a live detached grade."""
+    return {"grading_pid": os.getpid()}
+
+
+def _two_grading_plans(records) -> None:
+    """Two plans of the default partition, each holding a live detached grade."""
+    records.manifests[("default", "plan-default-a")] = {
+        "stories": {"s2": _grading_story()}
+    }
+    records.manifests[("default", "plan-default-b")] = {
+        "stories": {"s3": _grading_story()}
+    }
+
+
+def test_live_grades_are_counted_in_the_bound_partition_only(store, records) -> None:
+    """The grade counter reads the live grades of the bound partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _grading_story()}
+    }
+    _two_grading_plans(records)
+
+    with bind_namespace(NAMESPACE):
+        count = detached_grade.live_grade_count()
+
+    assert count == 1
+
+
+def test_live_grades_are_counted_in_the_default_partition_when_unbound(
+    store, records
+) -> None:
+    """With nothing bound the grade counter reads the default partition."""
+    records.manifests[(NAMESPACE, "plan-bound")] = {
+        "stories": {STORY: _grading_story()}
+    }
+    _two_grading_plans(records)
+
+    assert detached_grade.live_grade_count() == 2
+
+
+# -- escalation: the journal the reset clears ---------------------------------
+
+
+@pytest.mark.parametrize("escalate", ESCALATIONS)
+def test_escalation_clears_the_journal_in_the_bound_partition_only(
+    fake_git, store, records, escalate
+) -> None:
+    """The escalation reset clears the plan's own journal, not another team's."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, STORY)] = [{"event": "other team"}]
+
+    with bind_namespace(NAMESPACE):
+        escalate(_escalation_manifest())
+
+    assert records.journal_clears == [(NAMESPACE, PLAN, STORY)]
+    assert records.journals.get((NAMESPACE, PLAN, STORY)) is None
+    assert records.journals[("default", PLAN, STORY)] == [{"event": "other team"}]
+
+
+@pytest.mark.parametrize("escalate", ESCALATIONS)
+def test_escalation_clears_the_default_partition_journal_when_unbound(
+    fake_git, store, records, escalate
+) -> None:
+    """With nothing bound the reset still clears the default partition."""
+    records.journals[(NAMESPACE, PLAN, STORY)] = [{"event": "boom"}]
+    records.journals[("default", PLAN, STORY)] = [{"event": "other team"}]
+
+    escalate(_escalation_manifest())
+
+    assert records.journal_clears == [("default", PLAN, STORY)]
+    assert records.journals.get(("default", PLAN, STORY)) is None
+    assert records.journals[(NAMESPACE, PLAN, STORY)] == [{"event": "boom"}]
+
+
+# -- the regression guard for the bound record reads --------------------------
+
+
+def test_no_bound_record_read_module_names_the_default_partition() -> None:
+    """None of the six modules names the default partition any more.
+
+    A literal ``"default"`` in one of the three record-store calls this story
+    moves is the defect it removes; this is the regression guard against it
+    creeping back.
+    """
+    offenders = {}
+    for module_name, methods in BOUND_RECORD_READ_MODULES.items():
+        hits = [
+            match
+            for match in _DEFAULT_PARTITION_CALL.findall(_module_source(module_name))
+            if match in methods
+        ]
+        if hits:
+            offenders[module_name] = sorted(set(hits))
+
+    assert not offenders, (
+        "these modules still name the default partition in a record-store call; "
+        f"they must select the namespace bound for the call instead: {offenders}"
+    )
+
+
+def test_every_bound_record_read_module_reaches_the_bound_namespace() -> None:
+    """Each of the six modules selects the namespace through the wrappers."""
+    missing_wrappers = [
+        module_name
+        for module_name in BOUND_RECORD_READ_MODULES
+        if "bound_records" not in _module_source(module_name)
+    ]
+    missing_import = [
+        module_name
+        for module_name in BOUND_RECORD_READ_MODULES
+        if not _BOUND_RECORDS_IMPORT.search(_module_source(module_name))
+    ]
+
+    assert not missing_wrappers, f"no bound-namespace wrappers in: {missing_wrappers}"
+    assert not missing_import, f"no 'from . import bound_records' in: {missing_import}"
+
+
+def test_every_bound_record_read_site_goes_through_the_wrapper() -> None:
+    """Every record-store site this story moves goes through the wrapper.
+
+    The wrapper call is counted per method, so a site left behind on the old
+    form - or a call that lost its wrapper - shows up as a missing one.
+    """
+    shortfalls = {}
+    for module_name, methods in BOUND_RECORD_READ_MODULES.items():
+        source = _module_source(module_name)
+        for method, expected in methods.items():
+            found = len(re.findall(rf"bound_records\s*\.\s*{method}\(", source))
+            if found < expected:
+                shortfalls[f"{module_name}:{method}"] = (found, expected)
+
+    assert not shortfalls, (
+        "these record-store sites do not go through the bound_records wrapper "
+        f"(found, expected): {shortfalls}"
     )

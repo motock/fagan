@@ -324,6 +324,31 @@ def test_escalation_manifest_is_written_to_the_default_partition_when_unbound(
     assert records.manifest_writes == [("default", PLAN)]
 
 
+# -- story_status: the plan is read from the bound partition ---------------
+
+
+def test_story_status_reads_the_manifest_from_the_bound_partition(store, records) -> None:
+    """``check_story_status`` reads the plan from the bound partition.
+
+    The body of ``check_story_status`` resolves its bare names against the
+    server namespace, so this also proves the wrapper is reachable from there.
+    """
+    with bind_namespace(NAMESPACE):
+        result = p.check_story_status(PLAN, STORY)
+
+    assert result == {"ok": False, "error": "Plan not found"}
+    assert records.manifest_reads == [(NAMESPACE, PLAN)]
+    assert ("default", PLAN) not in records.manifest_reads
+
+
+def test_story_status_reads_the_default_partition_when_unbound(store, records) -> None:
+    """With nothing bound the story status still reads the default partition."""
+    result = p.check_story_status(PLAN, STORY)
+
+    assert result == {"ok": False, "error": "Plan not found"}
+    assert records.manifest_reads == [("default", PLAN)]
+
+
 # -- the regression guard ---------------------------------------------------
 
 

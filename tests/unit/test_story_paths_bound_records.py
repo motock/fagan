@@ -78,9 +78,12 @@ class _RecordingRecords:
     def __init__(self) -> None:
         self.manifest_writes: list[tuple[str, str]] = []
         self.manifest_reads: list[tuple[str, str]] = []
+        self.manifest_bulk_reads: list[str] = []
         self.journal_writes: list[tuple[str, str, str]] = []
         self.journal_clears: list[tuple[str, str, str]] = []
+        self.journal_key_reads: list[tuple[str, str]] = []
         self.manifests: dict[tuple[str, str], dict] = {}
+        self.journals: dict[tuple[str, str, str], list[dict]] = {}
 
     def put_manifest(self, namespace: str, plan_name: str, manifest: dict) -> None:
         self.manifest_writes.append((namespace, plan_name))
@@ -90,16 +93,34 @@ class _RecordingRecords:
         self.manifest_reads.append((namespace, plan_name))
         return self.manifests.get((namespace, plan_name))
 
+    def get_manifests(self, namespace: str) -> dict[str, dict]:
+        self.manifest_bulk_reads.append(namespace)
+        return {
+            name: manifest
+            for (held_namespace, name), manifest in self.manifests.items()
+            if held_namespace == namespace
+        }
+
     def append_journal(
         self, namespace: str, plan_name: str, story_key: str, record: dict
     ) -> None:
         self.journal_writes.append((namespace, plan_name, story_key))
+        self.journals.setdefault((namespace, plan_name, story_key), []).append(record)
 
     def get_journal(self, namespace: str, plan_name: str, story_key: str) -> list[dict]:
-        return []
+        return list(self.journals.get((namespace, plan_name, story_key), []))
 
     def clear_journal(self, namespace: str, plan_name: str, story_key: str) -> None:
         self.journal_clears.append((namespace, plan_name, story_key))
+        self.journals.pop((namespace, plan_name, story_key), None)
+
+    def list_journal_keys(self, namespace: str, plan_name: str) -> list[str]:
+        self.journal_key_reads.append((namespace, plan_name))
+        return sorted(
+            key
+            for (held_namespace, held_plan, key) in self.journals
+            if held_namespace == namespace and held_plan == plan_name
+        )
 
 
 class _Store:

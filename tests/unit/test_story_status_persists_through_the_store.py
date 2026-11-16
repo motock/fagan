@@ -393,7 +393,7 @@ def test_grading_transitions_are_written_through_the_store(plan_dir, monkeypatch
 
 def test_every_manifest_write_in_the_module_goes_through_the_store():
     """No direct file write survives: the module has no ``_atomic_write_json``
-    left and its manifest writes are all ``put_manifest`` calls."""
+    left and its manifest writes are all ``bound_records.put_manifest`` calls."""
     source = Path(__file__).resolve().parents[2] / "pipeline" / "story_status.py"
     text = source.read_text()
     assert "_atomic_write_json" not in text, (

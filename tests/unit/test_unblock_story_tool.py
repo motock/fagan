@@ -146,6 +146,49 @@ def test_invalid_status_refused_without_echo(plan_dir, notices):
     assert _story()["rework_attempts"] == 3
 
 
+@pytest.mark.parametrize("bad_status", [["x"], 5])
+def test_non_string_status_refused_before_the_lock(
+    plan_dir, notices, monkeypatch, bad_status
+):
+    """A non-str status is refused, not passed to a set membership test.
+
+    ``status not in _VALID_STATUSES`` raises TypeError for an unhashable value
+    such as a list, so the type check has to come first. The refusal must be
+    explicit, must happen before the plan lock, and must leave the brief, the
+    files and the plan approval exactly as they were.
+    """
+    monkeypatch.setenv(plan_approval.APPROVAL_ENV, "1")
+    _write()
+    manifest = FileStore().get_manifest(PLAN)
+    manifest["approval"] = {
+        "status": "approved",
+        "digest": plan_approval.canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
+    }
+    FileStore().save_manifest(PLAN, manifest)
+
+    entered: list[str] = []
+
+    @contextmanager
+    def watch(name, wait_seconds=0.0):
+        entered.append(name)
+        yield True
+
+    monkeypatch.setattr(p._store, "transaction", watch)
+    result = _call(status=bad_status, note="n")
+    assert result["ok"] is False
+    assert result["error"]
+    assert json.dumps(bad_status) not in json.dumps(result)
+    assert entered == []
+    story = _story()
+    assert story["agent_instructions"] == BASE_BRIEF
+    assert story["status"] == "parked"
+    assert story["rework_attempts"] == 3
+    assert story["files"] == ["a.py"]
+    assert FileStore().get_manifest(PLAN)["approval"]["status"] == "approved"
+    assert notices == []
+
+
 def test_overlong_note_refused(plan_dir, notices):
     _write()
     assert _call(note="x" * 8001)["ok"] is False
@@ -173,6 +216,46 @@ def test_lock_contention_is_retryable(plan_dir, notices, monkeypatch):
     assert "retry_after_seconds" in result
     assert _story()["rework_attempts"] == 3
     assert notices == []
+
+
+def test_retry_after_lock_release_succeeds_and_resets_approval(
+    plan_dir, notices, monkeypatch
+):
+    """A locked plan is refused retryably; the retry then does the real work."""
+    monkeypatch.setenv(plan_approval.APPROVAL_ENV, "1")
+    _write()
+    manifest = FileStore().get_manifest(PLAN)
+    manifest["approval"] = {
+        "status": "approved",
+        "digest": plan_approval.canonical_digest(manifest),
+        "digest_version": plan_approval.APPROVAL_DIGEST_VERSION,
+    }
+    FileStore().save_manifest(PLAN, manifest)
+
+    real = p._store.transaction
+
+    @contextmanager
+    def busy(name, wait_seconds=0.0):
+        yield False
+
+    monkeypatch.setattr(p._store, "transaction", busy)
+    refused = _call(status="interrupted", note="n")
+    assert refused["ok"] is True
+    assert refused["skipped"] == "locked"
+    assert "approval_reset" not in refused
+    story = _story()
+    assert story["rework_attempts"] == 3
+    assert story["status"] == "parked"
+    assert story["agent_instructions"] == BASE_BRIEF
+    assert FileStore().get_manifest(PLAN)["approval"]["status"] == "approved"
+    assert notices == []
+
+    monkeypatch.setattr(p._store, "transaction", real)
+    retried = _call(status="interrupted", note="n")
+    assert retried["ok"] is True
+    assert retried["approval_reset"] is True
+    assert _story()["status"] == "interrupted"
+    assert FileStore().get_manifest(PLAN)["approval"]["status"] == "pending_approval"
 
 
 def test_approval_reset_and_reported(plan_dir, notices, monkeypatch):

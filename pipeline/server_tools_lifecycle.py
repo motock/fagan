@@ -366,6 +366,10 @@ def _validate_unblock_arguments(
         return _unblock_refusal(
             f"a clear_fields entry is not clearable: only {sorted(UNPARKABLE_FIELDS)} may be cleared"
         )
+    if status is not None and not isinstance(status, str):
+        return _unblock_refusal(
+            f"invalid status: must be one of {sorted(_VALID_STATUSES)}"
+        )
     if status is not None and status not in _VALID_STATUSES:
         return _unblock_refusal(
             f"invalid status: must be one of {sorted(_VALID_STATUSES)}"

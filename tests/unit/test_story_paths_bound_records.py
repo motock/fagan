@@ -168,7 +168,9 @@ def test_no_progress_manifest_is_written_to_the_bound_partition(
     story, manifest, worktree = _capacity_case(tmp_path, monkeypatch)
 
     with bind_namespace(NAMESPACE):
-        result = no_progress.classify_no_progress(PLAN, STORY, story, worktree, manifest)
+        result = no_progress.classify_no_progress(
+            PLAN, STORY, story, worktree, manifest
+        )
 
     assert result == {"status": "changes_requested", "reason": "usage_capacity"}
     assert records.manifest_writes == [(NAMESPACE, PLAN)]

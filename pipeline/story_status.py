@@ -17,6 +17,7 @@ from typing import Any
 
 from pipeline.dispatch import _find_dead_new_functions
 
+from . import bound_records
 from .build_detect import (
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -24,7 +25,6 @@ from .build_detect import (
     _scope_test_cmd_to_acceptance,
     failed_node_ids,  # noqa: F401
 )
-from . import bound_records
 from .checkpoint import _terminate_and_checkpoint
 from .ci import _acceptance_tampered
 from .concurrency import _heavy_lock
@@ -966,6 +966,7 @@ def bind_to_server(_server: Any) -> None:
     # be reachable there - same reason the detached-grade primitives below are
     # exported.
     _server._baseline_exempted_failures = _baseline_exempted_failures
+    _server.bound_records = bound_records  # rebound body's manifest I/O
 
     # BASELINE-1 path C: the grade-result write merges onto a fresh read, so a
     # baseline the dispatch recorded meanwhile survives it.

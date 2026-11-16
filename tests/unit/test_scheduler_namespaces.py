@@ -459,3 +459,227 @@ def test_worker_refuses_a_namespace_the_store_cannot_serve(
     assert result == {"ok": False, "error": "namespace_unavailable"}
     assert advance_calls == []
     assert [a["detail"]["reason"] for a in audits] == ["namespace_unavailable"]
+
+
+# ---------------------------------------------------------------------------
+# ss-01: PIPELINE_SCHEDULER_NAMESPACES_ONLY / _SKIP scope the tick
+# ---------------------------------------------------------------------------
+
+
+class _Spied(_Namespaced):
+    """Records every per-namespace read so exclusion can be asserted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[tuple[str, str]] = []
+
+    def list_plans(self, namespace: str) -> list[str]:
+        self.reads.append(("list_plans", namespace))
+        return super().list_plans(namespace)
+
+    def get_manifest(self, namespace: str, plan_name: str):
+        self.reads.append(("get_manifest", namespace))
+        return super().get_manifest(namespace, plan_name)
+
+
+def _three_namespace_records() -> _Spied:
+    records = _Spied()
+    records.put_manifest("default", "p-default", {"stories": {}})
+    records.put_manifest("alpha", "p-alpha", {"namespace": "alpha", "stories": {}})
+    records.put_manifest("beta", "p-beta", {"namespace": "beta", "stories": {}})
+    return records
+
+
+def test_unset_scope_returns_the_same_result_as_before(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.delenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", raising=False)
+    monkeypatch.delenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", raising=False)
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+
+    result = _tick()
+
+    assert result["ok"] is True
+    assert result["plans"] == SENTINEL["plans"]
+    assert set(result["namespaces"]) == {"alpha", "beta"}
+    assert "namespace_error" not in result
+    assert advance_calls == [("alpha", "p-alpha"), ("beta", "p-beta")]
+
+
+def test_only_one_namespace_advances_only_it_and_not_default(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "alpha")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert default_calls == []
+    assert advance_calls == [("alpha", "p-alpha")]
+    assert set(result["namespaces"]) == {"alpha"}
+    assert "beta" not in result["namespaces"]
+    assert "namespace_error" not in result
+
+
+def test_only_containing_default_advances_default_and_only_the_listed(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "default,beta")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert default_calls == ["called"]
+    assert advance_calls == [("beta", "p-beta")]
+    assert set(result["namespaces"]) == {"beta"}
+
+
+def test_skip_excludes_one_namespace_and_still_advances_the_rest(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", "beta")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+
+    result = _tick()
+
+    assert result["plans"] == SENTINEL["plans"]
+    assert advance_calls == [("alpha", "p-alpha")]
+    assert set(result["namespaces"]) == {"alpha"}
+
+
+def test_skip_naming_default_skips_the_default_advance(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", "default")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert default_calls == []
+    assert advance_calls == [("alpha", "p-alpha"), ("beta", "p-beta")]
+
+
+def test_a_skipped_namespace_is_never_read_or_advanced(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", "beta")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+
+    _tick()
+
+    assert ("list_plans", "beta") not in records.reads
+    assert ("get_manifest", "beta") not in records.reads
+    assert all(call[0] != "beta" for call in advance_calls)
+
+
+def test_an_only_scope_never_reads_an_excluded_namespace(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "alpha")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+
+    _tick()
+
+    assert ("list_plans", "beta") not in records.reads
+    assert ("get_manifest", "beta") not in records.reads
+    assert all(call[0] != "beta" for call in advance_calls)
+
+
+def test_both_variables_set_refuses_and_advances_nothing(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "alpha")
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", "beta")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert result == {"ok": False, "plans": {}, "namespace_error": "scheduler_scope_invalid"}
+    assert default_calls == []
+    assert advance_calls == []
+    assert records.reads == []
+
+
+@pytest.mark.parametrize("value", ["alpha,,beta", "Bad Name!", "a/b/c"])
+def test_malformed_scope_entry_refuses_and_advances_nothing(
+    monkeypatch, advance_calls, audits, value
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", value)
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert result == {"ok": False, "plans": {}, "namespace_error": "scheduler_scope_invalid"}
+    assert default_calls == []
+    assert advance_calls == []
+    assert records.reads == []
+
+
+def test_refusal_logs_the_error_class_and_no_namespace_names(
+    monkeypatch, advance_calls, audits, caplog
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "secret-team")
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_SKIP", "beta")
+    _install(monkeypatch, _FakeStore(_three_namespace_records()))
+
+    with caplog.at_level("ERROR", logger="pipeline.scheduler_namespaces"):
+        _tick()
+
+    assert "scheduler scope refused" in caplog.text
+    assert "secret-team" not in caplog.text
+    assert "beta" not in caplog.text
+
+
+def test_only_listing_default_alone_advances_default_and_no_other_namespace(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "default")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert default_calls == ["called"]
+    assert advance_calls == []
+    assert "namespaces" not in result
+    assert ("list_plans", "alpha") not in records.reads
+    assert ("list_plans", "beta") not in records.reads

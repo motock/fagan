@@ -16,11 +16,13 @@ the unchanged path and gets back the unchanged result object.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
+from pipeline.scheduler_scope import SchedulerScope, SchedulerScopeError, load_scope
 from pipeline.store_namespaces import namespaces_with_plans
 
 logger = logging.getLogger("pipeline.scheduler_namespaces")
@@ -54,13 +56,73 @@ def _advance_namespace(server: Any, records: Any, namespace: str) -> tuple[dict,
     return plans, refusals
 
 
+def _advance_others(server: Any, records: Any, others: list[str]) -> dict[str, dict]:
+    """Advance each namespace in *others* under its own binding; return per-namespace results."""
+    namespaces: dict[str, dict] = {}
+    for namespace in others:
+        with bind_namespace(namespace):
+            plans, refusals = _advance_namespace(server, records, namespace)
+        for reason in refusals:
+            audit_refusal(reason)
+        namespaces[namespace] = {"ok": True, "plans": plans}
+    return namespaces
+
+
+def _scoped_others(records: Any, scope: SchedulerScope) -> list[str]:
+    """Return the non-default namespaces the scope admits, reading nothing it excludes.
+
+    An ONLY scope names its namespaces directly, so the store is not asked to
+    enumerate. A SKIP scope filters the enumeration before any per-namespace read.
+    """
+    default = current_namespace()
+    if scope.only is not None:
+        return [namespace for namespace in scope.only if namespace != default]
+    return [
+        namespace
+        for namespace in namespaces_with_plans(records)
+        if namespace != default and scope.allows(namespace)
+    ]
+
+
+def _advance_in_scope(
+    server: Any, advance_default: Callable[[], dict[str, Any]], scope: SchedulerScope
+) -> dict[str, Any]:
+    """Advance only the namespaces *scope* admits; the default advance runs only when admitted."""
+    records = _record_view(server)
+    result = advance_default() if scope.allows(current_namespace()) else {"ok": True, "plans": {}}
+    if records is None:
+        return result
+
+    try:
+        others = _scoped_others(records, scope)
+    except Exception as exc:  # noqa: BLE001 - enumeration failure is reported, default still runs
+        logger.error("namespace enumeration failed error_class=%s", type(exc).__name__)
+        result["namespace_error"] = "namespace_enumeration_failed"
+        return result
+
+    if others:
+        result["namespaces"] = _advance_others(server, records, others)
+    return result
+
+
 def advance_all_namespaces(advance_default: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     """Advance the default namespace via *advance_default*, then every other namespace.
 
     *advance_default* is ``server.advance_all_plans``, passed in by the daemon's
     composition root so the default path stays the same function object.
+
+    An invalid scope from the environment refuses the whole tick: nothing is
+    advanced and the result carries ``namespace_error``.
     """
     from pipeline import server
+
+    try:
+        scope = load_scope(os.environ)
+    except SchedulerScopeError as exc:
+        logger.error("scheduler scope refused error_class=%s", type(exc).__name__)
+        return {"ok": False, "plans": {}, "namespace_error": "scheduler_scope_invalid"}
+    if scope is not None:
+        return _advance_in_scope(server, advance_default, scope)
 
     records = _record_view(server)
     if records is None:
@@ -82,12 +144,5 @@ def advance_all_namespaces(advance_default: Callable[[], dict[str, Any]]) -> dic
     if not others:
         return result
 
-    namespaces: dict[str, dict] = {}
-    for namespace in others:
-        with bind_namespace(namespace):
-            plans, refusals = _advance_namespace(server, records, namespace)
-        for reason in refusals:
-            audit_refusal(reason)
-        namespaces[namespace] = {"ok": True, "plans": plans}
-    result["namespaces"] = namespaces
+    result["namespaces"] = _advance_others(server, records, others)
     return result

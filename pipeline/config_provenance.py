@@ -241,6 +241,10 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     # Claude, no model override). See _escalation_target in escalation.py.
     EnvVarSpec("PIPELINE_ESCALATION_BACKEND", "claude"),
     EnvVarSpec("PIPELINE_ESCALATION_MODEL", None),
+    # Scheduler scope: which namespaces this instance advances. Unset = all.
+    # See pipeline/scheduler_scope.py.
+    EnvVarSpec("PIPELINE_SCHEDULER_NAMESPACES_ONLY", None),
+    EnvVarSpec("PIPELINE_SCHEDULER_NAMESPACES_SKIP", None),
     # Wedge detector thresholds
     EnvVarSpec("PIPELINE_WEDGE_NOTIFY_COOLDOWN_SECONDS", "3600"),
     EnvVarSpec("PIPELINE_WEDGE_SCAN_ENABLED", "1"),

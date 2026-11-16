@@ -112,19 +112,24 @@ class _Store:
 
 
 @pytest.fixture
-def records() -> InMemoryRecordStore:
-    """The in-memory record store standing in for the store's record view."""
-    return InMemoryRecordStore()
+def records() -> _RecordingRecords:
+    """The recording view over an in-memory record store.
+
+    The counters live on the wrapper, so the fixture hands out the wrapper
+    itself: the ``store`` fixture wraps this same object, and a test that reads
+    ``records.manifest_writes`` sees the calls the dispatch path made.
+    """
+    return _RecordingRecords(InMemoryRecordStore())
 
 
 @pytest.fixture
-def store(monkeypatch, records: InMemoryRecordStore) -> _Store:
+def store(monkeypatch, records: _RecordingRecords) -> _Store:
     """Install the recording store at the live ``pipeline.server`` binding.
 
     Every dispatch module resolves ``_store`` through a ``_ServerRef``, so
     patching the one server binding reaches all of them.
     """
-    facade = _Store(p._store, _RecordingRecords(records))
+    facade = _Store(p._store, records)
     monkeypatch.setattr(p, "_store", facade, raising=False)
     return facade
 

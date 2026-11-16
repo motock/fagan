@@ -157,8 +157,11 @@ def _build_dispatch_command(
     # Reference data goes after the brief and before the rework instruction.
     context_section = f"{context_block}\n\n" if context_block else ""
     if resume_journal:
+        # Journal records are free-form dicts; a checkpoint written without a
+        # ``summary`` must not crash the resume prompt.
         completed = "\n".join(
-            f"  - [{e['step']}] {e['summary']}" for e in resume_journal
+            f"  - [{e.get('step', '?')}] {e.get('summary', '')}"
+            for e in resume_journal
         )
         next_hint = resume_journal[-1].get("next_hint") or "Your WIP is committed — see the completed steps above and git log/git diff, do not re-read the worktree. Run the test suite to see current state, then continue with the next concrete step toward the story goal."
         prompt = (

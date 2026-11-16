@@ -49,6 +49,8 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/actor.py": 3,
     "pipeline/audit_anchor.py": 8,
     "pipeline/audit_file.py": 3,
+    # The ratchet counts lines, so the import line counts beside the use.
+    "pipeline/bound_records.py": 2,
     "pipeline/events_nats_consumer.py": 2,
     "pipeline/health_freshness.py": 2,
     "pipeline/ci.py": 3,
@@ -82,6 +84,7 @@ ALLOWLIST_REASONS: dict[str, str] = {
     "pipeline/actor.py": "request-namespace fallback: current_namespace() resolves to the default when none is bound",
     "pipeline/audit_anchor.py": "audit anchoring is default-only: it reads and publishes the default chains",
     "pipeline/audit_file.py": "file audit layout holds only the default namespace; other namespaces are refused",
+    "pipeline/bound_records.py": "refuses only the file layout, which holds the default partition end to end",
     "pipeline/ci.py": "merge CI gate and manifest namespace plumbing; routing the gate is a separate change",
     "pipeline/manifest_source.py": "file fallback reads the default partition; routing it is a separate change",
     "pipeline/metrics_exposition.py": "process-wide metrics reads; no request namespace is bound",

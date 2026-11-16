@@ -169,11 +169,7 @@ _identity = build_identity_provider(get_or_create_api_key)
 
 # Registered before _enforce_api_key, so it runs inside the principal and namespace bindings.
 app.middleware("http")(plan_view_gate)
-#: The request surfaces whose responses carry tenant data. Only these are
-#: served inside the verified request namespace. Everything else - the index
-#: page, the /auth login bootstrap, static assets and the orchestrator probes -
-#: must answer before a principal or a namespace exists, and carries no tenant
-#: data, so it is served outside the namespace wrapper.
+#: The only surfaces carrying tenant data; everything else answers pre-tenant.
 TENANT_DATA_PATHS = ("/api/", "/mcp/")
 
 

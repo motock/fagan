@@ -17,13 +17,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import audit, audit_anchor, security_audit
+from . import unpark as unpark_module
 from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
 from .unpark import (
     _VALID_STATUSES,
     UNPARKABLE_FIELDS,
+    _derive_human_action,
     _validate_added_files,
-    unpark_story,
 )
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -390,6 +391,69 @@ def _validate_unblock_arguments(
     return None
 
 
+def unpark_story(
+    plan_name: str,
+    story_key: str,
+    fields: list[str],
+    status: str | None = None,
+    *,
+    add_files: list[str] | tuple[str, ...] = (),
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Apply an unblock to the manifest while the caller holds the plan lock.
+
+    The in-transaction half of :func:`pipeline.unpark.unpark_story`: the same
+    edits, made through the store the caller already has a transaction open on.
+    Nothing here builds a store or enters a transaction, because
+    :func:`unblock_story` holds the plan lock around this call -- on a store
+    whose lock is per session (the configured Postgres store) a second
+    transaction would be a second session whose lock attempt fails while the
+    first still holds it, and every unblock would fail.
+
+    ``note`` is appended to the story's brief in the same save as the cleared
+    fields, so the brief and the clear are written together or not at all.
+
+    It is the name :func:`unblock_story` resolves its manifest edit through, so
+    the tool and the unblock keep one seam; ``pipeline.unpark.unpark_story`` -- the
+    locked entry point the CLI uses -- is never called from here.
+
+    Returns the resolution record :func:`pipeline.unpark.unpark_story` returns,
+    without ``human_action`` overrides: the caller is always a person here.
+    """
+    manifest = _store.get_manifest(plan_name)
+    story = manifest["stories"].get(story_key)
+    if story is None:
+        raise KeyError("no such story")
+    prior_status = story.get("status")
+    # Dedupe while preserving order: a repeated name would otherwise be deleted
+    # twice and raise KeyError on the second `del`.
+    cleared = list(dict.fromkeys(field for field in fields if field in story))
+    for field in cleared:
+        del story[field]
+    declared = story.get("files") or []
+    files_added = [
+        path for path in _validate_added_files(list(add_files)) if path not in declared
+    ]
+    if files_added:
+        story["files"] = [*declared, *files_added]
+    if status is not None:
+        story["status"] = status
+    if note:
+        story["agent_instructions"] = (
+            f"{story.get('agent_instructions') or ''}\n\n{note}".lstrip("\n")
+        )
+    _store.save_manifest(plan_name, manifest)
+    return {
+        "plan": plan_name,
+        "story": story_key,
+        "cleared": sorted(cleared),
+        "status": status,
+        "new_status": story.get("status"),
+        "files_added": files_added,
+        "human_action": _derive_human_action(files_added, prior_status, status),
+    }
+
+
 def unblock_story(
     plan_name: str,
     story_key: str,
@@ -420,14 +484,11 @@ def unblock_story(
     value is never echoed. If the plan lock is busy the result carries
     ``skipped: "locked"`` and ``retry_after_seconds``: call again.
     """
-    from copy import deepcopy
-
     from .actor import actor_id
     from .authorization import authorize
     from .concurrency import command_lock_wait_seconds
     from .parsers import _validate_key
     from .plan_approval import approval_enabled, reset_if_changed
-    from .unpark import _record_resolution
 
     try:
         _validate_key(plan_name)
@@ -450,28 +511,20 @@ def unblock_story(
                 "retry_after_seconds": wait_seconds,
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
-        manifest = _store.get_manifest(plan_name)
-        story = manifest["stories"].get(story_key)
-        if story is None:
-            return _unblock_refusal("no such story")
-        snapshot = deepcopy(manifest)
-        if note:
-            story["agent_instructions"] = (
-                f"{story.get('agent_instructions') or ''}\n\n{note}".lstrip("\n")
-            )
-            _store.save_manifest(plan_name, manifest)
         try:
+            # The lock is open here, so the edits happen in this transaction:
+            # nothing below builds a store or enters another one.
             result = unpark_story(
                 plan_name,
                 story_key,
                 clear_fields,
                 status=status,
                 add_files=add_files or (),
-                store=_store,
+                note=note,
             )
-        except (ValueError, KeyError, RuntimeError, OSError) as exc:
-            if note:
-                _store.save_manifest(plan_name, snapshot)
+        except KeyError:
+            return _unblock_refusal("no such story")
+        except (ValueError, RuntimeError, OSError) as exc:
             return _unblock_refusal(f"unblock failed: {type(exc).__name__}")
         approval_reset = False
         if approval_enabled():
@@ -482,7 +535,18 @@ def unblock_story(
 
                 notify_approval_event(plan_name, manifest, "plan_pending_approval")
                 approval_reset = True
-    _record_resolution(result, principal=actor_id())
+    # Only after the save returns: a failed write must never claim the unblock
+    # happened. Resolved through the module so the notice and the resolution
+    # record keep the seam pipeline.unpark exposes.
+    unpark_module._notify_user(
+        plan_name,
+        f"manual unblock: cleared {', '.join(result['cleared']) or 'nothing'}"
+        + (f"; status -> {status}" if status else ""),
+        story_key=story_key,
+        severity="warning",
+        event="story_unparked_manually",
+    )
+    unpark_module._record_resolution(result, principal=actor_id())
     return {"ok": True, **result, "approval_reset": approval_reset}
 
 

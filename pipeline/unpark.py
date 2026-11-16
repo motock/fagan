@@ -47,16 +47,12 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import TYPE_CHECKING
 
 from . import triage_outcomes
 from .actor import actor_id
 from .parsers import _validate_key
 from .persistence import _notify_user
 from .store import build_store
-
-if TYPE_CHECKING:
-    from .store import Store
 
 __all__ = ["UNPARKABLE_FIELDS", "clear_story_fields", "main", "unpark_story"]
 
@@ -150,50 +146,6 @@ def _derive_human_action(
     return "other"
 
 
-def _apply_unpark(
-    store: Store,
-    plan_name: str,
-    story_key: str,
-    fields: list[str],
-    status: str | None,
-    new_paths: list[str],
-) -> dict:
-    """Apply the unblock to the manifest with the plan lock already held.
-
-    The lock is the caller's: :func:`unpark_story` opens it for the CLI, the
-    ``unblock_story`` tool calls this through :func:`unpark_story` while its own
-    transaction is open. Nothing here acquires it, so a store whose lock is held
-    per session is never asked for it twice.
-
-    Returns ``{"cleared", "prior_status", "new_status", "files_added"}``;
-    ``cleared`` keeps manifest order and ``files_added`` lists only new paths.
-    """
-    manifest = store.get_manifest(plan_name)
-    story = manifest["stories"].get(story_key)
-    if story is None:
-        raise KeyError(f"no such story {story_key!r} in plan {plan_name!r}")
-
-    prior_status = story.get("status")
-    # Dedupe while preserving order: a repeated name would otherwise be
-    # deleted twice and raise KeyError on the second `del`.
-    cleared = list(dict.fromkeys(field for field in fields if field in story))
-    for field in cleared:
-        del story[field]
-    declared = story.get("files") or []
-    files_added = [path for path in new_paths if path not in declared]
-    if files_added:
-        story["files"] = [*declared, *files_added]
-    if status is not None:
-        story["status"] = status
-    store.save_manifest(plan_name, manifest)
-    return {
-        "cleared": cleared,
-        "prior_status": prior_status,
-        "new_status": story.get("status"),
-        "files_added": files_added,
-    }
-
-
 def unpark_story(
     plan_name: str,
     story_key: str,
@@ -202,7 +154,6 @@ def unpark_story(
     *,
     add_files: list[str] | tuple[str, ...] = (),
     human_action: str | None = None,
-    store: Store | None = None,
 ) -> dict:
     """Clear ``fields`` from one story under the plan lock and record the unblock.
 
@@ -217,12 +168,6 @@ def unpark_story(
     resolution record itself is written by :func:`main`, never here, so an
     automated caller that goes through :func:`clear_story_fields` does not record
     a human decision.
-
-    ``store`` is for a caller that already holds the plan lock in an open
-    transaction (the ``unblock_story`` tool): the unblock is then applied through
-    that store without taking the lock a second time. When it is ``None`` -- the
-    CLI and every other caller -- this function builds the configured store and
-    takes the lock itself, exactly as before.
 
     Returns ``{"plan", "story", "cleared", "status", "new_status", "files_added",
     "human_action"}`` where ``cleared`` is the sorted list of names actually
@@ -263,31 +208,37 @@ def unpark_story(
             f"{sorted(triage_outcomes.HUMAN_ACTIONS)}"
         )
 
-    if store is not None:
-        # The caller already holds the plan lock in an open transaction (the
-        # ``unblock_story`` tool passes its own store). Acquiring it here would
-        # open a second session, and a lock held by the first session is never
-        # granted to the second.
-        outcome = _apply_unpark(
-            store, plan_name, story_key, fields, status, new_paths
-        )
-    else:
-        active_store = build_store()
-        with active_store.transaction(plan_name) as acquired:
-            if not acquired:
-                raise RuntimeError(
-                    f"could not acquire the plan lock for {plan_name!r}: "
-                    "another dispatch/ingest/interrupt is in progress"
-                )
-            outcome = _apply_unpark(
-                active_store, plan_name, story_key, fields, status, new_paths
+    store = build_store()
+    with store.transaction(plan_name) as acquired:
+        if not acquired:
+            raise RuntimeError(
+                f"could not acquire the plan lock for {plan_name!r}: "
+                "another dispatch/ingest/interrupt is in progress"
             )
+        manifest = store.get_manifest(plan_name)
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            raise KeyError(f"no such story {story_key!r} in plan {plan_name!r}")
+
+        prior_status = story.get("status")
+        # Dedupe while preserving order: a repeated name would otherwise be
+        # deleted twice and raise KeyError on the second `del`.
+        cleared = list(dict.fromkeys(field for field in fields if field in story))
+        for field in cleared:
+            del story[field]
+        declared = story.get("files") or []
+        files_added = [path for path in new_paths if path not in declared]
+        if files_added:
+            story["files"] = [*declared, *files_added]
+        if status is not None:
+            story["status"] = status
+        store.save_manifest(plan_name, manifest)
 
     # Only after the save returns: a failed write must never claim the unblock
     # happened.
     _notify_user(
         plan_name,
-        f"manual unblock: cleared {', '.join(outcome['cleared']) or 'nothing'}"
+        f"manual unblock: cleared {', '.join(cleared) or 'nothing'}"
         + (f"; status -> {status}" if status else ""),
         story_key=story_key,
         severity="warning",
@@ -296,14 +247,12 @@ def unpark_story(
     return {
         "plan": plan_name,
         "story": story_key,
-        "cleared": sorted(outcome["cleared"]),
+        "cleared": sorted(cleared),
         "status": status,
-        "new_status": outcome["new_status"],
-        "files_added": outcome["files_added"],
+        "new_status": story.get("status"),
+        "files_added": files_added,
         "human_action": human_action
-        or _derive_human_action(
-            outcome["files_added"], outcome["prior_status"], status
-        ),
+        or _derive_human_action(files_added, prior_status, status),
     }
 
 

@@ -24,7 +24,6 @@ from pipeline.actor import bind_namespace, current_namespace
 from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
 from pipeline.scheduler_scope import SchedulerScope, SchedulerScopeError, load_scope
 from pipeline.store_namespaces import namespaces_with_plans
-from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger("pipeline.scheduler_namespaces")
 
@@ -75,12 +74,13 @@ def _scoped_others(records: Any, scope: SchedulerScope) -> list[str]:
     An ONLY scope names its namespaces directly, so the store is not asked to
     enumerate. A SKIP scope filters the enumeration before any per-namespace read.
     """
+    default = current_namespace()
     if scope.only is not None:
-        return [namespace for namespace in scope.only if namespace != DEFAULT_NAMESPACE]
+        return [namespace for namespace in scope.only if namespace != default]
     return [
         namespace
         for namespace in namespaces_with_plans(records)
-        if namespace != current_namespace() and scope.allows(namespace)
+        if namespace != default and scope.allows(namespace)
     ]
 
 
@@ -89,7 +89,7 @@ def _advance_in_scope(
 ) -> dict[str, Any]:
     """Advance only the namespaces *scope* admits; the default advance runs only when admitted."""
     records = _record_view(server)
-    result = advance_default() if scope.allows(DEFAULT_NAMESPACE) else {"ok": True, "plans": {}}
+    result = advance_default() if scope.allows(current_namespace()) else {"ok": True, "plans": {}}
     if records is None:
         return result
 

@@ -662,3 +662,24 @@ def test_refusal_logs_the_error_class_and_no_namespace_names(
     assert "scheduler scope refused" in caplog.text
     assert "secret-team" not in caplog.text
     assert "beta" not in caplog.text
+
+
+def test_only_listing_default_alone_advances_default_and_no_other_namespace(
+    monkeypatch, advance_calls, audits
+) -> None:
+    monkeypatch.setenv("PIPELINE_SCHEDULER_NAMESPACES_ONLY", "default")
+    records = _three_namespace_records()
+    _install(monkeypatch, _FakeStore(records))
+    default_calls: list[str] = []
+
+    def default_advance() -> dict:
+        default_calls.append("called")
+        return dict(SENTINEL)
+
+    result = scheduler_namespaces.advance_all_namespaces(default_advance)
+
+    assert default_calls == ["called"]
+    assert advance_calls == []
+    assert "namespaces" not in result
+    assert ("list_plans", "alpha") not in records.reads
+    assert ("list_plans", "beta") not in records.reads

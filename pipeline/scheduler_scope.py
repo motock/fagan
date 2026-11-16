@@ -15,16 +15,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pipeline.store_records import (
-    DEFAULT_NAMESPACE,
-    InvalidRecordKeyError,
-    validate_namespace,
-)
+from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 ONLY_VAR = "PIPELINE_SCHEDULER_NAMESPACES_ONLY"
 SKIP_VAR = "PIPELINE_SCHEDULER_NAMESPACES_SKIP"
 
-_DEFAULT_TOKEN = "default"
 _SEPARATOR = ","
 
 
@@ -52,8 +47,6 @@ def _parse_list(raw: str) -> tuple[str, ...]:
         entry = part.strip()
         if not entry:
             raise SchedulerScopeError("blank entry")
-        if entry == _DEFAULT_TOKEN:
-            entry = DEFAULT_NAMESPACE
         try:
             validate_namespace(entry)
         except InvalidRecordKeyError as exc:

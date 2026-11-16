@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import bound_records
 from .audit import record_audit
 from .branch_names import story_branch
 from .ci import (
@@ -566,8 +567,6 @@ def _merge_decision(
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
-    from . import persistence
-    from .actor import current_namespace
     from .authorization import authorize
     from .pr import _resolve_story_branch
     from .review_merge_binding import (
@@ -592,14 +591,11 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         _store,
         _validate_key,
     )
-    from .store_records import UnknownNamespaceError
 
-    # The manifest reads and writes below are default-partition only, so a bound
-    # request is denied up front, before authorization can audit into the
-    # default chain.
-    try:
-        persistence.require_default_namespace(current_namespace())
-    except UnknownNamespaceError:
+    # The file layout holds only the default partition end to end, so a bound
+    # request is refused up front; a record store proceeds in the bound
+    # namespace through bound_records.
+    if bound_records.refuses_bound_namespace(_store):
         return {"ok": False, "error": "unknown namespace"}
 
     # Validate the caller-supplied keys BEFORE anything reads or writes a path
@@ -731,7 +727,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # now because the blocking returns below skip the final write.
                 story["pr_checks"] = ci
                 story.pop("pr_checks_error", None)
-                _store.records().put_manifest("default", plan_name, manifest)
+                bound_records.put_manifest(_store, plan_name, manifest)
                 if ci["state"] in ("fail", "cancelled"):
                     return {
                         "ok": False,
@@ -779,7 +775,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "done"
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
-        _store.records().put_manifest("default", plan_name, manifest)
+        bound_records.put_manifest(_store, plan_name, manifest)
         record_audit(
             plan_name,
             action="story.merge",
@@ -818,18 +814,13 @@ def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
-    from . import persistence
-    from .actor import current_namespace
     from .authorization import authorize
     from .server import _store, _validate_key
-    from .store_records import UnknownNamespaceError
 
-    # The manifest reads and writes below are default-partition only, so a bound
-    # request is denied up front, before authorization can audit into the
-    # default chain.
-    try:
-        persistence.require_default_namespace(current_namespace())
-    except UnknownNamespaceError:
+    # The file layout holds only the default partition end to end, so a bound
+    # request is refused up front; a record store proceeds in the bound
+    # namespace through bound_records.
+    if bound_records.refuses_bound_namespace(_store):
         return {"ok": False, "error": "unknown namespace"}
     # ``authorize`` is not inert on bad input -- it reads the manifest by
     # ``plan_name`` and, on denial, appends to the plan's notification sidecar.
@@ -848,7 +839,7 @@ def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
                 "skipped": "locked",
                 "reason": "an advance_pipeline tick is already running for this plan",
             }
-        if _store.records().get_manifest("default", plan_name) is None:
+        if bound_records.get_manifest(_store, plan_name) is None:
             return {"ok": False, "error": f"No manifest for {plan_name}"}
         manifest = _store.get_manifest(plan_name)
         manifest["paused"] = paused

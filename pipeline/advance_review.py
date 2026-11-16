@@ -36,7 +36,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from . import review_job
+from . import bound_records, review_job
 from .host_state import build_host_state
 from .module_ref import _ModuleRef
 
@@ -229,7 +229,7 @@ def _persist(
     the store: that raises rather than writing, because re-creating the plan
     would resurrect a deleted one.
     """
-    manifest = _store.records().get_manifest("default", plan_name)
+    manifest = bound_records.get_manifest(_store, plan_name)
     if manifest is None:
         raise FileNotFoundError("manifest not found")
     stored = manifest["stories"].get(story_key)
@@ -238,4 +238,4 @@ def _persist(
         # write, and re-creating the story would resurrect a dropped one.
         return
     mutate(stored)
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)

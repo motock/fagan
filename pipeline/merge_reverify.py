@@ -40,6 +40,8 @@ from typing import Any
 import pipeline
 from pipeline.parsers import _validate_key
 
+from . import bound_records
+
 __all__ = [
     "cancel_merge_reverify",
     "collect_merge_reverify",
@@ -334,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         from pipeline import server
         from pipeline.ci import context_from_manifest
 
-        manifest = server._store.records().get_manifest("default", plan_name)
+        manifest = bound_records.get_manifest(server._store, plan_name)
         if manifest is None:
             raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
         story = manifest["stories"][story_key]

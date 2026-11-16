@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import access_hooks, merge_reverify
+from . import access_hooks, bound_records, merge_reverify
 from .ci import SettingsContext, gate_record, settings_for_plan
 from .concurrency import _released_plan_lock
 from .host_state import build_host_state
@@ -421,7 +421,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     settings = settings_for_plan(plan_name)
 
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
-    manifest = _store.records().get_manifest("default", plan_name)
+    manifest = bound_records.get_manifest(_store, plan_name)
     if manifest is None:
         raise FileNotFoundError("manifest not found")
     stories = manifest["stories"]
@@ -891,12 +891,12 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # is not refused "plan busy". Persist this tick's edits first, then
             # apply the answer only if the story is still the polled story.
             polled = (story["status"], story.get("review_verdict_sha"))
-            _store.records().put_manifest("default", plan_name, manifest)
+            bound_records.put_manifest(_store, plan_name, manifest)
             with _released_plan_lock(plan_name):
                 readiness = _await_merge_readiness(
                     _merge_readiness_forge(), worktree, branch, settings
                 )
-            manifest = _store.records().get_manifest("default", plan_name)
+            manifest = bound_records.get_manifest(_store, plan_name)
             if manifest is None:
                 raise FileNotFoundError("manifest not found")
             # A human (or another tick) moved the story on: that wins, no-op.
@@ -997,4 +997,4 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             summary["notify"].append(key)
         summary["merged"].append(key)
         record_merge_result("merged")
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)

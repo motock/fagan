@@ -390,8 +390,8 @@ def _calls_with_their_trailing_text(source: str) -> list[str]:
     """Return each bound-records call together with the text that follows it.
 
     The call is matched up to its closing parenthesis, so a call wrapped over
-    several lines is returned whole and the suppression that trails it is
-    part of the returned text.
+    several lines is returned whole, and the rest of that line is returned with
+    it, so a suppression written after the call is part of the returned text.
     """
     calls = []
     for match in re.finditer(r"bound_records\s*\.\s*\w+\(", source):
@@ -405,7 +405,8 @@ def _calls_with_their_trailing_text(source: str) -> list[str]:
                 if depth == 0:
                     end = index + 1
                     break
-        calls.append(source[match.start() : end])
+        line_end = source.find("\n", end)
+        calls.append(source[match.start() : len(source) if line_end == -1 else line_end])
     return calls
 
 

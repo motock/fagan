@@ -102,6 +102,7 @@ REMOTE_ENFORCED = frozenset(
         "save_plan",
         "set_setting",
         "set_story_status",
+        "unblock_story",
     }
 )
 

@@ -399,9 +399,9 @@ def test_every_manifest_write_in_the_module_goes_through_the_store():
     assert "_atomic_write_json" not in text, (
         "story_status must persist through the store, not the atomic JSON writer"
     )
-    puts = re.findall(r'\.put_manifest\(\s*"default"', text)
+    puts = re.findall(r'bound_records\.put_manifest\(', text)
     assert len(puts) == 12, f"expected 12 put_manifest writes, found {len(puts)}"
-    assert 'get_manifest("default", plan_name)' in text
+    assert re.search(r'bound_records\.get_manifest\(', text)
 
 
 # ---------------------------------------------------------------------------

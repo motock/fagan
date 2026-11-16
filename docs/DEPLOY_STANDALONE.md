@@ -612,19 +612,19 @@ subject, and a plan with no owner falls back to the role rule.
 | `advance_all_plans` | `plan:dispatch`, per plan | as above; plans the caller does not own are skipped |
 | `mark_story_in_progress` | `plan:dispatch` | owner or delegate |
 | `review_story` | `plan:dispatch` | owner or delegate |
-| `pause_plan` | `plan:pause` | owner or delegate |
-| `resume_plan` | `plan:pause` | owner or delegate |
+| `pause_plan`, `resume_plan` | `plan:pause` | owner or delegate |
 | `interrupt_story` | `story:interrupt` | owner or delegate |
-| `patch_story` | `story:patch` | owner or delegate |
-| `set_story_status` | `story:patch` | owner or delegate |
-| `request_decision` | `story:patch` | owner or delegate |
+| `patch_story`, `set_story_status`, `request_decision`, `unblock_story` | `story:patch` | owner or delegate; `unblock_story` also clears the parked story's retry and review fields as `python -m pipeline.unpark` does and, when it changes the story's brief or files, resets the plan's approval, which the result reports as `approval_reset` |
 | `mark_story_done` | `story:mark_done` | owner or delegate |
 | `approve_merge` | `story:merge` | owner or delegate |
 | `checkpoint`, `checkpoint_story` | `story:patch` | owner or delegate |
+| `record_decision` | `decision:record` | any authenticated human or agent that may view the plan, owning it or not; a reserved `system:` principal and an unauthenticated caller hold nothing |
 | `patch_plan` | plan-scoped `config:write` | owner or delegate |
+| `get_settings`, `list_settings`, `set_setting` | `config:read` to read, `config:write` to write, at the layer named | no default rule allows `config:read`, so a remote read is refused unless a configured authorizer permits it; a write to a plan layer needs its owner or a delegate; the host-only deployment layer is refused to every remote caller |
 | `ingest_plan`, `save_plan` | `plan:ingest` | the plan's owner; `save_plan` also refuses a remote `workspace` |
 | `record_security_audit` | host-scoped `config:write` | **local operator only — not reachable remotely** |
-| `check_story_status`, `get_effective_config`, `get_story_diff`, `list_decisions`, `list_ready_stories` | none beyond visibility | caller must own the plan or be its delegate; anything else gets one fixed "not available" reply |
+| `check_story_status`, `export_plan`, `get_effective_config`, `get_story_diff`, `list_decisions`, `list_ready_stories` | none beyond visibility | caller must own the plan or be its delegate; anything else gets one fixed "not available" reply |
+| `get_story_log`, `get_story_journal`, `get_story_worktree`, `get_story_events` | none beyond visibility | plan-scoped reads on the same rule: the plan's owner or a delegate, and anything else gets the same one fixed "not available" reply. Every field, log line, journal entry and event message is redacted before it leaves the server: a whole PEM private-key block, a `gh*_`/`github_pat_`/`sk-` token literal, a `Bearer` credential, and the value after a `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY` or `KEY` name all become `[redacted]`, with the name and the `=`/`:` separator kept, and a returned record whose key is itself a secret name has its value replaced the same way. None of these tools takes a path argument: the plan name and story key name the story, and the server resolves its own paths |
 | `list_plans`, `verify_audit` | none beyond visibility | results are filtered to visible plans; `verify_audit` also drops its `host` entry for remote callers |
 | `check_usage` | none | host-level and unfiltered: deployment-wide counters that belong to no plan |
 | `decompose_plan` | — | **never** remotely; refused by default deny |

@@ -408,7 +408,13 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
   its worktree against its fork point (also the `get_story_diff` tool), a
   stuck story can take a proposed patch through
   [patch review and apply](REFERENCE.md#patch-review--apply-wap-9wap-10), and
-  the plan list scopes to the active repository.
+  the plan list scopes to the active repository. The same diagnosis is
+  reachable over MCP: `get_story_log`, `get_story_journal`, `get_story_worktree`
+  and `get_story_events` are plan-scoped reads that redact secret values before
+  returning them, and none of them takes a path argument, because the plan name
+  and story key name the story. `unblock_story` is the matching mutation, held
+  to the plan's owner or a delegate, and it resets plan approval when it changes
+  the story's brief or files.
 - **Cross-plan coordination.** A story can wait on a story in another plan
   (`blocked_by`), and the pipeline warns when two plans' in-flight stories
   edit the same files. See

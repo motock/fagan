@@ -29,6 +29,7 @@ from app.plugin_loader import (
     require_allowlist,
     require_methods,
 )
+from pipeline import bound_records
 from pipeline.actor import current_namespace
 from pipeline.audit import append_host_audit
 
@@ -69,7 +70,7 @@ def refuse_dispatch(
         return None
     story["status"] = "parked"
     story["parked_reason"] = REFUSAL_PREFIX + reason
-    store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(store, plan_name, manifest)
     return {"ok": False, "error": REFUSAL_PREFIX + reason, "story_key": story_key}
 
 

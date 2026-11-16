@@ -48,7 +48,7 @@ from typing import Any
 
 from app.identity import Principal
 
-from . import wake
+from . import bound_records, wake
 from .actor import current_correlation_id, current_principal
 from .audit import record_audit
 
@@ -453,7 +453,7 @@ class PlanApprovalMixin:
                     "skipped": "locked",
                     "retry_after_seconds": wait_seconds,
                 }
-            if plan_name not in _store.records().list_plans("default"):
+            if plan_name not in bound_records.list_plans(_store):
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)
             digest = canonical_digest(manifest)

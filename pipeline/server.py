@@ -52,8 +52,8 @@ from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
+from . import bound_records, config_provenance
 from . import ci as _ci_module
-from . import config_provenance
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -508,7 +508,7 @@ def _repo_root_for(plan_name: str) -> Path:
     else falls back to the server's global REPO_ROOT for older manifests
     ingested before this field existed.
     """
-    if plan_name in _store.records().list_plans("default"):
+    if plan_name in bound_records.list_plans(_store):
         repo_root = _store.get_manifest(plan_name).get("repo_root")
         if repo_root:
             return Path(repo_root)

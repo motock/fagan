@@ -25,6 +25,7 @@ import threading
 import time
 from contextlib import contextmanager
 
+from . import bound_records
 from .host_state import build_host_state
 
 # Same convention as the rest of the package (pipeline/advance_pool.py,
@@ -163,7 +164,7 @@ def _reap_zombie_in_progress_stories() -> int:
     pids held 2 of 3 concurrency slots for ~19h, blocking all e2e dispatch.
     """
     reaped = 0
-    for plan_name in _store.records().list_plans("default"):
+    for plan_name in bound_records.list_plans(_store):
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 # Another writer holds this plan: skip it rather than racing
@@ -176,7 +177,7 @@ def _reap_zombie_in_progress_stories() -> int:
                     extra={"plan": plan_name},
                 )
                 continue
-            manifest = _store.records().get_manifest("default", plan_name)
+            manifest = bound_records.get_manifest(_store, plan_name)
             if manifest is None:
                 # Missing or corrupt: never write over it.
                 raise FileNotFoundError("manifest not found")
@@ -205,7 +206,7 @@ def _reap_zombie_in_progress_stories() -> int:
                     # user). Trust that it's alive and don't reap.
                     continue
             if changed:
-                _store.records().put_manifest("default", plan_name, manifest)
+                bound_records.put_manifest(_store, plan_name, manifest)
     return reaped
 
 

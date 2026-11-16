@@ -3,14 +3,15 @@
 The tool opens the plan's transaction itself and then delegates the manifest
 edit to :func:`pipeline.unpark.unpark_story`. On the configured Postgres store
 ``transaction()`` delegates to the plugin, so every entry opens its own session:
-if ``unpark_story`` re-acquired the lock, the second session's
-``pg_try_advisory_xact_lock`` would fail because the first still holds it, and
-every call would fail with ``unblock failed: RuntimeError``.
+if ``unpark_story`` re-acquired the lock -- it built its own store and entered
+its own transaction -- the second session's ``pg_try_advisory_xact_lock`` would
+return false while the outer session still held it, and every call would fail
+with ``unblock failed: RuntimeError``.
 
-The fake store below records every ``transaction()`` entry and raises if one is
-entered while another is open, which is what a per-session lock does -- but
-deterministically, and without a database. The FileStore tests keep passing
-either way, because its flock is re-entrant within a thread.
+The fakes below model that database rather than a thread: the lock state is
+shared by every store instance over the same "database", and a second entry
+yields ``False`` instead of blocking. The FileStore suite cannot see the bug
+because its flock is re-entrant within a thread, which is why this file exists.
 """
 
 from __future__ import annotations
@@ -46,45 +47,52 @@ class _AuditLog:
         self.records.append(record)
 
 
-class _NestedLockStore:
-    """A store whose plan lock is per-session: nesting is refused."""
+class _Database:
+    """The state every session over this "database" shares."""
 
     def __init__(self, manifest: dict) -> None:
         self.manifest = manifest
         self.entries: list[str] = []
         self.open = 0
         self.nested = 0
+
+
+class _SessionStore:
+    """One store instance: an independent session over the shared database."""
+
+    def __init__(self, db: _Database) -> None:
+        self.db = db
         self.audit = _AuditLog()
 
     @contextmanager
     def transaction(self, plan_name: str, wait_seconds: float = 0.0):
-        if self.open:
-            self.nested += 1
-            raise AssertionError(
-                f"plan lock for {plan_name!r} taken again while already held"
-            )
-        self.entries.append(plan_name)
-        self.open += 1
+        if self.db.open:
+            # The plan lock belongs to the session that already holds it, so a
+            # second attempt returns false -- what the Postgres store does.
+            self.db.nested += 1
+            yield False
+            return
+        self.db.entries.append(plan_name)
+        self.db.open += 1
         try:
             yield True
         finally:
-            self.open -= 1
+            self.db.open -= 1
 
     def get_manifest(self, plan_name: str) -> dict:
         assert plan_name == PLAN
-        return copy.deepcopy(self.manifest)
+        return copy.deepcopy(self.db.manifest)
 
     def save_manifest(self, plan_name: str, manifest: dict) -> None:
         assert plan_name == PLAN
-        self.manifest = copy.deepcopy(manifest)
+        self.db.manifest = copy.deepcopy(manifest)
 
     def audit_log(self):
-        """The authorization seam appends here; this test does not read it."""
         return self.audit
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
+def db(tmp_path, monkeypatch):
     plans = tmp_path / "plans"
     plans.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plans)
@@ -105,11 +113,13 @@ def store(tmp_path, monkeypatch):
         },
     }
     # ``authorize`` reads the plan owner from the plan directory, so the file
-    # form has to exist too; the store under test is the fake one below.
+    # form has to exist too; the stores under test are the fakes below.
     FileStore().save_manifest(PLAN, manifest)
-    fake = _NestedLockStore(manifest)
-    monkeypatch.setattr(p, "_store", fake)
-    return fake
+    database = _Database(manifest)
+    monkeypatch.setattr(p, "_store", _SessionStore(database))
+    # Every store this code builds is another session over the same database.
+    monkeypatch.setattr(unpark_mod, "build_store", lambda: _SessionStore(database))
+    return database
 
 
 @pytest.fixture
@@ -124,11 +134,11 @@ def notices(monkeypatch):
     return seen
 
 
-def _story(store: _NestedLockStore) -> dict:
-    return copy.deepcopy(store.manifest["stories"][STORY])
+def _story(db: _Database) -> dict:
+    return copy.deepcopy(db.manifest["stories"][STORY])
 
 
-def test_unblock_takes_the_plan_lock_once_and_succeeds(store, notices):
+def test_unblock_takes_the_plan_lock_once_and_succeeds(db, notices):
     with bind_principal(ALICE):
         result = lifecycle.unblock_story(
             plan_name=PLAN,
@@ -140,9 +150,9 @@ def test_unblock_takes_the_plan_lock_once_and_succeeds(store, notices):
         )
 
     assert result["ok"] is True, result
-    assert store.entries == [PLAN]
-    assert store.nested == 0
-    story = _story(store)
+    assert db.entries == [PLAN]
+    assert db.nested == 0
+    story = _story(db)
     assert "rework_attempts" not in story
     assert story["status"] == "interrupted"
     assert story["files"] == ["a.py", "b.py"]
@@ -150,19 +160,15 @@ def test_unblock_takes_the_plan_lock_once_and_succeeds(store, notices):
     assert [n["event"] for n in notices] == ["story_unparked_manually"]
 
 
-def test_the_default_path_still_takes_one_lock_on_the_configured_store(
-    store, notices, monkeypatch
-):
+def test_the_default_path_still_takes_its_own_lock_once(db, notices):
     """``unpark_story`` without ``store`` keeps building and locking once.
 
-    This is the CLI's path: it must still take the plan lock itself (exactly
-    once) and must not be handed the caller's session.
+    This is the CLI's path: it must still acquire the plan lock itself, and
+    exactly once.
     """
-    monkeypatch.setattr(unpark_mod, "build_store", lambda: store)
-
     result = unpark_mod.unpark_story(PLAN, STORY, ["rework_attempts"])
 
-    assert store.entries == [PLAN]
-    assert store.nested == 0
+    assert db.entries == [PLAN]
+    assert db.nested == 0
     assert result["cleared"] == ["rework_attempts"]
-    assert _story(store)["status"] == "parked"
+    assert _story(db)["status"] == "parked"

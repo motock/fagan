@@ -699,9 +699,14 @@ def _grading_story() -> dict:
     return {"grading_pid": os.getpid()}
 
 
-def _two_grading_stories() -> dict:
-    """Two stories that look like they hold a live detached grade."""
-    return {"stories": {"s2": _grading_story(), "s3": _grading_story()}}
+def _two_grading_plans(records) -> None:
+    """Two plans of the default partition, each holding a live detached grade."""
+    records.manifests[("default", "plan-default-a")] = {
+        "stories": {"s2": _grading_story()}
+    }
+    records.manifests[("default", "plan-default-b")] = {
+        "stories": {"s3": _grading_story()}
+    }
 
 
 def test_live_grades_are_counted_in_the_bound_partition_only(store, records) -> None:
@@ -709,7 +714,7 @@ def test_live_grades_are_counted_in_the_bound_partition_only(store, records) -> 
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _grading_story()}
     }
-    records.manifests[("default", "plan-default")] = _two_grading_stories()
+    _two_grading_plans(records)
 
     with bind_namespace(NAMESPACE):
         count = detached_grade.live_grade_count()
@@ -724,7 +729,7 @@ def test_live_grades_are_counted_in_the_default_partition_when_unbound(
     records.manifests[(NAMESPACE, "plan-bound")] = {
         "stories": {STORY: _grading_story()}
     }
-    records.manifests[("default", "plan-default")] = _two_grading_stories()
+    _two_grading_plans(records)
 
     assert detached_grade.live_grade_count() == 2
 

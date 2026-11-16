@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import oidc, oidc_login
+from app.identity import IdentityError
 
 ISSUER = "https://issuer.example"
 DISCOVERY_URL = f"{ISSUER}/.well-known/openid-configuration"
@@ -993,3 +994,158 @@ def test_callback_redirects_to_root_for_a_rejected_next(client, idp, clock):
     assert response.status_code == 302
     assert response.headers["location"] == "/"
     assert _session_cookie(response)
+
+
+# --------------------------------------------------------------------------
+# The session principal must carry the operator-configured extra claims
+# --------------------------------------------------------------------------
+
+
+def test_session_principal_carries_the_configured_extra_claims(
+    monkeypatch, client, idp, clock
+):
+    """The browser session must keep the claims the API provider would carry."""
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "fagan_groups")
+    clock.now = 1500
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    idp.custom_token = idp.id_token(
+        fagan_groups=["/orgs/default/teams/default/team_leader"]
+    )
+
+    session_id = _new_session(client, idp, params["state"])
+
+    principal = oidc_login.load_session(session_id).principal
+    assert dict(principal.extra_claims)["fagan_groups"] == (
+        "/orgs/default/teams/default/team_leader",
+    )
+
+
+def test_session_principal_has_no_extra_claims_when_none_are_configured(
+    monkeypatch, client, idp, clock
+):
+    """An unconfigured claim is not carried, even when the token has it."""
+    monkeypatch.delenv(oidc.OIDC_EXTRA_CLAIMS_ENV, raising=False)
+    clock.now = 1600
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    idp.custom_token = idp.id_token(
+        fagan_groups=["/orgs/default/teams/default/team_leader"]
+    )
+
+    session_id = _new_session(client, idp, params["state"])
+
+    principal = oidc_login.load_session(session_id).principal
+    assert dict(principal.extra_claims) == {}
+
+
+def test_session_principal_omits_a_configured_claim_the_token_lacks(
+    monkeypatch, client, idp, clock
+):
+    """A configured name the token does not carry is simply absent."""
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "fagan_groups,other_claim")
+    clock.now = 1700
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    idp.custom_token = idp.id_token(fagan_groups=["group-a"])
+
+    session_id = _new_session(client, idp, params["state"])
+
+    principal = oidc_login.load_session(session_id).principal
+    assert dict(principal.extra_claims) == {"fagan_groups": ("group-a",)}
+
+
+def test_login_refuses_a_malformed_extra_claim_list(monkeypatch, client, idp, clock):
+    """A malformed claim list is refused, and no session is minted."""
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "good_name,dash-name")
+    clock.now = 1800
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+
+    response = _callback(client, params["state"])
+
+    assert response.status_code == 401
+    assert response.json() == {"error": "authentication_failed"}
+    assert not [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.startswith(f"{oidc_login.SESSION_COOKIE}=")
+    ]
+
+
+def test_login_reads_the_extra_claim_configuration_at_callback_time(
+    monkeypatch, client, idp, clock
+):
+    """The claim names are read when the callback verifies the token."""
+    monkeypatch.delenv(oidc.OIDC_EXTRA_CLAIMS_ENV, raising=False)
+    clock.now = 1900
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    idp.custom_token = idp.id_token(fagan_groups=["group-a"])
+
+    # The operator configures the claim while the login attempt is in flight.
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "fagan_groups")
+
+    session_id = _new_session(client, idp, params["state"])
+
+    principal = oidc_login.load_session(session_id).principal
+    assert dict(principal.extra_claims)["fagan_groups"] == ("group-a",)
+
+
+def test_login_uses_the_shared_extra_claim_names_helper(
+    monkeypatch, client, idp, clock
+):
+    """The login route asks the provider for the claim names, not its own."""
+    monkeypatch.setattr(oidc, "extra_claim_names", lambda *args, **kwargs: ("team",))
+    clock.now = 2000
+    params = _login_params(client)
+    idp.nonce = params["nonce"]
+    idp.custom_token = idp.id_token(team=["team-leader"], other=["ignored"])
+
+    session_id = _new_session(client, idp, params["state"])
+
+    principal = oidc_login.load_session(session_id).principal
+    assert dict(principal.extra_claims) == {"team": ("team-leader",)}
+
+
+# --------------------------------------------------------------------------
+# The public extra-claim-names helper (``app.oidc``)
+# --------------------------------------------------------------------------
+
+
+def test_extra_claim_names_reads_the_process_environment(monkeypatch):
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "tier,_region")
+
+    assert oidc.extra_claim_names() == ("tier", "_region")
+
+
+def test_extra_claim_names_accepts_an_explicit_environ(monkeypatch):
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "from_process_env")
+
+    names = oidc.extra_claim_names({oidc.OIDC_EXTRA_CLAIMS_ENV: "from_argument"})
+
+    assert names == ("from_argument",)
+
+
+def test_extra_claim_names_with_no_configuration_is_empty(monkeypatch):
+    monkeypatch.delenv(oidc.OIDC_EXTRA_CLAIMS_ENV, raising=False)
+
+    assert oidc.extra_claim_names() == ()
+
+
+def test_extra_claim_names_drops_blanks_and_duplicates(monkeypatch):
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, " tier , _region,,tier,flags_2 ")
+
+    assert oidc.extra_claim_names() == ("tier", "_region", "flags_2")
+
+
+def test_extra_claim_names_refuses_a_malformed_list(monkeypatch):
+    monkeypatch.setenv(oidc.OIDC_EXTRA_CLAIMS_ENV, "good_name,dash-name")
+
+    with pytest.raises(IdentityError) as excinfo:
+        oidc.extra_claim_names()
+
+    assert str(excinfo.value) == (
+        "invalid oidc configuration: " + oidc.OIDC_EXTRA_CLAIMS_ENV
+    )
+    assert "dash-name" not in str(excinfo.value)

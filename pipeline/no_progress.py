@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import usage_cooldown, usage_transitions
+from . import bound_records, usage_cooldown, usage_transitions
 from .build_detect import _last_done_summary
 from .parsers import _RATE_LIMIT_PATTERNS
 from .scope_conflict import parse_scope_conflict
@@ -65,7 +65,7 @@ def _wait_for_capacity(
         )
     else:
         story["status"] = "changes_requested"
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
     # Latch the cooldown and announce the gate so the scheduler stops
     # redispatching into the same wall. Neither may take the status change
     # down: a cooldown that cannot be recorded is not a reason to crash.
@@ -123,7 +123,7 @@ def _retry_transport(
         )
     else:
         story["status"] = "changes_requested"
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
     if exhausted:
         _notify_user(
             plan_name,
@@ -178,7 +178,7 @@ def classify_no_progress(
     }
     story["status"] = "parked"
     story["parked_reason"] = f"scope conflict: {', '.join(paths)}"
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
     _notify_user(
         plan_name,
         f"{story_key} parked: agent reported a scope conflict ({', '.join(paths)}) "

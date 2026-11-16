@@ -386,6 +386,29 @@ def test_every_story_path_site_goes_through_the_wrapper() -> None:
     )
 
 
+def _calls_with_their_trailing_text(source: str) -> list[str]:
+    """Return each bound-records call together with the text that follows it.
+
+    The call is matched up to its closing parenthesis, so a call wrapped over
+    several lines is returned whole and the suppression that trails it is
+    part of the returned text.
+    """
+    calls = []
+    for match in re.finditer(r"bound_records\s*\.\s*\w+\(", source):
+        depth = 0
+        end = match.end()
+        for index in range(match.end() - 1, len(source)):
+            if source[index] == "(":
+                depth += 1
+            elif source[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        calls.append(source[match.start() : end])
+    return calls
+
+
 def test_story_status_keeps_its_undefined_name_suppressions() -> None:
     """The rewritten ``story_status`` calls keep their ``# noqa: F821`` marker.
 
@@ -394,14 +417,10 @@ def test_story_status_keeps_its_undefined_name_suppressions() -> None:
     suppression the old call carried.
     """
     source = _module_source("story_status.py")
-    wrappers = [
-        line
-        for line in source.splitlines()
-        if re.search(r"bound_records\s*\.\s*(?:get_manifest|put_manifest)\(", line)
-    ]
+    calls = _calls_with_their_trailing_text(source)
 
-    assert wrappers, "story_status must reach for the bound_records wrappers"
-    assert all("# noqa: F821" in line for line in wrappers), (
+    assert calls, "story_status must reach for the bound_records wrappers"
+    assert all("# noqa: F821" in call for call in calls), (
         "every bound_records call in story_status must keep its "
         "'# noqa: F821' suppression: _store is injected at runtime"
     )

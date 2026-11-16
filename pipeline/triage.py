@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import logging
 import json
+from . import bound_records
 from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
@@ -411,7 +412,7 @@ def run_triage_sweep(plan_name: str) -> dict:
         return {"ok": True, "skipped": "disabled"}
     try:
         from .server import _store
-        manifest = _store.records().get_manifest("default", plan_name)
+        manifest = bound_records.get_manifest(_store, plan_name)
         if manifest is None:
             return {"ok": True, "skipped": "no_manifest"}
         if manifest.get("paused"):
@@ -494,7 +495,7 @@ def run_triage_sweep(plan_name: str) -> dict:
             for s in manifest.get("stories", {}).values():
                 if isinstance(s, dict):
                     s.pop("_patch_acceptance_recorded", None)
-            if (fresh := _store.records().get_manifest("default", plan_name)) is None:
+            if (fresh := bound_records.get_manifest(_store, plan_name)) is None:
                 raise FileNotFoundError("plan manifest not found")
             _store.records().put_manifest(
                 "default", plan_name, _merge_sweep_changes(fresh, initial, manifest)

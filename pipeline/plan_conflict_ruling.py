@@ -36,7 +36,7 @@ import logging
 import subprocess
 from datetime import UTC, datetime
 
-from . import testfiles
+from . import bound_records, testfiles
 from .build_detect import failed_node_ids
 from .plan_conflict import (
     _GIT_TIMEOUT_SECONDS,
@@ -530,7 +530,7 @@ def _plan_conflict_intercept(
             return None
         from .server import _store
 
-        _store.records().put_manifest("default", plan_name, manifest)
+        bound_records.put_manifest(_store, plan_name, manifest)
         return {"status": story["status"], "pid": pid, "plan_conflict": outcome}
     except Exception as exc:  # noqa: BLE001 - fail open: never abort a grade
         logger.warning(

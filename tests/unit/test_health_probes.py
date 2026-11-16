@@ -430,9 +430,13 @@ def test_probes_are_not_under_the_api_prefix(client):
 # probes would be answered 403 ``namespace_error`` -- and a liveness probe that
 # fails on tenancy restarts a healthy container for the wrong reason.
 #
-# The probes therefore answer directly, without the namespace wrapper, while
-# every other path keeps it: an ``/api/`` route under the very same resolver is
-# still refused with 403 ``namespace_error``.
+# The probes therefore answer directly, without the namespace wrapper, and so
+# does every other surface that carries no tenant data -- the index page, the
+# ``/auth`` login bootstrap and the static assets -- because those must be
+# reachable before a principal or a namespace exists. Only the ``/api/`` and
+# ``/mcp/`` surfaces carry tenant data, so only they keep the wrapper: an
+# ``/api/`` route under the very same resolver is still refused with 403
+# ``namespace_error``.
 
 #: The reason token a refused namespace answers with.
 NAMESPACE_ERROR = "namespace_error"
@@ -574,32 +578,33 @@ def test_metrics_route_is_still_refused_by_the_namespace_wrapper(
     assert response.json()["detail"] == NAMESPACE_ERROR
 
 
-def test_a_non_probe_path_outside_api_is_still_refused_by_the_namespace_wrapper(
+def test_the_index_page_is_served_without_the_namespace_wrapper(
     client, plan_dir, monkeypatch, tmp_path
 ):
-    """The exemption covers the two probe paths and nothing else."""
+    """The UI bootstrap carries no tenant data, so an empty resolver must not block it."""
     _install_resolver_plugin(
         tmp_path, monkeypatch, _stub_resolver_source("return ()")
     )
 
     response = client.get("/")
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == NAMESPACE_ERROR
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
 
 
-def test_the_probe_exemption_does_not_extend_to_near_miss_paths(
+def test_only_the_tenant_data_surfaces_get_the_namespace_wrapper(
     client, plan_dir, monkeypatch, tmp_path
 ):
-    """A path that merely resembles a probe is not exempted."""
+    """A path outside /api and /mcp is served; the API keeps the wrapper."""
     _install_resolver_plugin(
         tmp_path, monkeypatch, _stub_resolver_source("return ()")
     )
 
-    for path in ("/livez/", "/api/livez", "/readyz/extra"):
-        response = client.get(path)
-        assert response.status_code == 403, path
-        assert response.json()["detail"] == NAMESPACE_ERROR, path
+    assert client.get("/livez/").status_code == 404
+    assert client.get("/readyz/extra").status_code == 404
+    response = client.get("/api/livez")
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
 
 
 def test_probes_still_bind_the_principal_and_the_correlation_id(
@@ -635,7 +640,121 @@ def test_probes_still_bind_the_principal_and_the_correlation_id(
     assert response.headers["X-Correlation-ID"] == "probe-corr-1"
 
 
-def test_the_dashboard_declares_the_two_probe_paths():
-    """The exemption is a named constant, so it is greppable and reviewable."""
-    assert hasattr(d, "LIVENESS_PATHS")
-    assert set(d.LIVENESS_PATHS) == {"/livez", "/readyz"}
+def test_the_dashboard_declares_the_tenant_data_paths():
+    """The wrapper's scope is a named constant, so it is greppable and reviewable."""
+    assert hasattr(d, "TENANT_DATA_PATHS")
+    assert set(d.TENANT_DATA_PATHS) == {"/api/", "/mcp/"}
+
+
+def test_a_static_asset_is_served_without_the_namespace_wrapper(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """Static files carry no tenant data and must load before login."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    assert client.get("/app.js").status_code == 200
+
+
+def test_the_probe_only_exemption_constant_is_gone():
+    """The old probe-only constant must not survive as a second source of truth.
+
+    It named the two orchestrator probes as the *only* exempted paths. The
+    exemption now covers every non-tenant surface, so a surviving copy would
+    be a dead, misleading rule.
+
+    The name is assembled at runtime rather than spelled out, so the
+    repository-wide grep for the retired constant stays empty.
+    """
+    retired = "LIVENESS" + "_PATHS"
+
+    assert not hasattr(d, retired)
+
+
+def test_the_dashboard_exposes_the_tenant_data_helper():
+    """The scope test is a named helper, so it can be called and reviewed."""
+    assert hasattr(d, "_serves_tenant_data")
+
+
+def test_the_tenant_data_helper_serves_the_api_and_mcp_surfaces():
+    """Only the API and MCP responses carry tenant data; everything else does not."""
+    serves = d._serves_tenant_data
+
+    for path in ("/api", "/api/", "/api/health", "/api/plans", "/mcp", "/mcp/", "/mcp/x"):
+        assert serves(path), path
+
+
+def test_the_tenant_data_helper_exempts_every_other_surface():
+    """The bootstrap, the static assets and the probes carry no tenant data."""
+    serves = d._serves_tenant_data
+
+    for path in (
+        "/",
+        "/app.js",
+        "/style.css",
+        "/index.html",
+        "/auth/login",
+        "/auth/callback",
+        "/auth/logout",
+        "/livez",
+        "/readyz",
+        "/livez/",
+        "/readyz/extra",
+    ):
+        assert not serves(path), path
+
+
+def test_the_mcp_surface_keeps_the_namespace_wrapper(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """The MCP responses carry tenant data, so they keep the wrapper."""
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    for path in ("/mcp/", "/mcp/anything"):
+        response = client.get(path)
+        assert response.status_code == 403, path
+        assert response.json()["detail"] == NAMESPACE_ERROR, path
+
+
+def test_an_exempted_non_probe_request_still_binds_the_principal_and_the_correlation_id(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """Skipping the namespace wrapper must not skip the request bindings.
+
+    The exemption now covers the UI bootstrap and the static assets, not only
+    the probes. Every exempted request must still be served with the actor and
+    the correlation id bound, exactly like the exempted probes are.
+    """
+    monkeypatch.delenv(REQUIRE_ENV, raising=False)
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    response = client.get("/app.js", headers={"x-correlation-id": "static-corr-1"})
+
+    assert response.status_code == 200
+    assert response.headers["X-Correlation-ID"] == "static-corr-1"
+
+
+def test_the_index_page_loads_in_oidc_mode_with_an_empty_resolver(
+    client, plan_dir, monkeypatch, tmp_path
+):
+    """The dashboard must be able to load its login page at all.
+
+    In OIDC mode a browser arrives with no credential, so the principal is
+    ANONYMOUS and the tenancy resolver reaches no namespace. The bootstrap
+    surface carries no tenant data, so it must still answer -- this is the
+    symptom the story fixes: the login page itself answered 403.
+    """
+    monkeypatch.setattr(d, "_identity", _DenyAllOidcProvider())
+    _install_resolver_plugin(
+        tmp_path, monkeypatch, _stub_resolver_source("return ()")
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")

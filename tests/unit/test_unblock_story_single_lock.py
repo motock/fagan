@@ -1,12 +1,13 @@
 """``unblock_story`` takes the plan lock exactly once.
 
-The tool opens the plan's transaction itself and then delegates the manifest
-edit to :func:`pipeline.unpark.unpark_story`. On the configured Postgres store
-``transaction()`` delegates to the plugin, so every entry opens its own session:
-if ``unpark_story`` re-acquired the lock -- it built its own store and entered
-its own transaction -- the second session's ``pg_try_advisory_xact_lock`` would
-return false while the outer session still held it, and every call would fail
-with ``unblock failed: RuntimeError``.
+The tool opens the plan's transaction itself and performs the manifest edit
+through its module-local ``unpark_story`` helper, which reads and writes via
+``_store``; it never calls :func:`pipeline.unpark.unpark_story`, which builds
+its own store. On the configured Postgres store ``transaction()`` delegates to
+the plugin, so every entry opens its own session: if the helper re-acquired the
+lock from a second store instance, ``pg_try_advisory_xact_lock`` would return
+false while the outer session still held it, and every call would fail with
+``unblock failed: RuntimeError``.
 
 The fakes below model that database rather than a thread: the lock state is
 shared by every store instance over the same "database", and a second entry
@@ -161,10 +162,9 @@ def test_unblock_takes_the_plan_lock_once_and_succeeds(db, notices):
 
 
 def test_the_default_path_still_takes_its_own_lock_once(db, notices):
-    """``unpark_story`` without ``store`` keeps building and locking once.
+    """The CLI path (``pipeline.unpark.unpark_story``) builds its own store and locks once.
 
-    This is the CLI's path: it must still acquire the plan lock itself, and
-    exactly once.
+    It must still acquire the plan lock itself, and exactly once.
     """
     result = unpark_mod.unpark_story(PLAN, STORY, ["rework_attempts"])
 

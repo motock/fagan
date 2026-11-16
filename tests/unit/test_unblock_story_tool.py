@@ -1,9 +1,10 @@
-"""``unblock_story``: the MCP path to ``pipeline.unpark.unpark_story``.
+"""``unblock_story``: the MCP equivalent of ``python -m pipeline.unpark``.
 
 The tool authorizes like ``set_story_status`` (plan owner or delegate, deny by
-default), delegates the unblock to ``unpark_story`` and appends an optional
-note to the story's brief under the same plan lock. A changed brief or ``files``
-resets the plan approval. A refused value is never echoed back.
+default), performs the unblock in its own single ``_store`` transaction and
+appends an optional note to the story's brief under that same plan lock. A
+changed brief or ``files`` resets the plan approval. A refused value is never
+echoed back.
 """
 
 from __future__ import annotations

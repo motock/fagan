@@ -208,6 +208,10 @@ services:
       - "${PUBLIC_PORT:-8443}:8443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Operator route files (*.caddy) imported ahead of the built-in routes, for
+      # example a second pipeline instance for one namespace. Read-only; each
+      # file must end in .caddy. The default directory holds only a .gitkeep.
+      - ${STANDALONE_EXTRA_ROUTES_DIR:-./extra-routes}:/etc/caddy/extra-routes:ro
       - caddy-data:/data
       - ca-public:/ca-public
     healthcheck:

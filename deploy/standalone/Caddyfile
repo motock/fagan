@@ -12,6 +12,11 @@
 }
 
 (routes) {
+	# Operator route files (one per second pipeline instance, for example) claim
+	# requests before the built-in handles below. No file matching *.caddy is
+	# imported as nothing.
+	import /etc/caddy/extra-routes/*.caddy
+
 	# The MCP transport and its RFC 9728 protected-resource metadata.
 	# The pipeline's MCP port is 8080; the dashboard is on 8000.
 	@mcp path /mcp* /.well-known/oauth-protected-resource*

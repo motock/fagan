@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Any
 
-from . import access_hooks, cross_plan, plan_approval, review_job
+from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -305,7 +305,7 @@ def _warn_file_overlaps(plan_name: str, stories: dict, ready: list[str], neighbo
 
 def _fresh_manifest(plan_name: str) -> dict[str, Any]:
     """Fresh store read (never a get_manifests snapshot); raise if it is gone."""
-    manifest = _store.records().get_manifest("default", plan_name)
+    manifest = bound_records.get_manifest(_store, plan_name)
     if manifest is None:
         raise FileNotFoundError("manifest not found")
     return manifest
@@ -313,7 +313,7 @@ def _fresh_manifest(plan_name: str) -> dict[str, Any]:
 
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     validate_plan_name(plan_name)
-    if plan_name not in _store.records().list_plans("default"):
+    if plan_name not in bound_records.list_plans(_store):
         return {"ok": False, "error": f"No manifest for {plan_name}"}
     manifest = _store.get_manifest(plan_name)
     stories = manifest["stories"]
@@ -572,7 +572,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 continue
             # Persist the claim BEFORE releasing the lock: an unpersisted lease
             # protects nothing.
-            _store.records().put_manifest("default", plan_name, m)
+            bound_records.put_manifest(_store, plan_name, m)
             if capped and on_device and not holds_slot:
                 # Only a dispatch that actually launches on-device consumes
                 # the slot; a cloud dispatch must not touch the counter.
@@ -664,7 +664,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         **_cid_kwargs,
                     )
                 summary["notify"].append(key)
-                _store.records().put_manifest("default", plan_name, m)
+                bound_records.put_manifest(_store, plan_name, m)
             else:
                 # Dispatch succeeded (or was skipped on store-lock contention):
                 # clear the lease from a fresh read too, as in the except above.
@@ -672,7 +672,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 st = m["stories"][key]
                 st.pop("dispatch_lease_expires_at", None)
                 st.pop("dispatch_lease_owner_pid", None)
-                _store.records().put_manifest("default", plan_name, m)
+                bound_records.put_manifest(_store, plan_name, m)
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate
@@ -838,7 +838,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         fresh["stories"][key]["agent_instructions"] = story[
                             "agent_instructions"
                         ]
-                        _store.records().put_manifest("default", plan_name, fresh)
+                        bound_records.put_manifest(_store, plan_name, fresh)
                         if story["agent_instructions"] != previous_instructions:
                             _notify_user(
                                 plan_name,

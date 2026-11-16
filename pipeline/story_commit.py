@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 import time
 
+from . import bound_records
+
 _LOGGER = logging.getLogger("pipeline")
 
 #: Retry cadence while another holder has the plan flock (seconds).
@@ -33,7 +35,7 @@ def _write_story(plan_name: str, story_key: str, story: dict) -> None:
     # package has an import cycle, and tests patch these attributes.
     from . import server
 
-    manifest = server._store.records().get_manifest("default", plan_name)
+    manifest = bound_records.get_manifest(server._store, plan_name)
     if manifest is None:
         # Missing or corrupt: never write over it. The message carries no path
         # so a tool caller cannot echo the operator's filesystem back out.
@@ -50,7 +52,7 @@ def _write_story(plan_name: str, story_key: str, story: dict) -> None:
         return
     stories[story_key] = story
     manifest["stories"] = stories
-    server._store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(server._store, plan_name, manifest)
 
 
 def commit_story(plan_name: str, story_key: str, story: dict) -> None:

@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from . import bound_records
 from .audit import record_audit
 from .branch_guard import BranchGuardError, refusal
 from .module_ref import _ModuleRef
@@ -280,7 +281,7 @@ def _refuse_if_remote_branch_taken(
     except BranchGuardError as exc:
         outcome, reason = refusal(story_key, branch, exc)
     story["dispatch_block_reason"] = reason
-    _store.records().put_manifest("default", plan_name, manifest)
+    bound_records.put_manifest(_store, plan_name, manifest)
     logging.getLogger("pipeline").warning(
         "fresh dispatch blocked by remote branch guard",
         extra={"plan": plan_name, "story_key": story_key, "branch": branch,

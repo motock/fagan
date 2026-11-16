@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from . import bound_records
 from .service import _ServerRef
 
 # Server-sourced members this module references as free variables. Each
@@ -245,13 +246,13 @@ def _step_detached_test_author(
                 story.pop("test_author_phase", None)
                 story["tdd_split"] = True
                 marker_path.write_text("ok\n")
-                _store.records().put_manifest("default", plan_name, manifest)
+                bound_records.put_manifest(_store, plan_name, manifest)
                 return "authored"
             # False: the phase fell open (timeout, no commit, dispatch
             # failure). Drop the stale phase so a later dispatch does not
             # re-poll it, then hand back to the blocking path.
             story.pop("test_author_phase", None)
-            _store.records().put_manifest("default", plan_name, manifest)
+            bound_records.put_manifest(_store, plan_name, manifest)
             return "fell_open"
 
         from .test_author import start_test_author_phase
@@ -267,7 +268,7 @@ def _step_detached_test_author(
         )
         if isinstance(launched, dict):
             story["test_author_phase"] = launched
-            _store.records().put_manifest("default", plan_name, manifest)
+            bound_records.put_manifest(_store, plan_name, manifest)
             return "pending"
         # None: the phase skipped or failed to launch. Nothing was written,
         # so there is nothing to persist.

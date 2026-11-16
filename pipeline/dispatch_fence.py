@@ -41,6 +41,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+from . import bound_records
 from .dispatch_lease import lease_is_live
 
 #: Marker written by the baseline test phase.
@@ -165,7 +166,7 @@ def blocks_reclaim(story, worktree) -> bool:
 
 def _read_story(store, plan_name: str, story_key: str) -> dict:
     """Re-read one story straight from the persisted record (never cached)."""
-    manifest = store.records().get_manifest("default", plan_name) or {}
+    manifest = bound_records.get_manifest(store, plan_name) or {}
     stories = manifest.get("stories") or {}
     return stories.get(story_key) or {}
 

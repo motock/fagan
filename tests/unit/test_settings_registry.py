@@ -18,6 +18,9 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "grade_xdist_workers",
         "role_routing",
         "notification_routes",
+        "autonomy",
+        "auto_merge",
+        "triage_mode",
     }
 
 
@@ -77,6 +80,9 @@ def test_legacy_env_names_are_the_plan_names():
         "grade_xdist_workers": "PIPELINE_GRADE_XDIST_WORKERS",
         "role_routing": "",
         "notification_routes": "",
+        "autonomy": "",
+        "auto_merge": "",
+        "triage_mode": "",
     }
 
 

@@ -43,7 +43,12 @@ record view delegates straight back to the same JSON files, through a
 and would make the developer's real plans directory (or a binding other than
 the caller's) shadow the caller's fixture. With the file store - or any store
 without a record view - the file read *is* the primary read. Only a genuinely
-store-backed deployment (``PIPELINE_STORE=sqlite``) reads records first.
+store-backed deployment (``PIPELINE_STORE=sqlite``) reads records first, and it
+reads them for the *request* namespace - the one bound with
+``current_namespace()``, which resolves to the default namespace when nothing is
+bound - not for one hard-coded partition. Both the store view and the namespace
+are resolved on every call, so a request that carries a namespace reads that
+namespace's copy of the plan.
 
 A manifest a source does yield is the answer: a store manifest without a
 ``role_config`` block means "no override", never "ask the file".
@@ -56,8 +61,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .actor import current_namespace
 from .host_state import build_host_state
-from .store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +145,7 @@ def read_plan_manifest(
     records = _record_view()
     if records is not None:
         try:
-            manifest = records.get_manifest(DEFAULT_NAMESPACE, plan_name)
+            manifest = records.get_manifest(current_namespace(), plan_name)
         except Exception:  # re-raised unless explicitly degraded
             if not fallback_on_error:
                 raise
@@ -200,7 +205,7 @@ def read_plan_names(
     records = _record_view()
     if records is not None:
         try:
-            names = [str(name) for name in records.list_plans(DEFAULT_NAMESPACE)]
+            names = [str(name) for name in records.list_plans(current_namespace())]
         except Exception:  # re-raised unless explicitly degraded
             if not fallback_on_error:
                 raise

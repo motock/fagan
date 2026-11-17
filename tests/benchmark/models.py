@@ -408,6 +408,24 @@ MODELS: dict[str, dict] = {
         "role_config": _ollama_role_config("qwen38-27b"),
         "story_model": "qwen38-27b",
     },
+    # bonsai-2:27b (qwen35 architecture, 26.9B params, Q2_0 quant, 8.3 GB,
+    # 262144 context) pulled straight from Ollama. Same arm shape as
+    # qwen38_27b -- 49152 window, 1800s budget, 60 steps, role pins held at
+    # the baseline reviewer so the implementer is the only variable -- but
+    # temperature 0.7 with thinking left at the level this tag advertises
+    # (`ollama show` lists false/low/medium/xhigh, default medium). This is a
+    # first smoke cell, not a tuned arm: the graded `medium` level is a real
+    # request the driver can handle, unlike an absent `think` key. If the
+    # smoke cell converges, compare it against qwen38_27b before widening.
+    "bonsai2_27b": {
+        **_local_arm(
+            os.environ.get("BENCH_BONSAI_TAG", "bonsai-2:27b"),
+            temperature="0.7",
+            extra={"PIPELINE_LOCAL_THINK": "medium"},
+        ),
+        "role_config": _ollama_role_config("bonsai-2-27b"),
+        "story_model": "bonsai-2-27b",
+    },
     # qwen3-coder:30b (MoE, non-thinking, proven Metal-stable) implementing
     # AND self-reviewing - the direct qwen counterpart to gptoss_temp03,
     # same temperature/num_ctx, for a like-for-like rework-cycle comparison

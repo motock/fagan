@@ -545,10 +545,34 @@ def install_merge_stubs(p, repo: Path) -> None:
         _sh(["git", "branch", "-D", branch], repo, check=False)
         return "merged (stub)"
 
+    def _ci_status_once_stub(branch, *, sha=None, settings=None):
+        """Non-polling sibling of _ci_status; same worktree test run.
+
+        The merge gate and the overlord's CI-evidence gather both resolve
+        ``pipeline.server._ci_status_once`` (single query, no sleep-poll), not
+        the blocking ``_ci_status`` above. Leaving it unpatched sent the query
+        to the real GitHub forge - the cell's origin is a local bare repo - so
+        every merge gate returned ``unreadable`` and the cell never left
+        ``pr_open`` (observed live 2026-11-16).
+        """
+        return _ci_status_stub(branch, sha=sha, settings=settings)
+
     for target in (p, _pserver):
         target._ci_status = _ci_status_stub
+        target._ci_status_once = _ci_status_once_stub
         target._open_pr = _open_pr_stub
         target._merge_pr = _merge_pr_stub
+
+    # The merge gate polls the host for a computed mergeability before it
+    # calls _merge_pr. The real forge resolves this cell's local bare origin
+    # to GitHub, gh's query fails, and the gate treats an unreadable answer as
+    # "pending" - so every tick blocks for the full 180s readiness budget and
+    # the story never leaves pr_open (observed live 2026-11-16). Returning no
+    # forge makes _await_merge_readiness treat the cell as "ready", which is
+    # what a local-only remote actually is.
+    import pipeline.advance_merge as _padvance_merge
+
+    _padvance_merge._merge_readiness_forge = lambda: None
 
 
 class MockBackend:
@@ -886,6 +910,15 @@ def main() -> int:
     os.environ["PIPELINE_RISK_THRESHOLD"] = "low"
     os.environ["PIPELINE_MAX_CONCURRENT_AGENTS"] = "1"
     _set_review_backend_env()
+    # Keep review inline. A detached review (the default) runs in a
+    # `pipeline.review_job` child process, so its APPROVE -> _open_pr forge
+    # call happens outside this process, where install_merge_stubs's hermetic
+    # gh replacements do not exist. The child then resolves the cell's local
+    # bare origin to the GitHub forge and every PR-open raises
+    # CalledProcessError, re-reviewing each tick until the cell's deadline
+    # (observed live 2026-11-16: "Unrecognised forge remote '.../origin.git';
+    # defaulting to github" in review_job/LRU-CACHE/job.log).
+    os.environ["PIPELINE_REVIEW_DETACHED"] = "0"
     # Make sure no stale per-tier local override hijacks the "sonnet" story tier.
     for k in ("PIPELINE_LOCAL_MODEL_SONNET", "PIPELINE_LOCAL_MODEL_OPUS",
               "PIPELINE_LOCAL_MODEL_HAIKU"):

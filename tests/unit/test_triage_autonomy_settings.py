@@ -13,7 +13,8 @@ use the value in force is resolved for the plan:
 
 These tests drive the public triage entry points -- ``pipeline.triage._triage_mode``
 and the executors that consult it -- with ``pipeline.autonomy_settings.read_layers``
-pinned, so no Store is touched.
+pinned, so no Store is touched.  The resolver's own rules are covered by
+``tests/unit/test_autonomy_settings.py``.
 """
 
 from __future__ import annotations
@@ -113,7 +114,12 @@ def test_triage_mode_without_a_manifest_reads_no_store_even_when_the_read_fails(
 
 @pytest.mark.parametrize(
     "env_value,expected",
-    [("execute", "execute"), ("shadow", "shadow"), ("", "shadow"), ("bogus", "shadow")],
+    [
+        ("execute", "execute"),
+        ("shadow", "shadow"),
+        ("", "shadow"),
+        ("bogus", "shadow"),
+    ],
 )
 def test_triage_mode_without_a_manifest_mirrors_the_environment(
     monkeypatch, env_value, expected
@@ -191,6 +197,15 @@ def test_a_manifest_selects_the_plan_the_layers_are_read_for(monkeypatch):
     assert "t1" in supplied
 
 
+def test_a_manifest_without_a_team_reads_the_default_team(monkeypatch):
+    """A manifest that names no team still names a plan, so the Store is read."""
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+    calls = _pin_layers(monkeypatch, {"team": {TRIAGE_MODE: "shadow"}})
+
+    assert triage._triage_mode({}) == "shadow"
+    assert len(calls) == 1
+
+
 # --- the executors read the plan's mode ---------------------------------------
 
 
@@ -266,18 +281,19 @@ def test_the_other_executors_read_the_plan_triage_mode(
 
     With the plan in shadow the executor must return ``"shadow"`` even though
     the environment says ``execute``; with the plan in execute it must get past
-    the mode check (and then fail later on its own preconditions, never on the
-    mode).
+    the mode check and fail on its own preconditions instead.
     """
     import importlib
 
     module = importlib.import_module(module_name)
-    executor = getattr(module, function_name)
+    run = getattr(module, function_name)
     monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+    monkeypatch.setattr(triage, "_notify_user", lambda plan, message, **kw: None)
 
     _pin_layers(monkeypatch, {"team": {TRIAGE_MODE: "shadow"}})
-    assert executor(PLAN, KEY, _story(), _ruling(), MANIFEST) == "shadow"
+    shadowed = run(PLAN, KEY, _story(), _ruling(), MANIFEST)
+    assert shadowed == "shadow"
 
     _pin_layers(monkeypatch, {"team": {TRIAGE_MODE: "execute"}})
-    result = executor(PLAN, KEY, _story(), _ruling(), MANIFEST)
-    assert result != "shadow"
+    executed = run(PLAN, KEY, _story(), _ruling(), MANIFEST)
+    assert executed != "shadow"

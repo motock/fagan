@@ -410,6 +410,7 @@ breaks when the value is wrong.
 | `PIPELINE_DASHBOARD_PUBLIC_URL` | Origin the review link in an approval notification is built from | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}` | `https://pipeline.example.com:8443` | No trailing slash and no path: it is an origin, and the path comes from the next row (§6) |
 | `PIPELINE_APPROVAL_LINK_PATH` | Path appended to that origin in an approval notification's review link | `/` | `/ext/approvals/` | A plain path only — no scheme, query or `..`. An invalid value falls back to `/` rather than failing a notification |
 | `PIPELINE_DASHBOARD_PLUGINS` | Dashboard extensions to mount, in `module:attr` form | unset — no extension is mounted, and no approval page exists | `approvals_app:plugin` | Comma-separated. A bad entry stops dashboard startup instead of being skipped, and whoever sets it runs code in the server (§6) |
+| `PIPELINE_TENANT_DATA_EXEMPT_PATHS` | Dashboard-extension paths served without a bound namespace, for an extension that must answer a caller who has several teams or none yet | unset — every `/api/` request is bound to a namespace | `/api/ext/console/me` | Comma-separated, at most 16, each under `/api/ext/` with lower-case segments and no trailing slash. A malformed value stops dashboard startup. Callers must still authenticate. Nothing is bound on a listed path, so its handler must not read namespace-scoped data. |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | In-network origin used for server-side OIDC discovery and token exchange | set by compose to `https://proxy:8443` | `https://proxy:8443` | The issuer (`KC_HOSTNAME`) is the public origin, which the pipeline cannot resolve inside the compose network. This origin replaces it only for requests the server makes; the browser still follows the public authorization endpoint and the `iss` claim is still the public issuer. Must be absolute `https://`. |
 
 One row here is rendered rather than authored: the installer writes
@@ -503,8 +504,7 @@ redirect URI. `--callback-port` must be the same port as
 `PIPELINE_CLI_CALLBACK_PORT`, or the browser returns to a URI the realm does not
 list and the flow fails with a redirect-URI error.
 
-Helper mode — no browser; the client mints a token per request in
-`.mcp.json`:
+Helper mode — no browser; the client mints a token per request in `.mcp.json`:
 
 ```json
 {

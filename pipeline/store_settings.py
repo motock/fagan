@@ -85,6 +85,17 @@ def _validate_repo(repo: str) -> None:
         raise InvalidRecordKeyError('invalid settings repo')
 
 
+def is_settings_repo(repo: object) -> bool:
+    """Whether *repo* can name a ``team_repo`` settings record (``host/org/name``)."""
+    if not isinstance(repo, str):
+        return False
+    try:
+        _validate_repo(repo)
+    except InvalidRecordKeyError:
+        return False
+    return True
+
+
 def validate_settings_write(
     values: object,
     allow_loosen: object,

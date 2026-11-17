@@ -34,6 +34,7 @@ from pipeline.autonomy_settings import (
     effective_triage_mode,
 )
 from pipeline.policy_settings import SETTINGS_ERROR_KEY
+from pipeline.store_settings import REPO_MAX_LENGTH
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -115,14 +116,14 @@ def test_empty_layers_keep_the_environment_value(monkeypatch):
 
 def test_the_context_is_read_for_its_namespace_team_and_repo(monkeypatch):
     calls = _pin_layers(monkeypatch, {})
-    context = _Context(namespace="acme", team="core", repo="acme/core")
+    context = _Context(namespace="acme", team="core", repo="github.com/acme/core")
     effective(AUTONOMY, "full", context)
     assert len(calls) == 1
     args, kwargs = calls[0]
     supplied = list(args) + list(kwargs.values())
     assert "acme" in supplied
     assert "core" in supplied
-    assert "acme/core" in supplied
+    assert "github.com/acme/core" in supplied
 
 
 def test_a_team_layer_may_tighten_the_environment_value(monkeypatch):
@@ -284,3 +285,72 @@ def test_importing_the_module_does_not_import_pipeline_ci():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- a plan named by a local path --------------------------------------------
+
+LOCAL_PATH = "/var/lib/pipeline/repos/github.com/acme/core"
+
+
+def test_a_plan_named_by_a_local_path_reads_no_repo_layer(monkeypatch):
+    calls = _pin_layers(monkeypatch, {})
+    effective(AUTONOMY, "full", _Context(repo=LOCAL_PATH))
+    assert calls[0][1]["repo"] == ""
+
+
+def test_a_plan_named_by_a_local_path_keeps_the_environment_value(monkeypatch):
+    _pin_layers(monkeypatch, {})
+    assert effective(AUTONOMY, "full", _Context(repo=LOCAL_PATH)) == "full"
+
+
+def test_a_plan_named_by_a_local_path_is_still_tightened_by_its_team(monkeypatch):
+    _pin_layers(monkeypatch, {"team": {AUTONOMY: "dry-run"}})
+    assert effective(AUTONOMY, "full", _Context(repo=LOCAL_PATH)) == "dry-run"
+
+
+def test_a_store_error_for_a_plan_named_by_a_local_path_is_restrictive(monkeypatch):
+    _pin_layers(monkeypatch, {SETTINGS_ERROR_KEY: "store_read_error"})
+    assert effective(AUTONOMY, "full", _Context(repo=LOCAL_PATH)) == "dry-run"
+
+
+def test_a_valid_repo_key_is_read_unchanged(monkeypatch):
+    calls = _pin_layers(monkeypatch, {})
+    effective(AUTONOMY, "full", _Context(repo="github.com/acme/core"))
+    assert calls[0][1]["repo"] == "github.com/acme/core"
+
+
+def test_a_local_path_plan_is_not_forced_restrictive_by_the_real_store():
+    assert effective(AUTONOMY, "full", _Context(repo=LOCAL_PATH)) == "full"
+
+
+# --- an unreadable namespace or team is still restrictive --------------------
+
+
+def test_an_invalid_namespace_still_yields_the_restrictive_value():
+    context = _Context(namespace="not a namespace", repo="github.com/acme/core")
+    assert effective(AUTONOMY, "full", context) == "dry-run"
+
+
+def test_an_invalid_team_still_yields_the_restrictive_value():
+    context = _Context(team="Not A Team", repo="github.com/acme/core")
+    assert effective(AUTONOMY, "full", context) == "dry-run"
+
+
+def test_an_invalid_namespace_stays_restrictive_for_a_local_path_plan():
+    context = _Context(namespace="not a namespace", repo=LOCAL_PATH)
+    assert effective(AUTONOMY, "full", context) == "dry-run"
+
+
+def test_a_repo_key_of_the_maximum_length_is_read_unchanged(monkeypatch):
+    calls = _pin_layers(monkeypatch, {})
+    repo = "github.com/acme/" + "c" * (REPO_MAX_LENGTH - len("github.com/acme/"))
+    assert len(repo) == REPO_MAX_LENGTH
+    effective(AUTONOMY, "full", _Context(repo=repo))
+    assert calls[0][1]["repo"] == repo
+
+
+def test_a_repo_key_past_the_maximum_length_reads_no_repo_layer(monkeypatch):
+    calls = _pin_layers(monkeypatch, {})
+    repo = "github.com/acme/" + "c" * (REPO_MAX_LENGTH - len("github.com/acme/") + 1)
+    effective(AUTONOMY, "full", _Context(repo=repo))
+    assert calls[0][1]["repo"] == ""

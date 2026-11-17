@@ -28,6 +28,7 @@ from app import (
     dashboard_cors,
     dashboard_schemas,
     dashboard_ui,
+    namespace_exempt,
     oidc_login,
     role_registry,
 )
@@ -173,10 +174,16 @@ _identity = build_identity_provider(get_or_create_api_key)
 app.middleware("http")(plan_view_gate)
 #: The only surfaces carrying tenant data; everything else answers pre-tenant.
 TENANT_DATA_PATHS = ("/api/", "/mcp/")
+#: Authenticated extension paths served without a bound namespace
+#: (PIPELINE_TENANT_DATA_EXEMPT_PATHS). Read once here: a malformed value raises at import,
+#: so the app refuses to start rather than run with a half-read list.
+_EXEMPT_PATHS = namespace_exempt.load_exempt_paths(os.environ)
 
 
 def _serves_tenant_data(path: str) -> bool:
     """True for the API and MCP surfaces: the only responses that carry tenant data."""
+    if namespace_exempt.is_exempt(path, _EXEMPT_PATHS):
+        return False
     return path in {"/api", "/mcp"} or path.startswith(TENANT_DATA_PATHS)
 
 

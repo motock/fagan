@@ -42,6 +42,7 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_namespace,
     bind_principal,
+    current_namespace,
     new_correlation_id,
 )
 from pipeline.namespace_guard import audit_refusal, read_plan_namespace
@@ -158,6 +159,11 @@ def start_review_job(plan_name: str, story_key: str, state_root: Path) -> dict:
                 plan_name,
                 story_key,
                 str(result_path),
+                # The tick that spawns this job is bound to the plan's
+                # namespace; without the argument the job reads the legacy
+                # default partition, finds no team plan and never returns a
+                # verdict. ``current_namespace()`` is "default" when unbound.
+                current_namespace(),
             ],
             # Never a story worktree: ``-m`` would put that branch's unreviewed
             # ``pipeline`` package first on the child's sys.path.

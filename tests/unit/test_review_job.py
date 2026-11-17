@@ -17,6 +17,7 @@ guarantees that make that safe:
 
 from __future__ import annotations
 
+import inspect
 import json
 import signal
 import subprocess
@@ -34,6 +35,8 @@ import pipeline
 from pipeline import server
 import pipeline.review_job as rj
 # isort: on
+
+from pipeline.actor import bind_namespace
 
 SOURCE_ROOT = Path(pipeline.__file__).resolve().parent.parent
 ENV_VAR = "PIPELINE_REVIEW_DETACHED"
@@ -166,7 +169,7 @@ def test_start_spawns_from_the_control_plane_source_root(tmp_path, monkeypatch):
     argv = calls["argv"]
     assert argv[:3] == [sys.executable, "-m", "pipeline.review_job"]
     assert argv[3:6] == ["P", "S-1", job["result_path"]]
-    assert len(argv) == 6
+    assert len(argv) == 7
 
 
 def test_start_returns_the_handle_fields(tmp_path, monkeypatch):
@@ -214,6 +217,109 @@ def test_start_appends_child_output_to_the_job_log(tmp_path, monkeypatch):
     # a crash's traceback lands in job.log for the caller's ``log_tail``.
     assert Path(calls["kwargs"]["stdout"].name) == log_path
     assert calls["kwargs"]["stdout"] is calls["kwargs"]["stderr"]
+
+
+# ---------------------------------------------------------------------------
+# start_review_job: the spawned job is told which namespace to read
+#
+# The detached job reads the plan through ``read_plan_namespace(plan, requested)``.
+# Without a requested namespace it falls back to the legacy default-partition
+# read, so a plan living in a team namespace is never found and the job dies
+# with an error instead of a verdict.  The spawning tick is bound to the
+# plan's namespace, so the spawner has to hand that namespace to the child.
+# ---------------------------------------------------------------------------
+
+
+def test_start_passes_the_bound_namespace_to_the_job(tmp_path, monkeypatch):
+    calls = _fake_popen(monkeypatch)
+
+    with bind_namespace("a/b"):
+        rj.start_review_job("P", "S-1", tmp_path / "state")
+
+    assert calls["argv"][-1] == "a/b"
+
+
+def test_start_passes_the_default_namespace_when_unbound(tmp_path, monkeypatch):
+    calls = _fake_popen(monkeypatch)
+
+    rj.start_review_job("P", "S-1", tmp_path / "state")
+
+    # Unbound, ``current_namespace()`` is the legacy default partition.
+    assert calls["argv"][-1] == "default"
+
+
+def test_start_keeps_the_jobs_positional_contract(tmp_path, monkeypatch):
+    calls = _fake_popen(monkeypatch)
+
+    job = rj.start_review_job("P", "S-1", tmp_path / "state")
+
+    argv = calls["argv"]
+    # The module prefix and the three positional arguments keep their places;
+    # the namespace is appended after the result path.
+    assert argv[:5] == [sys.executable, "-m", "pipeline.review_job", "P", "S-1"]
+    assert argv[5] == job["result_path"]
+    assert len(argv) == 7
+    assert argv[6] == argv[-1]
+    # The namespace is always a usable, non-empty argument for the child.
+    assert isinstance(argv[-1], str)
+    assert argv[-1].strip() != ""
+
+
+def test_start_reads_the_namespace_at_spawn_time(tmp_path, monkeypatch):
+    """The namespace is read per call, not captured when the module is imported."""
+    spawned: list[list[str]] = []
+
+    def _popen(argv, **kwargs):
+        spawned.append(argv)
+        return _Proc()
+
+    monkeypatch.setattr(rj.subprocess, "Popen", _popen)
+
+    rj.start_review_job("P", "S-1", tmp_path / "state")
+    with bind_namespace("team/one"):
+        rj.start_review_job("P", "S-2", tmp_path / "state")
+    rj.start_review_job("P", "S-3", tmp_path / "state")
+
+    assert [argv[-1] for argv in spawned] == ["default", "team/one", "default"]
+
+
+def test_start_signature_is_unchanged():
+    """``start_review_job`` keeps its three parameters: callers stay intact."""
+    parameters = inspect.signature(rj.start_review_job).parameters
+
+    assert list(parameters) == ["plan_name", "story_key", "state_root"]
+    for parameter in parameters.values():
+        assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        assert parameter.default is inspect.Parameter.empty
+
+
+def test_start_refuses_a_namespace_argument():
+    """The namespace is not a parameter: it is read from the binding."""
+    with pytest.raises(TypeError):
+        rj.start_review_job("P", "S-1", Path("/tmp/state"), "a/b")  # type: ignore[call-arg]
+
+
+def test_review_job_module_uses_the_actors_current_namespace():
+    """The namespace comes from ``pipeline.actor``, so every caller agrees."""
+    import pipeline.actor
+
+    assert rj.current_namespace is pipeline.actor.current_namespace
+
+
+def test_start_spawns_an_argv_the_job_accepts(tmp_path, monkeypatch):
+    """The spawned argv is one the job's own argument contract accepts."""
+    calls = _fake_popen(monkeypatch)
+
+    with bind_namespace("a/b"):
+        rj.start_review_job("P", "S-1", tmp_path / "state")
+
+    # ``main`` takes ``<plan> <story_key> <result_path> [namespace]``: the four
+    # positionals the spawner passes must be exactly that many, or the job
+    # exits 2 (bad invocation) without writing a verdict.
+    positionals = calls["argv"][3:]
+    assert len(positionals) == 4
+    assert positionals[:3] == ["P", "S-1", calls["argv"][5]]
+    assert positionals[3] == "a/b"
 
 
 # ---------------------------------------------------------------------------

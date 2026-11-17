@@ -154,6 +154,13 @@ def test_an_empty_layer_set_keeps_the_environment_triage_mode(monkeypatch):
     assert triage._triage_mode(MANIFEST) == "execute"
 
 
+def test_a_team_layer_may_not_loosen_the_environment_triage_mode(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "shadow")
+    _pin_layers(monkeypatch, {"team": {TRIAGE_MODE: "execute"}})
+
+    assert triage._triage_mode(MANIFEST) == "shadow"
+
+
 def test_an_unreadable_store_falls_back_to_the_restrictive_triage_mode(
     monkeypatch, caplog
 ):
@@ -197,7 +204,7 @@ def test_a_manifest_selects_the_plan_the_layers_are_read_for(monkeypatch):
     assert "t1" in supplied
 
 
-def test_a_manifest_without_a_team_reads_the_default_team(monkeypatch):
+def test_a_manifest_without_a_team_still_names_a_plan(monkeypatch):
     """A manifest that names no team still names a plan, so the Store is read."""
     monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
     calls = _pin_layers(monkeypatch, {"team": {TRIAGE_MODE: "shadow"}})
@@ -260,6 +267,20 @@ def test_the_executor_dry_runs_when_the_store_cannot_be_read(monkeypatch, execut
     result = triage._apply_ruling_for_mode(PLAN, KEY, _story(), _ruling(), MANIFEST)
 
     # Autonomy falls back to its most restrictive value: dry-run.
+    assert result == "dry-run"
+
+
+def test_the_executor_dry_runs_when_the_store_read_raises(monkeypatch, executor):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+    monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "full")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("store is down")
+
+    monkeypatch.setattr(autonomy_settings, "read_layers", _boom)
+
+    result = triage._apply_ruling_for_mode(PLAN, KEY, _story(), _ruling(), MANIFEST)
+
     assert result == "dry-run"
 
 

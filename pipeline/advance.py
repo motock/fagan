@@ -25,6 +25,8 @@ from .advance_merge import (
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
 from .advance_review import review_or_collect
+from .autonomy_settings import effective_autonomy
+from .ci import context_from_manifest
 from .concurrency import (
     PlanLockReacquireTimeout,
     _has_live_test_author_phase,
@@ -365,7 +367,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     # like `== "dry-run"` work via its __eq__), but the raw proxy object is
     # not JSON-serializable, so anything embedded in the returned dict must
     # use the resolved plain string instead.
-    autonomy = PIPELINE_AUTONOMY._value()
+    autonomy = effective_autonomy(PIPELINE_AUTONOMY._value(), context_from_manifest(manifest))
 
     if autonomy == "dry-run":
         return {

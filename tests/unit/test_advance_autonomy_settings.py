@@ -206,6 +206,9 @@ def test_a_plan_named_by_its_repo_root_is_not_forced_into_dry_run(
     filesystem path rather than a ``host/org/name`` identity. Reading the
     settings for such a plan must not fail and leave the tick stuck in the
     restrictive dry-run mode: the environment value stands.
+
+    The layers are read for real here (nothing is pinned), because the point
+    is that the shape of the plan's own repo identity must not break the read.
     """
     env_autonomy("gated")
     _write_manifest(plan_dir, "localcheckout", {})

@@ -530,29 +530,38 @@ def _merge_decision(
     (fail closed to the hold). ``plan_name`` is the plan the story belongs to;
     production callers (``_adjudicate_merges``) always pass it so the ruling is
     recorded in the plan's own decisions log and the plan's role_config
-    override applies.
+    override applies. With ``plan_name`` the autonomy and auto_merge values
+    come from the plan's settings (pipeline.autonomy_settings); without it,
+    from the environment as before.
     """
+    from .autonomy_settings import effective_auto_merge, effective_autonomy
     from .config import PIPELINE_AUTO_MERGE
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
+    context = settings_for_plan(plan_name) if plan_name else None
+    autonomy = effective_autonomy(PIPELINE_AUTONOMY, context)
+    auto_merge = effective_auto_merge(PIPELINE_AUTO_MERGE, context)
+
     if story.get("review_verdict") != "APPROVE":
         return {"action": "park", "reason": "not approved"}
-    if PIPELINE_AUTONOMY == "dry-run":
+    if autonomy == "dry-run":
         return {"action": "park", "reason": "dry-run"}
-    if not PIPELINE_AUTO_MERGE:
-        return {
-            "action": "park",
-            "reason": "auto-merge disabled (PIPELINE_AUTO_MERGE=0)",
-        }
+    if not auto_merge:
+        reason = (
+            "auto-merge disabled (PIPELINE_AUTO_MERGE=0)"
+            if not PIPELINE_AUTO_MERGE
+            else "auto-merge disabled (auto_merge=off)"
+        )
+        return {"action": "park", "reason": reason}
 
     risk_rank = _RISK_ORDER.get(
         (story.get("risk") or "low").lower(), _RISK_ORDER["high"]
     )
     if risk_rank >= _RISK_ORDER["high"]:
-        if PIPELINE_AUTONOMY == "full":
+        if autonomy == "full":
             return _adjudicate_high_risk_merge(story, plan_name)
         return {"action": "park", "reason": "high risk held for human review"}
-    if PIPELINE_AUTONOMY == "full":
+    if autonomy == "full":
         return {"action": "merge", "reason": "autonomy=full"}
 
     threshold = _RISK_ORDER.get(PIPELINE_RISK_THRESHOLD, _RISK_ORDER["low"])

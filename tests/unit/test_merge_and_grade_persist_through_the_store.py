@@ -1,7 +1,8 @@
 """Merge outcomes and detached-grade transitions are persisted through the store.
 
 ``pipeline/merge.py``'s two manifest writes inside ``_approve_merge_impl``'s
-``_store.transaction`` (the CI-gate result and the final "done" write) and
+plan-flock scope (``with _plan_lock(plan_name) as acquired:`` — the CI-gate
+result and the final "done" write) and
 ``pipeline/detached_grade.py``'s two state transitions (grade started, grade
 result collected) used to call ``_atomic_write_json(manifest_path, manifest)``
 directly. They now go through

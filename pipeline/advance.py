@@ -930,11 +930,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     # ok:False - a concurrent re-ingest dropped the story
                     # during the released window (review_story returns
                     # {"ok": False, "error": ...}, no "status" key).
-                    # skipped - review_story's own _store.transaction could
-                    # not take the plan lock during the window this loop
-                    # deliberately opened (the {"ok": True, "skipped":
-                    # "locked"} shape, also no "status" key), so no review
-                    # ran. Either way there is no status to report and
+                    # skipped - review_story's own plan-flock guard
+                    # (_plan_lock) could not take the plan lock during the
+                    # window this loop deliberately opened (the {"ok": True,
+                    # "skipped": "locked"} shape, also no "status" key), so no
+                    # review ran. Either way there is no status to report and
                     # rv["status"] would KeyError the whole tick; record the
                     # skip and let a later tick retry - the story is still
                     # tests_passed on disk. Same handling LOCKSTARVE-B3

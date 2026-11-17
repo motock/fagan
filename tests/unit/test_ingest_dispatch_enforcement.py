@@ -136,13 +136,14 @@ def _locked_flock():
 
 
 class _LockedStore:
-    """A store whose plan transaction is always held by someone else.
+    """A store whose plan flock is always held by someone else.
 
     Dispatch's first act after the authorization check is to enter the plan
-    transaction; when the lock yields False it returns ``{"ok": True,
-    "skipped": "locked"}`` before any worktree, git or agent work. That makes
-    it a side-effect-free probe of "the gate let the call through" -- exactly
-    the behaviour the pre-check path had when the lock was contended.
+    flock (``_plan_lock``); when the lock yields False it returns
+    ``{"ok": True, "skipped": "locked"}`` before any worktree, git or agent
+    work. That makes it a side-effect-free probe of "the gate let the call
+    through" -- exactly the behaviour the pre-check path had when the lock was
+    contended.
     """
 
     def audit_log(self):

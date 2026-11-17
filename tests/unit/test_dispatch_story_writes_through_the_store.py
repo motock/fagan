@@ -1,7 +1,7 @@
 """dispatch_story's own manifest writes persist through the record store.
 
-``pipeline/dispatch.py``'s ``_dispatch_story_impl`` opens the plan transaction
-itself (``with _store.transaction(plan_name) as acquired:``) and mutates the
+``pipeline/dispatch.py``'s ``_dispatch_story_impl`` takes the plan flock
+itself (``with _plan_lock(plan_name) as acquired:``) and mutates the
 manifest it read inside that scope at four points:
 
 * the initial claim / brief write (branch + correlation ID) before any
@@ -18,7 +18,7 @@ writes the file projection behind the store's back (and, under
 ``PIPELINE_STORE=sqlite``, bypasses the database row entirely).
 
 The recording store below wraps the real ``FileStore`` so every test drives
-the real dispatch path (real transaction, real key validation) and simply
+the real dispatch path (real plan flock, real key validation) and simply
 observes what the store was asked to persist.
 """
 
@@ -176,7 +176,7 @@ class _RecordingStore:
     """``FileStore`` stand-in that observes manifest writes.
 
     Everything but ``records()`` delegates to the real store, so the dispatch
-    path exercises the real transaction, the real manifest read and the real
+    path exercises the real store, the real manifest read and the real
     on-disk write.
     """
 

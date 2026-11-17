@@ -10,7 +10,8 @@ path that is merely a prefix-neighbour of a listed path (or any other
 resolver reaches no namespace.
 
 A malformed exempt list is refused at import: the app must not start with a
-half-read list, so ``import app.dashboard`` fails loudly.
+half-read list, so ``import app.dashboard`` fails loudly. A blank or unset
+list exempts nothing and starts the app.
 """
 
 from __future__ import annotations
@@ -104,10 +105,34 @@ def _api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     return auth.get_or_create_api_key()
 
 
+def _no_namespace_resolver(monkeypatch, tmp_path):
+    """Install a resolver that reaches no namespace."""
+    _install_resolver_plugin(tmp_path, monkeypatch, _stub_resolver_source("return ()"))
+
+
 def _exempt_resolver(monkeypatch, tmp_path):
     """Install a resolver that reaches no namespace and list one exempt path."""
-    _install_resolver_plugin(tmp_path, monkeypatch, _stub_resolver_source("return ()"))
+    _no_namespace_resolver(monkeypatch, tmp_path)
     monkeypatch.setattr(d, "_EXEMPT_PATHS", ("/api/ext/probe",))
+
+
+def _import_dashboard(exempt_value):
+    """Import the dashboard in a fresh process with the exempt list set.
+
+    Returns the completed process: the list is read at import, so a malformed
+    one can only be refused by refusing to start.
+    """
+    env = dict(os.environ)
+    env[EXEMPT_ENV] = exempt_value
+    return subprocess.run(
+        [sys.executable, "-c", "import app.dashboard"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
 
 
 def test_exempt_path_is_served_without_a_bound_namespace(
@@ -124,6 +149,7 @@ def test_exempt_path_is_served_without_a_bound_namespace(
     response = client.get("/api/ext/probe", headers={"x-pipeline-api-key": key})
 
     assert response.status_code == 404
+    assert response.json().get("detail") != NAMESPACE_ERROR
 
 
 def test_exempt_path_below_the_listed_path_is_served_too(
@@ -136,6 +162,7 @@ def test_exempt_path_below_the_listed_path_is_served_too(
     response = client.get("/api/ext/probe/me", headers={"x-pipeline-api-key": key})
 
     assert response.status_code == 404
+    assert response.json().get("detail") != NAMESPACE_ERROR
 
 
 def test_exempt_path_still_requires_the_credential(
@@ -181,7 +208,7 @@ def test_no_exempt_paths_means_no_exemption(
     client, plan_dir, monkeypatch, tmp_path
 ):
     """With nothing listed, the path is bound like any other ``/api/`` path."""
-    _install_resolver_plugin(tmp_path, monkeypatch, _stub_resolver_source("return ()"))
+    _no_namespace_resolver(monkeypatch, tmp_path)
     monkeypatch.setattr(d, "_EXEMPT_PATHS", ())
     key = _api_key(tmp_path, monkeypatch)
 
@@ -205,38 +232,23 @@ def test_the_tenant_data_surfaces_are_unchanged():
     assert "/mcp/" in d.TENANT_DATA_PATHS
 
 
-def test_a_malformed_exempt_list_refuses_the_import(tmp_path):
+def test_a_malformed_exempt_list_refuses_the_import():
     """A listed path that is not an extension path stops the app at import."""
-    env = dict(os.environ)
-    env[EXEMPT_ENV] = "/api/plans"
-
-    result = subprocess.run(
-        [sys.executable, "-c", "import app.dashboard"],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    result = _import_dashboard("/api/plans")
 
     assert result.returncode != 0
     assert EXEMPT_ENV in result.stderr
 
 
-def test_a_valid_exempt_list_lets_the_app_start(tmp_path):
+def test_a_valid_exempt_list_lets_the_app_start():
     """The positive control: a listed extension path starts the app."""
-    env = dict(os.environ)
-    env[EXEMPT_ENV] = "/api/ext/probe"
+    result = _import_dashboard("/api/ext/probe")
 
-    result = subprocess.run(
-        [sys.executable, "-c", "import app.dashboard"],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_blank_exempt_list_lets_the_app_start():
+    """A blank list exempts nothing and must not stop the app."""
+    result = _import_dashboard("")
 
     assert result.returncode == 0, result.stderr

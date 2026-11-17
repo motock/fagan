@@ -26,6 +26,7 @@ from app import (
     auth,
     chat,
     dashboard_cors,
+    dashboard_helpers,
     dashboard_schemas,
     dashboard_ui,
     oidc_login,
@@ -41,8 +42,10 @@ from app.dashboard_helpers import (  # noqa: F401 (names re-exported; moved rout
     _consolidate_stories_by_key,
     _parse_progress,
     _plan_summary,
+    _read_archived_plans,
     _store,
     _story_last_activity,
+    plan_list,
 )
 from app.dashboard_models import (
     DecisionRequest,
@@ -103,6 +106,7 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_principal,
     current_correlation_id,
+    current_namespace,  # noqa: F401 (re-exported; moved routes read it)
     request_correlation_id,
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401
@@ -301,17 +305,6 @@ def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRe
     return result
 
 
-def _read_archived_plans() -> set[str]:
-    """Which plan names the user has archived/dismissed from the sidebar.
-
-    Read through the host state (ADR 0012 open question 3: the preference file
-    is host-local, not per-plan) and fail open -- a missing or corrupt file
-    reads as "nothing archived" rather than 500ing the plan list over a
-    non-critical preference file, the same tolerance _parse_iso applies to
-    malformed timestamps in this module."""
-    return set(_host_state.get_dashboard_ui_state().get("archived", []))
-
-
 def _write_archived_plans(archived: set[str]) -> None:
     """Persist the archived-plan set atomically through the host state."""
     _host_state.put_dashboard_ui_state({"archived": sorted(archived)})
@@ -450,46 +443,19 @@ def usage() -> dict[str, Any]:
     return {"available": True, **state, "backends": backends}
 
 
-def _normalize_repo_path(value: str) -> str:
-    """Shared repo-path normalization for the ``repo`` filter.
-
-    Applied identically to the query param and to each candidate plan's
-    ``repo_root`` so ``~``-prefixed and trailing-slash variants still match.
-    """
-    return os.path.realpath(os.path.expanduser(value))
-
-
 @app.get("/api/plans")
 def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[str, Any]:
-    """List plan summaries, newest first.
+    """List plan summaries across every namespace the caller's view scope allows.
 
-    ``repo`` is an optional filter: absent, empty (``repo=``), or ``all``
-    returns ALL plans exactly as before. Any other value returns only plans
-    whose manifest ``repo_root`` matches, after applying ``os.path.expanduser``
-    + ``os.path.realpath`` normalization to BOTH the param and each candidate
-    (so ``~/repo`` and trailing-slash variants still match). A ``repo`` value
-    matching no plans yields HTTP 200 with an empty ``plans`` list. Composes
-    with ``include_archived`` (AND).
+    A scoped view (a team, an organization's teams, an active break-glass grant)
+    is a roll-up: each plan is read from, and labelled with, its own namespace.
+    ``repo`` filters on the manifest's ``repo_root`` exactly as before, after
+    ``os.path.expanduser`` + ``os.path.realpath`` normalization on both sides; an
+    unavailable namespace degrades that namespace only (``degraded`` in the
+    response). The body lives in :mod:`app.dashboard_helpers` to keep this module
+    under its line budget.
     """
-    archived_plans = _read_archived_plans()
-    filter_repo = _normalize_repo_path(repo) if repo and repo != "all" else None
-    plans = []
-    for name in _store.list_manifests():
-        manifest = _service.get_manifest_or_none(name)
-        if manifest is None:
-            continue
-        if not include_archived and name in archived_plans:
-            continue
-        if filter_repo:
-            candidate_root = (manifest or {}).get("repo_root")
-            if not candidate_root or _normalize_repo_path(candidate_root) != filter_repo:
-                continue
-        plans.append(_plan_summary(name, manifest, archived_plans, include_notification_summary=True))
-    # Newest-first: most-recently-touched plan surfaces at the top of the
-    # sidebar regardless of name, so active work is never buried below
-    # long-finished plans just because they alphabetize earlier.
-    plans.sort(key=lambda p: p["updated_at"], reverse=True)
-    return {"plans": plans}
+    return plan_list(include_archived, repo)
 
 
 @app.get("/api/ingestable-plans")
@@ -507,7 +473,7 @@ def archive_plan(plan_name: str) -> dict[str, Any]:
     reversible and carries no orchestration risk."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    archived = _read_archived_plans()
+    archived = dashboard_helpers._read_archived_plans()
     archived.add(plan_name)
     _write_archived_plans(archived)
     return {"name": plan_name, "archived": True}
@@ -518,7 +484,7 @@ def unarchive_plan(plan_name: str) -> dict[str, Any]:
     """Restore a previously-archived plan to the default sidebar view."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    archived = _read_archived_plans()
+    archived = dashboard_helpers._read_archived_plans()
     archived.discard(plan_name)
     _write_archived_plans(archived)
     return {"name": plan_name, "archived": False}

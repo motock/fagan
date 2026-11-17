@@ -40,6 +40,21 @@ def _on_is_tighter(a: bool, b: bool) -> bool:
     return a or b
 
 
+_AUTONOMY_LEVELS = ("dry-run", "gated", "full")  # tightest first
+
+
+def _lower_autonomy_is_tighter(a: str, b: str) -> str:
+    return a if _AUTONOMY_LEVELS.index(a) <= _AUTONOMY_LEVELS.index(b) else b
+
+
+def _off_is_tighter(a: bool, b: bool) -> bool:
+    return a and b
+
+
+def _shadow_is_tighter(a: str, b: str) -> str:
+    return "shadow" if "shadow" in (a, b) else "execute"
+
+
 def _lower_is_tighter(a: int, b: int) -> int:
     return min(a, b)
 
@@ -222,6 +237,35 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=LAYERS[1:],
             # A new key has no retired environment name to refuse.
             legacy_env="",
+        ),
+        SettingKey(
+            name="autonomy",
+            type="enum",
+            kind="ceiling",
+            safe_value="gated",
+            allowed_layers=_ALL_LAYERS,
+            legacy_env="",
+            tighter=_lower_autonomy_is_tighter,
+            choices=_AUTONOMY_LEVELS,
+        ),
+        SettingKey(
+            name="auto_merge",
+            type="bool",
+            kind="ceiling",
+            safe_value=True,
+            allowed_layers=_ALL_LAYERS,
+            legacy_env="",
+            tighter=_off_is_tighter,
+        ),
+        SettingKey(
+            name="triage_mode",
+            type="enum",
+            kind="ceiling",
+            safe_value="shadow",
+            allowed_layers=_ALL_LAYERS,
+            legacy_env="",
+            tighter=_shadow_is_tighter,
+            choices=("shadow", "execute"),
         ),
     )
 }

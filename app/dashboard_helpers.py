@@ -2,21 +2,35 @@
 
 Pulled out of dashboard.py (which re-imports and re-exports every name
 here) purely to shrink that file. None of these read module-level
-config (PLAN_DIR/USAGE_STATE_PATH) directly — the two that touch
-persisted state (`_plan_summary`, `_story_last_activity`) do so only via
-`pipeline.server._store`, whose own behavior is controlled by
-`pipeline.server.PLAN_DIR`/`WORKTREE_ROOT` (patched directly by tests),
-so importing `_store` here rather than proxying through the dashboard
-module is safe.
+config (PLAN_DIR/USAGE_STATE_PATH) directly, and they touch persisted
+state through exactly two seams, both imported from `pipeline.server`
+rather than proxied through the dashboard module:
+
+- `_store`, the namespaced record store (ADR 0012), used by
+  `_plan_summary`, `_story_last_activity` and `plan_list`. Its behavior is
+  controlled by `pipeline.server.PLAN_DIR`/`WORKTREE_ROOT` (patched
+  directly by tests).
+- `_host_state`, the host-local file seam (ADR 0012: the file layout is
+  one implementation of the store contract, and host-local records live
+  in their own files rather than as store records), used by
+  `_read_archived_plans` for the dashboard's UI preferences. It is not
+  governed by `WORKTREE_ROOT`, and its `FileHostState.root()` resolves
+  the live `pipeline.server.PLAN_DIR` binding on every access unless the
+  host state was built with an explicit root, so tests that pin the
+  store's record store do not pin this seam. It reads fail-open (a
+  missing, unreadable or wrong-shaped file reads as empty), which is why
+  the archived set is never a reason to fail a request.
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from typing import Any
 
-from pipeline.actor import current_namespace
-from pipeline.server import _store
+from pipeline import view_scope as pipeline_view_scope
+from pipeline.actor import current_namespace, current_principal
+from pipeline.server import _host_state, _store
 
 # Default line cap when the modal fetches the log tail. Capped at
 # _LOG_TAIL_CAP so an accidental giant log file never gets slurped into
@@ -226,19 +240,35 @@ def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict 
     return None
 
 
+def _read_archived_plans() -> set[str]:
+    """Which plan names the user has archived/dismissed from the sidebar (fail-open)."""
+    return set(_host_state.get_dashboard_ui_state().get("archived", []))
+
+
 def _plan_summary(
     plan_name: str, manifest: dict[str, Any], archived_plans: set[str] | None = None,
-    *, include_notification_summary: bool = False,
+    *, include_notification_summary: bool = False, namespace: str | None = None,
 ) -> dict[str, Any]:
+    """One plan's summary row.
+
+    ``namespace`` selects the partition a roll-up read the plan from; ``None``
+    keeps the request's own namespace and the pre-roll-up response shape (no
+    ``namespace`` key).
+    """
+    partition = namespace or current_namespace()
     stories = manifest.get("stories", {})
-    updated_at = _store.records().get_manifest_updated_at(current_namespace(), plan_name)
+    updated_at = _store.records().get_manifest_updated_at(partition, plan_name)
     # A manifest that vanished under a race with a concurrent write has no
     # timestamp - sort it last rather than 500ing the whole list over one
     # plan's timestamp.
     if updated_at is None:
         updated_at = 0.0
     latest_notification = None
-    if include_notification_summary:
+    # A roll-up must not read another partition's notifications through the
+    # facade, so a foreign namespace gets no notification line at all - the same
+    # shape as a caller that did not ask for one.
+    include_notification = include_notification_summary and partition == current_namespace()
+    if include_notification:
         records = _collapse_duplicate_notifications(_store.get_notification_records(plan_name, limit=5))
         latest_notification = records[-1] if records else None
     summary = {
@@ -251,7 +281,8 @@ def _plan_summary(
         "archived": plan_name in (archived_plans or set()),
         # Plan-level repository path from the manifest; null when absent.
         "repo_root": (manifest or {}).get("repo_root"),
-        **({"latest_notification": latest_notification} if include_notification_summary else {}),
+        **({"namespace": namespace} if namespace is not None else {}),
+        **({"latest_notification": latest_notification} if include_notification else {}),
     }
     # Plan-approval state (ENT-LC-05). Surfaced only when the manifest carries
     # an approval record, so the default-off response stays byte-identical to
@@ -365,3 +396,82 @@ def _acceptance_slice(stories: dict[str, Any]) -> dict[str, Any]:
 
     return {"with_acceptance": _rates(with_acc),
             "without_acceptance": _rates(without_acc)}
+
+
+#: How many namespaces one plan-list roll-up may read. A view that allows more is
+#: capped and reports ``degraded: ["namespace_cap"]`` rather than fanning out unbounded.
+PLAN_LIST_NAMESPACE_CAP_DEFAULT = 20
+PLAN_LIST_NAMESPACE_CAP_ENV = "PIPELINE_PLAN_LIST_NAMESPACE_CAP"
+
+
+def _plan_list_namespace_cap() -> int:
+    raw = os.environ.get(PLAN_LIST_NAMESPACE_CAP_ENV, "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return PLAN_LIST_NAMESPACE_CAP_DEFAULT
+    return value if value > 0 else PLAN_LIST_NAMESPACE_CAP_DEFAULT
+
+
+def _normalize_repo_path(value: str) -> str:
+    """Repo-path normalization for the ``repo`` filter: applied to the param and each candidate."""
+    return os.path.realpath(os.path.expanduser(value))
+
+
+def plan_list(include_archived: bool, repo: str | None) -> dict[str, Any]:
+    """List plan summaries, newest first, across the caller's visible namespaces.
+
+    A scoped view is a roll-up: every namespace the view scope allows is read, each
+    plan labelled with its namespace. With no scoped view (``ALL``) the request's own
+    namespace is read exactly as before. A namespace that cannot be read degrades that
+    namespace only, and a view larger than the cap is truncated; both are reported in
+    ``degraded``. The ``repo`` filter matches the manifest's ``repo_root`` after
+    ``expanduser`` + ``realpath`` on both sides.
+    """
+    archived_plans = _read_archived_plans()
+    filter_repo = _normalize_repo_path(repo) if repo and repo != "all" else None
+    plans = []
+    degraded = []
+    visible = pipeline_view_scope.checked_visible(
+        pipeline_view_scope.active_view_scope(), current_principal()
+    )
+    if visible is pipeline_view_scope.ALL:
+        namespaces = [current_namespace()]
+        labelled = None
+    else:
+        namespaces = sorted(visible)
+        cap = _plan_list_namespace_cap()
+        if len(namespaces) > cap:
+            namespaces = namespaces[:cap]
+            degraded.append("namespace_cap")
+        labelled = len(namespaces) > 1 or namespaces[0] != current_namespace()
+    records = _store.records()
+    for namespace in namespaces:
+        try:
+            names = records.list_plans(namespace)
+        except Exception:  # noqa: BLE001 - one unreadable namespace degrades only itself
+            degraded.append("namespace_unavailable")
+            continue
+        for name in names:
+            manifest = records.get_manifest(namespace, name)
+            if manifest is None:
+                continue
+            if not include_archived and name in archived_plans:
+                continue
+            if filter_repo:
+                candidate_root = (manifest or {}).get("repo_root")
+                if not candidate_root or _normalize_repo_path(candidate_root) != filter_repo:
+                    continue
+            plans.append(
+                _plan_summary(
+                    name, manifest, archived_plans,
+                    include_notification_summary=True,
+                    namespace=namespace if labelled else None,
+                )
+            )
+    # Newest-first, so active work is never buried under long-finished plans.
+    plans.sort(key=lambda p: p["updated_at"], reverse=True)
+    result: dict[str, Any] = {"plans": plans}
+    if degraded:
+        result["degraded"] = degraded
+    return result

@@ -1475,7 +1475,7 @@
   },
   "/api/plans": {
    "get": {
-    "description": "List plan summaries, newest first.\n\n``repo`` is an optional filter: absent, empty (``repo=``), or ``all``\nreturns ALL plans exactly as before. Any other value returns only plans\nwhose manifest ``repo_root`` matches, after applying ``os.path.expanduser``\n+ ``os.path.realpath`` normalization to BOTH the param and each candidate\n(so ``~/repo`` and trailing-slash variants still match). A ``repo`` value\nmatching no plans yields HTTP 200 with an empty ``plans`` list. Composes\nwith ``include_archived`` (AND).",
+    "description": "List plan summaries across every namespace the caller's view scope allows.\n\nA scoped view (a team, an organization's teams, an active break-glass grant)\nis a roll-up: each plan is read from, and labelled with, its own namespace.\n``repo`` filters on the manifest's ``repo_root`` exactly as before, after\n``os.path.expanduser`` + ``os.path.realpath`` normalization on both sides; an\nunavailable namespace degrades that namespace only (``degraded`` in the\nresponse). The body lives in :mod:`app.dashboard_helpers` to keep this module\nunder its line budget.",
     "operationId": "list_plans_api_plans_get",
     "parameters": [
      {

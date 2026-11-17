@@ -2,12 +2,24 @@
 
 Pulled out of dashboard.py (which re-imports and re-exports every name
 here) purely to shrink that file. None of these read module-level
-config (PLAN_DIR/USAGE_STATE_PATH) directly — the two that touch
-persisted state (`_plan_summary`, `_story_last_activity`) do so only via
-`pipeline.server._store`, whose own behavior is controlled by
-`pipeline.server.PLAN_DIR`/`WORKTREE_ROOT` (patched directly by tests),
-so importing `_store` here rather than proxying through the dashboard
-module is safe.
+config (PLAN_DIR/USAGE_STATE_PATH) directly, and they touch persisted
+state through exactly two seams, both imported from `pipeline.server`
+rather than proxied through the dashboard module:
+
+- `_store`, the namespaced record store (ADR 0012), used by
+  `_plan_summary`, `_story_last_activity` and `plan_list`. Its behavior is
+  controlled by `pipeline.server.PLAN_DIR`/`WORKTREE_ROOT` (patched
+  directly by tests).
+- `_host_state`, the host-local file seam (ADR 0012: the file layout is
+  one implementation of the store contract, and host-local records live
+  in their own files rather than as store records), used by
+  `_read_archived_plans` for the dashboard's UI preferences. It is not
+  governed by `WORKTREE_ROOT`, and its `FileHostState.root()` resolves
+  the live `pipeline.server.PLAN_DIR` binding on every access unless the
+  host state was built with an explicit root, so tests that pin the
+  store's record store do not pin this seam. It reads fail-open (a
+  missing, unreadable or wrong-shaped file reads as empty), which is why
+  the archived set is never a reason to fail a request.
 """
 from __future__ import annotations
 

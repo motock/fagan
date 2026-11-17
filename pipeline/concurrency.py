@@ -308,8 +308,8 @@ def _plan_lock_once(plan_name: str):
             # successful hold report the failure's start time). A REAL flock
             # taken while this thread already has an entry for the plan (the
             # _released_plan_lock window case: advance_pipeline drops the
-            # flock around dispatch_story, which then re-flocks through
-            # _store.transaction -> _TransactionLock) must NOT overwrite the
+            # flock around dispatch_story, which then re-flocks directly via
+            # _plan_lock in _dispatch_story_impl) must NOT overwrite the
             # outer hold's start or its accumulated released_seconds — it only
             # raises the depth, so the outer release still owns the record.
             _start_plan_lock_hold(plan_name)
@@ -451,8 +451,8 @@ def _plan_lock_timings() -> dict[str, dict]:
     ``depth`` exists because a real flock can be re-taken for the same plan
     while this thread already holds the outer one: _released_plan_lock drops
     the flock around a slow phase, so a body that re-enters _plan_lock (e.g.
-    advance_pipeline -> dispatch_story -> _store.transaction ->
-    _TransactionLock) takes a genuine second flock instead of hitting the
+    advance_pipeline -> dispatch_story -> _plan_lock in _dispatch_story_impl)
+    takes a genuine second flock instead of hitting the
     reentrant fast path. That inner hold must not reset ``started`` or wipe
     ``released_seconds`` — otherwise the outer, genuinely long hold would be
     credited with only the inner span and then lose its entry entirely to the

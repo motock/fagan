@@ -196,7 +196,7 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
     ``story["rebase_attempts"]`` as ``{base_sha, ts}`` before the story changes,
     and the ``rebase_attempts`` log is what the attempt caps read.
     """
-    if _triage_mode() != "execute":
+    if _triage_mode(manifest) != "execute":
         return "shadow"
     park = classify_park(story, {})
     if not check_ruling_allowed(park, "resolve_rebase"):

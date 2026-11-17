@@ -261,9 +261,23 @@ def _record_execution(plan_name, story_key, action, result, mode,
         )
 
 
-def _triage_mode() -> str:
-    """``PIPELINE_TRIAGE_MODE``: ``execute`` runs the park-class actions; anything else is shadow."""
-    return "execute" if os.environ.get("PIPELINE_TRIAGE_MODE", "").strip().lower() == "execute" else "shadow"
+def _triage_mode(manifest: dict | None = None) -> str:
+    """``execute`` runs the park-class actions; anything else is shadow.
+
+    With a manifest, the plan's ``triage_mode`` setting applies over
+    ``PIPELINE_TRIAGE_MODE``.
+    """
+    legacy = (
+        "execute"
+        if os.environ.get("PIPELINE_TRIAGE_MODE", "").strip().lower() == "execute"
+        else "shadow"
+    )
+    if manifest is None:
+        return legacy
+    from .autonomy_settings import effective_triage_mode
+    from .ci import context_from_manifest
+
+    return effective_triage_mode(legacy, context_from_manifest(manifest))
 
 
 def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str:
@@ -279,17 +293,20 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str
     snapshotted before any mutation.
     """
     # Lazy import to avoid circular dependency
+    from .autonomy_settings import effective_autonomy
+    from .ci import context_from_manifest
     from .server import PIPELINE_AUTONOMY
 
     # Snapshot the prior state BEFORE any executor mutates the story dict.
     prior_status = story.get("status")
     prior_parked_reason = story.get("parked_reason")
     action = ruling.get("action", "unknown")
-    if action in NEW_ACTIONS and _triage_mode() == "shadow":
+    if action in NEW_ACTIONS and _triage_mode(manifest) == "shadow":
         _notify_user(plan_name, f"{story_key} triage shadow: {action} - {ruling.get('rationale', '')}")
         _record_execution(plan_name, story_key, action, "shadow", "shadow", prior_status, prior_parked_reason)
         return "shadow"
-    if PIPELINE_AUTONOMY == "dry-run":
+    autonomy = effective_autonomy(PIPELINE_AUTONOMY, context_from_manifest(manifest))
+    if autonomy == "dry-run":
         # Notify but do not act
         rationale = ruling.get("rationale", "")
         _notify_user(plan_name, f"{story_key} triage dry-run: {action} – {rationale}")

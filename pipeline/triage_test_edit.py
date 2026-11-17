@@ -97,7 +97,7 @@ def _notify(plan_name, story_key, story, message: str, event: str) -> None:
 
 def execute_approve_test_edit(plan_name, story_key, story, ruling, manifest) -> str:
     """Authorise edits to the named test files, or park the story for a human."""
-    if _triage_mode() != "execute":
+    if _triage_mode(manifest) != "execute":
         return "shadow"
     branch = story.get("branch")
     if not isinstance(branch, str) or not branch:

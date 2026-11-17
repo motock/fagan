@@ -40,24 +40,27 @@ from app import pipeline_mcp_server as p
 @pytest.fixture(autouse=True)
 def _restore_patched_seams():
     """install_merge_stubs permanently rebinds pipeline.server's _ci_status /
-    _open_pr / _merge_pr (and the compat shim's copies) to hermetic stubs and
+    _ci_status_once / _open_pr / _merge_pr (and the compat shim's copies) to
+    hermetic stubs, and pipeline.advance_merge's merge-readiness forge, and
     never restores them. Without restoration, running this module in the full
     suite leaves the stubs in place for the rest of the session, breaking
     unrelated tests that exercise the real seams (e.g. test_pipeline_mcp_server's
     test_ci_status_*). Snapshot the originals before each test and restore them
     after."""
+    import pipeline.advance_merge as _advance_merge
+
+    seam_names = ("_ci_status", "_ci_status_once", "_open_pr", "_merge_pr")
     originals = {
-        "p": {name: getattr(p, name) for name in ("_ci_status", "_open_pr", "_merge_pr")},
-        "server": {
-            name: getattr(_pserver, name)
-            for name in ("_ci_status", "_open_pr", "_merge_pr")
-        },
+        "p": {name: getattr(p, name) for name in seam_names},
+        "server": {name: getattr(_pserver, name) for name in seam_names},
     }
+    readiness_original = _advance_merge._merge_readiness_forge
     yield
     for name, orig in originals["p"].items():
         setattr(p, name, orig)
     for name, orig in originals["server"].items():
         setattr(_pserver, name, orig)
+    _advance_merge._merge_readiness_forge = readiness_original
 
 
 def _seed_worktree(root: Path, story_key: str, test_file_content: str) -> Path:
@@ -113,6 +116,43 @@ def test_ci_status_stub_catches_missing_method_like_the_rli3_incident(tmp_path, 
     assert result["state"] == "fail"
 
 
+def test_ci_status_once_stub_passes_when_worktree_tests_pass(tmp_path, monkeypatch):
+    """The merge gate resolves the non-polling sibling, not _ci_status.
+    Leaving it unpatched sent the query to the real GitHub forge, so every
+    bench cell's merge gate saw "unreadable" and stayed at pr_open."""
+    monkeypatch.setattr(p, "WORKTREE_ROOT", tmp_path)
+    _seed_worktree(tmp_path, "SOME-KEY", "def test_ok():\n    assert True\n")
+    harness.install_merge_stubs(p, tmp_path / "repo_unused")
+
+    result = p._ci_status_once("agent/some-key", sha="", settings=_context({}))
+
+    assert result["state"] == "pass"
+
+
+def test_ci_status_once_stub_fails_when_worktree_tests_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "WORKTREE_ROOT", tmp_path)
+    _seed_worktree(tmp_path, "SOME-KEY", "def test_fail():\n    assert False\n")
+    harness.install_merge_stubs(p, tmp_path / "repo_unused")
+
+    result = p._ci_status_once("agent/some-key", sha="", settings=_context({}))
+
+    assert result["state"] == "fail"
+    assert result["error"]
+
+
+def test_merge_readiness_stub_leaves_a_local_only_cell_ready(tmp_path):
+    """The merge gate polls the host for a computed mergeability before it
+    calls _merge_pr. A real forge resolves the cell's local bare origin to
+    GitHub, the query fails, and the gate treats that as "pending" - so every
+    tick waits out the full readiness budget and the story never merges. No
+    forge adapter is the documented "ready" path for a repo with no host."""
+    import pipeline.advance_merge as _advance_merge
+
+    harness.install_merge_stubs(p, tmp_path / "repo_unused")
+
+    assert _advance_merge._merge_readiness_forge() is None
+
+
 def test_stubs_actually_patch_pipeline_server_not_just_the_compat_shim(tmp_path):
     """Root-caused live 2026-07-25: pipeline_mcp_server (`p`) is a backward-
     compat shim that COPIES each name out of pipeline.server into its own
@@ -129,6 +169,7 @@ def test_stubs_actually_patch_pipeline_server_not_just_the_compat_shim(tmp_path)
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
     assert _pserver._ci_status is p._ci_status
+    assert _pserver._ci_status_once is p._ci_status_once
     assert _pserver._open_pr is p._open_pr
     assert _pserver._merge_pr is p._merge_pr
 

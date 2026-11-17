@@ -25,6 +25,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from pipeline import autonomy_settings
 from pipeline.autonomy_settings import (
     RESTRICTIVE,
     effective,
@@ -32,8 +33,6 @@ from pipeline.autonomy_settings import (
     effective_autonomy,
     effective_triage_mode,
 )
-
-from pipeline import autonomy_settings
 from pipeline.policy_settings import SETTINGS_ERROR_KEY
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

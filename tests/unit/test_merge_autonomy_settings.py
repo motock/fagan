@@ -73,12 +73,19 @@ def _pin_layers(monkeypatch, layers):
 
 
 def _forbid_layers(monkeypatch):
-    """Make any Store read fail: the gate must not read without a plan."""
+    """Make any Store read fail; return the list of attempted reads.
+
+    The settings resolution swallows read errors, so the recorded attempts are
+    what proves the Store was never consulted.
+    """
+    attempts: list[tuple] = []
 
     def _boom(*args, **kwargs):
+        attempts.append((args, kwargs))
         raise AssertionError("the Store must not be read without a plan")
 
     monkeypatch.setattr(autonomy_settings, "read_layers", _boom)
+    return attempts
 
 
 def _decision(story=None, plan_name="plan-x"):
@@ -120,6 +127,18 @@ def test_the_settings_are_read_for_the_plan_being_decided(monkeypatch):
 
     assert seen
     assert set(seen) == {"plan-42"}
+
+
+def test_the_settings_are_read_for_the_plan_scope(monkeypatch):
+    _pin_plan(monkeypatch, _context())
+    calls = _pin_layers(monkeypatch, {})
+
+    _decision()
+
+    assert calls
+    supplied = list(calls[0][0]) + list(calls[0][1].values())
+    for expected in ("default", "alpha", "acme/app"):
+        assert expected in supplied
 
 
 def test_a_deployment_layer_may_set_autonomy_above_the_environment(monkeypatch):
@@ -183,29 +202,32 @@ def test_an_unreadable_store_parks_with_the_restrictive_value(monkeypatch, caplo
 
 
 def test_without_a_plan_the_store_is_not_read(monkeypatch):
-    _forbid_layers(monkeypatch)
+    attempts = _forbid_layers(monkeypatch)
 
     assert _decision(plan_name=None) == {
         "action": "merge",
         "reason": "risk <= threshold low",
     }
+    assert attempts == []
 
 
 def test_without_a_plan_the_environment_dry_run_still_parks(monkeypatch):
     monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "dry-run")
-    _forbid_layers(monkeypatch)
+    attempts = _forbid_layers(monkeypatch)
 
     assert _decision(plan_name=None) == {"action": "park", "reason": "dry-run"}
+    assert attempts == []
 
 
 def test_without_a_plan_the_environment_auto_merge_off_still_parks(monkeypatch):
     monkeypatch.setattr(config_mod, "PIPELINE_AUTO_MERGE", False)
-    _forbid_layers(monkeypatch)
+    attempts = _forbid_layers(monkeypatch)
 
     assert _decision(plan_name=None) == {
         "action": "park",
         "reason": "auto-merge disabled (PIPELINE_AUTO_MERGE=0)",
     }
+    assert attempts == []
 
 
 # --- the environment flag off keeps its own reason -----------------------------

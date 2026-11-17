@@ -43,7 +43,7 @@ def test_deploy_doc_promises_no_browser_review_page() -> None:
 
 def test_changelog_unreleased_mentions_plan_approval() -> None:
     text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index("## [Unreleased]")
+    start = text.index("## [0.10.0]")
     end = text.find("## [", start + 1)
     section = text[start:end if end != -1 else len(text)]
     assert "plan_pending_approval" in section

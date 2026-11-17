@@ -183,7 +183,7 @@ def _unreleased_section(changelog: str) -> str:
     lines = changelog.splitlines()
     start = None
     for index, line in enumerate(lines):
-        if line.strip() == "## [Unreleased]":
+        if line.startswith("## [0.10.0]"):
             start = index + 1
             break
     if start is None:

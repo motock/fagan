@@ -8,6 +8,7 @@ deployment layer, so a lower layer may only tighten it.
 * No plan context: the environment value, exactly as before.
 * The Store layers cannot be read: the most restrictive value, with one warning
   that names the setting and never its value.
+* A plan whose repo is not a settings key (a local path): no repo layer is read; the team, deployment and environment values still apply.
 * Otherwise: the environment value fills the deployment layer when that layer
   does not set the key, then the registry resolves the key. An environment value
   the key does not accept is not injected, so a raw invalid value survives only
@@ -22,6 +23,7 @@ from pipeline.policy_settings import SETTINGS_ERROR_KEY
 from pipeline.settings_registry import REGISTRY
 from pipeline.settings_resolve import resolve
 from pipeline.settings_store import read_layers
+from pipeline.store_settings import is_settings_repo
 
 logger = logging.getLogger("pipeline.autonomy_settings")
 
@@ -52,7 +54,10 @@ def effective(key: str, legacy, context) -> object:
     if context is None:
         return legacy
     try:
-        layers = read_layers(context.namespace, team=context.team, repo=context.repo)
+        # A plan named only by a local path has no team_repo layer: no settings
+        # record can carry a path as its repo, so read the layers above it.
+        repo = context.repo if is_settings_repo(context.repo) else ""
+        layers = read_layers(context.namespace, team=context.team, repo=repo)
         if SETTINGS_ERROR_KEY in layers:
             _warn(key)
             return RESTRICTIVE[key]

@@ -44,7 +44,7 @@ def _environment_baseline(monkeypatch):
 
 def _context() -> SettingsContext:
     """A fixed plan context: one namespace, one team, one repo."""
-    return SettingsContext(namespace="default", team="alpha", repo="acme/app")
+    return SettingsContext(namespace="default", team="alpha", repo="github.com/acme/app")
 
 
 def _pin_plan(monkeypatch, context):
@@ -137,7 +137,7 @@ def test_the_settings_are_read_for_the_plan_scope(monkeypatch):
 
     assert calls
     supplied = list(calls[0][0]) + list(calls[0][1].values())
-    for expected in ("default", "alpha", "acme/app"):
+    for expected in ("default", "alpha", "github.com/acme/app"):
         assert expected in supplied
 
 

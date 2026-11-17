@@ -26,7 +26,6 @@ from app import (
     auth,
     chat,
     dashboard_cors,
-    dashboard_helpers,
     dashboard_schemas,
     dashboard_ui,
     oidc_login,
@@ -473,7 +472,7 @@ def archive_plan(plan_name: str) -> dict[str, Any]:
     reversible and carries no orchestration risk."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    archived = dashboard_helpers._read_archived_plans()
+    archived = _read_archived_plans()
     archived.add(plan_name)
     _write_archived_plans(archived)
     return {"name": plan_name, "archived": True}
@@ -484,7 +483,7 @@ def unarchive_plan(plan_name: str) -> dict[str, Any]:
     """Restore a previously-archived plan to the default sidebar view."""
     if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    archived = dashboard_helpers._read_archived_plans()
+    archived = _read_archived_plans()
     archived.discard(plan_name)
     _write_archived_plans(archived)
     return {"name": plan_name, "archived": False}

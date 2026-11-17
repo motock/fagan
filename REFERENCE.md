@@ -3871,8 +3871,18 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `rework_on_ci_fail` | pref, boolean | `off` | `set_setting` |
 | `reverify_full_suite` | pref, boolean | `off` | `set_setting` |
 | `grade_xdist_workers` | ceiling, integer (the lower value is tighter) | `1` | `set_setting` |
+| `autonomy` | ceiling, `dry-run` \| `gated` \| `full` (dry-run is tightest) | `gated` | `set_setting` |
+| `auto_merge` | ceiling, boolean (off is tighter) | `on` | `set_setting` |
+| `triage_mode` | ceiling, `shadow` \| `execute` (shadow is tighter) | `shadow` | `set_setting` |
 | `notification_routes` | pref, channel instances and routes | `{}` | `set_setting` (not the `deployment` layer) |
 | `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
+
+`autonomy`, `auto_merge` and `triage_mode` keep their environment variables
+(`PIPELINE_AUTONOMY`, `PIPELINE_AUTO_MERGE`, `PIPELINE_TRIAGE_MODE`). Until the
+deployment layer sets one of them, the variable's value stands in for the deployment layer,
+so a team or repository can only tighten it. When the Store cannot be read, these three
+resolve to `dry-run`, `off` and `shadow`. Code that has no plan context still reads the
+variables directly.
 
 A **ceiling** key may only be tightened by a lower layer, unless the layer above opts in with `allow_loosen`. A **pref** key takes the most specific layer that sets it. The kind and the resolution order are the ones in "Test scope" and in the settings registry (`pipeline/settings_registry.py`).
 

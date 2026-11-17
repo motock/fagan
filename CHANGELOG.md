@@ -45,6 +45,41 @@ in practice.
 - Story service-level gauges on `GET /api/metrics`: `fagan_story_dispatch_to_review_seconds`, `fagan_story_review_to_merge_seconds` and `fagan_story_cycle_seconds` at `quantile` `0.5` and `0.9`, plus `fagan_story_service_level_samples{measure}` carrying the count behind each one. They are computed from the audit stream's first dispatch, earliest review start and first merge over the stories merged in the last 30 days, using nearest-rank percentiles; queue time is deliberately not measured because the stream has no eligibility event, the numbers are fleet-wide with no plan, story or actor label, and a measure with no samples renders only its count.
 - An explicit, audited `review_story(plan_name, story_key, force=True)`: `force` deletes the story's last-reviewed markers (`last_reviewed_sha`, `last_reviewed_logic_fingerprint`, `skip_notified_sha`) under the plan lock, so the review runs instead of being skipped, and it records one `story:force_review` audit entry when the markers are cleared; it leaves `review_verdict`, `review_feedback` and `rework_attempts` alone, so a forced review landing `REQUEST_CHANGES` counts against the rework budget like any other and `force` cannot loop past `PIPELINE_REWORK_MAX_ATTEMPTS`. Documented in `REFERENCE.md`.
 
+**Namespaces and access hooks**
+
+- Every store record is now partitioned by namespace, and a request selects one with the `X-Fagan-Namespace` header on the remote MCP transport and the dashboard. The namespace is verified against the namespace resolver (`PIPELINE_NAMESPACE_RESOLVER_PLUGIN`) before any work runs and refused with a `403` and a reason token (`namespace_malformed`, `namespace_missing`, `namespace_not_permitted`, `namespace_out_of_scope`, `namespace_error`), each denial audited. With no plugin there is one namespace, `default`, and nothing changes. See REFERENCE.md, "Namespaces".
+- `PIPELINE_SCHEDULER_NAMESPACES_ONLY` / `PIPELINE_SCHEDULER_NAMESPACES_SKIP` limit one instance to a set of namespaces, for both the scheduler tick and incoming requests, failing closed when malformed. The tick advances every namespace that holds plans, and the advance worker, review job and dispatched agent (`PIPELINE_WORKER_NAMESPACE`) run in the plan's namespace.
+- The dashboard plan list is a roll-up across the namespaces the view scope (`PIPELINE_VIEW_SCOPE_PLUGIN`) allows, each row labelled with its namespace, capped at `PIPELINE_PLAN_LIST_NAMESPACE_CAP` (default 20) namespaces and reporting `degraded` rather than failing.
+- Three operator hooks, all off unless selected and all audited by reason token: `PIPELINE_REPO_ACCESS_PLUGIN` is consulted before every dispatch and merge (a refusal parks the story with `access refused: <reason>`); `PIPELINE_ADMISSION_PLUGIN` admits a dispatch, a spend or a notification (dispatch and spend fail closed, notifications fail open); `PIPELINE_REFERENCE_PLUGIN` decides cross-namespace `blocked_by` entries `ref:<namespace>:<plan>:<story_key>`, which are refused when it is unset.
+- Model and forge credentials resolve per namespace: `default` still reads the environment, while any other namespace gets them only from the credentials plugin (`credential_missing` otherwise), and its agents never inherit the process `GH_TOKEN` or OAuth token. `CredentialRef` accepts two-segment `<org>/<team>` namespaces and the new `forge` and `secret` purposes; `secret://<provider>/<name>` references resolve through the built-in `env` and `file` (`PIPELINE_SECRET_FILE_ROOT`) providers or `PIPELINE_SECRET_PROVIDER_PLUGINS`.
+- `PIPELINE_OIDC_EXTRA_CLAIMS` copies the named token claims onto the verified principal for plugins to read; core never reads them.
+- The usage gate's state and cooldown can be keyed per credential (storage layer only; the default credential keeps today's paths).
+- `notification_routes` and `role_routing` tenant settings can be stored per org, team and team-repo layer and are validated on write; nothing consults them at runtime yet. `PIPELINE_SETTINGS_KEYS_PLUGIN` lets an operator register additional settings keys.
+- The standalone TLS front door imports operator route files from `STANDALONE_EXTRA_ROUTES_DIR` (`/etc/caddy/extra-routes/*.caddy`) ahead of its built-in routes, so one namespace can be served by its own instance.
+
+**Story diagnosis tools**
+
+- MCP tools `get_story_log`, `get_story_journal`, `get_story_worktree` and `get_story_events`: plan-scoped, read-only, no path argument, and every secret value masked before it is returned.
+- MCP tool `unblock_story`, the remote form of `python -m pipeline.unpark`: held to the plan's owner or a delegate, clears allowlisted retry/review fields, optionally sets the status, appends `files` and a brief note, records the caller as the human resolution and resets plan approval when the brief or files change. `python -m pipeline.unpark` gains `--add-files` and records the same human resolution.
+
+**Test scope and file-size policy**
+
+- Plan- and story-level `test_scope` (`full` | `scoped`). A `scoped` story is graded on its acceptance paths plus the test files it adds or changes, and the full suite is left to remote CI and the `ci_rework` loop. It is resolved per dispatch from the settings layers, recorded as `test_scope_resolution`, degraded to `full` when the repo has no CI, and shown by `get_effective_config`. Telemetry counts dispatches and time-to-done by scope. See REFERENCE.md, "Test scope".
+- `file_size_policy` (`advisory` default, or `enforced`) is resolved per dispatch and stamped on the story. Under `advisory` the agent is told never to park on file size and the reviewer reports size only as a Suggestion. `scripts/check_line_limit.py` gains `--mode warn|block`, and core CI runs it in `warn`.
+
+**Overlord triage**
+
+- Failure-triage rulings name the observed park class and are limited to the actions that class allows. Five new actions run in shadow until `PIPELINE_TRIAGE_MODE=execute`: `resolve_rebase`, `retry_transient` (which carries the overlord's diagnosis into the next dispatch), `rebrief`, `approve_test_edit` (gated by a judge of the existing-test edit) and `resume_review`. `amend_scope` now acts on scope-gate and guard evidence. A sweep sends one `triage_sweep_summary` digest. See overlord-policy.md, "Park classes".
+- `python -m pipeline.triage_readiness` reports, per park class, whether its shadow rulings meet the promotion rule. It reads the human resolutions now recorded beside each ruling.
+
+**Dashboard, CI and other additions**
+
+- The dashboard's plan header can pause and resume a plan, and its **Review** panel approves a pending plan or requests changes.
+- The merge-gate rework message names the failing tests from the CI log.
+- CI scans the built server image with Trivy (report-only) and adds the `dependency-review` and OpenSSF Scorecard workflows.
+- `ingest_plan` warns when a brief's Docs section edits a file the story's `files` omits.
+- The plan name `host` is reserved (it would collide with the host audit-anchor key).
+
 **Plan approval**
 
 - Notifications for the three plan-approval events (`plan_pending_approval`, `plan_approved`, `plan_changes_requested`).
@@ -116,6 +151,7 @@ in practice.
   channel that recovers after a long outage no longer flushes weeks of stale
   messages at once.
 - The scheduler daemon now keeps retrying the NATS broker in the background when the broker is not up yet at start-up (the standalone stack starts `nats` a few milliseconds after the pipeline container), and starts the durable consumers when it answers. Before, those consumers stayed down until the container was restarted and their events piled up in the stream.
+- REFERENCE.md now documents the story diagnosis tools, namespaces, the namespace, view-scope, repo-access, admission, reference and secret-provider plugin seams, `PIPELINE_OIDC_EXTRA_CLAIMS`, `PIPELINE_ESCALATION_BACKEND`/`_MODEL` and `PIPELINE_WEDGE_SCAN_ENABLED`/`_NOTIFY_COOLDOWN_SECONDS`. It no longer claims that credentials always resolve in the `default` namespace or that forge and Ollama keys stay environment-only. The tenant settings table lists `notification_routes` and `role_routing`, and the triage docs list all park classes and the `resume_review` action.
 - REFERENCE.md now documents `PIPELINE_PLAN_LOCK_SLOW_SECONDS`, `PIPELINE_COMMAND_LOCK_WAIT_SECONDS`, `PIPELINE_DASHBOARD_PUBLIC_URL`, `PIPELINE_APPROVAL_LINK_PATH` and `PIPELINE_DASHBOARD_PLUGINS`.
 
 ### Upgrading

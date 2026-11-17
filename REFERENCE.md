@@ -263,6 +263,45 @@ has a dashboard HTTP route.
   backs the story modal's **Diff** section. HTTP:
   `GET /api/plans/{plan_name}/stories/{story_key}/diff?path=...`.
 
+### Story diagnosis tools
+
+Four read-only tools and one mutation for working a stuck or parked story over
+MCP. None takes a path: the plan name and story key name the story, and the
+worktree is resolved from the story record and contain-checked under the
+worktrees root. Every read masks secret values before returning them. An
+unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
+
+- `get_story_log(plan_name, story_key, lines=200)` — the tail of the story's
+  log. `lines` is clamped to 1..500 (a non-integer uses the default). The
+  joined text is masked as a whole, so a multi-line PEM block is masked
+  entirely. No readable log: `{"available": false, "lines": []}`.
+- `get_story_journal(plan_name, story_key)` — the checkpoint journal as
+  `{"available": bool, "entries": [...]}`; string values under a secret-looking
+  key are replaced and every other string is masked.
+- `get_story_worktree(plan_name, story_key)` — branch, head, up to 10 commits
+  ahead of the default branch, up to 200 uncommitted paths, and the agent's
+  scratchpad (masked, at most 20,000 characters). No worktree:
+  `{"available": false, "reason": "no_worktree"}`; a git failure:
+  `{"available": false, "reason": "git_failed"}`.
+- `get_story_events(plan_name, story_key, limit=50)` — the story's events from
+  the plan's notification history in the request's namespace, newest first,
+  each `{"seq", "ts", "event", "message"}`; `limit` is clamped to 1..200. The
+  story's `review_feedback`, `parked_reason`, `failure_reason` and
+  `last_inconclusive_output_excerpt` (masked, at most 4,000 characters) are
+  returned alongside when present.
+- `unblock_story(plan_name, story_key, clear_fields, status=None,
+  add_files=None, note=None)` — the MCP form of `python -m pipeline.unpark`.
+  Authorized like `set_story_status` (the plan's owner or a delegate). Under
+  the plan lock it clears the named retry/review fields (only those in
+  `pipeline.unpark.UNPARKABLE_FIELDS`), optionally sets `status`, appends
+  repo-relative `add_files` to the story's `files`, and appends `note` (up to
+  8,000 characters) to `agent_instructions`. It sends one
+  `story_unparked_manually` notification and records the caller as the human
+  resolution. Changing the brief or files resets plan approval as
+  `patch_story` does (`approval_reset` in the result). A busy lock returns
+  `skipped: "locked"` with `retry_after_seconds`; a refused value is never
+  echoed.
+
 Plan approval can also be decided from the dashboard. The plan detail header's
 **Review** button opens a panel that shows the plan's approval status, its
 warnings and whether the stored digest still matches the plan on disk. An
@@ -2295,6 +2334,75 @@ In addition to the TDD-split gates above, the test-author phase is skipped
 structural test for a doc or config edit belongs in the brief itself. A
 story with no `files`, or with any other path, is unaffected.
 
+## Namespaces
+
+Every record the store holds (manifests, journals, decisions, usage, outbox,
+notifications, audit chains, settings) is partitioned by namespace. With no
+plugin configured there is exactly one, `default`, and nothing below changes
+behaviour. A namespace is `default`, a single-segment identifier, or a
+two-segment `<org>/<team>` key.
+
+**Selecting a namespace.** The remote MCP transport and the dashboard read the
+`X-Fagan-Namespace` request header and bind the namespace it names for the
+life of the request. The request is checked against the namespaces the
+namespace resolver (`PIPELINE_NAMESPACE_RESOLVER_PLUGIN`, see "Plugins")
+reports for the principal, before any work runs. It fails closed, with a `403`
+carrying one reason token and the correlation id, and never echoing the
+requested value:
+
+| Reason | When |
+| --- | --- |
+| `namespace_malformed` | The header is not a valid namespace (checked before the resolver is asked) |
+| `namespace_missing` | No header, and the principal can reach more than one namespace |
+| `namespace_not_permitted` | The principal cannot reach that namespace. Under a plugin resolver an `agent` principal reaches only the namespace equal to its `team_scope` |
+| `namespace_out_of_scope` | This instance's scope (below) excludes the namespace |
+| `namespace_error` | The resolver failed or answered malformed, or the instance scope is malformed |
+
+Each denial appends one host audit record with the subject and the reason; a
+malformed value is recorded only as a SHA-256 prefix. An allowed request writes
+nothing. `/livez` and `/readyz` are exempt from the check.
+
+**Instance scope.** `PIPELINE_SCHEDULER_NAMESPACES_ONLY` (advance only these)
+or `PIPELINE_SCHEDULER_NAMESPACES_SKIP` (advance everything except these), each
+a comma-separated list where `default` names the default namespace, limit one
+instance to a set of namespaces. The scope applies to the scheduler tick and to
+every request: a request for an excluded namespace is refused with
+`namespace_out_of_scope`. Setting both, a blank entry or an invalid namespace
+fails closed: the scheduler advances nothing and every request is refused with
+`namespace_error`. The scope is read on every call, so a change applies
+without a restart.
+
+**Scheduling.** The scheduler tick advances the `default` namespace, then each
+other namespace that holds plans, bound to that namespace. The advance worker,
+the review job and the dispatched agent run in the plan's namespace: the agent
+receives it as `PIPELINE_WORKER_NAMESPACE`, which an operator does not set by
+hand. A child asked to run a plan in a namespace the plan does not declare is
+refused and audited.
+
+**Plan views.** The dashboard plan list (`/api/plans`) is a roll-up across the
+namespaces the view scope (`PIPELINE_VIEW_SCOPE_PLUGIN`) allows the caller,
+each row labelled with its namespace. At most
+`PIPELINE_PLAN_LIST_NAMESPACE_CAP` namespaces (default `20`; a non-integer or
+non-positive value uses the default) are read per request. Beyond the cap the
+answer carries `degraded: ["namespace_cap"]`, and a namespace that cannot be
+read degrades only itself (`degraded: ["namespace_unavailable"]`).
+
+**Credentials, settings and dependencies.** Model and forge credentials outside
+`default` come only from the credentials plugin (see "Credentials"). Tenant
+settings are stored per namespace (see "Tenant settings"). A `blocked_by` entry
+`ref:<namespace>:<plan>:<story_key>` names a story in another namespace. It is
+accepted at ingest only when `PIPELINE_REFERENCE_PLUGIN` allows it, and
+readiness reads only that story's status string. Nothing writes across
+namespaces.
+
+**One instance per namespace (standalone).** The standalone TLS front door
+imports `/etc/caddy/extra-routes/*.caddy` before its built-in routes, mounted
+read-only from `STANDALONE_EXTRA_ROUTES_DIR` (default
+`deploy/standalone/extra-routes`, empty). An operator route file can send one
+namespace's requests to a second instance whose instance scope names only that
+namespace. A route file sits in front of every built-in route, so treat it as
+security-sensitive configuration.
+
 ## Plugins (operator-supplied adapters)
 
 Each architectural seam has a built-in default. An operator can replace it by
@@ -2311,8 +2419,19 @@ who is authenticated or allowed without saying so.
 | Event bus | `PIPELINE_EVENT_BUS_PLUGIN` | `factory() -> EventBus` | `/api/health` reports the selection as `plugin` under `runtime.event_bus`. `PIPELINE_EVENT_BUS` must stay at its `inprocess` default. |
 | Forge | `PIPELINE_FORGE_PLUGIN` | `factory(repo_root) -> Forge` | An instance is cached per repository root. `PIPELINE_FORGE` must stay at its `auto` default. |
 | Ticket provider | `PIPELINE_TICKET_PROVIDER_PLUGIN` | `factory() -> TicketProvider` | `PIPELINE_TICKET_PROVIDER` must stay at its `auto` default. |
-| Policy settings | `PIPELINE_SETTINGS_PLUGIN` | `factory() -> provider` with `policy_settings(namespace, team) -> {"org": {...}, "team": {...}}` | Read-only org/team policy keys (e.g. `test_scope`, `allow_team_loosen`). Core passes namespace `default` and the plan's `team`. No plugin means no org/team layer. A provider call that raises or returns the wrong shape fails closed: the seam returns `{"error": "settings_provider_error"}` (logged at WARNING with the exception type only) and every policy key is treated as restrictive - `test_scope` resolves to `full`. A provider answering `{}` means no org/team layer. A malformed spec raises like every other seam. |
+| Policy settings | `PIPELINE_SETTINGS_PLUGIN` | `factory() -> provider` with `policy_settings(namespace, team) -> {"org": {...}, "team": {...}}` | Read-only org/team policy keys (e.g. `test_scope`, `allow_team_loosen`). Core passes the request's bound namespace and the plan's `team`. No plugin means no org/team layer. A provider call that raises or returns the wrong shape fails closed: the seam returns `{"error": "settings_provider_error"}` (logged at WARNING with the exception type only) and every policy key is treated as restrictive - `test_scope` resolves to `full`. A provider answering `{}` means no org/team layer. A malformed spec raises like every other seam. |
 | Notification channels | `PIPELINE_CHANNEL_PLUGINS` | comma list of `module:attr` registrars | Each registrar is called once with `register_channel_type`; the channel types it registers are ordinary channel types. |
+| Namespace resolver | `PIPELINE_NAMESPACE_RESOLVER_PLUGIN` | `factory()` returning an object with `accesses(principal) -> tuple[NamespaceAccess, ...]` | Which namespaces a principal may reach, with its roles in each. Unset: the `default` namespace with the principal's own roles. An empty answer, a duplicate namespace or a wrong-typed entry is refused. Requires `PIPELINE_PLUGIN_MODULES`. See "Namespaces". |
+| View scope | `PIPELINE_VIEW_SCOPE_PLUGIN` | `factory()` returning an object with `visible(principal) -> frozenset[str] \| ALL` | Which namespaces plan views (the dashboard plan list) show. Unset: the namespaces the resolver reports. An empty or malformed answer, or an exception, denies the view. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Repo access hook | `PIPELINE_REPO_ACCESS_PLUGIN` | `factory()` returning an object with `check(namespace, repo, action, risk) -> AccessDecision` | Consulted before a dispatch and before a merge (scheduler and `approve_merge`). Unset: no hook, nothing changes. A refusal, an exception or a malformed answer refuses: a dispatch or scheduler merge parks the story with `access refused: <reason>`; `approve_merge` returns the error and leaves the story as it was. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Admission hook | `PIPELINE_ADMISSION_PLUGIN` | `factory()` returning an object with `admit(kind, namespace, context) -> AdmissionDecision` | `kind` is `dispatch`, `spend` or `notification`; `context` carries counts only. Unset: everything is admitted. A refused dispatch is deferred to a later tick (not parked); a refused spend pauses the spend poll; a refused notification is dropped and counted. A hook failure fails closed for dispatch and spend and open for notifications. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Reference hook | `PIPELINE_REFERENCE_PLUGIN` | `factory()` returning an object with `allow(from_namespace, to_namespace) -> bool` | Decides `blocked_by` entries of the form `ref:<namespace>:<plan>:<story_key>`. **Unset refuses every such reference**; only an answer of exactly `True` allows one. Plain `<plan>:<story_key>` entries are unaffected. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Secret providers | `PIPELINE_SECRET_PROVIDER_PLUGINS` | comma list of `module:attr`; each object has `name` and `get(name) -> str \| None` | Extra providers for `secret://<provider>/<name>` references, beside the built-in `env` and `file`. See "Credentials". |
+
+Every refusal by the repo access, admission and reference hooks appends one
+host audit record carrying the action and a reason token. A hook's reason must
+be a lower-case token (`^[a-z][a-z0-9_]{0,63}$`); any other value is recorded as
+`unspecified`. No plan, story, repository or hook free text is recorded.
 
 **Spec format.** `module:attr` — a dotted Python module path, one colon, and a
 public identifier attribute: no file paths, no spaces, no leading dot, no
@@ -2376,9 +2495,9 @@ and an optional expiry in epoch seconds.
 
 | Field | Meaning |
 | --- | --- |
-| `purpose` | The credential class: `env`, `model` or `notification` in this release |
-| `name` | The credential within that class — an environment-variable name for `env`, a fixed name for `model`, the channel's configured reference for `notification` |
-| `namespace` | The tenant namespace. Core **always** sets it to `'default'` in this release; a provider may use it for multi-tenant selection |
+| `purpose` | The credential class: `env`, `model`, `forge`, `notification` or `secret` |
+| `name` | The credential within that class — an environment-variable name for `env`, a fixed name for `model` and `forge`, the channel's configured reference for `notification`, `provider/name` for `secret` |
+| `namespace` | The namespace the request is bound to (see "Namespaces"): `default`, a single-segment identifier, or a two-segment `<org>/<team>` key. The value is opaque to the seam |
 | `scope` | Optional extra selectors as `(key, value)` pairs — a plan, a repository or a tenant. Empty when the caller has nothing narrower to offer |
 
 The purposes resolved through the seam in this release:
@@ -2386,15 +2505,31 @@ The purposes resolved through the seam in this release:
 - `env` — the `name` is an environment variable name. The default provider reads
   only a declared allowlist of `env` names, so the seam cannot be used to read an
   arbitrary orchestrator variable.
-- `model` — `anthropic_api_key` and `claude_oauth_token`, the model credential.
+- `model` — `anthropic_api_key`, `claude_oauth_token` and `ollama_api_key`.
+- `forge` — `github_token`, injected into a dispatched agent as `GH_TOKEN` in a
+  non-default namespace.
 - `notification` — the `password_ref` or `webhook_url_ref` configured on a
   notification channel instance (see "Slack channel type" and the notification
   routing example).
+- `secret` — a `secret://<provider>/<name>` reference. `env` reads an
+  environment variable and only in the `default` namespace; `file` reads a file
+  under `PIPELINE_SECRET_FILE_ROOT` that must resolve inside that root (symlink
+  escapes are refused) and must not be readable by group or others; any other
+  provider comes from `PIPELINE_SECRET_PROVIDER_PLUGINS`. A refusal names the
+  failure class only.
 
-**What stays environment- or file-based in this release** and is planned to move
-to the seam later: the forge tokens (`GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`,
-`GLAB_TOKEN`, `CI_JOB_TOKEN`), the ticket provider keys (`PLANE_API_KEY` and its
-siblings), the Ollama key (`OLLAMA_API_KEY`), the git clone token file, and the
+**Per-namespace resolution.** The `default` namespace keeps reading the
+environment exactly as before. Any other namespace is refused before the
+environment is read: its model and forge credentials come only from the
+credentials plugin, and when the plugin has nothing for it the refusal is
+`credential_missing`. A dispatched agent in a non-default namespace never
+inherits the process forge token or OAuth token; it gets `GH_TOKEN` only from
+the seam, or none.
+
+**What stays environment- or file-based in the `default` namespace** and is
+planned to move to the seam later: the other forge tokens (`GITHUB_TOKEN`,
+`GITLAB_TOKEN`, `GLAB_TOKEN`, `CI_JOB_TOKEN`), the ticket provider keys
+(`PLANE_API_KEY` and its siblings), the git clone token file, and the
 deployment-level OIDC client secret and NATS credentials file
 (`PIPELINE_NATS_CREDS_FILE`). Until each one moves, its existing environment
 variable or file location remains the source of truth.
@@ -2426,10 +2561,10 @@ class.
 The overlord's failure-triage sweep rules on parked and failed stories. It is off until you turn it on, and the new park-class actions stay in shadow until you promote them.
 
 1. **Turn the sweep on.** Set `PIPELINE_AUTO_TRIAGE=1` in the scheduler's environment. Unset (or any value other than `1`, `true`, `yes` or `on`) means off. The shipped launchd template sets it to `1`; see Launchd Install & Reload.
-2. **Start in shadow.** `PIPELINE_TRIAGE_MODE` defaults to `shadow`. In shadow, the four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them. The switch is global, so it promotes all four at once; see the promotion rule in `overlord-policy.md`.
+2. **Start in shadow.** `PIPELINE_TRIAGE_MODE` defaults to `shadow`. In shadow, the five park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`, `resume_review`) are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them. The switch is global, so it promotes all five at once; see the promotion rule in `overlord-policy.md`.
 3. **Read the digest.** A sweep that ruled on at least one story sends one `triage_sweep_summary` notification. It gives the ruling count, counts by park class and by action, and the story keys split into `Executed`, `Shadow` and `Held`. `Shadow` was recorded but not run. `Held` left the story for a human (`dry-run` autonomy, or a `park_for_human` ruling). `Executed` ran its action. The digest is capped at 1000 characters and carries no rationale text.
 4. **Read the decisions log.** Each ruling is appended to the plan's decisions log with `decided_by: overlord-triage` and the observed `park_class`. Each execution record carries `mode` (`shadow`, `dry-run`, or the autonomy level) and the story's prior status and parked reason, so an action can be reversed by hand.
-5. **Know what executes today.** Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions (`escalate_model`, `split_story`, `repo_issue`, `park_for_human`, `mark_done`, `patch_acceptance`, `amend_scope`) once the sweep is on, whatever `PIPELINE_TRIAGE_MODE` is. That includes the default `gated`. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges. The four new actions are shadow by default because their executors are new. Set `PIPELINE_AUTONOMY=dry-run` to keep the sweep recording and notifying without acting.
+5. **Know what executes today.** Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions (`escalate_model`, `split_story`, `repo_issue`, `park_for_human`, `mark_done`, `patch_acceptance`, `amend_scope`) once the sweep is on, whatever `PIPELINE_TRIAGE_MODE` is. That includes the default `gated`. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges. The five new actions are shadow by default because their executors are new. Set `PIPELINE_AUTONOMY=dry-run` to keep the sweep recording and notifying without acting.
 6. **Scoped suite evidence.** For a story dispatched with `test_scope` resolving to `scoped`, the suite check the overlord sees runs that story's recorded scoped targets, not the full suite. A timeout or error fails open to silence (`PIPELINE_TRIAGE_SUITE_TIMEOUT`, default 240 seconds).
 
 ### Promotion rule (shadow to execute)
@@ -2441,6 +2576,8 @@ Set `PIPELINE_TRIAGE_MODE=execute` only when all of the following hold, measured
 - **false parks** (a ruling that held a story the reviewer judged safe to act on) are at most 10% of the reviewed decisions.
 
 Any false proceed sets `PIPELINE_TRIAGE_MODE` back to `shadow` until the rule is met again.
+
+`python -m pipeline.triage_readiness --plan <plan> [...]` (or `--all`; `--json` for JSON) does the counting: it pairs each shadow ruling with the human resolution recorded beside it (by `pipeline.unpark` or `unblock_story`) and prints, per park class, the shadow and paired counts, agreements, false proceeds, false parks, the false-park rate and whether the class is eligible. It is read-only.
 
 ## Configuration (environment variables)
 ### Message broker (NATS JetStream)
@@ -2625,7 +2762,11 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `OVERLORD_POLICY` | `~/.claude/overlord-policy.md` | Global decision policy |
 | `PIPELINE_AUTONOMY` | `gated` | `dry-run` \| `gated` \| `full` |
 | `PIPELINE_AUTO_MERGE` | `1` | Set to `0` to park every reviewed PR for a human merge; dispatch and review continue |
-| `PIPELINE_TRIAGE_MODE` | `shadow` | `shadow` \| `execute`. Unset, empty or unrecognised means `shadow`. In `shadow`, the four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are recorded in the decisions log with `mode: shadow` and notified, and the story is left untouched whatever `PIPELINE_AUTONOMY` is. `execute` runs their executors; a stub without one parks the story for a human. The seven existing actions are unaffected. Park classes (`pipeline/triage_park_classes.py`, table in `overlord-policy.md`): `rebase_conflict`, `scope_gate`, `guard_demands_path`, `pin_removed_test_failure`, `no_commit_after_rework`, `ci_red_after_rework`, `transient_bookkeeping`, `high_risk_hold`, and `unknown`. A ruling whose action the observed class does not allow is replaced with `park_for_human`. |
+| `PIPELINE_TRIAGE_MODE` | `shadow` | `shadow` \| `execute`. Unset, empty or unrecognised means `shadow`. In `shadow`, the five park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`, `resume_review`) are recorded in the decisions log with `mode: shadow` and notified, and the story is left untouched whatever `PIPELINE_AUTONOMY` is. `execute` runs their executors; a stub without one parks the story for a human. The seven existing actions are unaffected. Park classes (`pipeline/triage_park_classes.py`, table in `overlord-policy.md`): `rebase_conflict`, `scope_gate`, `guard_demands_path`, `pin_removed_test_failure`, `no_commit_after_rework`, `ci_red_after_rework`, `transient_bookkeeping`, `high_risk_hold`, `brief_conflicts_existing_test`, `env_tool_missing`, `agent_failed_after_push`, and `unknown`. A ruling whose action the observed class does not allow is replaced with `park_for_human`. |
+| `PIPELINE_ESCALATION_BACKEND` | *(unset → the dispatch role's resolved backend)* | Backend a stuck story escalates to, e.g. `ollama` to escalate onto a cloud-served model while Claude usage is capped. When either this or `PIPELINE_ESCALATION_MODEL` is set, it wins over the registry and defaults to `claude` if only the model is given. |
+| `PIPELINE_ESCALATION_MODEL` | *(unset)* | Raw driver tag written to the escalated story's `model` (e.g. `deepseek-v4-flash:cloud`), not a registry alias. |
+| `PIPELINE_WEDGE_SCAN_ENABLED` | `1` | `0` turns off the advisory pre-tick wedge scan, which notifies about `in_progress` stories whose agent is dead or has shown no journal or `agent.log` activity for `PIPELINE_WEDGE_STALE_ACTIVITY_SECONDS` (default `1800`). Detection only: it never changes a story's status. |
+| `PIPELINE_WEDGE_NOTIFY_COOLDOWN_SECONDS` | `3600` | Minimum seconds between two wedge notifications for the same story. |
 | `PIPELINE_RISK_THRESHOLD` | `low` | Highest risk merged unattended in `gated` |
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
@@ -3324,6 +3465,7 @@ and the session cookie" section below.
 | `PIPELINE_OIDC_ALLOW_PRIVATE_JWKS` | *(unset → off)* | Permits a JWKS host that resolves to a private or loopback address — what a self-hosted IdP inside a VPC (Keycloak, Dex, ADFS) needs. Only `1` or `true` (case-insensitive) enable it; any other value, including `yes` or `on`, leaves the restrictive default in place. Enabling it also pins the JWKS fetch to the resolved address, so the request cannot traverse an HTTP egress proxy — an operator behind one needs direct egress to the IdP. |
 | `PIPELINE_OIDC_AGENT_CLIENTS` | *(unset → none)* | Comma-separated OIDC client ids (`azp`) allowed to authenticate as an *agent* principal. Empty means no client is an agent and every token is a human principal. Read on every verification, so a rotated list takes effect without a restart. An agent never carries IdP roles and is confined to one team: its scope claim must be a valid `<org-id>/<team-id>` pair or the token is refused (`invalid token: agent scope`), and `pipeline.authorization` refuses the agent on any plan whose manifest does not declare that same team id (see the verification rules below). |
 | `PIPELINE_OIDC_AGENT_SCOPE_CLAIM` | `team_scope` | The token claim carrying an agent's `<org-id>/<team-id>` binding. Only consulted for a token whose `azp` is in `PIPELINE_OIDC_AGENT_CLIENTS`; for any other token the claim is ignored. |
+| `PIPELINE_OIDC_EXTRA_CLAIMS` | *(unset → none)* | Comma-separated token claim names copied, uninterpreted, onto the verified principal as immutable `(name, value)` pairs, for a plugin (namespace resolver, view scope, authorizer) to read. Core never reads them. Each name must be an identifier or the whole list is refused at startup. Applies to the API identity provider and the browser login alike. A token whose configured claims exceed 256 entries or 16 KiB serialised is refused with a fixed `claim too large` reason. |
 
 The verification rules are fixed, not configurable:
 
@@ -3717,7 +3859,7 @@ value that is not a non-negative integer disables that check.
 
 ## Tenant settings
 
-These eight keys are tenant settings (ADR 0015). Each is stored in the settings Store per (namespace, team, repo) and resolved at the point of use, so no environment variable changes them. Set one with the `set_setting` tool; `get_settings` and `list_settings` read them back.
+These keys are tenant settings (ADR 0015). Each is stored in the settings Store per (namespace, team, repo) and resolved at the point of use, so no environment variable changes them. Set one with the `set_setting` tool; `get_settings` and `list_settings` read them back.
 
 | Key | Kind | Safe value (used when the Store cannot be read) | Set with |
 | --- | --- | --- | --- |
@@ -3729,8 +3871,26 @@ These eight keys are tenant settings (ADR 0015). Each is stored in the settings 
 | `rework_on_ci_fail` | pref, boolean | `off` | `set_setting` |
 | `reverify_full_suite` | pref, boolean | `off` | `set_setting` |
 | `grade_xdist_workers` | ceiling, integer (the lower value is tighter) | `1` | `set_setting` |
+| `notification_routes` | pref, channel instances and routes | `{}` | `set_setting` (not the `deployment` layer) |
+| `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
 
 A **ceiling** key may only be tightened by a lower layer, unless the layer above opts in with `allow_loosen`. A **pref** key takes the most specific layer that sets it. The kind and the resolution order are the ones in "Test scope" and in the settings registry (`pipeline/settings_registry.py`).
+
+`notification_routes` takes the deployment notification file's schema without
+`version`. Credentials stay name-only: `*_ref` names are accepted, inline
+secrets are refused, and a `*_env` name is refused outside the `default`
+namespace. A layer route may name only that layer's own instances, and the
+deployment routes are matched first. `role_routing` values are validated
+against the live model registry when written. Both keys are validated and
+stored, but nothing reads them at runtime yet: notification routing and role
+resolution still come from the deployment file and the registry.
+
+`PIPELINE_SETTINGS_KEYS_PLUGIN=module:attr` lets an operator register extra
+keys alongside the core keys. They are validated on first read, and an invalid
+key (bad name, a collision with a core key, an unknown kind or type, a layer
+outside the known layers, a bad default, a non-empty legacy name) raises on
+every read, so the process never runs without them. The plural
+`PIPELINE_SETTINGS_KEYS_PLUGINS` is refused.
 
 ### Retired environment variables
 

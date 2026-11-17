@@ -169,10 +169,13 @@ never from `parked_reason` text alone.
 | `ci_red_after_rework` | CI red after rework (`ci_rework` set, or PR checks failed) | `rebrief` \| `escalate_model` \| `park_for_human` |
 | `transient_bookkeeping` | `branch head unavailable`, `plan lock contended`, `unchanged_since_last_review` | `retry_transient` \| `park_for_human` |
 | `high_risk_hold` | `high risk held for human review` | `park_for_human` only |
+| `brief_conflicts_existing_test` | `parked_reason` starts `plan conflict: pre-existing tests` and names the tests that contradict the brief | `amend_scope` \| `approve_test_edit` \| `rebrief` \| `park_for_human` |
+| `env_tool_missing` | the test run died on `FileNotFoundError ... No such file or directory: '<tool>'` for a bare tool binary | `repo_issue` \| `park_for_human` |
+| `agent_failed_after_push` | a failed story whose branch head (`last_commit`) has no review verdict | `resume_review` \| `park_for_human` |
 | `unknown` | none of the above | the seven existing actions |
 
-The four new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) are
-shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
+The five new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`,
+`resume_review`) are shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
 notified, and the story is left untouched.
 
 **Repository scope.** In execute mode, `retry_transient`, `resolve_rebase` and `approve_test_edit`
@@ -183,6 +186,14 @@ A plan whose `repo_root` is missing, empty, not a string, not an absolute path, 
 or not the root of a git repository is refused: the story is parked for a human with a reason
 naming `repo_root`, and nothing falls back to the server's repository. `rebrief` reads no
 repository, so it is not affected by `repo_root`.
+
+### resume_review
+
+`resume_review` (park class `agent_failed_after_push` only) returns a failed story whose pushed
+branch head no review has seen to `tests_passed`, so `review_story` reviews that head, after
+clearing the review records that would skip or misreport it. It parks the story for a human
+instead when no commit is recorded beyond the base, when a verdict already covers the head or
+cannot be bound to one, or when the story is `risk: high`.
 
 ### retry_transient and rebrief
 
@@ -302,7 +313,7 @@ line, or with an empty fixture body is unparseable and fails closed to
 
 This section is for the operator, not a ruling instruction. The sweep is off unless `PIPELINE_AUTO_TRIAGE=1` is set. The full procedure is in REFERENCE.md under "Enabling the overlord".
 
-- The four park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`) run in shadow by default: they are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them, for all four at once.
+- The five park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`, `resume_review`) run in shadow by default: they are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them, for all five at once.
 - Each sweep sends one `triage_sweep_summary` digest: counts by park class and action, and story keys split into `Executed`, `Shadow` and `Held`. The decisions log holds each ruling with its `park_class` and the `mode` it ran under.
 - Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions once the sweep is on. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges.
 - Promotion rule: set `PIPELINE_TRIAGE_MODE=execute` only after at least 20 shadow decisions have been reviewed against live evidence, with no false proceed and false parks at most 10% of the reviewed decisions. Any false proceed sets the mode back to `shadow`.
@@ -326,7 +337,7 @@ joins a multi-line value into one paragraph and cuts it at 600 characters, and t
 says when a cut happened. The two-sentence limit is the instruction to the overlord; the executor
 enforces only the 600-character cap.
 
-ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human. The park-class actions are also valid ACTION values: `resolve_rebase`, `retry_transient`, `rebrief` and `approve_test_edit`, each shadow-only unless `PIPELINE_TRIAGE_MODE=execute`. An ACTION not listed under the observed park class (see Park classes) is replaced with park_for_human.
+ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human. The park-class actions are also valid ACTION values: `resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit` and `resume_review`, each shadow-only unless `PIPELINE_TRIAGE_MODE=execute`. An ACTION not listed under the observed park class (see Park classes) is replaced with park_for_human.
 
 `SPLIT` is emitted only when `ACTION` is `split_story`: exactly two child summaries separated by ` || `. When `ACTION` is not `split_story`, omit the `SPLIT` line entirely.
 

@@ -172,6 +172,7 @@ from . import (
     review_audit,
 )
 from .actor import current_namespace, current_principal
+from .concurrency import _plan_lock
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
     _patch_plan_impl,
@@ -950,7 +951,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         refusal = authorize("plan:dispatch", plan_name=plan_name, story_key=story_key)
         if refusal is not None:
             return refusal
-        with _store.transaction(plan_name) as acquired:
+        with _plan_lock(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,
@@ -974,7 +975,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         refusal = authorize("plan:dispatch", plan_name=plan_name, record_allowed=False)
         if refusal is not None:
             return refusal
-        with _store.transaction(plan_name) as acquired:
+        with _plan_lock(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,

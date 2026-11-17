@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,12 @@ import pytest
 import pipeline.server as p
 from pipeline import detached_grade, merge
 from pipeline.store_records import InvalidRecordKeyError, validate_plan_name
+
+
+@contextmanager
+def _flag_flock(fake_store):
+    """Yield the fake store's current "lock held" flag as the plan flock result."""
+    yield fake_store.acquired
 
 
 class _FakeStore:
@@ -233,6 +240,9 @@ def test_should_not_write_when_the_merge_transaction_is_busy(
     plan_name, story_key = "p2", "S1"
     fake_store.seed(plan_name, _parked_manifest(plan_name, story_key))
     _merge_seams(monkeypatch)
+    monkeypatch.setattr(
+        merge, "_plan_lock", lambda *a, **k: _flag_flock(fake_store)
+    )
     fake_store.acquired = False
 
     busy = merge._approve_merge_impl(plan_name, story_key)

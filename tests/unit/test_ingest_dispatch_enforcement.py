@@ -129,14 +129,21 @@ def _write_manifest(plan_dir: Path, name: str, repo_root: Path) -> None:
     path.write_text(json.dumps(manifest))
 
 
+@contextmanager
+def _locked_flock():
+    """A plan flock that another dispatcher already holds."""
+    yield False
+
+
 class _LockedStore:
-    """A store whose plan transaction is always held by someone else.
+    """A store whose plan flock is always held by someone else.
 
     Dispatch's first act after the authorization check is to enter the plan
-    transaction; when the lock yields False it returns ``{"ok": True,
-    "skipped": "locked"}`` before any worktree, git or agent work. That makes
-    it a side-effect-free probe of "the gate let the call through" -- exactly
-    the behaviour the pre-check path had when the lock was contended.
+    flock (``_plan_lock``); when the lock yields False it returns
+    ``{"ok": True, "skipped": "locked"}`` before any worktree, git or agent
+    work. That makes it a side-effect-free probe of "the gate let the call
+    through" -- exactly the behaviour the pre-check path had when the lock was
+    contended.
     """
 
     def audit_log(self):
@@ -166,6 +173,7 @@ def test_dispatch_story_is_allowed_for_the_local_operator(
 ) -> None:
     _write_manifest(plan_dir, "plan-alpha", _repo(tmp_path))
     monkeypatch.setattr(p, "_store", _LockedStore())
+    monkeypatch.setattr(dispatch_mod, "_plan_lock", lambda *a, **k: _locked_flock())
 
     with bind_principal(LOCAL_OPERATOR):
         result = p.dispatch_story("plan-alpha", "s-1")
@@ -245,6 +253,7 @@ def test_dispatch_story_with_enforcement_disabled_proceeds(
     monkeypatch.setenv(ENFORCE_ENV, "0")
     _write_manifest(plan_dir, "plan-alpha", _repo(tmp_path))
     monkeypatch.setattr(p, "_store", _LockedStore())
+    monkeypatch.setattr(dispatch_mod, "_plan_lock", lambda *a, **k: _locked_flock())
 
     with bind_principal(DENIED):
         result = p.dispatch_story("plan-alpha", "s-1")

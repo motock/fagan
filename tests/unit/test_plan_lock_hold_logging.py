@@ -386,7 +386,7 @@ def test_real_lock_inside_released_window_logs_one_outer_release(
 
     This is the production shape: advance_pipeline drops the plan flock via
     _released_plan_lock around dispatch_story, and dispatch_story re-flocks
-    through _store.transaction -> _TransactionLock.__enter__ -> _plan_lock.
+    by calling _plan_lock directly in _dispatch_story_impl.
     That nested call is a REAL flock (the window discarded the held-set entry),
     so it must deepen the outer hold rather than overwrite its start and then
     pop its entry on release — which would leave the outer, genuinely long

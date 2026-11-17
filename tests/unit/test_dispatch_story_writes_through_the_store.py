@@ -1,7 +1,7 @@
 """dispatch_story's own manifest writes persist through the record store.
 
-``pipeline/dispatch.py``'s ``_dispatch_story_impl`` opens the plan transaction
-itself (``with _store.transaction(plan_name) as acquired:``) and mutates the
+``pipeline/dispatch.py``'s ``_dispatch_story_impl`` takes the plan flock
+itself (``with _plan_lock(plan_name) as acquired:``) and mutates the
 manifest it read inside that scope at four points:
 
 * the initial claim / brief write (branch + correlation ID) before any
@@ -18,7 +18,7 @@ writes the file projection behind the store's back (and, under
 ``PIPELINE_STORE=sqlite``, bypasses the database row entirely).
 
 The recording store below wraps the real ``FileStore`` so every test drives
-the real dispatch path (real transaction, real key validation) and simply
+the real dispatch path (real plan flock, real key validation) and simply
 observes what the store was asked to persist.
 """
 
@@ -29,6 +29,7 @@ import subprocess
 import pytest
 
 from app import backend
+from pipeline import dispatch as pdispatch
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
@@ -175,7 +176,7 @@ class _RecordingStore:
     """``FileStore`` stand-in that observes manifest writes.
 
     Everything but ``records()`` delegates to the real store, so the dispatch
-    path exercises the real transaction, the real manifest read and the real
+    path exercises the real store, the real manifest read and the real
     on-disk write.
     """
 
@@ -335,8 +336,7 @@ def test_completed_dispatch_write_goes_through_the_store(
 
 
 def test_should_not_write_when_the_transaction_is_busy(tmp_path, monkeypatch):
-    """Another dispatch/interrupt already holds the plan transaction: the
-    entry point returns the ``skipped: locked`` refusal and mutates nothing."""
+    """Another dispatcher already holds the plan flock: the entry point returns the ``skipped: locked`` refusal and mutates nothing."""
     plans, _wts = _dispatch_env(tmp_path, monkeypatch)
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plans, PLAN, {STORY: dict(_BASE_STORY)})
@@ -345,6 +345,9 @@ def test_should_not_write_when_the_transaction_is_busy(tmp_path, monkeypatch):
 
     busy = _BusyStore(p._store)
     monkeypatch.setattr(p, "_store", busy, raising=False)
+    monkeypatch.setattr(
+        pdispatch, "_plan_lock", lambda *a, **k: _busy_transaction()
+    )
 
     result = p.dispatch_story(PLAN, STORY)
 
@@ -425,3 +428,69 @@ def test_invalid_plan_name_fails_closed(tmp_path, monkeypatch):
         p.dispatch_story("a..b", STORY)
 
     assert fake.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 7. the guard is the plan flock, not a store transaction
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_never_opens_a_store_transaction(tmp_path, monkeypatch):
+    """The plan flock, not a store transaction, guards a dispatch."""
+    plans, _wts = _dispatch_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plans, PLAN, {STORY: dict(_BASE_STORY)})
+    _stub_dispatch_externals(monkeypatch)
+
+    class _NoTransaction(_RecordingStore):
+        def transaction(self, plan_name, wait_seconds=0.0):
+            raise AssertionError("dispatch must not open a store transaction")
+
+    monkeypatch.setattr(p, "_store", _NoTransaction(p._store), raising=False)
+
+    result = p.dispatch_story(PLAN, STORY)
+
+    assert result.get("ok") is True, result
+
+
+def test_dispatch_refuses_when_the_plan_flock_is_held(tmp_path, monkeypatch):
+    """Another dispatcher holds the plan flock: the refusal is unchanged.
+
+    The protected behaviour - ``skipped: locked`` and no writes at all - is
+    the same as before the guard changed; only the lock behind it moved.
+    """
+    plans, _wts = _dispatch_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plans, PLAN, {STORY: dict(_BASE_STORY)})
+    _stub_dispatch_externals(monkeypatch)
+    before = _manifest_bytes(plans, PLAN)
+
+    monkeypatch.setattr(pdispatch, "_plan_lock", lambda *a, **k: _busy_transaction())
+
+    result = p.dispatch_story(PLAN, STORY)
+
+    assert result["ok"] is True, result
+    assert result["skipped"] == "locked", result
+    assert _manifest_bytes(plans, PLAN) == before, (
+        "a refused dispatch must not mutate the manifest"
+    )
+
+
+def test_dispatch_still_launches_when_the_plan_flock_is_free(tmp_path, monkeypatch):
+    """The happy path: with the plan flock free the dispatch launches.
+
+    The refusal under contention and the launch when the lock is free are the
+    two halves of the guard dispatch now takes.
+    """
+    plans, _wts = _dispatch_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plans, PLAN, {STORY: dict(_BASE_STORY)})
+    _stub_dispatch_externals(monkeypatch)
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: True)
+
+    result = p.dispatch_story(PLAN, STORY)
+
+    assert result["ok"] is True, result
+    assert "skipped" not in result, result
+    assert result["story_key"] == STORY, result
+    assert result["pid"], result

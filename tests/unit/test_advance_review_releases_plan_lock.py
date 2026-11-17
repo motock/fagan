@@ -458,13 +458,13 @@ class TestReviewLockReleaseGuards:
     def test_review_story_locked_skip_during_released_window_does_not_crash_tick(
         self, monkeypatch, tmp_path
     ):
-        """review_story's own _store.transaction (pipeline/service.py) wraps
-        the whole call in a non-blocking concurrency._plan_lock acquire, and
-        returns {"ok": True, "skipped": "locked", "reason": ...} - also with
-        no "status" key - when it cannot take the plan lock. Releasing this
-        loop's own hold around review_story (this story's change) is exactly
-        what makes that contention reachable: a genuine second holder of the
-        real flock during the released window.
+        """review_story's own plan flock (concurrency._plan_lock, taken
+        directly in pipeline/service.py) wraps the whole call in a
+        non-blocking acquire, and returns {"ok": True, "skipped": "locked",
+        "reason": ...} - also with no "status" key - when it cannot take the
+        plan lock. Releasing this loop's own hold around review_story (this
+        story's change) is exactly what makes that contention reachable: a
+        genuine second holder of the real flock during the released window.
 
         This double models the real call path instead of bypassing it: while
         the loop's lock is released, a competitor thread genuinely acquires

@@ -35,6 +35,7 @@ from .ci import (
     gate_record,
     settings_for_plan,
 )
+from .concurrency import _plan_lock
 
 _lock_state = {}
 
@@ -609,7 +610,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     if refusal is not None:
         return refusal
 
-    with _store.transaction(plan_name) as acquired:
+    with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
                 "ok": False,

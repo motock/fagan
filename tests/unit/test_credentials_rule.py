@@ -126,8 +126,8 @@ def test_changelog_unreleased_announces_the_credential_provider() -> None:
     lines = (ROOT / "CHANGELOG.md").read_text(
         encoding="utf-8", errors="replace"
     ).splitlines()
-    assert "## [Unreleased]" in lines, "CHANGELOG.md has no Unreleased section"
-    start = lines.index("## [Unreleased]")
+    assert "## [0.10.0] - 2026-11-17" in lines, "CHANGELOG.md has no Unreleased section"
+    start = lines.index("## [0.10.0] - 2026-11-17")
     block: list[str] = []
     for line in lines[start + 1 :]:
         if line.startswith("## "):

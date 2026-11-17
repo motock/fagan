@@ -9,9 +9,11 @@ in practice.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-17
+
 ### Added
 
-- Settings: document the `autonomy`, `auto_merge` and `triage_mode` tenant settings; their environment variables (`PIPELINE_AUTONOMY`, `PIPELINE_AUTO_MERGE`, `PIPELINE_TRIAGE_MODE`) remain the deployment default.
+- Settings: the `autonomy`, `auto_merge` and `triage_mode` tenant settings now resolve per plan (namespace, team, repo) in the merge gate, the advance tick and overlord triage, and are documented in REFERENCE.md; their environment variables (`PIPELINE_AUTONOMY`, `PIPELINE_AUTO_MERGE`, `PIPELINE_TRIAGE_MODE`) remain the deployment default, so nothing changes until a value is set in the settings Store.
 - `PIPELINE_TENANT_DATA_EXEMPT_PATHS` (default unset) lists dashboard-extension paths under `/api/ext/` that authenticate but skip namespace binding.
 - Remote settings calls are authorised per layer through the authorizer seam. `set_setting` needs `config:write` and `get_settings`/`list_settings` need `config:read`, each on a resource naming the layer's scope id and the repo, and an agent principal is still refused before the authorizer is asked. The `deployment` layer stays refused to a remote caller whatever the authorizer allows. With no authorizer plugin (`LocalPolicy`) every remote settings call is refused, as before.
 - Added the settings record kind (ADR 0015) to the SQLite store and the plugin wrapper. A `settings` table (migration 6) holds one versioned record per (namespace, scope, scope_id, repo), written compare-and-set on version inside the write transaction. **Contract change for plugins:** `get_settings`, `put_settings` and `list_settings` are now in `RECORD_STORE_METHODS` and so in `PLUGIN_STORE_METHODS`; a plugin built before this change is refused at startup until it implements them. The record-store conformance suite gains settings cases that every store runs.

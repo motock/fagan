@@ -569,7 +569,7 @@ def test_the_spec_still_says_save_plan_is_covered_by_the_digest_check():
 
 def test_the_changelog_carries_the_behaviour_change():
     text = CHANGELOG.read_text(encoding="utf-8")
-    headings = [m.start() for m in re.finditer(r"^## ", text, re.MULTILINE)]
+    headings = [m.start() for m in re.finditer(r"^## \[\d", text, re.MULTILINE)]
     assert headings, "CHANGELOG.md has no release section"
     end = headings[1] if len(headings) > 1 else len(text)
     newest = text[headings[0] : end]

@@ -139,7 +139,7 @@ def _heading_section(text: str, heading: str) -> list[str]:
 
 def test_changelog_added_heading_sits_directly_under_unreleased(changelog: str) -> None:
     lines = [line for line in changelog.splitlines()]
-    unreleased = lines.index("## [Unreleased]")
+    unreleased = lines.index("## [0.10.0] - 2026-11-17")
     following = [line for line in lines[unreleased + 1 :] if line.strip()]
     assert following, "## [Unreleased] section is empty"
     assert following[0] == "### Added", (

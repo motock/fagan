@@ -460,7 +460,7 @@ def test_changelog_records_the_save_plan_response_change():
 
 def test_changelog_records_the_change_in_the_unreleased_section():
     text = _CHANGELOG.read_text(encoding="utf-8")
-    start = text.index("## ")
+    start = text.index("## [0.10.0]")
     rest = text[start + 3:].lstrip("\n")
     end = rest.find("\n## ")
     section = rest if end == -1 else rest[:end]

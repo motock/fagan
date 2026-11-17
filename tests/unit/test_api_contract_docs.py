@@ -39,8 +39,8 @@ def _read(path: Path) -> str:
 
 def _unreleased_section() -> str:
     text = _read(CHANGELOG)
-    start = text.index("## [Unreleased]")
-    next_release = text.find("\n## [", start + len("## [Unreleased]"))
+    start = text.index("## [0.10.0]")
+    next_release = text.find("\n## [", start + len("## [0.10.0]"))
     if next_release == -1:
         return text[start:]
     return text[start:next_release]

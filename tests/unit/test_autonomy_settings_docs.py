@@ -19,7 +19,7 @@ def _tenant_settings() -> str:
 
 
 def _unreleased() -> str:
-    return _section(CHANGELOG.read_text(encoding="utf-8"), "## [Unreleased]")
+    return _section(CHANGELOG.read_text(encoding="utf-8"), "## [0.10.0]")
 
 
 def test_reference_tenant_settings_lists_autonomy_keys():

@@ -105,7 +105,6 @@ from pipeline.actor import (
     bind_correlation_id,
     bind_principal,
     current_correlation_id,
-    current_namespace,  # noqa: F401 (re-exported; moved routes read it)
     request_correlation_id,
 )
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS  # noqa: F401

@@ -91,6 +91,11 @@ def test_plan_list_with_vanished_manifest_sorts_last_and_does_not_raise(
     real_records = real_store.records()
 
     class _VanishingRecords:
+        def __getattr__(self, attr):
+            # The plan list reads the namespace-aware record API directly; only
+            # the freshness read is overridden here.
+            return getattr(real_records, attr)
+
         def get_manifest_updated_at(self, namespace, plan_name):
             if plan_name == "plan-gone":
                 return None

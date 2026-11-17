@@ -62,7 +62,7 @@ def execute_resume_review(plan_name, story_key, story, ruling, manifest) -> str:
     write succeeds is the in-memory story changed, so the sweep persists the
     same state the store holds.
     """
-    if _triage_mode() != "execute":
+    if _triage_mode(manifest) != "execute":
         return "shadow"
     head = story.get("last_commit")
     if not isinstance(head, str) or not head:

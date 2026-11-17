@@ -13,6 +13,7 @@ from . import access_hooks, bound_records, cross_plan, plan_approval, triage_reb
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_dir_name
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
+from .concurrency import _plan_lock
 from .config import WORKTREE_SCOPE_RULE
 from .dispatch_attempt import (
     _find_dead_new_functions,  # noqa: F401
@@ -115,7 +116,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     refusal = authorize("plan:dispatch", plan_name=plan_name, story_key=story_key)
     if refusal is not None:
         return refusal
-    with _store.transaction(plan_name) as acquired:
+    with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
                 "ok": True,
@@ -903,14 +904,13 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
 
         # W4-logging slice: hand the agent subprocess the story's correlation
-        # ID (PIPELINE_CORRELATION_ID) so its own agent.log lines join up with
-        # the orchestrator's events. Backend.dispatch has no env parameter and
-        # the drivers build the subprocess env from os.environ at launch time
+        # ID so its agent.log lines join the orchestrator's events; the drivers
+        # build the child env from os.environ at launch time
         # (app/backend_ollama.py's `{**os.environ, ...}` and
         # app/backend_claude.py's _first_party_claude_env), so the var is
         # staged in os.environ for exactly this synchronous launch call and
-        # restored afterwards; dispatches are serialized per plan by the
-        # _store transaction, so no concurrent launch observes a torn value.
+        # restored afterwards; dispatches are serialized per plan by the plan
+        # flock, so no concurrent launch of the same plan observes a torn value.
         # Pre-spawn fence: every slow phase above is done, so re-check for
         # positive evidence that this dispatch must not launch an agent - the
         # worker was abandoned by the scheduler's watchdog, another live

@@ -43,7 +43,7 @@ from .rebrief import (
     diagnose_failure,
 )
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
-from .role_routing_scope import layer_routing_for_manifest
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .stall_scan import run_stall_scan
 from .store_records import validate_plan_name
 from .wedge_io import run_wedge_scan
@@ -741,13 +741,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     _auto_escalation_enabled()
                     and story.get("backend") in _LOCAL_BACKEND_NAMES
                     and not story.get("escalated")
-                    and _escalation_target() != (story.get("backend"), story.get("model"))
+                    and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
                 ):
                     manifest = _fresh_manifest(plan_name)
                     _escalate_to_claude(manifest, plan_name, key)
                     _notify_user(
                         plan_name,
-                        f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
+                        f"{key} local agent failed; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
                         event="escalated",
                         story_key=key,
                         **(

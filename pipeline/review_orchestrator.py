@@ -37,6 +37,7 @@ from .review_logic import (
 )
 from .review_orchestrator_comments import _format_security_comment
 from .review_refs import _ServerRef
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .review_verdict_binding import bind_verdict
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 from .story_commit import commit_story

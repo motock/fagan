@@ -209,7 +209,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
                 _notify_escalate_model(
                     plan_name, story_key, story,
                     f"{story_key} triage ruled escalate_model; escalating to "
-                    f"{_escalation_label()}.",
+                    f"{_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))}.",
                     "escalated",
                 )
                 return "escalate_model"

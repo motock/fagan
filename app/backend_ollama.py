@@ -68,7 +68,7 @@ _REVIEW_LOG_TRUNCATE = 2000
 # reading is not evidence about whether it can serve - resource_status()
 # skips the free-memory floor for these providers (reachability still
 # applies). Future hosted providers extend this registry.
-_HOSTED_PROVIDERS = frozenset({"litellm"})
+_HOSTED_PROVIDERS = frozenset({"litellm", "gateway"})
 
 _DEFAULT_MIN_FREE_MEMORY_MB = "512"
 # Providers that pin a model's memory for the whole process lifetime with
@@ -142,11 +142,14 @@ class OllamaDriver:
         # a live production-shaped run where review (ollama) inherited
         # dispatch's (mlx) PIPELINE_LOCAL_ENDPOINT override and 404'd
         # probing Ollama's /api/tags against MLX's port.
-        self.endpoint = (
-            os.environ.get(f"PIPELINE_LOCAL_ENDPOINT_{self.provider.name.upper()}")
-            or os.environ.get("PIPELINE_LOCAL_ENDPOINT")
-            or self.provider.default_endpoint
-        ).rstrip("/")
+        if self.provider.name == "gateway":
+            self.endpoint = self.provider.default_endpoint
+        else:
+            self.endpoint = (
+                os.environ.get(f"PIPELINE_LOCAL_ENDPOINT_{self.provider.name.upper()}")
+                or os.environ.get("PIPELINE_LOCAL_ENDPOINT")
+                or self.provider.default_endpoint
+            ).rstrip("/")
         # NOTE: the legacy PIPELINE_LOCAL_TIMEOUT_SECONDS knob (formerly read
         # into self.timeout here) is dead - _chat's wall-clock budget comes
         # from PIPELINE_ROLE_CALL_TIMEOUT_SECONDS via

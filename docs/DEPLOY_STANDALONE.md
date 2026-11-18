@@ -387,6 +387,34 @@ read — including these files' exported values. Bound that exposure rather than
 assume it away: scope every credential to the minimum the pipeline needs, budget-cap
 the model account, and do not mount a credential no agent should see.
 
+## Customer AI gateway
+
+A tenant can point the pipeline at its own OpenAI-compatible gateway. Register
+the gateway in `model_registry.json`:
+
+```json
+{
+  "providers": {
+    "gateway": {
+      "models": {
+        "tenant-model": {"tag": "tenant-model"}
+      }
+    }
+  }
+}
+```
+
+Two credentials configure it, both resolved per namespace:
+
+| Credential | Purpose | Name |
+| --- | --- | --- |
+| `gateway_base_url` | the gateway base URL | `model` |
+| `gateway_api_key` | the gateway API key | `model` |
+
+The base URL must use `https` and its host must resolve to a public address;
+a private or unroutable address is refused before any request is sent.
+
+
 ## 4. Configuration reference
 
 These variables go in `deploy/standalone/.env`. The compose file consumes them

@@ -31,7 +31,7 @@ from app.cloud_served import endpoint_from_env, is_cloud_served
 CAPABLE = "capable"
 ON_DEVICE = "on-device"
 
-_CAPABLE_PROVIDERS = frozenset({"claude", "litellm"})
+_CAPABLE_PROVIDERS = frozenset({"claude", "litellm", "gateway"})
 _VALID_CLASSES = (CAPABLE, ON_DEVICE)
 _ROLE = "dispatch"
 

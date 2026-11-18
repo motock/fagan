@@ -143,6 +143,7 @@ _DRIVERS: dict[str, type | Callable[[], OllamaDriver]] = {
     "lmstudio": functools.partial(OllamaDriver, provider_name="lmstudio"),
     "mlx": functools.partial(OllamaDriver, provider_name="mlx"),
     "litellm": functools.partial(OllamaDriver, provider_name="litellm"),
+    "gateway": functools.partial(OllamaDriver, provider_name="gateway"),
 }
 
 

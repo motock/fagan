@@ -212,7 +212,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             and _auto_escalation_enabled()  # noqa: F821
                             and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
                             and not story.get("escalated")
-                            and _escalation_target() != (story.get("backend"), story.get("model"))
+                            and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
                         ):
                             _escalate_to_claude(manifest, plan_name, story_key)
                             _notify_user(  # noqa: F821

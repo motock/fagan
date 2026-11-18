@@ -293,7 +293,10 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     further fallback past Claude, so it must park rather than escalate
     """
     _stamp_first_dispatch(story)
-    backend, model = _escalation_target()
+    # Only the plan name is in scope here, so the scope is read exactly as
+    # pipeline.ci.settings_for_plan reads it (same plan-keyed manifest).
+    _layer_routing = layer_routing_for_plan(plan_name)
+    backend, model = _escalation_target(layer_routing=_layer_routing)
     story["backend"] = backend
     if model:
         story["model"] = model

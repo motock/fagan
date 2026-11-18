@@ -417,8 +417,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # diagnosis leaves agent_instructions untouched (no-op).
         _rebrief_step_cap_struggle(  # noqa: F821
             story, str(worktree), plan_role_config=manifest.get("role_config"),
-            plan_name=plan_name,
-            story_key=story_key)
+            plan_name=plan_name, story_key=story_key,
+            **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
         # Worktree hygiene: append the cleanup-guidance section so the resumed
         # agent tidies the worktree before continuing. Unconditional and
         # idempotent (append_cleanup_guidance is a no-op when its header is

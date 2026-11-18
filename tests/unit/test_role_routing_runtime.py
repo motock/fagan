@@ -349,15 +349,34 @@ def test_role_resource_ok_forwards_layer_routing(monkeypatch):
 
 
 def _layer_routing_keywords(module, func_name):
-    """Every ``func_name(...)`` call in ``module``'s source and its kwargs."""
+    """Every ``func_name(...)`` call in ``module``'s source and its kwargs.
+
+    A call may forward the setting either literally (``layer_routing=<expr>``)
+    or as ``**layer_routing_kwargs(<expr>)``, which adds the keyword only when
+    the resolved scope actually set one. Both forms are reported as
+    ``{"layer_routing": "<expr source>"}`` so an assertion pins the EXPRESSION
+    the call site forwards, not the spelling it uses to forward it.
+    """
     with open(module.__file__, encoding="utf-8") as handle:
         tree = ast.parse(handle.read())
-    found = []
     found = []
     for node in ast.walk(tree):
         is_named_call = isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         if is_named_call and node.func.id == func_name:
-            found.append({kw.arg: ast.unparse(kw.value) for kw in node.keywords})
+            kwargs = {}
+            for kw in node.keywords:
+                if kw.arg is not None:
+                    kwargs[kw.arg] = ast.unparse(kw.value)
+                    continue
+                value = kw.value
+                if (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "layer_routing_kwargs"
+                    and len(value.args) == 1
+                ):
+                    kwargs["layer_routing"] = ast.unparse(value.args[0])
+            found.append(kwargs)
     return found
 
 def test_dispatch_resolves_the_plan_routing_for_its_target():

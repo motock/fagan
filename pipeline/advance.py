@@ -347,7 +347,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     review_ok, review_reason = _role_resource_ok(
         "review",
         plan_role_config=manifest.get("role_config"),
-        layer_routing=layer_routing_for_manifest(manifest),
+        **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
     )
 
     done = _completed_dep_ids(stories)
@@ -441,7 +441,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             story_backend, _story_model = _resolve_dispatch_target(
                 story,
                 plan_role_config=manifest.get("role_config"),
-                layer_routing=layer_routing_for_manifest(manifest),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             if story_backend == "claude":
                 # Claude-routed: interrupt only when the blanket gate is down
@@ -528,7 +528,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             story_backend, _story_model = _resolve_dispatch_target(
                 story,
                 plan_role_config=manifest.get("role_config"),
-                layer_routing=layer_routing_for_manifest(manifest),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             if story_backend == "claude":
                 # Gate on Claude's usage resource_status, NOT local memory.
@@ -710,7 +710,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             story_backend, _story_model = _resolve_dispatch_target(
                 story,
                 plan_role_config=manifest.get("role_config"),
-                layer_routing=layer_routing_for_manifest(manifest),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             tag = story.get("model") or story.get("dispatched_model") or _story_model
             if story_backend != "claude" and tag and tag.endswith(":cloud"):
@@ -838,7 +838,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                             evidence,
                             story,
                             manifest.get("role_config"),
-                            layer_routing=layer_routing_for_manifest(manifest),
+                            **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
                         )
                         story["agent_instructions"] = compose_rebriefed_instructions(
                             story.get("agent_instructions", ""), diagnosis

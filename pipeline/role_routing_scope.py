@@ -22,6 +22,17 @@ logger = logging.getLogger("pipeline")
 ROLE_ROUTING_KEY = "role_routing"
 
 
+def layer_routing_kwargs(layer_routing: dict[str, Any] | None) -> dict[str, Any]:
+    """``resolve_role``-style kwargs carrying ``layer_routing`` when it is set.
+
+    Call sites that already forward a value to a shared resolver use this so an
+    unset (``{}``/``None``) scope adds no keyword at all: the everyday call
+    keeps its exact pre-existing shape and only a team that configured
+    ``role_routing`` changes it.
+    """
+    return {"layer_routing": layer_routing} if layer_routing else {}
+
+
 def _warn(exc: BaseException) -> None:
     """One value-free warning: the exception type only, never a manifest field."""
     logger.warning(

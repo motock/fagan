@@ -33,6 +33,10 @@ from .rebrief import (
     compose_rebriefed_instructions,
     diagnose_failure,
 )
+from .role_routing_scope import (
+    layer_routing_for_manifest,
+    layer_routing_for_plan,
+)
 
 # The plan's record store, resolved at CALL time through the live
 # pipeline.server binding (the _ServerRef pattern used by pipeline/advance.py,
@@ -86,13 +90,15 @@ def _escalation_target(layer_routing: dict | None = None) -> tuple[str, str | No
     return resolution.provider, resolution.model
 
 
-def _escalation_label() -> str:
+def _escalation_label(layer_routing: dict | None = None) -> str:
     """Display name for the escalation target in operator-facing notifications.
 
     Preserves the capitalized "Claude" the existing notifications and their
     tests expect when the target is the default; other backends render as
-    their lowercase driver name."""
-    backend, _ = _escalation_target()
+    their lowercase driver name. Callers that know the story's settings scope
+    pass layer_routing so a team's role_routing reaches resolve_role here
+    exactly as it does in the escalation itself."""
+    backend, _ = _escalation_target(layer_routing=layer_routing)
     return "Claude" if backend == "claude" else backend
 
 

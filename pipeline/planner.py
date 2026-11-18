@@ -35,6 +35,7 @@ from .git_ops import (  # noqa: F401
 )
 from .persona import _persona_body, _persona_default_model
 from .repo_config import RepoConfigError, load_repo_config
+from .role_routing_scope import layer_routing_kwargs
 
 # ---------- Guided-decomposition planner ----------
 _PLANNER_SYSTEM = (
@@ -221,6 +222,7 @@ def _resolve_planner_backend(
     dispatch_backend: str,
     local_model: str,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> tuple[str, str]:
     """Resolve (provider, model) for the planner role. Always-on; no mode.
 
@@ -240,6 +242,11 @@ def _resolve_planner_backend(
     A garbage/unknown provider fails closed here (RoleRegistryError) so
     _run_planner's fail-open except catches it and dispatch proceeds with
     no checklist rather than crashing on a bogus backend name.
+
+    layer_routing is the team's role_routing value for this plan's scope
+    (role -> {provider, model}); it resolves the planner role exactly as
+    the dispatch path resolves its own, and an unset mapping adds no
+    keyword at all, so the everyday call keeps its pre-existing shape.
     """
     from .config import _LOCAL_BACKEND_NAMES
 
@@ -250,6 +257,7 @@ def _resolve_planner_backend(
         registry=registry,
         default_provider="ollama",
         model_fallback=lambda: _default_planner_model_tag(registry),
+        **layer_routing_kwargs(layer_routing),
     )
     provider, model = resolution.provider, resolution.model
 
@@ -276,6 +284,7 @@ def _run_planner(
     local_model: str,
     include_scratchpad: bool = False,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
     tests_already_authored: bool = False,
     authored_test_files: list[tuple[str, list[str]]] | None = None,
     worktree: str | None = None,
@@ -317,6 +326,7 @@ def _run_planner(
             dispatch_backend,
             local_model,
             plan_role_config=plan_role_config,
+            layer_routing=layer_routing,
         )
         # Compute cell_dir for cache sidecar recording
         if worktree is not None and Path(worktree).parent.name == "worktrees":
@@ -402,6 +412,7 @@ def _run_rework_planner(
     dispatch_backend: str,
     local_model: str,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
     worktree: str | None = None,
 ) -> str | None:
     """Like _run_planner, but translates code-review feedback into an
@@ -414,6 +425,7 @@ def _run_rework_planner(
             dispatch_backend,
             local_model,
             plan_role_config=plan_role_config,
+            layer_routing=layer_routing,
         )
         # Compute cell_dir for cache sidecar recording
         if worktree is not None and Path(worktree).parent.name == "worktrees":
@@ -440,6 +452,7 @@ def _rework_requires_new_tests(
     dispatch_backend: str,
     local_model: str,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> bool:
     """Bounded single-turn LLM call: does review_feedback's fix require
     at least one new test case, not just a code change against tests that
@@ -455,6 +468,7 @@ def _rework_requires_new_tests(
             dispatch_backend,
             local_model,
             plan_role_config=plan_role_config,
+            layer_routing=layer_routing,
         )
         text = backend.get_backend("planner", name=backend_name).complete(
             review_feedback,
@@ -517,7 +531,10 @@ _STRENGTH_TIER_GUIDANCE = {
 }
 
 
-def _dispatch_strength_tier(plan_role_config: dict | None = None) -> str:
+def _dispatch_strength_tier(
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
+) -> str:
     """Classify the resolved "dispatch" role into a strength tier: "claude",
     "cloud-oss", or "local". Provider name alone can't tell cloud from local -
     glm dispatches *through* the ollama provider but is a cloud-served model
@@ -525,12 +542,24 @@ def _dispatch_strength_tier(plan_role_config: dict | None = None) -> str:
     already uses to recognize cloud-served tags. Fails open to "claude" (the
     same default resolve_role itself falls back to) on a misconfigured
     registry, mirroring _run_decompose's own fail-open contract.
+
+    layer_routing is the team's role_routing setting for this plan's scope;
+    it resolves the "dispatch" role exactly as the dispatch path does, so a
+    team that pins dispatch to a local model gets local-sized stories. The
+    caller owns that scope: today the only caller is _run_decompose_detailed,
+    which runs before a plan exists, so it has no (namespace, team, repo)
+    scope to resolve and passes none - the tier then reads the deployment
+    file and the registry, exactly as before. A caller that does hold a plan
+    or manifest scope passes layer_routing_for_plan(plan_name) /
+    layer_routing_for_manifest(manifest), the same value the dispatch path
+    uses, and the sizing follows the team's dispatch pin.
     """
     try:
         resolution = role_registry.resolve_role(
             "dispatch",
             plan_role_config=plan_role_config,
             model_fallback=lambda: DEFAULT_MODEL,
+            **layer_routing_kwargs(layer_routing),
         )
     except role_registry.RoleRegistryError:
         return "claude"
@@ -570,7 +599,11 @@ def build_decompose_context_block(repo_root: str | Path) -> str:
 
 
 def _run_decompose_detailed(
-    request: str, *, plan_role_config: dict | None = None, repo_root: str | None = None
+    request: str,
+    *,
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
+    repo_root: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Decompose with the cause preserved: returns (text, error).
 
@@ -584,6 +617,11 @@ def _run_decompose_detailed(
     repo_root, when given, appends the workspace's ``.fagan.json`` decompose
     context after the raw goal. A required source (or invalid config) failure
     returns (None, "context error: ...") without calling the backend.
+
+    layer_routing is the team's role_routing value for this scope; it
+    resolves BOTH the decompose role and the "dispatch" role that sizes the
+    stories (see _dispatch_strength_tier), so a team that pins either role
+    gets the matching model and story sizing.
     """
     if repo_root is not None:
         try:
@@ -596,8 +634,11 @@ def _run_decompose_detailed(
         "decompose",
         plan_role_config=plan_role_config,
         model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
+        **layer_routing_kwargs(layer_routing),
     )
-    tier = _dispatch_strength_tier(plan_role_config=plan_role_config)
+    tier = _dispatch_strength_tier(
+        plan_role_config=plan_role_config, layer_routing=layer_routing
+    )
     system = _persona_body("product-analyst") + _STRENGTH_TIER_GUIDANCE[tier]
     try:
         text = backend.get_backend("decompose", name=resolution.provider).complete(
@@ -613,7 +654,11 @@ def _run_decompose_detailed(
 
 
 def _run_decompose(
-    request: str, *, plan_role_config: dict | None = None, repo_root: str | None = None
+    request: str,
+    *,
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
+    repo_root: str | None = None,
 ) -> str | None:
     """Call a bounded, single-turn LLM (the product-analyst persona) to turn
     a raw goal/feature request into epics/stories JSON matching save_plan's
@@ -636,7 +681,10 @@ def _run_decompose(
     use _run_decompose_detailed instead.
     """
     return _run_decompose_detailed(
-        request, plan_role_config=plan_role_config, repo_root=repo_root
+        request,
+        plan_role_config=plan_role_config,
+        layer_routing=layer_routing,
+        repo_root=repo_root,
     )[0]
 
 

@@ -55,12 +55,21 @@ from .forge import (
     CIStatusUnreadable,
     get_forge,
 )
+from .live_ref import LiveRef as _ServerRef
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
 from .repo_clone import parse_repo_url
 from .settings_store import effective_setting
+from .worktree_cleanup import remove_finished_worktree
 
 logger = logging.getLogger(__name__)
+
+# Server-sourced members read as free variables by the mark-done cleanup.
+# Each resolves to the live ``pipeline.server`` binding at call time, exactly
+# as pipeline/dispatch.py does, so ``monkeypatch.setattr(pipeline.server, ...)``
+# in the suite still lands.
+_repo_root_for = _ServerRef("_repo_root_for")
+WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 
 # ---------- Merge gate settings context ----------
 DEFAULT_NAMESPACE = "default"
@@ -759,6 +768,9 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
         manifest = _store.get_manifest(plan_name)  # noqa: F821
         story = manifest["stories"][story_key]
+        # Captured here because the worktree is removed only after this
+        # transaction commits: git must never run while the plan lock is held.
+        worktree = story.get("worktree", "")
         merged_outside_pipeline = story.get("status") != "done" and bool(story.get("pr_url"))
         story["status"] = "done"
         story.pop("parked_reason", None)
@@ -791,12 +803,49 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         if all_done:
             if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
                 _record_retro_pending(plan_name, len(manifest["stories"]))
-            return {
+            result = {
                 "ok": True,
                 "plan_completed": True,
                 "stories": list(manifest["stories"].keys()),
             }
-        return {"ok": True}
+        else:
+            result = {"ok": True}
+
+    # The manifest is saved and the plan lock released: only now remove the
+    # story's worktree and local branch (git must never run under the lock).
+    _cleanup_finished_worktree(plan_name, story_key, worktree)
+    return result
+
+
+def _cleanup_finished_worktree(plan_name: str, story_key: str, worktree: str) -> None:
+    """Remove a just-finished story's worktree; never raises.
+
+    Split out of ``_mark_story_done_impl`` because that function's body is
+    rebound onto ``pipeline.server``'s namespace (see ``bind_to_server``), where
+    the cleanup helper and the logger are not visible. Here the names resolve
+    against this module, so ``pipeline.ci.remove_finished_worktree`` stays the
+    patch point and a cleanup failure can never undo the recorded "done".
+    """
+    try:
+        outcome = remove_finished_worktree(
+            _repo_root_for(plan_name),
+            worktree,
+            story_key,
+            worktree_root=WORKTREE_ROOT,
+        )
+        logger.info(
+            "story worktree cleanup finished",
+            extra={
+                "plan_name": plan_name,
+                "story_key": story_key,
+                "outcome": outcome,
+            },
+        )
+    except Exception:  # noqa: BLE001 - cleanup is best effort, never fatal
+        logger.warning(
+            "story worktree cleanup raised; worktree left in place",
+            extra={"plan_name": plan_name, "story_key": story_key},
+        )
 
 
 # Story fields patch_story may edit. Deliberately excludes "status" (use
@@ -865,6 +914,11 @@ def bind_to_server(server: Any) -> None:
     )
     server._mark_story_done_impl = _mark_story_done_impl
     server._record_retro_pending = _record_retro_pending
+    # The rebind makes _mark_story_done_impl's bare names resolve against
+    # server.__dict__, so its post-transaction cleanup call needs this binding
+    # too. The helper itself keeps this module's namespace, where
+    # remove_finished_worktree stays the patch point.
+    server._cleanup_finished_worktree = _cleanup_finished_worktree
 
 
 __all__ = [

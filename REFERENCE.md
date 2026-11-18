@@ -233,6 +233,9 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
 
 ### Manual status (kept for the human-driven flow)
 - `mark_story_in_progress(plan_name, story_key)`, `mark_story_done(...)`.
+  `mark_story_done` removes the story's worktree and local branch only when the
+  worktree is clean and inside `WORKTREE_ROOT`; a dirty worktree is kept and
+  logged, and the remote branch is never touched.
 
 ---
 

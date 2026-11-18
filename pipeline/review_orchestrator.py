@@ -38,7 +38,6 @@ from .review_logic import (
 from .review_orchestrator_comments import _format_security_comment
 from .review_refs import _ServerRef
 from .review_verdict_binding import bind_verdict
-from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 from .story_commit import commit_story
 
@@ -189,13 +188,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
 
     plan_role_config = _plan_role_config(plan_name)
-    # The plan's layer routing, resolved once so every reviewer call below is
-    # served by the same backend the review resource gate checked
-    # (pipeline/usage.py::_role_resource_ok): a routed team whose review role
-    # points elsewhere must not be gated on one backend and reviewed on another
-    # - the incident class usage.py documents. Resolved here, not at each call,
-    # so a mid-review settings change can't split the scope within one cycle.
-    layer_routing = layer_routing_for_plan(plan_name)
     # Captured before invoking the reviewer: a later APPROVE_WITH_FIX is
     # verified against it, and the verdict is bound to the sha the reviewer
     # actually saw (issue 9012b28e). None -> unverifiable; never crash review.
@@ -288,7 +280,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     branch,
                     backend_name=_escalation_backend,
                     plan_role_config=plan_role_config,
-                    **layer_routing_kwargs(layer_routing),
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
                     **prior_kw,
@@ -298,7 +289,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     worktree,
                     branch,
                     plan_role_config=plan_role_config,
-                    **layer_routing_kwargs(layer_routing),
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
                     **prior_kw,
@@ -394,7 +384,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 branch,
                 backend_name=fallback_mode,
                 plan_role_config=plan_role_config,
-                **layer_routing_kwargs(layer_routing),
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -433,7 +422,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 branch,
                 backend_name=_escalation_backend,
                 plan_role_config=plan_role_config,
-                **layer_routing_kwargs(layer_routing),
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -443,7 +431,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 worktree,
                 branch,
                 plan_role_config=plan_role_config,
-                **layer_routing_kwargs(layer_routing),
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -494,7 +481,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             security_output = _run_security_reviewer(
                 worktree, branch, since_sha=story.get("last_reviewed_sha"),
                 plan_role_config=plan_role_config,
-                **layer_routing_kwargs(layer_routing),
             )
         except backend.RateLimitedError:
             # OA2-04: mirror the main reviewer's rate-limit deferral. A 429 on

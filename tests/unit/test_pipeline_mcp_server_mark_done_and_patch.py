@@ -421,43 +421,6 @@ def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     assert captured["plan_role_config"] == {"review": {"provider": "ollama"}}
 
 
-def test_review_story_passes_the_plans_layer_routing_to_reviewer(
-    plan_dir, agents_dir, monkeypatch,
-):
-    """End-to-end: the plan's ``role_routing`` setting must reach _run_reviewer.
-
-    The review resource gate resolves the review role WITH the plan's layer
-    routing (pipeline/usage.py::_role_resource_ok), so the reviewer itself must
-    resolve the same scope - otherwise the gate and the reviewer disagree about
-    which backend serves review, the incident class usage.py documents. The AST
-    pins in test_role_routing_runtime prove the call sites forward it; this
-    proves the resolution reads the plan's scope at all.
-    """
-    from pipeline import settings_store
-
-    routing = {"review": {"provider": "openai", "model": "gpt-4o-layer"}}
-    monkeypatch.setattr(
-        settings_store, "effective_setting",
-        lambda key, **kwargs: {"key": key, "value": routing, "source": "team"},
-    )
-    _write_manifest(plan_dir, "rvroute", {
-        "S1": {"summary": "Add thing", "status": "tests_passed",
-               "worktree": str(plan_dir / "wt"), "risk": "low"},
-    })
-    captured = {}
-
-    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, **kwargs):
-        captured.update(kwargs, plan_role_config=plan_role_config, backend_name=backend_name)
-        return "VERDICT: APPROVE"
-
-    monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
-    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
-
-    p.review_story("rvroute", "S1")
-
-    assert captured.get("layer_routing") == routing
-
-
 def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypatch):
     # T11 (2026-07-12): updated. This test's reviewer stub is a bare
     # "VERDICT: REQUEST_CHANGES" with no findings text - previously asserted

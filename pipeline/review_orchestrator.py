@@ -284,7 +284,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     worktree,
                     branch,
                     backend_name=_escalation_backend,
-                    plan_role_config=plan_role_config, layer_routing=layer_routing,
+                    plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
                     **prior_kw,

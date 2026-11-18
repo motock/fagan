@@ -278,7 +278,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # per-story override, so this is the one seam that needs an explicit
             # check. The target is Claude by default; PIPELINE_ESCALATION_BACKEND
             # retargets it (e.g. to a non-Claude provider while Claude is capped).
-            _escalation_backend = _escalation_target()[0]
+            _escalation_backend = _escalation_target(**layer_routing_kwargs(layer_routing))[0]
             reviewer_output = (
                 _run_reviewer(
                     worktree,

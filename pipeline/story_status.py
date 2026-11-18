@@ -63,6 +63,7 @@ from .parsers import (
 )
 from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .story_fields import merge_into_fresh_manifest
 from .story_status_records import (
     _clear_failure_streaks,

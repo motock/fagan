@@ -36,6 +36,7 @@ from .rebrief import (
 from .role_routing_scope import (
     layer_routing_for_manifest,
     layer_routing_for_plan,
+    layer_routing_kwargs,
 )
 
 # The plan's record store, resolved at CALL time through the live
@@ -295,7 +296,7 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     # Only the plan name is in scope here, so the scope is read exactly as
     # pipeline.ci.settings_for_plan reads it (same plan-keyed manifest).
     _lr = layer_routing_for_plan(plan_name)
-    backend, model = _escalation_target(**({"layer_routing": _lr} if _lr else {}))
+    backend, model = _escalation_target(**layer_routing_kwargs(_lr))
     story["backend"] = backend
     if model:
         story["model"] = model

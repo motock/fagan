@@ -41,7 +41,7 @@ from .rebrief import (
 _store = _ServerRef("_store")
 
 
-def _escalation_target() -> tuple[str, str | None]:
+def _escalation_target(layer_routing: dict | None = None) -> tuple[str, str | None]:
     """Resolve the backend (and optional model) a stuck story escalates TO.
 
     Historically every escalation path flipped the story to Claude. With
@@ -72,7 +72,9 @@ def _escalation_target() -> tuple[str, str | None]:
         model = (os.environ.get("PIPELINE_ESCALATION_MODEL") or "").strip() or None
         return backend, model
     try:
-        resolution = role_registry.resolve_role("dispatch")
+        resolution = role_registry.resolve_role(
+            "dispatch", layer_routing=layer_routing
+        )
     except role_registry.RoleRegistryError:
         logging.getLogger("pipeline").warning(
             "role_registry could not resolve the dispatch role for "

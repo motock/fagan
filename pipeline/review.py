@@ -236,6 +236,7 @@ def _materialize_review_diff(worktree: str, base_ref: str) -> str | None:
 def _run_reviewer(
     worktree: str, branch: str, backend_name: str | None = None,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
     since_sha: str | None = None,
     risk: str = "low",
     prior_feedback: str | None = None,
@@ -303,6 +304,7 @@ def _run_reviewer(
     # provider, exactly as it already won over the plain env lookup.
     resolution = role_registry.resolve_role(
         "review", plan_role_config=plan_role_config,
+        layer_routing=layer_routing,
         model_fallback=lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
     )
     model = resolution.model
@@ -592,6 +594,7 @@ def _run_reviewer(
 def _run_security_reviewer(
     worktree: str, branch: str, since_sha: str | None = None,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
     context_block: str = "",
 ) -> str:
     """Run the security-engineer persona over a branch and return its raw output.
@@ -619,6 +622,7 @@ def _run_security_reviewer(
     body = _persona_body("security-engineer")
     resolution = role_registry.resolve_role(
         "security", plan_role_config=plan_role_config,
+        layer_routing=layer_routing,
         model_fallback=lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
     )
     model = resolution.model

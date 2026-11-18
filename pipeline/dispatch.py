@@ -39,6 +39,7 @@ from .dispatch_routing import (
     _resolve_dispatch_target,
 )
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
+from .role_routing_scope import layer_routing_for_plan
 from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
 from .story_fields import record_dispatch_baseline
@@ -60,9 +61,7 @@ WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
 LogicalState = _ServerRef("LogicalState")
 _acceptance_rel_paths = _ServerRef("_acceptance_rel_paths")
 _build_dispatch_command = _ServerRef("_build_dispatch_command")
-_exclude_worktree_logs_from_tracking = _ServerRef(
-    "_exclude_worktree_logs_from_tracking"
-)
+_exclude_worktree_logs_from_tracking = _ServerRef("_exclude_worktree_logs_from_tracking")
 _persona_requires_claude = _ServerRef("_persona_requires_claude")
 _plan_role_config = _ServerRef("_plan_role_config")
 _provision_worktree_venv = _ServerRef("_provision_worktree_venv")
@@ -362,7 +361,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # _resolve_dispatch_target, so a registry-pinned roles.dispatch
         # model actually runs instead of the driver's env default.
         dispatch_backend, dispatch_model = _resolve_dispatch_target(
-            story, plan_role_config=_plan_role_config(plan_name)
+            story, plan_role_config=_plan_role_config(plan_name), layer_routing=layer_routing_for_plan(plan_name)
         )
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
@@ -828,7 +827,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         local_model=spec["model"],
                         review_feedback=review_feedback,
                         fix_checklist=fix_checklist,
-                        plan_role_config=_plan_role_config(plan_name),
+                        plan_role_config=_plan_role_config(plan_name), layer_routing=layer_routing_for_plan(plan_name),
                     )
                     if rework_tests_committed:
                         story["rework_test_author_done_for_sha"] = current_sha

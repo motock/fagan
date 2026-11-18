@@ -377,7 +377,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
-                f"{_escalation_label()} (no local_model_fallback configured).",
+                f"{_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} (no local_model_fallback configured).",
                 story_key=story_key,
                 event="escalated",
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),

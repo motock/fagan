@@ -404,15 +404,47 @@ the gateway in `model_registry.json`:
 }
 ```
 
-Two credentials configure it, both resolved per namespace:
+The provider is registered as `gateway` in every provider surface: the
+`app.inference_providers` provider registry, the backend driver table
+(`app.backend._DRIVERS["gateway"]` is
+`functools.partial(OllamaDriver, provider_name="gateway")`), the hosted-provider
+set and the strength classifier. Its `default_endpoint` is deliberately empty:
+`PIPELINE_LOCAL_ENDPOINT` / `PIPELINE_LOCAL_ENDPOINT_GATEWAY` are **ignored**
+for this provider, because the environment is per process while the tenant is
+per namespace. Select it with `PIPELINE_LOCAL_PROVIDER=gateway` or a plan
+provider of `gateway`.
 
-| Credential | Purpose | Name |
-| --- | --- | --- |
-| `gateway_base_url` | the gateway base URL | `model` |
-| `gateway_api_key` | the gateway API key | `model` |
+Two per-namespace credentials configure it, both with purpose `model`:
 
-The base URL must use `https` and its host must resolve to a public address;
-a private or unroutable address is refused before any request is sent.
+| Credential name | Holds |
+| --- | --- |
+| `gateway_base_url` | the gateway's base URL, e.g. `https://gw.acme.example` (the `/v1/chat/completions` path is appended) |
+| `gateway_api_key` | the API key sent as `Authorization: Bearer <key>` |
+
+Both are resolved on **every** call for the *current namespace*, and neither
+has an environment-variable fallback (they are intentionally absent from
+`app.credentials`' legacy-env map and env allowlist): a deployment-wide
+fallback would send one tenant's key to another tenant's host. Point each
+namespace at its own secret, either as a file reference
+
+```json
+{
+  "purpose": "model",
+  "name": "gateway_api_key",
+  "secret_ref": "secret://file/gateway/acme-api-key"
+}
+```
+
+(`secret://file/...` is resolved by the file credential provider for any
+purpose/name pair, under the configured secret root) or as a value admitted by
+the enterprise credential overlay, which admits the two gateway refs
+separately from the built-in ones.
+
+The base URL must use `https` **and** its host must resolve to a *public*
+address; a plain-`http`, loopback, private or metadata-service address is
+refused before any request is sent, and the connection is pinned to the
+address that was validated. A namespace with no gateway credential fails
+loudly instead of falling back to another tenant's endpoint.
 
 
 ## 4. Configuration reference

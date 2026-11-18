@@ -294,8 +294,8 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     _stamp_first_dispatch(story)
     # Only the plan name is in scope here, so the scope is read exactly as
     # pipeline.ci.settings_for_plan reads it (same plan-keyed manifest).
-    _layer_routing = layer_routing_for_plan(plan_name)
-    backend, model = _escalation_target(layer_routing=_layer_routing)
+    _lr = layer_routing_for_plan(plan_name)
+    backend, model = _escalation_target(**({"layer_routing": _lr} if _lr else {}))
     story["backend"] = backend
     if model:
         story["model"] = model
@@ -319,7 +319,7 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     )
     _notify_user(
         plan_name,
-        f"{story_key} escalating to {_escalation_label(_layer_routing)} ({reason}); "
+        f"{story_key} escalating to {_escalation_label(_lr)} ({reason}); "
         f"retrying the same worktree with a fresh budget.",
         story_key=story_key,
         event="escalated",

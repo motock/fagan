@@ -63,7 +63,6 @@ from .parsers import (
 )
 from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
-from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .story_fields import merge_into_fresh_manifest
 from .story_status_records import (
     _clear_failure_streaks,
@@ -180,8 +179,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
-                        story_key=story_key,
-                        **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
+                        story_key=story_key)
                     story["dispatch_error"] = dispatch_error
                     # OA2-03 convergence: at the threshold, stop resuming the
                     # same struggling local model. Produce the SAME
@@ -213,13 +211,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             and _auto_escalation_enabled()  # noqa: F821
                             and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
                             and not story.get("escalated")
-                            and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
+                            and _escalation_target() != (story.get("backend"), story.get("model"))
                         ):
                             _escalate_to_claude(manifest, plan_name, story_key)
                             _notify_user(  # noqa: F821
                                 plan_name,
                                 f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
-                                f"on {current_model}; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} (no "
+                                f"on {current_model}; escalating to {_escalation_label()} (no "
                                 f"local_model_fallback configured).",
                                 story_key=story_key,
                                 event="escalated",
@@ -370,7 +368,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             and _auto_escalation_enabled()  # noqa: F821
             and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             and not story.get("escalated")
-            and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
+            and _escalation_target() != (story.get("backend"), story.get("model"))
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
             _escalate_to_claude(manifest, plan_name, story_key)
@@ -378,7 +376,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
-                f"{_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} (no local_model_fallback configured).",
+                f"{_escalation_label()} (no local_model_fallback configured).",
                 story_key=story_key,
                 event="escalated",
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
@@ -417,8 +415,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # diagnosis leaves agent_instructions untouched (no-op).
         _rebrief_step_cap_struggle(  # noqa: F821
             story, str(worktree), plan_role_config=manifest.get("role_config"),
-            plan_name=plan_name, story_key=story_key,
-            **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
+            plan_name=plan_name,
+            story_key=story_key)
         # Worktree hygiene: append the cleanup-guidance section so the resumed
         # agent tidies the worktree before continuing. Unconditional and
         # idempotent (append_cleanup_guidance is a no-op when its header is
@@ -468,7 +466,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             and _auto_escalation_enabled()  # noqa: F821
             and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             and not story.get("escalated")
-            and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
+            and _escalation_target() != (story.get("backend"), story.get("model"))
         ):
             # No local_model_fallback opt-in for this plan: under auto
             # dispatch, escalate to Claude instead of cycling on the same
@@ -485,7 +483,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
-                    f"on {current_model}; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} (no "
+                    f"on {current_model}; escalating to {_escalation_label()} (no "
                     f"local_model_fallback configured).",
                     story_key=story_key,
                     event="escalated",
@@ -839,7 +837,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 if (
                     _auto_escalation_enabled()  # noqa: F821
                     and not story.get("escalated")
-                    and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
+                    and _escalation_target() != (story.get("backend"), story.get("model"))
                 ):
                     _escalate_review_to_claude(
                         story,
@@ -879,8 +877,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             (worktree / ".agent_transcript.json").unlink(missing_ok=True)
             _rebrief_step_cap_struggle(  # noqa: F821
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
-                plan_name=plan_name, story_key=story_key,
-                **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
+                plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
             bound_records.put_manifest(_store, plan_name,  # noqa: F821
                 merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from .module_ref import _ModuleRef
-from .role_routing_scope import layer_routing_kwargs
 from .service import _ServerRef
 
 _module_level_function_names = _ServerRef("_module_level_function_names")
@@ -181,8 +180,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
 
 def _rebrief_step_cap_struggle(
     story: dict[str, Any], worktree: str, plan_role_config: dict | None = None,
-    plan_name: str | None = None, story_key: str | None = None,
-    layer_routing: dict | None = None,
+    plan_name: str | None = None, story_key: str | None = None
 ) -> None:
     """CLAUDE.md Step 9: when an implementer hits the step cap, diagnose where
     it struggled and fold the root cause into agent_instructions so the resume
@@ -210,9 +208,7 @@ def _rebrief_step_cap_struggle(
         logging.getLogger("pipeline").debug(
             "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
             exc_info=True)
-    diagnosis = diagnose_failure(
-        evidence, story, plan_role_config, **layer_routing_kwargs(layer_routing)
-    )
+    diagnosis = diagnose_failure(evidence, story, plan_role_config)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     # After the diagnosis, never before: composing a diagnosis truncates the

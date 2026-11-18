@@ -31,7 +31,6 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label, _escalation_target)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
-from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
 from .triage_digest import sweep_digest
 from .test_scope_run import is_scoped
@@ -201,7 +200,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
+                and _escalation_target() != (story.get("backend"), story.get("model"))
             ):
                 _escalate_to_claude(
                     manifest, plan_name, story_key
@@ -209,7 +208,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
                 _notify_escalate_model(
                     plan_name, story_key, story,
                     f"{story_key} triage ruled escalate_model; escalating to "
-                    f"{_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))}.",
+                    f"{_escalation_label()}.",
                     "escalated",
                 )
                 return "escalate_model"

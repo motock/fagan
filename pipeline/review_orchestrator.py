@@ -38,7 +38,6 @@ from .review_logic import (
 from .review_orchestrator_comments import _format_security_comment
 from .review_refs import _ServerRef
 from .review_verdict_binding import bind_verdict
-from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 from .story_commit import commit_story
 
@@ -189,10 +188,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
 
     plan_role_config = _plan_role_config(plan_name)
-    # The team's role_routing layer, resolved for THIS plan's scope. It rides
-    # beside plan_role_config - never merged into it - because resolve_role
-    # honours a layer model only when the layer provider is the one that won.
-    layer_routing = layer_routing_for_manifest(manifest)
     # Captured before invoking the reviewer: a later APPROVE_WITH_FIX is
     # verified against it, and the verdict is bound to the sha the reviewer
     # actually saw (issue 9012b28e). None -> unverifiable; never crash review.
@@ -278,13 +273,13 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # per-story override, so this is the one seam that needs an explicit
             # check. The target is Claude by default; PIPELINE_ESCALATION_BACKEND
             # retargets it (e.g. to a non-Claude provider while Claude is capped).
-            _escalation_backend = _escalation_target(**layer_routing_kwargs(layer_routing))[0]
+            _escalation_backend = _escalation_target()[0]
             reviewer_output = (
                 _run_reviewer(
                     worktree,
                     branch,
                     backend_name=_escalation_backend,
-                    plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                    plan_role_config=plan_role_config,
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
                     **prior_kw,
@@ -293,7 +288,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 else _run_reviewer(
                     worktree,
                     branch,
-                    plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                    plan_role_config=plan_role_config,
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
                     **prior_kw,
@@ -388,7 +383,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 worktree,
                 branch,
                 backend_name=fallback_mode,
-                plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -426,7 +421,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 worktree,
                 branch,
                 backend_name=_escalation_backend,
-                plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -435,7 +430,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             else _run_reviewer(
                 worktree,
                 branch,
-                plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
                 **prior_kw,
@@ -485,7 +480,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         try:
             security_output = _run_security_reviewer(
                 worktree, branch, since_sha=story.get("last_reviewed_sha"),
-                plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
+                plan_role_config=plan_role_config,
             )
         except backend.RateLimitedError:
             # OA2-04: mirror the main reviewer's rate-limit deferral. A 429 on
@@ -575,7 +570,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target(**layer_routing_kwargs(layer_routing)) != (story.get("backend"), story.get("model"))
+                and _escalation_target() != (story.get("backend"), story.get("model"))
             ):
                 _escalate_review_to_claude(
                     story,
@@ -632,7 +627,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target(**layer_routing_kwargs(layer_routing)) != (story.get("backend"), story.get("model"))
+                and _escalation_target() != (story.get("backend"), story.get("model"))
             ):
                 _escalate_review_to_claude(
                     story,
@@ -939,7 +934,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target(**layer_routing_kwargs(layer_routing)) != (story.get("backend"), story.get("model"))
+                and _escalation_target() != (story.get("backend"), story.get("model"))
             ):
                 _escalate_review_to_claude(
                     story,

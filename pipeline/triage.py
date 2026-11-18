@@ -31,6 +31,7 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label, _escalation_target)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
 from .triage_digest import sweep_digest
 from .test_scope_run import is_scoped

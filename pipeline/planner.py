@@ -545,7 +545,14 @@ def _dispatch_strength_tier(
 
     layer_routing is the team's role_routing setting for this plan's scope;
     it resolves the "dispatch" role exactly as the dispatch path does, so a
-    team that pins dispatch to a local model gets local-sized stories.
+    team that pins dispatch to a local model gets local-sized stories. The
+    caller owns that scope: today the only caller is _run_decompose_detailed,
+    which runs before a plan exists, so it has no (namespace, team, repo)
+    scope to resolve and passes none - the tier then reads the deployment
+    file and the registry, exactly as before. A caller that does hold a plan
+    or manifest scope passes layer_routing_for_plan(plan_name) /
+    layer_routing_for_manifest(manifest), the same value the dispatch path
+    uses, and the sizing follows the team's dispatch pin.
     """
     try:
         resolution = role_registry.resolve_role(

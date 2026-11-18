@@ -3891,9 +3891,14 @@ A **ceiling** key may only be tightened by a lower layer, unless the layer above
 secrets are refused, and a `*_env` name is refused outside the `default`
 namespace. A layer route may name only that layer's own instances, and the
 deployment routes are matched first. `role_routing` values are validated
-against the live model registry when written. Both keys are validated and
-stored, but nothing reads them at runtime yet: notification routing and role
-resolution still come from the deployment file and the registry.
+against the live model registry when written. No
+notification code reads `notification_routes` at runtime yet: notification
+routing still comes from the deployment file. `role_routing` is read: every
+`resolve_role` call on the execution path (dispatch, escalation, the planner,
+decompose, the sizing tier, review, test authoring and usage accounting)
+resolves the team's value for its own plan or manifest scope through
+`pipeline/role_routing_scope.py`, and an unset or unreadable value leaves
+resolution exactly as it was (deployment file, then the registry).
 
 `PIPELINE_SETTINGS_KEYS_PLUGIN=module:attr` lets an operator register extra
 keys alongside the core keys. They are validated on first read, and an invalid

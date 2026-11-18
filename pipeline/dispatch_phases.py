@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import bound_records
+from .role_routing_scope import layer_routing_for_plan
 from .service import _ServerRef
 
 # Server-sourced members this module references as free variables. Each
@@ -90,6 +91,10 @@ def _apply_planner_checklist(
             local_model=spec["model"],
             include_scratchpad=scratchpad_on,
             plan_role_config=_plan_role_config(plan_name),
+            # The team's role_routing for this plan's scope, resolved once
+            # here (hpc-01's shared lookup) so a team that pins the planner
+            # role actually gets it: planner.py only forwards the value.
+            layer_routing=layer_routing_for_plan(plan_name),
             tests_already_authored=test_author_marker.exists(),
             authored_test_files=authored_test_files,
             worktree=str(worktree_path),

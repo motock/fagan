@@ -822,6 +822,15 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     _DECOMPOSE_JSON_RETRY_ATTEMPTS = 2
 
     def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
+        # No layer_routing here, deliberately: decompose runs BEFORE a plan
+        # exists, so there is no stored manifest and therefore no
+        # (namespace, team, repo) scope to resolve the team's role_routing
+        # against (role_routing_for_plan needs one). _run_decompose_detailed
+        # and the sizing tier it drives (_dispatch_strength_tier) thus resolve
+        # the planner/decompose/dispatch roles from plan_role_config, the
+        # deployment file and the registry - the pre-existing shape, unchanged
+        # for every team. The plan-scoped path (dispatch) resolves the value
+        # with layer_routing_for_plan and passes it in.
         text, backend_error = _run_decompose_detailed(request, repo_root=_decompose_context_root(workspace))
         plan: Any = None
         parse_error: json.JSONDecodeError | None = None

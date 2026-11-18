@@ -209,7 +209,9 @@ def _rebrief_step_cap_struggle(
         logging.getLogger("pipeline").debug(
             "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
             exc_info=True)
-    diagnosis = diagnose_failure(evidence, story, plan_role_config)
+    diagnosis = diagnose_failure(
+        evidence, story, plan_role_config, **layer_routing_kwargs(layer_routing)
+    )
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     # After the diagnosis, never before: composing a diagnosis truncates the

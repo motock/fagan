@@ -15,6 +15,7 @@ import inspect
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -285,7 +286,9 @@ def test_gateway_resolves_its_credentials_on_every_call(wire) -> None:
         _chat(provider)
 
     assert len(wire.refs) > first, "credentials are resolved per call"
-    assert wire.calls[-1][1].startswith("https://other-gateway.example")
+    # Exact host equality, not a prefix: a prefix test also accepts
+    # https://other-gateway.example.evil, and code scanning flags it.
+    assert urlsplit(wire.calls[-1][1]).hostname == "other-gateway.example"
     assert wire.refs[-1].namespace == OTHER_NAMESPACE
 
 

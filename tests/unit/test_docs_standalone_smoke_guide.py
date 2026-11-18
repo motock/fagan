@@ -14,11 +14,11 @@ from pathlib import Path
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "DEPLOY_STANDALONE.md"
 
-# A growth cap, not a pin: the guide is at 1290 lines and may not grow by more
-# than 14 lines. This is deliberately not an exact count. The last deliberate
-# raise was the "Hosted Ollama (ollama.com)" section (hpc-03), which documents
-# dispatching through ollama.com instead of a local server.
-MAX_LINES = 1304
+# A growth cap, not a pin: the guide is at 1320 lines and may not grow by more
+# than 14 lines. This is deliberately not an exact count. The last two
+# deliberate raises were the "Hosted Ollama (ollama.com)" section (hpc-03) and
+# the "Customer AI gateway" section (hpc-05).
+MAX_LINES = 1334
 
 
 def _smoke_section(text: str) -> str:

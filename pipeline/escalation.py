@@ -98,7 +98,7 @@ def _escalation_label(layer_routing: dict | None = None) -> str:
     their lowercase driver name. Callers that know the story's settings scope
     pass layer_routing so a team's role_routing reaches resolve_role here
     exactly as it does in the escalation itself."""
-    backend, _ = _escalation_target(layer_routing=layer_routing)
+    backend, _ = _escalation_target(**({"layer_routing": layer_routing} if layer_routing else {}))
     return "Claude" if backend == "claude" else backend
 
 

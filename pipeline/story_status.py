@@ -879,7 +879,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             (worktree / ".agent_transcript.json").unlink(missing_ok=True)
             _rebrief_step_cap_struggle(  # noqa: F821
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
-                plan_name=plan_name, story_key=story_key)
+                plan_name=plan_name, story_key=story_key,
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
             story["status"] = "changes_requested"
             bound_records.put_manifest(_store, plan_name,  # noqa: F821
                 merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821

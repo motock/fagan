@@ -180,7 +180,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
-                        story_key=story_key)
+                        story_key=story_key,
+                        **layer_routing_kwargs(layer_routing_for_manifest(manifest)))
                     story["dispatch_error"] = dispatch_error
                     # OA2-03 convergence: at the threshold, stop resuming the
                     # same struggling local model. Produce the SAME

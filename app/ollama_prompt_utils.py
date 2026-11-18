@@ -12,6 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from app.cloud_served import is_cloud_served
 from pipeline.config_provenance import ENV_VAR_CATALOG
 
 _LOCAL_TIER_ENV = {
@@ -168,16 +169,19 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     "gpt-oss-20b-high:latest": {"num_ctx": 81920},
 }
 
-def _tuned_num_ctx(model_tag: str, fallback: int) -> int:
-    # A ":cloud"-tagged model (deepseek-v4-flash:cloud, glm-5.2:cloud,
-    # minimax-m3:cloud) is a frontier model proxied through the local
-    # Ollama-compatible endpoint, not a constrained on-device model. The
-    # on-device PIPELINE_LOCAL_NUM_CTX ceiling (e.g. 32K) would needlessly
-    # cap and trim its transcript; use a cloud-specific knob so a capable
-    # cloud model keeps its full reasoning context. The ":cloud" suffix is
-    # the existing convention (planner.py:973, backend.py:135). See the
-    # matching max_steps/park relaxation in OllamaDriver.dispatch.
-    if model_tag.endswith(":cloud"):
+def _tuned_num_ctx(model_tag: str, fallback: int, *, endpoint: str = "") -> int:
+    # A cloud-served model (deepseek-v4-flash:cloud, glm-5.2:cloud,
+    # minimax-m3:cloud - or any plain-named tag on a hosted endpoint such as
+    # https://ollama.com) is a frontier model whose weights are not on this
+    # box, not a constrained on-device model. The on-device
+    # PIPELINE_LOCAL_NUM_CTX ceiling (e.g. 32K) would needlessly cap and trim
+    # its transcript; use a cloud-specific knob so a capable cloud model keeps
+    # its full reasoning context. app.cloud_served decides whether the tag is
+    # cloud-served from the ":cloud" suffix, the registry class and the
+    # endpoint, so a hosted endpoint relaxes plain names too. See the matching
+    # max_steps/park relaxation in OllamaDriver.dispatch. *endpoint* defaults
+    # to "" so a caller that does not know the endpoint keeps today's rule.
+    if is_cloud_served("ollama", model_tag, endpoint=endpoint):
         return int(os.environ.get("PIPELINE_CLOUD_NUM_CTX", "131072"))
     env = os.environ.get("PIPELINE_LOCAL_NUM_CTX")
     if env is not None:

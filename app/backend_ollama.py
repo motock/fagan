@@ -20,6 +20,7 @@ import httpx
 
 from app import inference_providers
 from app.backend_types import AgentHandle
+from app.cloud_served import is_cloud_served
 from app.harness import HarnessRequest, get_harness, resolve_harness_name
 from app.ollama_prompt_utils import (  # noqa: F401 (re-exported: OllamaDriver's methods reference these as bare names)
     _LOCAL_DEFAULT_MODEL,
@@ -223,7 +224,7 @@ class OllamaDriver:
         # shadowed by the value captured at OllamaDriver.__init__ time.
         # The actual wire call (request shape, 429 detection, response
         # envelope) lives in self.provider - see inference_providers.py.
-        num_ctx = _tuned_num_ctx(model, self.num_ctx)
+        num_ctx = _tuned_num_ctx(model, self.num_ctx, endpoint=self.endpoint)
         temperature = _tuned_temperature(model, self.temperature)
         think = _tuned_think(model)
         # Returns the full response envelope (not just the "message" body)
@@ -323,7 +324,7 @@ class OllamaDriver:
         as dispatch, plus key-based tool inference, since the local model
         intermittently emits tool calls as text and drops the tool name."""
         resolved_model = _resolve_local_model(model, provider=getattr(self.provider, "name", "ollama"))
-        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
+        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx, endpoint=self.endpoint)
         _append_review_log(
             cwd,
             f"=== review cycle "
@@ -681,7 +682,7 @@ class OllamaDriver:
         # captured at OllamaDriver.__init__ time. Fall back to that captured
         # value when neither is set, so existing callers that rely on the
         # constructor default are not broken.
-        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
+        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx, endpoint=self.endpoint)
         # Resolve temperature: use raw env if set to preserve boundary values
         temp_env = os.environ.get("PIPELINE_LOCAL_TEMPERATURE")
         if temp_env is not None:
@@ -705,8 +706,10 @@ class OllamaDriver:
         max_steps = int(
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
-        # Cloud-model relaxation: a ":cloud"-tagged frontier model proxied
-        # through the local endpoint is not a constrained on-device model.
+        # Cloud-model relaxation: a cloud-served frontier model (a ":cloud"
+        # tag, a registry entry classed capable, or any tag on a hosted
+        # endpoint such as https://ollama.com) is not a constrained on-device
+        # model.
         # Give it a longer step leash than the on-device cap so a hard
         # multi-file story can finish, and disable the weak-model park guards
         # (LOCAL_AGENT_PARK_ENABLED kill-switch) so off-task-drift / read-heavy
@@ -716,7 +719,9 @@ class OllamaDriver:
         # (gemma4, gpt-oss, devstral, qwen-mlx) is untouched - it keeps the
         # 60-step cap and the park guards it needs. An explicit
         # LOCAL_AGENT_PARK_ENABLED in the environment is honored, not clobbered.
-        if resolved_model.endswith(":cloud"):
+        if is_cloud_served(
+            self.provider.name, resolved_model, endpoint=self.endpoint
+        ):
             max_steps = int(
                 os.environ.get("PIPELINE_CLOUD_MAX_STEPS", "120")
             )
@@ -853,10 +858,13 @@ class OllamaDriver:
         # Hosted providers (see _HOSTED_PROVIDERS) serve their models
         # off-host: a hosted model has no local VRAM/RAM footprint, so a
         # free-memory reading is not evidence about whether it can serve -
-        # skip the floor for them the same way it is skipped for :cloud
-        # tags (reachability above still applies).
+        # skip the floor for them the same way it is skipped for cloud-served
+        # models (reachability above still applies). A cloud-served model is
+        # decided by tag suffix, registry class and endpoint together, so a
+        # plain-named model on https://ollama.com skips the floor too.
         if free_mb is not None and not (
-            tag.endswith(":cloud") or self.provider.name in _HOSTED_PROVIDERS
+            is_cloud_served(self.provider.name, tag, endpoint=self.endpoint)
+            or self.provider.name in _HOSTED_PROVIDERS
         ):
             provider_env = f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{self.provider.name.upper()}"
             provider_default = _PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS.get(

@@ -13,8 +13,11 @@ Derivation, in order of precedence:
    registry's ``providers.<provider>.models.<name>`` entry (any other value is
    ignored and logged once, never guessed at);
 2. the provider -- ``claude`` and ``litellm`` are capable;
-3. an ``ollama`` model tag ending ``:cloud`` is capable (cloud weights run on
-   hardware that is not the local box, mirroring
+3. an ``ollama`` model that is cloud-served -- a tag ending ``:cloud``, a
+   registry entry classed ``capable``, or (when the caller passes the
+   endpoint) a plain tag served from a remote endpoint such as
+   ``https://ollama.com`` -- is capable (cloud weights run on hardware that is
+   not the local box, mirroring
    ``pipeline.ingest._on_device_route_target``'s definition of on-device);
 4. everything else is on-device.
 """
@@ -23,11 +26,12 @@ from __future__ import annotations
 import logging
 import os
 
+from app.cloud_served import endpoint_from_env, is_cloud_served
+
 CAPABLE = "capable"
 ON_DEVICE = "on-device"
 
 _CAPABLE_PROVIDERS = frozenset({"claude", "litellm"})
-_CLOUD_TAG_SUFFIX = ":cloud"
 _VALID_CLASSES = (CAPABLE, ON_DEVICE)
 _ROLE = "dispatch"
 
@@ -40,14 +44,26 @@ logger = logging.getLogger(__name__)
 
 
 def strength_class(
-    provider: str, model_tag: str | None, entry_class: str | None = None
+    provider: str,
+    model_tag: str | None,
+    entry_class: str | None = None,
+    *,
+    endpoint: str | None = None,
 ) -> str:
     """Return the strength class for *provider* dispatching to *model_tag*.
 
-    An explicit *entry_class* of exactly ``"capable"`` or ``"on-device"`` wins
+    An explicit *entry_class* of exactly ``"capable"``/``"on-device"`` wins
     outright, in both directions. Any other non-None value is ignored (not an
     error) and logged once per process; derivation then proceeds as if it were
-    absent. Never raises.
+    absent.
+
+    *endpoint* is optional and only used when the caller actually knows which
+    Ollama endpoint will serve the model: ``None`` (the default) means "not
+    known", so a plain-named tag keeps today's on-device derivation. A caller
+    that knows it (e.g. :func:`dispatch_strength_class`, reading
+    ``PIPELINE_LOCAL_ENDPOINT_OLLAMA``/``PIPELINE_LOCAL_ENDPOINT``) passes it
+    so a plain-named model on ``https://ollama.com`` classifies capable --
+    see :func:`app.cloud_served.is_cloud_served`. Never raises.
     """
     global _INVALID_ENTRY_CLASS_WARNED
 
@@ -65,7 +81,12 @@ def strength_class(
     if provider_name in _CAPABLE_PROVIDERS:
         return CAPABLE
     tag = str(model_tag or "").strip().lower()
-    if provider_name == "ollama" and tag.endswith(_CLOUD_TAG_SUFFIX):
+    # The ":cloud" suffix, the registry class and the endpoint are one
+    # question - app.cloud_served owns it so this module cannot drift from
+    # the dispatch path's sizing decisions.
+    if provider_name == "ollama" and is_cloud_served(
+        provider_name, tag, endpoint=endpoint or ""
+    ):
         return CAPABLE
     return ON_DEVICE
 
@@ -225,7 +246,25 @@ def dispatch_strength_class(
                 break
 
         tag, declared = _resolve_model(reg, provider, model_value)
-        return strength_class(provider, tag, declared)
+        # This caller does know the endpoint: it is whatever the dispatch path
+        # itself would dial, resolved the same way OllamaDriver's constructor
+        # resolves it (provider-scoped var wins). An explicit *environ*
+        # mapping is authoritative; when the caller passed none, read the
+        # process env directly - `env` above is deliberately narrowed to {}
+        # for a non-dict mapping, and os.environ is not a dict. Absent both,
+        # None keeps the suffix/class rule as-is.
+        if environ is None:
+            endpoint = endpoint_from_env()
+        else:
+            endpoint = env.get("PIPELINE_LOCAL_ENDPOINT_OLLAMA") or env.get(
+                "PIPELINE_LOCAL_ENDPOINT"
+            )
+        return strength_class(
+            provider,
+            tag,
+            declared,
+            endpoint=str(endpoint) if endpoint else None,
+        )
     except Exception:  # noqa: BLE001 - an observability hook must never gate
         logger.debug("strength class derivation failed; assuming on-device")
         return ON_DEVICE

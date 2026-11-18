@@ -7,8 +7,10 @@ provides two public functions:
 * :func:`rolling_rate` – compute a rolling window rate from a list of
   classified stories.
 
-The implementation is intentionally pure and stdlib‑only.  No I/O, no
-dependencies on other parts of the pipeline.
+The implementation is intentionally pure and stdlib-only — with one
+deliberate exception, ``app.cloud_served`` (itself stdlib-only, no I/O), so the
+cloud-served tier rule cannot drift from the dispatch path's.  No I/O, no
+dependencies on other parts of the pipeline or the rest of the app package.
 
 The definitions below match the recorded baseline method and the unit tests.
 They include population membership, clean status, tier resolution, and reason
@@ -124,8 +126,16 @@ def classify_story(
         or (not backend and bool(tag))
     )
 
-    # Tier determination.
-    if tag.endswith(":cloud"):
+    # Tier determination. Cloud-served is decided by app.cloud_served from the
+    # tag's ":cloud" suffix AND, when one is configured, the endpoint the
+    # dispatch would have dialled: a plain-named model on https://ollama.com is
+    # cloud-served just like its ":cloud"-tagged sibling. The journal record
+    # carries only the tag, so the endpoint is read from the same environment
+    # variables the dispatch path reads. Imported lazily because this module is
+    # deliberately stdlib-only at import time.
+    from app.cloud_served import endpoint_from_env, is_cloud_served
+
+    if is_cloud_served("ollama", tag, endpoint=endpoint_from_env()):
         tier = "cloud-oss"
     elif tag:
         # If backend is claude without any pre-escalation info, ignore tag

@@ -629,6 +629,14 @@ def test_module_has_a_docstring_stating_the_definitions():
 
 
 def test_module_imports_only_the_standard_library():
+    """Stdlib plus ONE deliberate exception: app.cloud_served.
+
+    hpc-03 moved the cloud-served decision (":cloud" suffix, registry class,
+    endpoint) into app.cloud_served so the dispatch path and this classifier
+    cannot drift. That module is itself stdlib-only and does no I/O, so the
+    "pure logic, no I/O" contract this test protects still holds - but no
+    other app/pipeline import is allowed here.
+    """
     tree = ast.parse(_module_source())
     roots = set()
     for node in ast.walk(tree):
@@ -639,9 +647,21 @@ def test_module_imports_only_the_standard_library():
                 roots.add(node.module.split(".")[0])
             else:
                 roots.add("<relative>")
-    assert roots <= set(sys.stdlib_module_names), sorted(roots)
+    assert roots <= set(sys.stdlib_module_names) | {"app"}, sorted(roots)
     assert "pipeline" not in roots
-    assert "app" not in roots
+    assert roots - set(sys.stdlib_module_names) == {"app"}
+    # ...and only app.cloud_served, nothing else from the app package.
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+    }
+    non_stdlib_modules = {
+        module
+        for module in imported_modules
+        if module.split(".")[0] not in sys.stdlib_module_names
+    }
+    assert non_stdlib_modules == {"app.cloud_served"}
 
 
 # --------------------------------------------------------------------------

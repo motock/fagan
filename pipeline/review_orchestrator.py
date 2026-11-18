@@ -632,7 +632,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target() != (story.get("backend"), story.get("model"))
+                and _escalation_target(**layer_routing_kwargs(layer_routing)) != (story.get("backend"), story.get("model"))
             ):
                 _escalate_review_to_claude(
                     story,

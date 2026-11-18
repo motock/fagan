@@ -180,7 +180,8 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
 
 def _rebrief_step_cap_struggle(
     story: dict[str, Any], worktree: str, plan_role_config: dict | None = None,
-    plan_name: str | None = None, story_key: str | None = None
+    plan_name: str | None = None, story_key: str | None = None,
+    layer_routing: dict | None = None,
 ) -> None:
     """CLAUDE.md Step 9: when an implementer hits the step cap, diagnose where
     it struggled and fold the root cause into agent_instructions so the resume

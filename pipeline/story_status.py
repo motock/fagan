@@ -55,7 +55,6 @@ from .escalation import (
     _escalation_label,
     _escalation_target,
 )
-from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .git_ops import _commit_wip, _untrack_scratchpad
 from .no_progress import classify_no_progress
 from .parsers import (

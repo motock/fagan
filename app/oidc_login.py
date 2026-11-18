@@ -74,7 +74,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Request
 
-from . import oidc
+from . import oidc, outbound_guard
 from .identity import IdentityError, Principal
 
 logger = logging.getLogger("pipeline.auth")
@@ -389,12 +389,7 @@ def _read_document(response: httpx.Response) -> Any:
 
 def _client_for(url: str, address: str) -> httpx.Client:
     """A client that connects to the already-validated ``address``."""
-    hostname = urllib.parse.urlsplit(url).hostname or ""
-    return httpx.Client(
-        transport=oidc._PinnedTransport(address, hostname),
-        timeout=httpx.Timeout(HTTP_TIMEOUT_S),
-        follow_redirects=False,
-    )
+    return outbound_guard.pinned_client(url, address, HTTP_TIMEOUT_S)
 
 
 def _fetch_json(url: str, *, allow_private: bool = False) -> dict[str, Any]:
@@ -404,7 +399,7 @@ def _fetch_json(url: str, *, allow_private: bool = False) -> dict[str, Any]:
     pinned for the connection, so a discovery document or token endpoint on a
     private address is refused instead of probed.
     """
-    address = oidc._resolve(url, allow_private=allow_private)
+    address = outbound_guard.resolve_public_address(url, allow_private=allow_private)
     if address is None:
         raise OidcLoginError("identity provider address refused")
     try:
@@ -428,7 +423,7 @@ def _post_form(
     url: str, form: dict[str, str], *, allow_private: bool = False
 ) -> dict[str, Any]:
     """POST ``form`` to the token endpoint over the address-checked transport."""
-    address = oidc._resolve(url, allow_private=allow_private)
+    address = outbound_guard.resolve_public_address(url, allow_private=allow_private)
     if address is None:
         raise OidcLoginError("identity provider address refused")
     try:

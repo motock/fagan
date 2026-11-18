@@ -192,9 +192,8 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # when one is configured - the default leaves story["model"] untouched so
     # Claude dispatch resolves its own model exactly as before this existed.
     _stamp_first_dispatch(story)
-    backend, model = _escalation_target(
-        layer_routing=layer_routing_for_manifest(manifest)
-    )
+    _lr = layer_routing_for_manifest(manifest)
+    backend, model = _escalation_target(**({"layer_routing": _lr} if _lr else {}))
     story["backend"] = backend
     if model:
         story["model"] = model

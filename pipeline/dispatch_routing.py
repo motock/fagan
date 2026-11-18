@@ -13,6 +13,7 @@ from typing import Any
 from app import role_registry
 
 from .module_ref import _ModuleRef
+from .role_routing_scope import layer_routing_kwargs
 
 _route_dispatch_backend = _ModuleRef("pipeline.dispatch", "_route_dispatch_backend")
 _persona_requires_claude = _ModuleRef("pipeline.dispatch", "_persona_requires_claude")
@@ -80,7 +81,7 @@ def _dispatch_fallback_provider(
                 {"dispatch": {"provider": plan_provider}} if plan_provider else None
             ),
             model_fallback=lambda: "unpinned",
-            layer_routing=layer_routing,
+            **layer_routing_kwargs(layer_routing),
         ).provider
     except role_registry.RoleRegistryError:
         # Malformed roles.dispatch entry: fall back to the pre-registry
@@ -93,7 +94,7 @@ def _dispatch_fallback_provider(
             ),
             registry={"providers": {}, "roles": {}},
             model_fallback=lambda: "unpinned",
-            layer_routing=layer_routing,
+            **layer_routing_kwargs(layer_routing),
         ).provider
 
 
@@ -183,7 +184,8 @@ def _resolve_dispatch_target(
     """
     try:
         resolution = role_registry.resolve_role(
-            "dispatch", plan_role_config=plan_role_config, layer_routing=layer_routing
+            "dispatch", plan_role_config=plan_role_config,
+            **layer_routing_kwargs(layer_routing),
         )
     except role_registry.RoleRegistryError:
         # Two distinct failure shapes:

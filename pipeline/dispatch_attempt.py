@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .module_ref import _ModuleRef
+from .role_routing_scope import layer_routing_for_plan
 from .service import _ServerRef
 
 _module_level_function_names = _ServerRef("_module_level_function_names")
@@ -193,6 +194,10 @@ def _rebrief_step_cap_struggle(
     diagnosis block, so repeated step-caps keep the prompt bounded and refresh
     with the latest struggle. Must run while the worktree still exists - the
     evidence is the tail of its agent.log."""
+    # A plan-scoped resolution: the team's role_routing reaches the diagnosis
+    # role. No plan name means no scope at all - ``{}`` (never None), so the
+    # downstream resolver keeps its pre-existing default behaviour.
+    layer_routing = layer_routing_for_plan(plan_name) if plan_name else {}
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
     previous_instructions = story.get("agent_instructions", "")
@@ -208,7 +213,8 @@ def _rebrief_step_cap_struggle(
         logging.getLogger("pipeline").debug(
             "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
             exc_info=True)
-    diagnosis = diagnose_failure(evidence, story, plan_role_config)
+    diagnosis = diagnose_failure(
+        evidence, story, plan_role_config, layer_routing=layer_routing)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     # After the diagnosis, never before: composing a diagnosis truncates the

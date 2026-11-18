@@ -167,9 +167,10 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # diagnose_failure fails open (returns None) on any error, in which case
     # compose_rebriefed_instructions is a no-op and this is a plain blind
     # retry exactly as before this existed.
+    layer_routing = layer_routing_for_manifest(manifest)
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story)
+    diagnosis = diagnose_failure(evidence, story, layer_routing=layer_routing)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(
@@ -193,8 +194,7 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # when one is configured - the default leaves story["model"] untouched so
     # Claude dispatch resolves its own model exactly as before this existed.
     _stamp_first_dispatch(story)
-    _lr = layer_routing_for_manifest(manifest)
-    backend, model = _escalation_target(**layer_routing_kwargs(_lr))
+    backend, model = _escalation_target(**layer_routing_kwargs(layer_routing))
     story["backend"] = backend
     if model:
         story["model"] = model
@@ -240,9 +240,10 @@ def _escalate_to_local_fallback_model(
     # diagnose_failure fails open (returns None) on any error, in which case
     # compose_rebriefed_instructions is a no-op and this is a plain blind
     # retry exactly as before this existed.
+    layer_routing = layer_routing_for_manifest(manifest)
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story)
+    diagnosis = diagnose_failure(evidence, story, layer_routing=layer_routing)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(

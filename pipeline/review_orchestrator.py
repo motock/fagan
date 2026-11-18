@@ -189,6 +189,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
 
     plan_role_config = _plan_role_config(plan_name)
+    # The team's role_routing layer, resolved for THIS plan's scope. It rides
+    # beside plan_role_config - never merged into it - because resolve_role
+    # honours a layer model only when the layer provider is the one that won.
+    layer_routing = layer_routing_for_manifest(manifest)
     # Captured before invoking the reviewer: a later APPROVE_WITH_FIX is
     # verified against it, and the verdict is bound to the sha the reviewer
     # actually saw (issue 9012b28e). None -> unverifiable; never crash review.

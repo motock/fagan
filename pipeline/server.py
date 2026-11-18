@@ -344,6 +344,7 @@ from .review import (
     _run_reviewer,
     _run_security_reviewer,
 )
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 
 # MCP self-modification detection. The running MCP server does not hot-reload
 # its own source, so a merge that changes it needs an explicit operator notice.

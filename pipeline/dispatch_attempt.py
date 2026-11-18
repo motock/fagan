@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .module_ref import _ModuleRef
+from .role_routing_scope import layer_routing_kwargs
 from .service import _ServerRef
 
 _module_level_function_names = _ServerRef("_module_level_function_names")

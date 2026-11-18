@@ -200,7 +200,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
             if (
                 _auto_escalation_enabled()
                 and not story.get("escalated")
-                and _escalation_target() != (story.get("backend"), story.get("model"))
+                and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
             ):
                 _escalate_to_claude(
                     manifest, plan_name, story_key

@@ -2150,6 +2150,8 @@ Use `get_effective_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before
 running that plan.
 
+For a plan, a role whose provider/model came from the plan's team `role_routing` setting reports `settings:<layer>` (`org`, `team` or `team_repo`) as its source, naming the settings layer that supplied it.
+
 Each env-var entry in that view carries `effective` (the value *this process*
 resolves, not necessarily the deployment's) and a boolean `process_scoped`.
 `process_scoped` is `true` when `source` is `code_default` but a launcher layer

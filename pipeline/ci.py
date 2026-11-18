@@ -41,7 +41,7 @@ from .config_provenance import (
     _claude_json_path,
     _scheduler_plist_path,
     effective_env_config,
-    effective_role_config,
+    effective_role_config_with_routing,
     ignored_env_vars_present,
     settings_entries,
 )
@@ -641,7 +641,14 @@ def _get_effective_config_impl(
     except role_registry.RoleRegistryError:
         registry = {}
 
-    roles = effective_role_config(
+    # The plan's own role_routing setting is one of the layers a role's
+    # provider/model can come from, so the view names it (settings:<layer>)
+    # instead of stopping at the registry. Reporting only: dispatch and review
+    # read the same setting themselves before they resolve a role.
+    from .role_routing_scope import layer_routing_setting_for_plan
+
+    roles = effective_role_config_with_routing(
+        layer_routing_setting_for_plan(plan_name) if plan_name else {},
         plan_role_config=plan_role_config,
         registry=registry,
         model_fallbacks=model_fallbacks,

@@ -218,7 +218,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             _notify_user(  # noqa: F821
                                 plan_name,
                                 f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
-                                f"on {current_model}; escalating to {_escalation_label()} (no "
+                                f"on {current_model}; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} (no "
                                 f"local_model_fallback configured).",
                                 story_key=story_key,
                                 event="escalated",

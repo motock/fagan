@@ -27,6 +27,7 @@ from typing import Protocol
 import httpx
 
 from app.credentials import CredentialMissing, CredentialRef, resolve_for_injection
+from app.gateway_provider import GatewayProvider
 from pipeline.actor import current_namespace
 
 # The 2026-09-02 scheduler freeze (daemon pid 1609 blocked ~40 min in
@@ -171,6 +172,7 @@ def ollama_auth_kwargs() -> dict:
     return {}
 
 
+
 class OllamaProvider:
     """Ollama's native /api/chat endpoint (not the OpenAI-compatible /v1
     surface - only the native API accepts `options.num_ctx`, which matters
@@ -239,6 +241,54 @@ class OllamaProvider:
             return False, f"Ollama endpoint {endpoint} unreachable: {e}"
 
 
+def openai_chat_body(
+    messages: list, *, model: str, num_ctx: int, temperature: float,
+    tools: list | None = None,
+) -> dict:
+    """The OpenAI-compatible ``/v1/chat/completions`` request body.
+
+    Shared by every provider that speaks OpenAI's chat protocol
+    (LMStudioProvider, and the tenant gateways in
+    :mod:`app.gateway_provider`) so the two mappings can never drift apart.
+    Returns a NEW dict on every call and never mutates ``messages`` or
+    ``tools``: a provider may reuse one caller-owned payload for several
+    requests, and a helper that popped or wrote into it would make the second
+    request go out with no ``model``.
+
+    ``num_ctx`` is sent as ``max_tokens`` (an output-length budget, not a true
+    context-window equivalent) - the OpenAI-compatible surface has no
+    per-request context control. ``tools`` is omitted entirely when falsy so a
+    tool-free request carries no empty ``tools`` array.
+    """
+    body = {
+        "model": model, "messages": messages, "stream": False,
+        "temperature": temperature,
+        "max_tokens": num_ctx,
+    }
+    if tools:
+        body["tools"] = tools
+    return body
+
+
+def openai_response_envelope(payload: dict) -> dict:
+    """Map an OpenAI-compatible response onto Ollama's native envelope shape.
+
+    ``{"choices": [{"message": ...}], "usage": {"prompt_tokens",
+    "completion_tokens"}}`` becomes ``{"message", "prompt_eval_count",
+    "eval_count"}`` - the shape ``OllamaDriver.complete()``/``_review_loop``
+    read - so a provider with a different wire format needs no driver change.
+    A missing or null ``usage`` block counts as zero tokens rather than a
+    KeyError.
+    """
+    message = payload["choices"][0]["message"]
+    usage = payload.get("usage") or {}
+    return {
+        "message": message,
+        "prompt_eval_count": usage.get("prompt_tokens", 0),
+        "eval_count": usage.get("completion_tokens", 0),
+    }
+
+
 class LMStudioProvider:
     """LM Studio's OpenAI-compatible /v1/chat/completions endpoint.
 
@@ -283,13 +333,10 @@ class LMStudioProvider:
         # LM Studio's OpenAI-compatible endpoint has no equivalent field, so
         # it's intentionally unused here.
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
-        body = {
-            "model": model, "messages": messages, "stream": False,
-            "temperature": temperature,
-            "max_tokens": num_ctx,
-        }
-        if tools:
-            body["tools"] = tools
+        body = openai_chat_body(
+            messages, model=model, num_ctx=num_ctx, temperature=temperature,
+            tools=tools,
+        )
         # None (defaulted or explicit) is coerced to the resolved role-call
         # timeout - never an unbounded read on the wire (2026-09-02 freeze).
         wire_timeout = (
@@ -303,14 +350,7 @@ class LMStudioProvider:
                 f"returned 429 (rate limited)"
             )
         resp.raise_for_status()
-        payload = resp.json()
-        message = payload["choices"][0]["message"]
-        usage = payload.get("usage") or {}
-        return {
-            "message": message,
-            "prompt_eval_count": usage.get("prompt_tokens", 0),
-            "eval_count": usage.get("completion_tokens", 0),
-        }
+        return openai_response_envelope(resp.json())
 
     def loaded_models(self, endpoint: str) -> set[str]:
         try:
@@ -546,6 +586,7 @@ _PROVIDERS: dict[str, type] = {
     "lmstudio": LMStudioProvider,
     "mlx": MLXProvider,
     "litellm": LiteLLMProvider,
+    "gateway": GatewayProvider,
 }
 
 

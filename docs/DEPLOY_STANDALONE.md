@@ -387,6 +387,36 @@ read — including these files' exported values. Bound that exposure rather than
 assume it away: scope every credential to the minimum the pipeline needs, budget-cap
 the model account, and do not mount a credential no agent should see.
 
+## Customer AI gateway
+
+A tenant can point the pipeline at its own OpenAI-compatible gateway. Register
+it under `providers.gateway.models` in `model_registry.json` using the
+gateway's own model tags, then select it with `PIPELINE_LOCAL_PROVIDER=gateway`
+or a plan provider of `gateway`. The provider is deliberately not wired to
+`PIPELINE_LOCAL_ENDPOINT*`: the environment is per process, the tenant is per
+namespace.
+
+Two per-namespace credentials configure it, both with purpose `model`:
+
+| Credential name | Holds |
+| --- | --- |
+| `gateway_base_url` | the gateway's base URL, e.g. `https://gw.acme.example` (the `/v1/chat/completions` path is appended) |
+| `gateway_api_key` | the API key sent as `Authorization: Bearer <key>` |
+
+Both resolve on **every** call for the *current namespace*, with no environment
+fallback: they are intentionally absent from `app.credentials`' legacy-env map
+and env allowlist, because a deployment-wide value would send one tenant's key
+to another tenant's host. Supply each namespace's own secret as a
+`secret://file/<path>` reference (the file provider resolves any purpose/name
+pair under the configured secret root) or through the enterprise credential
+overlay, which admits the two gateway refs separately from the built-in ones.
+
+The base URL must use `https` **and** resolve to a *public* address: plain
+`http`, loopback, private and metadata-service addresses are refused before any
+request is sent, and the connection is pinned to the validated address. A
+namespace with no gateway credential fails loudly rather than borrowing another
+tenant's endpoint.
+
 ## 4. Configuration reference
 
 These variables go in `deploy/standalone/.env`. The compose file consumes them

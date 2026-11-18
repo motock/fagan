@@ -788,7 +788,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     dispatch_backend=dispatch_backend,
                     local_model=spec["model"],
                     plan_role_config=_plan_role_config(plan_name),
-                    layer_routing=layer_routing_for_plan(plan_name),
                     worktree=str(worktree_path),
                 )
             # Rework test-author phase: when the reviewer's feedback itself
@@ -818,7 +817,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         dispatch_backend=dispatch_backend,
                         local_model=spec["model"],
                         plan_role_config=_plan_role_config(plan_name),
-                        layer_routing=layer_routing_for_plan(plan_name),
                     )
                 ):
                     rework_tests_committed = _run_rework_test_author_phase(

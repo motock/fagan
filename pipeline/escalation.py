@@ -33,6 +33,11 @@ from .rebrief import (
     compose_rebriefed_instructions,
     diagnose_failure,
 )
+from .role_routing_scope import (
+    layer_routing_for_manifest,
+    layer_routing_for_plan,
+    layer_routing_kwargs,
+)
 
 # The plan's record store, resolved at CALL time through the live
 # pipeline.server binding (the _ServerRef pattern used by pipeline/advance.py,
@@ -41,7 +46,7 @@ from .rebrief import (
 _store = _ServerRef("_store")
 
 
-def _escalation_target() -> tuple[str, str | None]:
+def _escalation_target(layer_routing: dict | None = None) -> tuple[str, str | None]:
     """Resolve the backend (and optional model) a stuck story escalates TO.
 
     Historically every escalation path flipped the story to Claude. With
@@ -72,7 +77,9 @@ def _escalation_target() -> tuple[str, str | None]:
         model = (os.environ.get("PIPELINE_ESCALATION_MODEL") or "").strip() or None
         return backend, model
     try:
-        resolution = role_registry.resolve_role("dispatch")
+        resolution = role_registry.resolve_role(
+            "dispatch", layer_routing=layer_routing
+        )
     except role_registry.RoleRegistryError:
         logging.getLogger("pipeline").warning(
             "role_registry could not resolve the dispatch role for "
@@ -84,13 +91,15 @@ def _escalation_target() -> tuple[str, str | None]:
     return resolution.provider, resolution.model
 
 
-def _escalation_label() -> str:
+def _escalation_label(layer_routing: dict | None = None) -> str:
     """Display name for the escalation target in operator-facing notifications.
 
     Preserves the capitalized "Claude" the existing notifications and their
     tests expect when the target is the default; other backends render as
-    their lowercase driver name."""
-    backend, _ = _escalation_target()
+    their lowercase driver name. Callers that know the story's settings scope
+    pass layer_routing so a team's role_routing reaches resolve_role here
+    exactly as it does in the escalation itself."""
+    backend, _ = _escalation_target(**layer_routing_kwargs(layer_routing))
     return "Claude" if backend == "claude" else backend
 
 
@@ -184,7 +193,8 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # when one is configured - the default leaves story["model"] untouched so
     # Claude dispatch resolves its own model exactly as before this existed.
     _stamp_first_dispatch(story)
-    backend, model = _escalation_target()
+    _lr = layer_routing_for_manifest(manifest)
+    backend, model = _escalation_target(**layer_routing_kwargs(_lr))
     story["backend"] = backend
     if model:
         story["model"] = model
@@ -283,7 +293,10 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     further fallback past Claude, so it must park rather than escalate
     """
     _stamp_first_dispatch(story)
-    backend, model = _escalation_target()
+    # Only the plan name is in scope here, so the scope is read exactly as
+    # pipeline.ci.settings_for_plan reads it (same plan-keyed manifest).
+    _lr = layer_routing_for_plan(plan_name)
+    backend, model = _escalation_target(**layer_routing_kwargs(_lr))
     story["backend"] = backend
     if model:
         story["model"] = model
@@ -307,7 +320,7 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     )
     _notify_user(
         plan_name,
-        f"{story_key} escalating to {_escalation_label()} ({reason}); "
+        f"{story_key} escalating to {_escalation_label(_lr)} ({reason}); "
         f"retrying the same worktree with a fresh budget.",
         story_key=story_key,
         event="escalated",

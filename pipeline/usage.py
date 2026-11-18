@@ -356,7 +356,7 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
 
 
 def _role_resource_ok(
-    role: str, plan_role_config: dict | None = None
+    role: str, plan_role_config: dict | None = None, layer_routing: dict | None = None
 ) -> tuple[bool, str]:
     """Whether the backend serving `role` ("dispatch"/"review") can take work
     right now. Delegates to that backend's resource_status() (Step 5): the
@@ -413,6 +413,7 @@ def _role_resource_ok(
                 resolution = role_registry.resolve_role(
                     "review",
                     plan_role_config=plan_role_config,
+                    layer_routing=layer_routing,
                     default_provider=os.environ.get(
                         "PIPELINE_BACKEND_REVIEW", "claude"
                     ).strip().lower(),

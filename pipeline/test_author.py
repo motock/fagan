@@ -29,6 +29,7 @@ from app import backend, role_registry
 from .config import WORKTREE_SCOPE_RULE
 from .git_ops import _worktree_has_non_wip_commits
 from .persistence import _notify_user
+from .role_routing_scope import layer_routing_for_plan
 
 # ---------- TDD-split test-author role (TDD_SPLIT_PRODUCTION_PLAN.md) ----------
 _NEVER_TOUCH_TESTS_STEERING = (
@@ -48,6 +49,7 @@ def _resolve_test_author_backend(
     dispatch_backend: str,
     local_model: str,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve (provider, model) for the "test_author" role - the tech lead
     that writes the test suite before the (usually weaker) executor
@@ -76,6 +78,7 @@ def _resolve_test_author_backend(
         resolution = role_registry.resolve_role(
             "test_author",
             plan_role_config=plan_role_config,
+            layer_routing=layer_routing,
             registry=registry,
             model_fallback=lambda: None,
         )
@@ -506,6 +509,7 @@ def start_test_author_phase(
         dispatch_backend,
         local_model,
         plan_role_config=plan_role_config,
+        layer_routing=layer_routing_for_plan(plan_name),
     )
     if not test_author_backend:
         _notify_user(
@@ -702,6 +706,7 @@ def _run_rework_test_author_phase(
     review_feedback: str,
     fix_checklist: str | None = None,
     plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
     timeout: float | None = None,
 ) -> bool:
     """Like _run_test_author_phase, but for a REWORK cycle whose review
@@ -721,6 +726,7 @@ def _run_rework_test_author_phase(
         dispatch_backend,
         local_model,
         plan_role_config=plan_role_config,
+        layer_routing=layer_routing,
     )
     if not test_author_backend:
         return False

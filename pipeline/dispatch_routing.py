@@ -13,6 +13,7 @@ from typing import Any
 from app import role_registry
 
 from .module_ref import _ModuleRef
+from .role_routing_scope import layer_routing_kwargs
 
 _route_dispatch_backend = _ModuleRef("pipeline.dispatch", "_route_dispatch_backend")
 _persona_requires_claude = _ModuleRef("pipeline.dispatch", "_persona_requires_claude")
@@ -53,7 +54,10 @@ def _resolve_dispatch_backend(story: dict[str, Any], env_backend: str) -> str:
 
 
 
-def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
+def _dispatch_fallback_provider(
+    plan_role_config: dict[str, Any] | None,
+    layer_routing: dict[str, Any] | None = None,
+) -> str:
     """Provider-only dispatch resolution for the fail-open path.
 
     Keeps the exact pre-registry priority - plan role_config, then the
@@ -77,6 +81,7 @@ def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
                 {"dispatch": {"provider": plan_provider}} if plan_provider else None
             ),
             model_fallback=lambda: "unpinned",
+            **layer_routing_kwargs(layer_routing),
         ).provider
     except role_registry.RoleRegistryError:
         # Malformed roles.dispatch entry: fall back to the pre-registry
@@ -89,6 +94,7 @@ def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
             ),
             registry={"providers": {}, "roles": {}},
             model_fallback=lambda: "unpinned",
+            **layer_routing_kwargs(layer_routing),
         ).provider
 
 
@@ -122,7 +128,9 @@ def _registry_tag_for(provider: str, model: str) -> str:
 
 
 def _resolve_dispatch_target(
-    story: dict[str, Any], plan_role_config: dict[str, Any] | None = None
+    story: dict[str, Any],
+    plan_role_config: dict[str, Any] | None = None,
+    layer_routing: dict[str, Any] | None = None,
 ) -> tuple[str, str | None]:
     """Resolve the concrete (provider, model) a story's dispatch runs on.
 
@@ -176,7 +184,8 @@ def _resolve_dispatch_target(
     """
     try:
         resolution = role_registry.resolve_role(
-            "dispatch", plan_role_config=plan_role_config
+            "dispatch", plan_role_config=plan_role_config,
+            **layer_routing_kwargs(layer_routing),
         )
     except role_registry.RoleRegistryError:
         # Two distinct failure shapes:
@@ -202,7 +211,7 @@ def _resolve_dispatch_target(
             )
         return (
             _resolve_dispatch_backend(
-                story, _dispatch_fallback_provider(plan_role_config)
+                story, _dispatch_fallback_provider(plan_role_config, layer_routing)
             ),
             None,
         )

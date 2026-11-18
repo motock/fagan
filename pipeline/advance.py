@@ -43,6 +43,7 @@ from .rebrief import (
     diagnose_failure,
 )
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
+from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .stall_scan import run_stall_scan
 from .store_records import validate_plan_name
 from .wedge_io import run_wedge_scan
@@ -344,7 +345,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     # running when Claude's weekly limit is hit (and vice versa).
     dispatch_ok, _dispatch_reason = _role_resource_ok("dispatch")
     review_ok, review_reason = _role_resource_ok(
-        "review", plan_role_config=manifest.get("role_config")
+        "review",
+        plan_role_config=manifest.get("role_config"),
+        **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
     )
 
     done = _completed_dep_ids(stories)
@@ -436,7 +439,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             if story["status"] != "in_progress" or "pid" not in story:
                 continue
             story_backend, _story_model = _resolve_dispatch_target(
-                story, plan_role_config=manifest.get("role_config")
+                story,
+                plan_role_config=manifest.get("role_config"),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             if story_backend == "claude":
                 # Claude-routed: interrupt only when the blanket gate is down
@@ -521,7 +526,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # slot frees up. Cloud dispatches never reach this branch.
                 continue
             story_backend, _story_model = _resolve_dispatch_target(
-                story, plan_role_config=manifest.get("role_config")
+                story,
+                plan_role_config=manifest.get("role_config"),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             if story_backend == "claude":
                 # Gate on Claude's usage resource_status, NOT local memory.
@@ -701,7 +708,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # exited but was never re-polled, so its dead pid was never
             # graded).
             story_backend, _story_model = _resolve_dispatch_target(
-                story, plan_role_config=manifest.get("role_config")
+                story,
+                plan_role_config=manifest.get("role_config"),
+                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
             )
             tag = story.get("model") or story.get("dispatched_model") or _story_model
             if story_backend != "claude" and tag and tag.endswith(":cloud"):
@@ -732,13 +741,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     _auto_escalation_enabled()
                     and story.get("backend") in _LOCAL_BACKEND_NAMES
                     and not story.get("escalated")
-                    and _escalation_target() != (story.get("backend"), story.get("model"))
+                    and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
                 ):
                     manifest = _fresh_manifest(plan_name)
                     _escalate_to_claude(manifest, plan_name, key)
                     _notify_user(
                         plan_name,
-                        f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
+                        f"{key} local agent failed; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
                         event="escalated",
                         story_key=key,
                         **(
@@ -826,7 +835,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                                 story_key=key,
                             )
                         diagnosis = diagnose_failure(
-                            evidence, story, manifest.get("role_config")
+                            evidence,
+                            story,
+                            manifest.get("role_config"),
+                            **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
                         )
                         story["agent_instructions"] = compose_rebriefed_instructions(
                             story.get("agent_instructions", ""), diagnosis

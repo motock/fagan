@@ -404,7 +404,10 @@ def _original_brief_excerpt(story: dict[str, Any]) -> str:
 
 
 def _run_diagnosis_role(
-    evidence: str, story: dict[str, Any], plan_role_config: dict | None = None
+    evidence: str,
+    story: dict[str, Any],
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> str | None:
     """Resolve and dispatch the "diagnosis" role, asking for the root cause
     and minimal fix in a few sentences. Returns None when no diagnosis provider
@@ -462,6 +465,7 @@ def _run_diagnosis_role(
         resolution = role_registry.resolve_role(
             "diagnosis",
             plan_role_config=plan_role_config,
+            layer_routing=layer_routing,
             registry=registry,
             model_fallback=lambda: None,
         )
@@ -483,7 +487,10 @@ def _run_diagnosis_role(
 
 
 def diagnose_failure(
-    evidence: str, story: dict[str, Any], plan_role_config: dict | None = None
+    evidence: str,
+    story: dict[str, Any],
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
 ) -> str | None:
     """Turn `evidence` into a short root-cause statement via the "diagnosis"
     role. FAILS OPEN (returns None) when the role is unconfigured, raises, or
@@ -491,7 +498,7 @@ def diagnose_failure(
     if not evidence or not evidence.strip():
         return None
     try:
-        diagnosis = _run_diagnosis_role(evidence, story, plan_role_config)
+        diagnosis = _run_diagnosis_role(evidence, story, plan_role_config, layer_routing)
     except Exception as exc:  # noqa: BLE001 (fail-open by design; log type only)
         logging.getLogger("pipeline").warning(
             f"diagnosis role failed with {type(exc).__name__}; "

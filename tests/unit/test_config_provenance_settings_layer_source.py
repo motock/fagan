@@ -10,9 +10,12 @@ value. Every other source name - ``plan_role_config``,
 ``caller_fallback``, ``unset`` - is unchanged; the rest of the suite pins
 them.
 
-The settings Store is stubbed (one fake ``records()`` reader); the settings
-resolver, the registry validation and the ``role_routing_scope`` read all run
-for real.
+``effective_role_config_with_routing`` is the whole-config seam a caller uses
+once it has resolved the setting (value plus source) for its scope.
+
+The settings Store is never read: this story's scope is the pure resolution,
+so its inputs arrive as the resolved ``(value, source)`` pair the Store
+returns. The model registry is a stub file; the live one is never read.
 """
 
 from __future__ import annotations
@@ -24,7 +27,6 @@ import pytest
 from pipeline import (
     ci,
     config_provenance,
-    role_routing_scope,
     server,
 )
 
@@ -63,14 +65,6 @@ class _FakeStore:
         return self._records
 
 
-class _Context:
-    """The settings context ``role_routing_scope`` reads for a plan."""
-
-    namespace = NAMESPACE
-    team = TEAM
-    repo = REPO
-
-
 @pytest.fixture(autouse=True)
 def model_registry(tmp_path, monkeypatch):
     """Point the model registry at a stub file; the live one is never read."""
@@ -83,37 +77,33 @@ def model_registry(tmp_path, monkeypatch):
 
 @pytest.fixture
 def store(monkeypatch):
-    """Install a Store stub that answers one settings layer."""
+    """Install a Store stub, so no test can read the live one."""
 
-    def _install(values=None, scope="team", scope_id=TEAM, repo=REPO):
+    def _install(values=None):
         rows = {}
         if values is not None:
-            rows[(scope, scope_id, repo)] = {"values": values, "allow_loosen": []}
+            rows[("team", "alpha", "")] = {"values": values, "allow_loosen": []}
         monkeypatch.setattr(server, "_store", _FakeStore(rows))
         return rows
 
     return _install
 
 
-@pytest.fixture
-def plan_scope(monkeypatch):
-    """Point the plan's settings context at this file's namespace/team."""
-    monkeypatch.setattr(
-        role_routing_scope, "_context_for_plan", lambda plan: _Context()
-    )
+def _setting(value, source):
+    """The ``effective_setting`` result shape for one scope's routing."""
+    return {"key": "role_routing", "value": value, "source": source}
 
 
 def _resolve(**kwargs):
     return config_provenance.resolve_role_provenance("review", **kwargs)
 
 
-def _plan_view(plan_name):
-    """The provenance view for a plan, with the plan's layer routing."""
-    from pipeline import role_routing_provenance
-
-    return role_routing_provenance.effective_plan_role_config(
-        plan_name, registry=_registry(), environ={}
+def _review_entry(setting):
+    """The review role's entry in the whole-config provenance view."""
+    entries = config_provenance.effective_role_config_with_routing(
+        setting, registry=_registry(), environ={}
     )
+    return next(entry for entry in entries if entry["role"] == "review")
 
 
 # ---------------------------------------------------------------------------
@@ -332,92 +322,26 @@ def test_an_undeclared_layer_model_is_reported_as_an_error():
 
 
 # ---------------------------------------------------------------------------
-# The settings read: the Store is stubbed, the resolver is real.
+# The whole-config seam: the same labelling for every role at once.
 # ---------------------------------------------------------------------------
 
 
-def test_the_plan_setting_reports_the_layer_it_came_from(store, plan_scope):
-    store({"role_routing": ROUTING})
-
-    setting = role_routing_scope.layer_routing_setting_for_plan("some-plan")
-
-    assert setting["value"] == ROUTING
-    assert setting["source"] == "team"
-
-
-def test_the_plan_setting_names_no_layer_when_the_store_holds_none(store, plan_scope):
-    store({})
-
-    assert role_routing_scope.layer_routing_setting_for_plan("some-plan") == {}
-
-
-def test_a_malformed_stored_value_routes_nothing(store, plan_scope):
-    """A stored value that is not a routing mapping is no routing at all."""
-    store({"role_routing": "nonsense"})
-
-    assert role_routing_scope.layer_routing_setting_for_plan("some-plan") == {}
-
-    review = next(
-        entry for entry in _plan_view("some-plan") if entry["role"] == "review"
-    )
-
-    assert review["provider_source"] == "default"
-    assert review["model_source"] == "unset"
-
-
-def test_a_failing_store_read_raises_nothing_and_names_no_layer(plan_scope):
-    class _Broken:
-        def records(self):
-            raise RuntimeError("store is down")
-
-    server._store = _Broken()
-    try:
-        assert role_routing_scope.layer_routing_setting_for_plan("some-plan") == {}
-    finally:
-        server._store = _FakeStore({})
-
-
-def test_the_provenance_view_labels_the_settings_layer(store, plan_scope):
-    """The plan's own setting reaches the reported view, naming its layer."""
-    store({"role_routing": ROUTING})
-
-    review = next(
-        entry for entry in _plan_view("some-plan") if entry["role"] == "review"
-    )
+def test_the_whole_config_view_labels_the_settings_layer():
+    review = _review_entry(_setting(ROUTING, "team"))
 
     assert (review["provider"], review["model"]) == ("ollama", "gpt-oss:20b")
     assert review["provider_source"] == "settings:team"
     assert review["model_source"] == "settings:team"
 
 
-def test_the_provenance_view_keeps_the_old_labels_without_the_setting(
-    store, plan_scope
-):
-    store({})
+def test_the_whole_config_view_keeps_the_old_labels_without_a_setting():
+    """An unset setting (no resolution, or one carrying no value) labels
+    nothing."""
+    for setting in ({}, _setting({}, "safe_default")):
+        review = _review_entry(setting)
 
-    review = next(
-        entry for entry in _plan_view("some-plan") if entry["role"] == "review"
-    )
-
-    assert review["provider_source"] == "default"
-    assert review["model_source"] == "unset"
-
-
-# ---------------------------------------------------------------------------
-# The operator view, and the reporting-only rule.
-# ---------------------------------------------------------------------------
-
-
-def test_the_operator_view_names_the_layer_for_a_plan(store, plan_scope):
-    """The view an operator reads for a plan reports the settings layer."""
-    store({"role_routing": ROUTING})
-
-    result = ci._get_effective_config_impl("some-plan")
-    review = next(entry for entry in result["roles"] if entry["role"] == "review")
-
-    assert (review["provider"], review["model"]) == ("ollama", "gpt-oss:20b")
-    assert review["provider_source"] == "settings:team"
-    assert review["model_source"] == "settings:team"
+        assert review["provider_source"] == "default"
+        assert review["model_source"] == "unset"
 
 
 def test_the_operator_view_without_a_plan_names_no_layer(store):

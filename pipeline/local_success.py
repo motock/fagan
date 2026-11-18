@@ -150,12 +150,17 @@ def classify_story(
     from app.cloud_served import endpoint_from_env, is_cloud_served
 
     if endpoint is None:
-        # Only a story that actually names a model can be cloud-served, so the
-        # environment is consulted only when there is a tag to classify.
-        # Callers that pass no model at all (e.g. a manifest recorded before
-        # the dispatch path stamped one) must stay free of environment reads:
-        # pipeline/plan_summary.py's format_plan_summary delegates here and is
-        # documented (and tested) as touching no clock, env or I/O surface.
+        # No endpoint supplied by the caller. A story only reaches the tier
+        # rule below when it names a model, so resolve the endpoint from the
+        # same environment variables the dispatch path reads *only* when there
+        # is a tag to classify: a plain-named model on https://ollama.com must
+        # classify like its ":cloud"-tagged sibling.
+        #
+        # A caller that pins itself pure cannot use that lookup. Stories with
+        # no model name carry no endpoint-dependent tier, so skipping the read
+        # for them is what keeps pipeline/plan_summary.py's
+        # format_plan_summary honest about its contract (no clock, env or I/O
+        # reads) without weakening the rule for real dispatches.
         endpoint = endpoint_from_env() if tag else ""
     if is_cloud_served("ollama", tag, endpoint=endpoint):
         tier = "cloud-oss"

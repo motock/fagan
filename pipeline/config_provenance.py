@@ -21,6 +21,7 @@ import pathlib
 import plistlib
 import sys
 import xml.parsers.expat
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 Path = pathlib.Path
@@ -418,6 +419,45 @@ def settings_entries(resolved) -> list[dict]:
     ]
 
 
+SETTINGS_SOURCE = "settings"
+
+
+def settings_layer_source(layer: str | None) -> str:
+    """The provenance label for a value the settings layer supplied.
+
+    ``settings:<layer>`` names the settings layer that supplied the value
+    (``org``, ``team``, ``team_repo``); with no layer name to name, the label
+    is the bare ``settings`` prefix rather than a bare colon. Every other
+    source label (``plan_role_config``, ``model_registry.json``, ``env:...``,
+    ``default``, ``caller_fallback``, ``unset``) is untouched.
+    """
+    return f"{SETTINGS_SOURCE}:{layer}" if layer else SETTINGS_SOURCE
+
+
+def _role_routing_entry(layer_routing, role) -> Mapping:
+    """The ``role_routing`` entry for ``role``, or ``{}`` when there is none."""
+    if not isinstance(layer_routing, Mapping):
+        return {}
+    entry = layer_routing.get(role)
+    return entry if isinstance(entry, Mapping) else {}
+
+
+def role_routing_parts(resolved) -> tuple[dict | None, str | None]:
+    """Split an ``effective_setting("role_routing")`` result into its parts.
+
+    Returns ``(mapping, layer)``. Both are ``None`` unless the resolution
+    carries a mapping value, so a key that resolved to its safe default (or
+    failed to read) contributes no routing and no label at all.
+    """
+    if not isinstance(resolved, Mapping):
+        return None, None
+    value = resolved.get("value")
+    if not isinstance(value, Mapping) or not value:
+        return None, None
+    source = resolved.get("source")
+    return dict(value), (source if isinstance(source, str) and source else None)
+
+
 def resolve_role_provenance(
     role,
     *,
@@ -425,6 +465,8 @@ def resolve_role_provenance(
     registry=None,
     model_fallback=None,
     environ=None,
+    layer_routing=None,
+    layer_routing_source=None,
 ) -> dict:
     """
     Resolve the provider and model for a role.
@@ -452,6 +494,14 @@ def resolve_role_provenance(
         Value or callable used when no other source supplies a model.
     environ : Mapping[str, str] | None
         Environment dictionary.  If ``None`` the real :data:`os.environ` is used.
+    layer_routing : Mapping[str, Mapping[str, str]] | None
+        The scope's ``role_routing`` setting (role → provider/model), forwarded
+        to :func:`resolve_role` so the reported provider/model is the one that
+        would actually be used. Does not change what the caller runs.
+    layer_routing_source : str | None
+        The settings layer that supplied ``layer_routing`` (``org``, ``team``,
+        ``team_repo``). Only used for the label: a value that came from the
+        settings layer reports ``settings:<layer>``.
 
     Returns
     -------
@@ -477,9 +527,14 @@ def resolve_role_provenance(
 
     provider_value = None
     provider_source = "unset"
+    layer_cfg = _role_routing_entry(layer_routing, role)
+    layer_source = settings_layer_source(layer_routing_source)
     if role in plan_role_config and isinstance(plan_role_config[role], dict) and "provider" in plan_role_config[role]:
         provider_value = plan_role_config[role]["provider"]
         provider_source = "plan_role_config"
+    elif layer_cfg.get("provider"):
+        provider_value = layer_cfg["provider"]
+        provider_source = layer_source
     elif role in registry_roles and isinstance(registry_roles[role], dict):
         if "provider" in registry_roles[role]:
             provider_value = registry_roles[role]["provider"]
@@ -497,6 +552,10 @@ def resolve_role_provenance(
     model_source = "unset"
     if role in plan_role_config and isinstance(plan_role_config[role], dict) and "model" in plan_role_config[role]:
         model_source = "plan_role_config"
+    elif layer_cfg.get("model") and layer_cfg.get("provider") in (None, provider_value):
+        # Mirror resolve_role's pairing rule: the settings layer's model is
+        # honoured only when the settings layer supplied the winning provider.
+        model_source = layer_source
     elif role in registry_roles and isinstance(registry_roles[role], dict) and ("model" in registry_roles[role] and (registry_roles[role].get("provider") is None or registry_roles[role]["provider"] == provider_value)):
         model_source = "model_registry.json"
     elif model_fallback is not None:
@@ -511,6 +570,9 @@ def resolve_role_provenance(
             registry=registry,
             model_fallback=model_fallback,
             environ=environ,
+            # Only a scope that configured role_routing adds the keyword, so
+            # the everyday call keeps its exact pre-existing shape.
+            **({"layer_routing": layer_routing} if layer_routing else {}),
         )
     except role_registry.RoleRegistryError as exc:
         if "no model configured" in str(exc):
@@ -571,6 +633,54 @@ def effective_role_config(*, plan_role_config=None, registry=None, model_fallbac
     list[dict]
         One dictionary per role in ``PIPELINE_ROLES``.
     """
+    return _role_config_entries(
+        plan_role_config=plan_role_config,
+        registry=registry,
+        model_fallbacks=model_fallbacks,
+        environ=environ,
+    )
+
+
+def effective_role_config_with_routing(
+    role_routing_setting,
+    *,
+    plan_role_config=None,
+    registry=None,
+    model_fallbacks=None,
+    environ=None,
+):
+    """``effective_role_config`` plus the scope's resolved ``role_routing``.
+
+    ``role_routing_setting`` is the ``settings_store.effective_setting`` result
+    for ``role_routing``: its ``source`` names the settings layer that supplied
+    the value, so a role whose provider/model comes from it is reported with
+    source ``settings:<layer>``. Passing ``{}``/``None`` (a safe default, or a
+    read that failed) reports exactly what ``effective_role_config`` reports.
+
+    Reporting only - the callers that actually dispatch a role read the setting
+    themselves, so nothing here changes what provider a role runs on.
+    """
+    layer_routing, layer_source = role_routing_parts(role_routing_setting)
+    return _role_config_entries(
+        plan_role_config=plan_role_config,
+        registry=registry,
+        model_fallbacks=model_fallbacks,
+        environ=environ,
+        layer_routing=layer_routing,
+        layer_routing_source=layer_source,
+    )
+
+
+def _role_config_entries(
+    *,
+    plan_role_config=None,
+    registry=None,
+    model_fallbacks=None,
+    environ=None,
+    layer_routing=None,
+    layer_routing_source=None,
+):
+    """One ``resolve_role_provenance`` entry per role in ``PIPELINE_ROLES``."""
     if registry is None:
         registry = {}
     results: list[dict] = []
@@ -584,6 +694,8 @@ def effective_role_config(*, plan_role_config=None, registry=None, model_fallbac
             registry=registry,
             model_fallback=fallback,
             environ=environ,
+            layer_routing=layer_routing,
+            layer_routing_source=layer_routing_source,
         )
         results.append(result)
     return results

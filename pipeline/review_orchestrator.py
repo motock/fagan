@@ -485,7 +485,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         try:
             security_output = _run_security_reviewer(
                 worktree, branch, since_sha=story.get("last_reviewed_sha"),
-                plan_role_config=plan_role_config, layer_routing=layer_routing,
+                plan_role_config=plan_role_config, **layer_routing_kwargs(layer_routing),
             )
         except backend.RateLimitedError:
             # OA2-04: mirror the main reviewer's rate-limit deferral. A 429 on

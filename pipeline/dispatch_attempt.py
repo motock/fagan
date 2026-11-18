@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .module_ref import _ModuleRef
-from .role_routing_scope import layer_routing_for_plan
+from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
 from .service import _ServerRef
 
 _module_level_function_names = _ServerRef("_module_level_function_names")
@@ -214,7 +214,7 @@ def _rebrief_step_cap_struggle(
             "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
             exc_info=True)
     diagnosis = diagnose_failure(
-        evidence, story, plan_role_config, layer_routing=layer_routing)
+        evidence, story, plan_role_config, **layer_routing_kwargs(layer_routing))
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     # After the diagnosis, never before: composing a diagnosis truncates the

@@ -170,7 +170,8 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     layer_routing = layer_routing_for_manifest(manifest)
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story, layer_routing=layer_routing)
+    diagnosis = diagnose_failure(
+        evidence, story, **layer_routing_kwargs(layer_routing))
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(
@@ -243,7 +244,8 @@ def _escalate_to_local_fallback_model(
     layer_routing = layer_routing_for_manifest(manifest)
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story, layer_routing=layer_routing)
+    diagnosis = diagnose_failure(
+        evidence, story, **layer_routing_kwargs(layer_routing))
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(

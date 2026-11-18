@@ -85,7 +85,12 @@ def _matched_records(story_key: str, story: dict, records: Iterable[dict]) -> li
 
 
 def classify_story(
-    story_key: str, story: dict, records: list[dict], journal: list[dict] | None = None
+    story_key: str,
+    story: dict,
+    records: list[dict],
+    journal: list[dict] | None = None,
+    *,
+    endpoint: str | None = None,
 ) -> dict:
     """Classify a story and return a dict with the required keys.
 
@@ -127,15 +132,32 @@ def classify_story(
     )
 
     # Tier determination. Cloud-served is decided by app.cloud_served from the
-    # tag's ":cloud" suffix AND, when one is configured, the endpoint the
-    # dispatch would have dialled: a plain-named model on https://ollama.com is
+    # tag's ":cloud" suffix AND, when one is known, the endpoint the dispatch
+    # would have dialled: a plain-named model on https://ollama.com is
     # cloud-served just like its ":cloud"-tagged sibling. The journal record
-    # carries only the tag, so the endpoint is read from the same environment
-    # variables the dispatch path reads. Imported lazily because this module is
-    # deliberately stdlib-only at import time.
+    # carries only the tag, so the endpoint comes from *endpoint* when the
+    # caller supplies it, and otherwise from the same environment variables the
+    # dispatch path reads (PIPELINE_LOCAL_ENDPOINT_OLLAMA, then
+    # PIPELINE_LOCAL_ENDPOINT).
+    #
+    # A caller that must stay pure passes ``endpoint=""`` explicitly: the empty
+    # string means "no endpoint known", so the suffix/class rule alone decides
+    # and no environment read happens. pipeline/plan_summary.py's
+    # ``format_plan_summary`` depends on that - it delegates here and is
+    # documented (and tested) as calling no clock, env or I/O surface.
+    # Imported lazily because this module is deliberately stdlib-only at import
+    # time.
     from app.cloud_served import endpoint_from_env, is_cloud_served
 
-    if is_cloud_served("ollama", tag, endpoint=endpoint_from_env()):
+    if endpoint is None:
+        # Only a story that actually names a model can be cloud-served, so the
+        # environment is consulted only when there is a tag to classify.
+        # Callers that pass no model at all (e.g. a manifest recorded before
+        # the dispatch path stamped one) must stay free of environment reads:
+        # pipeline/plan_summary.py's format_plan_summary delegates here and is
+        # documented (and tested) as touching no clock, env or I/O surface.
+        endpoint = endpoint_from_env() if tag else ""
+    if is_cloud_served("ollama", tag, endpoint=endpoint):
         tier = "cloud-oss"
     elif tag:
         # If backend is claude without any pre-escalation info, ignore tag

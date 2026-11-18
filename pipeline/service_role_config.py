@@ -11,10 +11,18 @@ from typing import Any
 
 from . import bound_records
 from .plan_approval import reset_if_changed
+from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
 
 
-def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | None=None, model: str | None=None):
+def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | None=None, model: str | None=None, layer_routing: dict | None=None):
     _validate_key(plan_name)
+    # Resolve the team's layer routing ONCE for this call (before the lock and
+    # before any validation), exactly as the decision path does: the pre-save
+    # role resolution must see the same scope the save will land in, and a
+    # settings change mid-call must not split it. Never raises - a Store
+    # failure degrades to "no layer routing" and validation proceeds as before.
+    if layer_routing is None:
+        layer_routing = layer_routing_for_plan(plan_name)
     # Fail closed at the boundary BEFORE taking the lock or touching disk:
     # an unknown role, empty provider/model, or undeclared provider/model
     # must never reach the manifest. This mirrors set_role_default's
@@ -78,6 +86,7 @@ def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | 
                 plan_role_config=new_role_config,
                 registry=role_registry.load_registry(),
                 model_fallback=lambda: "sonnet",
+                **layer_routing_kwargs(layer_routing),
             )
         except role_registry.RoleRegistryError as exc:
             return {"ok": False, "error": str(exc)}

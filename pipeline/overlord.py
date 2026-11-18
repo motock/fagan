@@ -15,6 +15,7 @@ through the re-export to the patched binding.
 from app import backend, role_registry
 
 from .persona import _persona_body, _persona_default_model
+from .role_routing_scope import layer_routing_kwargs
 
 
 def _load_policy() -> str:
@@ -33,7 +34,11 @@ def _load_policy() -> str:
     return "\n".join(parts)
 
 
-def _invoke_overlord(prompt: str, plan_role_config: dict | None = None) -> str:
+def _invoke_overlord(
+    prompt: str,
+    plan_role_config: dict | None = None,
+    layer_routing: dict | None = None,
+) -> str:
     """Run the overlord persona headless and return its raw stdout.
 
     External boundary: delegates to the configured Backend. Tests mock this
@@ -45,11 +50,20 @@ def _invoke_overlord(prompt: str, plan_role_config: dict | None = None) -> str:
     explicitly (rather than relying on get_backend's own internal env
     lookup, as before) is required so a registry/plan-configured provider
     actually takes effect.
+
+    ``layer_routing`` is the team's ``role_routing`` value for the caller's
+    (namespace, team, repo) scope. The CALLER resolves it once per call (via
+    ``pipeline.role_routing_scope``) and hands it here; the overlord only
+    forwards it to ``resolve_role`` as its own argument - it is never looked up
+    here and never merged into ``plan_role_config``, whose pairing rules differ.
+    An unset scope adds no keyword at all, so the everyday call keeps its exact
+    pre-existing shape.
     """
     system = _persona_body("overlord")
     resolution = role_registry.resolve_role(
         "overlord", plan_role_config=plan_role_config,
         model_fallback=lambda: _persona_default_model("overlord") or "opus",
+        **layer_routing_kwargs(layer_routing),
     )
     return backend.get_backend("overlord", name=resolution.provider).complete(
         prompt, system=system, model=resolution.model, allowed_tools="Read",

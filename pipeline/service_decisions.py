@@ -12,6 +12,7 @@ from app.identity import LOCAL_OPERATOR
 from .actor import actor_id
 from .authorization import _load_manifest
 from .ownership import subject_or_none
+from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
 
 #: Cap on the delegates a manifest may route to, so a hostile list cannot bury
 #: neighbouring records or grow the routing record without bound.
@@ -87,6 +88,12 @@ def _routing_target(plan_name: str) -> dict:
 def _request_decision_impl(self, plan_name: str, story_key: str, question: str, options: list[str], context: str=''):
     _validate_key(plan_name)
     _validate_key(story_key)
+    # Resolve the team's layer routing ONCE for this whole call, before any
+    # per-role work: a settings change mid-call must not split the scope
+    # across two lookups (role_routing_scope never caches, so a Store that
+    # recovers takes effect on the next call). Never raises: a Store failure
+    # degrades to "no layer routing" and the decision proceeds as before.
+    layer_routing = layer_routing_for_plan(plan_name)
     with _scoped_repo_root(plan_name):
         policy = _load_policy()
     opts = "\n".join(f"  - {o}" for o in options)
@@ -100,7 +107,11 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
     )
     try:
         ruling = _parse_ruling(
-            _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+            _invoke_overlord(
+                prompt,
+                plan_role_config=_plan_role_config(plan_name),
+                **layer_routing_kwargs(layer_routing),
+            )
         )
     except Exception as exc:  # noqa: BLE001 - fail open: an overlord error must not reach the agent
         # Fail open: an overlord backend error must never surface to the

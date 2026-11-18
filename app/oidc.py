@@ -22,16 +22,13 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import ipaddress
 import json
 import logging
 import math
 import os
 import re
-import socket
 import threading
 import time
-import urllib.parse
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +43,7 @@ from app.plugin_loader import (
     require_methods,
 )
 
+from . import outbound_guard
 from .identity import (
     ROLES,
     SYSTEM_SUBJECT_PREFIX,
@@ -124,8 +122,10 @@ _OIDC = "oidc"
 
 #: Bound on name resolution. ``socket.getaddrinfo`` has no timeout of its own and
 #: runs while a fetch is in flight, so a slow or black-holed resolver would
-#: otherwise stall every token verification behind one lookup.
-JWKS_DNS_TIMEOUT_S = 5.0
+#: otherwise stall every token verification behind one lookup. The value is the
+#: shared guard's, so the JWKS fetch and a tenant-supplied endpoint cannot drift
+#: apart; it stays a module attribute here because callers lower it.
+JWKS_DNS_TIMEOUT_S = outbound_guard.DNS_TIMEOUT_S
 
 #: Overall bound on one fetch. ``JWKS_TIMEOUT_S`` applies per socket operation,
 #: so a trickling server could otherwise hold a worker (and the fetch lock) for
@@ -195,7 +195,9 @@ class OidcSettings:
             raise IdentityError("invalid issuer: must not contain '#'")
         # Only this check is optional: the private-network opt-in exists for an
         # IdP inside a VPC, and must not relax the https, issuer or skew rules.
-        if not self.allow_private_jwks and _is_internal_target(self.jwks_url):
+        if not self.allow_private_jwks and outbound_guard.is_internal_target(
+            self.jwks_url
+        ):
             raise IdentityError("invalid jwks_url: must not target an internal host")
         if (
             isinstance(self.clock_skew_s, bool)
@@ -217,153 +219,40 @@ _UNKNOWN_KEY = "invalid token: unknown key"
 _KEY_TYPES = {"RS256": "RSA", "ES256": "EC"}
 
 
-def _embedded_ipv4(address: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
-    """Return the IPv4 address tunnelled inside ``address``, if any.
+# --- the outbound guard, re-exported under its former private names ----------
+#
+# The address checks and the address-pinning transport now live in
+# :mod:`app.outbound_guard`, because they are not OIDC-specific: a
+# tenant-supplied model endpoint gets exactly the same treatment. These aliases
+# keep this module's own surface compatible, so a caller that reached in for
+# ``oidc._is_internal_address`` or ``oidc._PinnedTransport`` keeps working and
+# cannot silently bypass the guard by finding the name gone.
+_is_internal_address = outbound_guard.is_internal_address
+_is_internal_target = outbound_guard.is_internal_target
+_embedded_ipv4 = outbound_guard.embedded_ipv4
+_PinnedTransport = outbound_guard.PinnedTransport
 
-    Covers IPv4-mapped (``::ffff:127.0.0.1``), 6to4 (``2002:7f00:1::``) and the
-    NAT64 well-known prefix (``64:ff9b::7f00:1``). Judging the wrapper alone
-    would let a loopback or metadata target through in a form the outer address
-    makes look public.
-    """
-    if address.ipv4_mapped is not None:
-        return address.ipv4_mapped
-    if address.sixtofour is not None:
-        return address.sixtofour
-    if address in ipaddress.IPv6Network("64:ff9b::/96"):
-        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
-    return None
-
-
-def _is_internal_address(address: Any) -> bool:
-    """Return True for any IP a JWKS request must never be sent to.
-
-    This is an allowlist, not a denylist: an address is acceptable only when
-    :attr:`is_global` is true. Enumerating "bad" ranges instead is how the
-    carrier-grade NAT block ``100.64.0.0/10`` slipped through - CPython reports
-    it as neither private nor global, so a metadata endpoint that lives there
-    (``100.100.100.200``) read as public. IPv4 addresses tunnelled inside IPv6
-    are unwrapped first, for the same reason.
-    """
-    if isinstance(address, ipaddress.IPv6Address):
-        embedded = _embedded_ipv4(address)
-        if embedded is not None:
-            return _is_internal_address(embedded)
-    return not address.is_global
-
-
-def _is_internal_target(url: str) -> bool:
-    """Return True if ``url`` names a loopback/private/link-local host.
-
-    ``jwks_url`` must be operator-controlled, but a misconfiguration (or a
-    value sourced from the environment in OIDC-02) would otherwise turn the
-    shared server into an SSRF probe against loopback or cloud metadata.
-
-    Case and a trailing dot are folded first: ``LOCALHOST`` and ``localhost.``
-    both resolve to 127.0.0.1 but neither compares equal to ``localhost``.
-    This is only the syntactic half of the guard - it runs at configuration
-    time, when resolving a name would fail closed on an offline host - and
-    :func:`_resolve` judges the actual address on every fetch.
-    """
-    host = urllib.parse.urlsplit(url).hostname
-    if not host:
-        return True
-    host = host.casefold().rstrip(".")
-    try:
-        return _is_internal_address(ipaddress.ip_address(host))
-    except ValueError:
-        return host == "localhost" or host.endswith(".localhost")
+#: ``socket`` is re-exported for the same reason: name resolution is stubbed
+#: through ``oidc.socket.getaddrinfo`` by callers that predate the move.
+socket = outbound_guard.socket
 
 
 def _resolve(url: str, *, allow_private: bool = False) -> str | None:
     """Return the public address ``url``'s host resolves to, or None.
 
-    None means "do not fetch": either the name does not resolve at all, or any
-    of its addresses is loopback/private/link-local. Judging the resolved
-    addresses rather than the name is what stops ``127-0-0-1.nip.io`` (or any
-    other public name pointing back inside) from reaching loopback or the
-    cloud metadata service. Resolving again on every fetch also means a name
-    that starts resolving inward after a cached document expires is refused
-    instead of trusted on the strength of its first answer.
-
-    ``allow_private`` is the operator's opt-in for a self-hosted IdP on a
-    private network: the name is still resolved and the resulting address is
-    still returned for pinning, but the internal-address rejection is skipped.
+    Thin wrapper over :func:`app.outbound_guard.resolve_public_address` that
+    keeps the JWKS fetch bound to this module's ``JWKS_DNS_TIMEOUT_S``.
     """
-    host = urllib.parse.urlsplit(url).hostname
-    if not host:
-        return None
-    return _resolve_host(host, allow_private=allow_private)
-
-
-def _resolve_host(host: str, *, allow_private: bool = False) -> str | None:
-    """Resolve ``host`` with a bounded deadline, returning a public address.
-
-    ``getaddrinfo`` blocks with no timeout of its own. The lookup therefore runs
-    on a short-lived daemon thread and the caller gives up after
-    ``JWKS_DNS_TIMEOUT_S``; a resolver that never answers fails closed instead of
-    pinning a dashboard worker until it does.
-
-    With ``allow_private`` the name is still resolved - the address is pinned
-    for the connection - but an internal result is accepted instead of refused.
-    """
-    infos: list[Any] = []
-
-    def lookup() -> None:
-        try:
-            infos.extend(socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP))
-        except (OSError, UnicodeError):
-            return
-
-    worker = threading.Thread(target=lookup, name="oidc-jwks-resolve", daemon=True)
-    worker.start()
-    worker.join(JWKS_DNS_TIMEOUT_S)
-    if not infos:
-        return None
-    for info in infos:
-        try:
-            address = ipaddress.ip_address(info[4][0])
-        except (IndexError, TypeError, ValueError):
-            return None
-        if not allow_private and _is_internal_address(address):
-            return None
-    return str(infos[0][4][0])
-
-
-class _PinnedTransport(httpx.HTTPTransport):
-    """HTTPS transport that connects to one already-validated address.
-
-    :func:`_resolve` validates every address a name resolves to, but ``httpx``
-    would then resolve that name a second time at connect time. A name that
-    answers publicly for the check and ``127.0.0.1`` for the fetch (DNS
-    rebinding) would still be fetched, so the validated address is pinned here
-    rather than re-derived: the request goes to that IP, while the configured
-    hostname is kept for the ``Host`` header and for TLS SNI. httpcore uses the
-    ``sni_hostname`` extension as ``server_hostname``, so the certificate is
-    still verified against the name and never against the IP.
-    """
-
-    def __init__(self, address: str, hostname: str) -> None:
-        super().__init__()
-        self._address = address
-        self._hostname = hostname
-
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        request.headers["Host"] = self._hostname
-        request.extensions = {**request.extensions, "sni_hostname": self._hostname}
-        request.url = request.url.copy_with(host=self._address)
-        return super().handle_request(request)
+    return outbound_guard.resolve_public_address(
+        url, allow_private=allow_private, timeout=JWKS_DNS_TIMEOUT_S
+    )
 
 
 @contextlib.contextmanager
 def _stream_response(url: str, address: str) -> Iterator[httpx.Response]:
     """Stream a ``GET`` for ``url`` against the already-validated ``address``."""
-    hostname = urllib.parse.urlsplit(url).hostname or ""
     with (
-        httpx.Client(
-            transport=_PinnedTransport(address, hostname),
-            timeout=httpx.Timeout(JWKS_TIMEOUT_S),
-            follow_redirects=False,
-        ) as client,
+        outbound_guard.pinned_client(url, address, JWKS_TIMEOUT_S) as client,
         client.stream("GET", url) as response,
     ):
         yield response

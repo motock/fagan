@@ -298,7 +298,15 @@ def test_old_docstring_first_line_is_gone(source: str) -> None:
 
 
 def test_story_line_uses_classify_story(source: str) -> None:
-    assert "classify_story(key, story, records)" in source
+    # The pin is on delegation, not arity: ``_story_line`` must hand the tier
+    # decision to ``classify_story`` (both call forms: with and without the
+    # pre-loaded journal), and must do it with an explicit empty endpoint so
+    # the endpoint-dependent tier rule cannot reach an environment read from
+    # inside this pinned-pure module.
+    assert "classify_story(key, story, records" in source
+    assert "classify_story(key, story, records, endpoint=\"\")" in source
+    assert 'classify_story(key, story, records, journal=journal, endpoint="")' in source
+    assert "endpoint=None" not in source
 
 
 def test_verdict_suffixes_are_literal_in_source(source: str) -> None:

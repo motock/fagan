@@ -208,7 +208,22 @@ def _rebrief_step_cap_struggle(
         logging.getLogger("pipeline").debug(
             "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
             exc_info=True)
-    diagnosis = diagnose_failure(evidence, story, plan_role_config)
+    # The diagnosis role resolves through the same priority chain as every
+    # other role: plan_role_config, then the plan's layer routing, then the
+    # registry (pipeline/rebrief.py -> resolve_role). The callers live in
+    # pipeline/story_status.py, where the plan manifest is in scope, but this
+    # path is plan-scoped and every caller passes plan_name, so resolve the
+    # routing from the plan name exactly as pipeline.advance does for the
+    # identical call. layer_routing_for_plan never raises and returns {} when
+    # the scope inherits the safe default, so this stays fail-open.
+    from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
+
+    diagnosis = diagnose_failure(
+        evidence,
+        story,
+        plan_role_config,
+        **layer_routing_kwargs(layer_routing_for_plan(plan_name) if plan_name else {}),
+    )
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     # After the diagnosis, never before: composing a diagnosis truncates the

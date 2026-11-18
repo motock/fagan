@@ -150,17 +150,19 @@ def classify_story(
     from app.cloud_served import endpoint_from_env, is_cloud_served
 
     if endpoint is None:
-        # No endpoint supplied by the caller. A story only reaches the tier
-        # rule below when it names a model, so resolve the endpoint from the
-        # same environment variables the dispatch path reads *only* when there
-        # is a tag to classify: a plain-named model on https://ollama.com must
-        # classify like its ":cloud"-tagged sibling.
+        # No endpoint supplied by the caller, so resolve it from the same
+        # environment variables the dispatch path reads: a plain-named model on
+        # https://ollama.com must classify like its ":cloud"-tagged sibling.
         #
-        # A caller that pins itself pure cannot use that lookup. Stories with
-        # no model name carry no endpoint-dependent tier, so skipping the read
-        # for them is what keeps pipeline/plan_summary.py's
-        # format_plan_summary honest about its contract (no clock, env or I/O
-        # reads) without weakening the rule for real dispatches.
+        # This lookup is an environment read, so a caller that is pinned pure
+        # must NOT leave ``endpoint`` at its default. It passes ``endpoint=""``
+        # (the explicit "no endpoint known" value, which keeps the rule
+        # suffix/class-only). pipeline/plan_summary.py's ``format_plan_summary``
+        # does exactly that and nothing else: a story with no tag skips the
+        # read whether or not the caller passed ``endpoint``, but a story that
+        # names a model - the normal completed-plan manifest shape - would
+        # otherwise read the environment from inside a function documented as
+        # pure. Only the explicit argument makes the purity hold unconditionally.
         endpoint = endpoint_from_env() if tag else ""
     if is_cloud_served("ollama", tag, endpoint=endpoint):
         tier = "cloud-oss"

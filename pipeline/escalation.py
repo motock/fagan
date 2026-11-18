@@ -169,7 +169,16 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # retry exactly as before this existed.
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story)
+    # Resolved once, before the diagnosis and the escalation target both use
+    # it: the diagnosis role and the dispatch role must read the same scope, so
+    # the same plan layer routing decides which backend each is served by.
+    _lr = layer_routing_for_manifest(manifest)
+    diagnosis = diagnose_failure(
+        evidence,
+        story,
+        manifest.get("role_config"),
+        **layer_routing_kwargs(_lr),
+    )
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(
@@ -193,7 +202,6 @@ def _escalate_to_claude(manifest: dict, plan_name: str, story_key: str) -> None:
     # when one is configured - the default leaves story["model"] untouched so
     # Claude dispatch resolves its own model exactly as before this existed.
     _stamp_first_dispatch(story)
-    _lr = layer_routing_for_manifest(manifest)
     backend, model = _escalation_target(**layer_routing_kwargs(_lr))
     story["backend"] = backend
     if model:
@@ -242,7 +250,15 @@ def _escalate_to_local_fallback_model(
     # retry exactly as before this existed.
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
-    diagnosis = diagnose_failure(evidence, story)
+    # Same scope rule as _escalate_to_claude: the diagnosis role reads the
+    # plan's layer routing (and its plan_role_config) so a routed team's
+    # diagnosis backend is honoured on this path too.
+    diagnosis = diagnose_failure(
+        evidence,
+        story,
+        manifest.get("role_config"),
+        **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
+    )
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
     story["agent_instructions"] = compose_attempt_facts(

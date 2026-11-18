@@ -23,15 +23,18 @@ import pytest
 from pipeline import (
     advance,
     dispatch,
+    dispatch_attempt,
     dispatch_routing,
     escalation,
     rebrief,
     review,
+    review_orchestrator,
     test_author,
     usage,
 )
+from pipeline.settings_resolve import SAFE_DEFAULT_SOURCE
 
-SAFE_DEFAULT = "safe_default"
+SAFE_DEFAULT = SAFE_DEFAULT_SOURCE
 ROUTING = {"dispatch": {"provider": "openai", "model": "gpt-4o-layer"}}
 
 
@@ -393,3 +396,131 @@ def test_advance_resolves_the_manifest_routing_for_its_targets():
     assert len(calls) >= 3
     for kwargs in calls:
         assert kwargs.get("layer_routing") == "layer_routing_for_manifest(manifest)"
+
+
+# ---------------------------------------------------------------------------
+# Review path: the reviewer must resolve the SAME scope its resource gate did
+# ---------------------------------------------------------------------------
+
+
+def _assigned_from(module, name):
+    """Every expression assigned to ``name`` at any scope in ``module``'s source."""
+    with open(module.__file__, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    values = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            values.append(ast.unparse(node.value))
+    return values
+
+
+def test_review_orchestrator_resolves_the_plans_routing_once():
+    values = _assigned_from(review_orchestrator, "layer_routing")
+
+    assert "layer_routing_for_plan(plan_name)" in values, (
+        "review_orchestrator must resolve the plan's layer routing; the review "
+        "resource gate (usage._role_resource_ok) honors it, so the reviewer "
+        "must not be served by a different backend than the gate checked"
+    )
+
+
+def test_every_reviewer_call_forwards_the_layer_routing():
+    for func_name in ("_run_reviewer", "_run_security_reviewer"):
+        calls = _layer_routing_keywords(review_orchestrator, func_name)
+
+        assert calls, f"review_orchestrator no longer calls {func_name}"
+        for kwargs in calls:
+            assert kwargs.get("layer_routing") == "layer_routing", (
+                f"{func_name} called without layer_routing: a routed team's "
+                "review role would silently fall through to the registry"
+            )
+
+
+def test_review_story_resolves_routing_before_any_reviewer_call():
+    with open(review_orchestrator.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+
+    resolve_idx = source.index("layer_routing = layer_routing_for_plan(plan_name)")
+    first_reviewer_idx = source.index("_run_reviewer(")
+    assert resolve_idx < first_reviewer_idx, (
+        "the routing must be resolved before the first reviewer call"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Diagnosis path: every execution-path diagnose_failure call forwards scope
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_attempt_step_cap_rebrief_forwards_the_routing(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        dispatch_attempt, "collect_attempt_facts", lambda *a, **k: "FACTS"
+    )
+    monkeypatch.setattr(
+        dispatch_attempt, "collect_failure_evidence", lambda *a, **k: "EVIDENCE"
+    )
+    monkeypatch.setattr(
+        dispatch_attempt, "compose_rebriefed_instructions", lambda instr, diag: instr
+    )
+    monkeypatch.setattr(
+        dispatch_attempt, "compose_attempt_facts", lambda instr, facts: instr
+    )
+    monkeypatch.setattr(
+        dispatch_attempt, "detect_unsatisfiable_signal", lambda evidence: None
+    )
+    monkeypatch.setattr(
+        dispatch_attempt,
+        "diagnose_failure",
+        lambda *a, **k: seen.append({"args": a, "kwargs": k}) or None,
+    )
+    from pipeline import role_routing_scope
+
+    monkeypatch.setattr(
+        role_routing_scope, "layer_routing_for_plan", lambda plan: ROUTING
+    )
+
+    dispatch_attempt._rebrief_step_cap_struggle(
+        {}, "/w", {"diagnosis": {"provider": "openai"}},
+        plan_name="hpc-01", story_key="hpc-01-a",
+    )
+
+    assert seen, "the step-cap rebrief no longer calls diagnose_failure"
+    assert seen[0]["kwargs"]["layer_routing"] == ROUTING, (
+        "the diagnosis role must resolve through the plan's layer routing"
+    )
+    assert seen[0]["args"][2] == {"diagnosis": {"provider": "openai"}}, (
+        "plan_role_config must still be forwarded ahead of the routing"
+    )
+
+
+def test_step_cap_rebrief_pins_the_forwarded_expression():
+    calls = _layer_routing_keywords(dispatch_attempt, "diagnose_failure")
+
+    assert calls, "dispatch_attempt no longer calls diagnose_failure"
+    for kwargs in calls:
+        assert kwargs.get("layer_routing") == "layer_routing_for_plan(plan_name) if plan_name else {}"
+
+
+def test_escalation_diagnoses_forward_the_manifest_routing():
+    calls = _layer_routing_keywords(escalation, "diagnose_failure")
+
+    assert len(calls) == 2, (
+        "escalation.py has two diagnosis sites (escalation to Claude and the "
+        "local fallback model); both must forward the scope"
+    )
+    expressions = sorted(kwargs.get("layer_routing") for kwargs in calls)
+    assert expressions == ["_lr", "layer_routing_for_manifest(manifest)"], (
+        "both escalation diagnoses must forward the manifest's layer routing"
+    )
+
+
+def test_escalation_forwarded_scope_is_resolved_from_the_manifest():
+    values = _assigned_from(escalation, "_lr")
+
+    assert "layer_routing_for_manifest(manifest)" in values, (
+        "_escalate_to_claude must compute the scope it forwards from the manifest"
+    )
+

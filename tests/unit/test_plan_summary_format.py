@@ -77,15 +77,31 @@ def _record(
     return record
 
 
-def _manifest(*stories: tuple[str, str, str], repo_root: str = "/repo/under-test") -> dict[str, Any]:
-    """Build a plan manifest from ``(story_key, summary, pr_url)`` triples."""
-    return {
+def _manifest(
+    *stories: tuple[str, str, str],
+    repo_root: str = "/repo/under-test",
+    models: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build a plan manifest from ``(story_key, summary, pr_url)`` triples.
+
+    ``models`` stamps ``dispatched_model``/``model``/``backend`` onto the named
+    stories, reproducing the shape the dispatch path writes for a real
+    completed plan (``pipeline/dispatch.py``, ``pipeline/escalation.py``).  The
+    purity tripwire needs that shape: without a model name a story never
+    reaches the endpoint-dependent branch of ``classify_story``.
+    """
+    manifest: dict[str, Any] = {
         "repo_root": repo_root,
         "stories": {
             key: {"summary": summary, "status": "done", "pr_url": pr_url, "risk": "low"}
             for key, summary, pr_url in stories
         },
     }
+    for key, model in (models or {}).items():
+        manifest["stories"][key].update(
+            {"backend": "ollama", "dispatched_model": model, "model": model}
+        )
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -424,9 +440,16 @@ def test_format_plan_summary_is_pure(monkeypatch) -> None:
     """Best-effort tripwire: the common I/O surfaces are rigged to raise.
 
     A pure ``format_plan_summary`` completes without touching any of them.
+    The fixture stories deliberately carry model names (``models=``): a
+    completed-plan manifest holds ``dispatched_model``/``model`` on every
+    story, and a story with a tag is exactly the shape that reaches
+    ``classify_story``'s endpoint branch - the only route by which this
+    formatter could ever read the environment.  A model-free fixture would
+    leave the tripwire blind to that case.
     """
     manifest = _manifest(
-        ("ALPHA-A", "wire the retry loop", "https://plane.example.com/pr/alpha")
+        ("ALPHA-A", "wire the retry loop", "https://plane.example.com/pr/alpha"),
+        models={"ALPHA-A": "qwen3-coder:30b-cloud"},
     )
     records = [_record("ALPHA-A", "story_merged")]
 

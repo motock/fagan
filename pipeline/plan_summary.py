@@ -59,11 +59,17 @@ def _story_line(key: str, story: dict[str, Any], records: list[dict]) -> str:
         line += f" (pr: {pr_url})"
     # format_plan_summary is pure (no file I/O), so the caller supplies the
     # story's journal entries pre-loaded under ``story["journal"]``.
+    # ``endpoint=""`` is classify_story's documented "no endpoint known" value:
+    # the tier rule stays suffix/class-only and no environment read happens.
+    # Without it, classify_story would resolve PIPELINE_LOCAL_ENDPOINT* for any
+    # story that names a model - which is the normal shape of a completed-plan
+    # manifest (``dispatched_model``/``model``) - and this module's pinned
+    # purity contract (no env, clock or I/O reads) would not hold.
     journal = story.get("journal")
     if isinstance(journal, list):
-        verdict = classify_story(key, story, records, journal=journal)
+        verdict = classify_story(key, story, records, journal=journal, endpoint="")
     else:
-        verdict = classify_story(key, story, records)
+        verdict = classify_story(key, story, records, endpoint="")
     if verdict["in_population"]:
         if verdict["clean"] and _reviewer_requested_changes(key, records):
             line += _REVIEWER_BOUNCE_SUFFIX

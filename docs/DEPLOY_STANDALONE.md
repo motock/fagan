@@ -334,7 +334,7 @@ the agents that shell out to `gh` or `git`.
 | `anthropic_api_key` | `PIPELINE_ANTHROPIC_API_KEY` | model calls over the Anthropic API |
 | `claude_code_oauth_token` | `CLAUDE_CODE_OAUTH_TOKEN` | the `claude` CLI's own authentication |
 | `gh_token` | `GH_TOKEN` | the forge CLI, and (derived) `PIPELINE_FORGE=github` and `PIPELINE_GIT_TOKEN_FILE` |
-| `ollama_api_key` | `OLLAMA_API_KEY` | a protected local Ollama |
+| `ollama_api_key` | `OLLAMA_API_KEY` | a protected local Ollama, or the per-team key for hosted `ollama.com` (§4, "Hosted Ollama") |
 
 `PIPELINE_ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are different
 credentials, not two spellings of one: the first is a metered Anthropic API key
@@ -421,6 +421,31 @@ and an `all` route delivering every event to each channel. It holds environment
 variable *names* only; the values stay in the `secrets/` files.
 
 Tenant settings (merge gates, test scope, timeouts) are no longer `.env` variables: set them with `set_setting`; the retired names are refused at startup. See REFERENCE.md "Tenant settings" and the CHANGELOG migration.
+
+### Hosted Ollama (ollama.com)
+
+`OLLAMA_ENDPOINT` (exported as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`) can point at
+ollama.com rather than at a box you own:
+
+```sh
+OLLAMA_ENDPOINT=https://ollama.com
+printf '%s' '<ollama-api-key>' > "$STATE_DIR/secrets/ollama_api_key"
+```
+
+That key is a *per-team* credential from ollama.com **Settings > Keys** — one
+per team, so usage and revocation stay separate. The credential model is
+unchanged: the `model/ollama_api_key` secret file becomes `OLLAMA_API_KEY`
+(§3). Both `glm-5.2` and `glm-5.2:cloud` are accepted as model names, in
+`roles.*.model` or `PIPELINE_LOCAL_MODEL_*`.
+
+Because the endpoint itself is classified, a plain name on
+`https://ollama.com` is cloud-served without adding `:cloud`: it gets
+`PIPELINE_CLOUD_NUM_CTX` and `PIPELINE_CLOUD_MAX_STEPS`, skips the host
+free-memory floor, and is sized as a capable dispatch target. `:cloud` still
+works on a localhost endpoint, where a local `ollama serve` proxies it. The
+test is a classification, not a DNS lookup: loopback names and private or
+loopback IP literals stay on-device, any other hostname counts as remote.
+
 ### The public origin, worked through
 
 `PUBLIC_HOSTNAME`, `PUBLIC_PORT` and `PIPELINE_MCP_RESOURCE_URL` are one value

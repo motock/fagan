@@ -7,8 +7,10 @@ provides two public functions:
 * :func:`rolling_rate` – compute a rolling window rate from a list of
   classified stories.
 
-The implementation is intentionally pure and stdlib‑only.  No I/O, no
-dependencies on other parts of the pipeline.
+The implementation is intentionally pure and stdlib-only — with one
+deliberate exception, ``app.cloud_served`` (itself stdlib-only, no I/O), so the
+cloud-served tier rule cannot drift from the dispatch path's.  No I/O, no
+dependencies on other parts of the pipeline or the rest of the app package.
 
 The definitions below match the recorded baseline method and the unit tests.
 They include population membership, clean status, tier resolution, and reason
@@ -83,7 +85,12 @@ def _matched_records(story_key: str, story: dict, records: Iterable[dict]) -> li
 
 
 def classify_story(
-    story_key: str, story: dict, records: list[dict], journal: list[dict] | None = None
+    story_key: str,
+    story: dict,
+    records: list[dict],
+    journal: list[dict] | None = None,
+    *,
+    endpoint: str | None = None,
 ) -> dict:
     """Classify a story and return a dict with the required keys.
 
@@ -124,8 +131,40 @@ def classify_story(
         or (not backend and bool(tag))
     )
 
-    # Tier determination.
-    if tag.endswith(":cloud"):
+    # Tier determination. Cloud-served is decided by app.cloud_served from the
+    # tag's ":cloud" suffix AND, when one is known, the endpoint the dispatch
+    # would have dialled: a plain-named model on https://ollama.com is
+    # cloud-served just like its ":cloud"-tagged sibling. The journal record
+    # carries only the tag, so the endpoint comes from *endpoint* when the
+    # caller supplies it, and otherwise from the same environment variables the
+    # dispatch path reads (PIPELINE_LOCAL_ENDPOINT_OLLAMA, then
+    # PIPELINE_LOCAL_ENDPOINT).
+    #
+    # A caller that must stay pure passes ``endpoint=""`` explicitly: the empty
+    # string means "no endpoint known", so the suffix/class rule alone decides
+    # and no environment read happens. pipeline/plan_summary.py's
+    # ``format_plan_summary`` depends on that - it delegates here and is
+    # documented (and tested) as calling no clock, env or I/O surface.
+    # Imported lazily because this module is deliberately stdlib-only at import
+    # time.
+    from app.cloud_served import endpoint_from_env, is_cloud_served
+
+    if endpoint is None:
+        # No endpoint supplied by the caller, so resolve it from the same
+        # environment variables the dispatch path reads: a plain-named model on
+        # https://ollama.com must classify like its ":cloud"-tagged sibling.
+        #
+        # This lookup is an environment read, so a caller that is pinned pure
+        # must NOT leave ``endpoint`` at its default. It passes ``endpoint=""``
+        # (the explicit "no endpoint known" value, which keeps the rule
+        # suffix/class-only). pipeline/plan_summary.py's ``format_plan_summary``
+        # does exactly that and nothing else: a story with no tag skips the
+        # read whether or not the caller passed ``endpoint``, but a story that
+        # names a model - the normal completed-plan manifest shape - would
+        # otherwise read the environment from inside a function documented as
+        # pure. Only the explicit argument makes the purity hold unconditionally.
+        endpoint = endpoint_from_env() if tag else ""
+    if is_cloud_served("ollama", tag, endpoint=endpoint):
         tier = "cloud-oss"
     elif tag:
         # If backend is claude without any pre-escalation info, ignore tag

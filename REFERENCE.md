@@ -365,7 +365,12 @@ refused.
 `approve_merge` and the scheduler's merge adjudication both probe the remote
 branch tip (`git rev-parse` after fetch, before the merge-time rebase) and call
 `check` before rebasing or pushing, so a commit pushed after the review - agent
-rework or a human push - can no longer merge on the earlier approval. On denial
+rework or a human push - can no longer merge on the earlier approval. Both also
+require the story worktree's local HEAD to equal the reviewed sha and the
+worktree to have no uncommitted tracked changes (`agent.log` ignored), so a
+local-only commit (such as a wall-clock-timeout WIP commit) or an uncommitted
+edit is refused before the pre-rebase checkpoint could publish it; a missing
+worktree falls back to the remote check. On denial
 the merge is refused with an error naming both short shas and telling the caller
 to `re-run review_story`; one audit record `merge.review_binding_denied` is
 appended with identifiers only (`plan`, `story`, `review_verdict_sha`,

@@ -581,7 +581,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     from .pr import _resolve_story_branch
     from .review_merge_binding import (
         branch_head_sha,
-        check,
+        check_with_worktree,
         rebind_after_pipeline_push,
         refuse,
     )
@@ -671,7 +671,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # remote tip AFTER fetch and BEFORE the merge-time rebase, and
                 # refuse here so nothing is rebased or pushed first.
                 head = branch_head_sha(branch)
-                binding = check(story, head)
+                binding = check_with_worktree(story, head, worktree)
                 if not binding["ok"]:
                     return refuse(plan_name, story_key, story, head, binding)
                 rb = _rebase_onto_master(worktree, branch)

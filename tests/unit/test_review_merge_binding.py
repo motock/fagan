@@ -29,6 +29,21 @@ REVIEWED = "abc123"
 REVIEWED_FULL = "abc123def4567890abc123def4567890abc12345"
 
 
+@pytest.fixture(autouse=True)
+def _no_local_head_probe(monkeypatch):
+    """Keep the local worktree probe out of this module's gate checks.
+
+    The suite-wide fixture in ``tests/unit/conftest.py`` skips this module
+    (it uses the real remote-tip probe seam), so the local worktree probe is
+    stubbed here explicitly: these tests drive the gate over fake worktrees
+    whose HEAD is not the reviewed sha, and the local probe would refuse
+    them on its own.
+    """
+    from pipeline import review_merge_binding
+
+    monkeypatch.setattr(review_merge_binding, "worktree_head_state", lambda *a, **k: (None, False))
+
+
 # ---------------------------------------------------------------------------
 # check() - pure, deny by default.
 # ---------------------------------------------------------------------------

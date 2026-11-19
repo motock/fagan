@@ -236,6 +236,14 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
 
 ---
 
+## Worktree cleanup on `mark_story_done`
+
+`mark_story_done` removes the story's worktree and local branch only when the
+worktree is clean and inside `WORKTREE_ROOT`; a dirty worktree is kept and
+logged, and the remote branch is never touched.
+
+---
+
 ## Plan pausing and story diff tools
 
 These tools were added after the reference above was written. Each one also

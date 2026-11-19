@@ -876,15 +876,15 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     story_key: the story's key within that plan's manifest, as returned by
         list_ready_stories, check_story_status, or dispatch_story.
 
-    Call this only after the story's PR has actually been reviewed and
-    merged — approve_merge already calls this internally as its last step,
-    so you normally only need to call mark_story_done directly for a
-    merge that happened outside the pipeline (e.g. a manual `gh pr merge`
-    you've already confirmed passed CI). It does not merge or verify
-    anything itself; it only records that the work is done. If another
-    dispatch/ingest/interrupt holds the plan's lock, this is a no-op that
-    returns {"ok": True, "skipped": "locked", ...} rather than blocking or
-    raising — retry the call rather than assuming failure.
+    Call this only after the story's PR has actually been reviewed and merged —
+    approve_merge already calls this internally as its last step, so you normally
+    only need to call mark_story_done directly for a merge that happened outside
+    the pipeline (e.g. a manual `gh pr merge` you've already confirmed passed CI).
+    It does not merge or verify anything; after recording the work as done it
+    removes the story's worktree and local branch when the worktree is clean and
+    inside WORKTREE_ROOT. If another dispatch/ingest/interrupt holds the plan's
+    lock, this is a no-op that returns {"ok": True, "skipped": "locked", ...}
+    rather than blocking or raising — retry the call rather than assuming failure.
     """
     return _service.mark_story_done(plan_name, story_key)
 

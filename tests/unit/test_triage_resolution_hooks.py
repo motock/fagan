@@ -85,6 +85,11 @@ def _seed_ruling(
     }
     record.update(overrides)
     p._store.records().append_decision("default", PLAN, record)
+    # The implementation reads the ruling through ``latest_failure_ruling``,
+    # so seed it where that public lookup finds it.
+    assert _ruling(story_key=story_key) is not None, (
+        f"the seeded ruling is not visible to latest_failure_ruling: {_decisions()!r}"
+    )
     return record
 
 
@@ -218,11 +223,17 @@ def test_a_failing_record_write_is_swallowed_and_logged(plan_dir, caplog):
 
 
 def test_the_warning_never_carries_a_token_a_body_or_a_diff(plan_dir, caplog):
-    """The log line carries identifiers and outcomes only."""
+    """The log line carries identifiers and outcomes - never a payload.
+
+    A record write can fail with a message that quotes the request, a diff or
+    the contents of a file. Whatever the implementation logs, it must not carry
+    that material: only identifiers (the story, the plan) and the outcome.
+    """
     _seed_ruling()
+    payload = "token=ghp_secret\ndiff --git a/x b/x\n+the file body\n"
 
     def boom(*args, **kwargs):
-        raise OSError("token=ghp_secret diff body here")
+        raise OSError(payload)
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr(to, "record_human_resolution", boom)
@@ -234,11 +245,25 @@ def test_the_warning_never_carries_a_token_a_body_or_a_diff(plan_dir, caplog):
     finally:
         monkey.undo()
 
-    for record in caplog.records:
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings, "the failed write must be logged as a warning"
+    for record in warnings:
         rendered = record.getMessage()
-        assert "ghp_secret" not in rendered
-        assert "token" not in rendered.lower()
-        assert "diff" not in rendered.lower()
+        assert "ghp_secret" not in rendered, f"a token leaked into the log: {rendered!r}"
+        assert "diff --git" not in rendered, f"a diff leaked into the log: {rendered!r}"
+        assert "the file body" not in rendered, (
+            f"file contents leaked into the log: {rendered!r}"
+        )
+        # Structured extras carry identifiers and outcomes, nothing bulky.
+        for key, value in vars(record).items():
+            if key.startswith("_") or key in ("args", "msg", "levelname", "exc_info"):
+                continue
+            if isinstance(value, (dict, list, tuple, set, bytes)):
+                assert len(value) <= 20, f"log field {key!r} carries a payload: {value!r}"
+            elif isinstance(value, str):
+                assert "ghp_secret" not in value, (
+                    f"log field {key!r} carries a token: {value!r}"
+                )
 
 
 # --------------------------------------------------------------------------
@@ -319,6 +344,28 @@ def test_set_story_status_to_an_unmapped_status_records_other(plan_dir):
     assert written[0]["human_action"] == "other"
 
 
+def test_set_story_status_to_interrupted_records_a_retry(plan_dir):
+    _seed_ruling()
+    _write_manifest({STORY: _parked_story()})
+
+    p.set_story_status(PLAN, STORY, "interrupted")
+
+    written = _resolutions()
+    assert len(written) == 1, f"expected one resolution, got {written!r}"
+    assert written[0]["human_action"] == "retry"
+
+
+def test_set_story_status_to_parked_records_a_park(plan_dir):
+    _seed_ruling()
+    _write_manifest({STORY: {"summary": "a story", "status": "pr_open"}})
+
+    p.set_story_status(PLAN, STORY, "parked")
+
+    written = _resolutions()
+    assert len(written) == 1, f"expected one resolution, got {written!r}"
+    assert written[0]["human_action"] == "park"
+
+
 def test_set_story_status_to_an_invalid_status_records_nothing(plan_dir):
     _seed_ruling()
     _write_manifest({STORY: _parked_story()})
@@ -336,6 +383,41 @@ def test_set_story_status_on_a_story_without_a_ruling_records_nothing(plan_dir):
 
     assert result.get("ok") is True
     assert _resolutions() == []
+
+
+def test_a_locked_plan_records_nothing(plan_dir, monkeypatch):
+    """No state change happened, so no answer to a ruling was given."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _locked(name, wait_seconds=0.0):
+        yield False
+
+    _seed_ruling()
+    _write_manifest({STORY: _parked_story()})
+    monkeypatch.setattr(p._store, "transaction", _locked)
+
+    result = p.set_story_status(PLAN, STORY, "todo")
+
+    assert result.get("skipped") == "locked"
+    assert _read_story()["status"] == "parked"
+    assert _resolutions() == [], "a refused status change is not an answer"
+
+
+def test_a_failing_record_write_does_not_break_the_status_change(plan_dir, monkeypatch):
+    """The hook is fail-open: a broken record write never fails the caller."""
+    monkeypatch.setattr(
+        to,
+        "record_human_resolution",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("decisions log is read-only")),
+    )
+    _seed_ruling()
+    _write_manifest({STORY: _parked_story()})
+
+    result = p.set_story_status(PLAN, STORY, "todo")
+
+    assert result.get("ok") is True, f"the status change must still succeed: {result!r}"
+    assert _read_story()["status"] == "todo"
 
 
 # --------------------------------------------------------------------------
@@ -408,6 +490,24 @@ def test_mark_story_done_without_a_ruling_records_nothing(plan_dir):
 
     assert result == {"ok": True}
     assert _resolutions() == []
+
+
+def test_a_failing_record_write_does_not_break_mark_story_done(plan_dir, monkeypatch):
+    """The hook is fail-open: a broken record write never fails the caller."""
+    monkeypatch.setattr(
+        to,
+        "record_human_resolution",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("decisions log is read-only")),
+    )
+    _seed_ruling()
+    _write_manifest(
+        {STORY: _open_story(), OTHER_STORY: {"summary": "other", "status": "todo"}}
+    )
+
+    result = p.mark_story_done(PLAN, STORY)
+
+    assert result == {"ok": True}, f"the return shape must not change: {result!r}"
+    assert _read_story()["status"] == "done"
 
 
 # --------------------------------------------------------------------------
@@ -486,3 +586,58 @@ def test_an_approve_merge_without_a_ruling_records_nothing(plan_dir, merge_bound
 
     assert result.get("ok") is True
     assert _resolutions() == []
+
+
+# --------------------------------------------------------------------------
+# the principal is the acting operator
+# --------------------------------------------------------------------------
+
+
+def test_the_resolution_is_attributed_to_the_acting_principal(plan_dir, monkeypatch):
+    """The principal comes from ``actor_id()``, as the operator unpark uses."""
+    from pipeline import actor as actor_mod
+
+    # Enforcement off so the authorization decision does not mask the
+    # attribution: the point of this test is WHO the record names.
+    monkeypatch.setenv("PIPELINE_POLICY_ENFORCE", "0")
+    _seed_ruling()
+    _write_manifest({STORY: _parked_story()})
+
+    with actor_mod.bind_principal(actor_mod.Principal(subject="alice")):
+        result = p.set_story_status(PLAN, STORY, "todo")
+
+    assert result.get("ok") is True
+    written = _resolutions()
+    assert len(written) == 1, f"expected one resolution, got {written!r}"
+    assert written[0]["decided_by"] == "alice", (
+        f"the resolution must name the acting principal, got {written[0]!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# the public surface
+# --------------------------------------------------------------------------
+
+
+def test_the_hook_is_exported():
+    """The new name is part of the module's public surface."""
+    assert hasattr(to, "__all__")
+    assert "record_resolution_if_ruled" in to.__all__
+
+
+# --------------------------------------------------------------------------
+# REFERENCE.md documents the automatic hook
+# --------------------------------------------------------------------------
+
+
+def test_reference_documents_the_automatic_resolution_hook():
+    """The reference says the three entry points record a resolution too."""
+    from pathlib import Path
+
+    reference = (Path(__file__).resolve().parents[2] / "REFERENCE.md").read_text()
+
+    assert "human resolution" in reference, "the paragraph this extends is gone"
+    for tool in ("approve_merge", "mark_story_done", "set_story_status"):
+        assert tool in reference, f"{tool} is not documented in REFERENCE.md"
+    for action in ("merge_held", "park", "retry"):
+        assert action in reference, f"the human action {action!r} is not documented"

@@ -422,7 +422,9 @@ def _mergeable_story(**extra) -> dict:
         "review_verdict": "APPROVE",
         "review_verdict_sha": "reviewed-sha",
         "risk": "low",
-        "worktree": "",
+        # A worktree path that does not exist: the merge path then skips the
+        # git push/checkout and only the forge calls (mocked below) run.
+        "worktree": "/nonexistent-worktree",
     }
     story.update(extra)
     return story

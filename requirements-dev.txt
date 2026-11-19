@@ -5,4 +5,4 @@ pytest==9.2.0  # Pinned EXACT: pytest's exit code gates every merge (CI test job
 pytest-xdist==3.8.0
 ruff==0.17.5
 pytest-cov==7.1.0  # Pinned EXACT. Non-gating line-coverage report (see CONTRIBUTING.md); ci.yml runs it on one matrix leg and uploads the XML.
-coverage==7.17.2  # Pinned EXACT: pytest-cov's measurement engine, pinned so the reported numbers do not shift with an upstream release.
+coverage==7.17.3  # Pinned EXACT: pytest-cov's measurement engine, pinned so the reported numbers do not shift with an upstream release.

@@ -175,7 +175,10 @@ never from `parked_reason` text alone.
 | `brief_conflicts_existing_test` | `parked_reason` starts `plan conflict: pre-existing tests` and names the tests that contradict the brief | `amend_scope` \| `approve_test_edit` \| `rebrief` \| `park_for_human` |
 | `env_tool_missing` | the test run died on `FileNotFoundError ... No such file or directory: '<tool>'` for a bare tool binary | `repo_issue` \| `park_for_human` |
 | `agent_failed_after_push` | a failed story whose branch head (`last_commit`) has no review verdict | `resume_review` \| `park_for_human` |
+| `own_lint_failure` | the lint gate is red, the suite is green, and every file the linter names was added or changed by the story's branch (or is in its `files`) | `rebrief` \| `park_for_human` |
 | `unknown` | none of the above | the seven existing actions |
+
+A story's own branch owns the files it added or changed. Editing those files to fix a lint finding is not an existing-test edit, so `rebrief` with the lint finding as the DIAGNOSIS is the expected ruling for `own_lint_failure`. A lint finding in a file the branch did not touch is a red baseline (`repo_issue`), not this class.
 
 The five new actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`,
 `resume_review`) are shadow-only unless `PIPELINE_TRIAGE_MODE=execute`: in shadow mode the ruling is recorded and
@@ -207,7 +210,7 @@ cannot be bound to one, or when the story is `risk: high`.
   notified. A story gets at most two transient retries (`triage_transient_retries`); a third
   parks for a human. A MERGED PR is not retried: the reason is rewritten so `mark_done` can rule
   on the story. Any other outcome parks the story for a human with the reason stated.
-- `rebrief` (park classes `guard_demands_path`, `no_commit_after_rework`, `ci_red_after_rework`)
+- `rebrief` (park classes `guard_demands_path`, `no_commit_after_rework`, `ci_red_after_rework`, `own_lint_failure`)
   stores the ruling's `DIAGNOSIS:` line as the newest entry of `triage_diagnosis`, keeps the last
   three, clears only the retry counters (`rework_attempts`, `ci_rework`, `merge_attempts`,
   `review_deferred_count`, `review_inconclusive_count`), and sets the story to `todo`. The next

@@ -26,6 +26,7 @@ from .branch_guard import remote_branch_exists
 from .forge import get_forge
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
+from .triage_lint_evidence import with_lint_evidence
 from .triage_park_classes import check_ruling_allowed, classify_park
 from .unpark import clear_story_fields
 
@@ -124,7 +125,7 @@ def _pr_state(repo_root: str, pr_url: str) -> str:
 def _park_class(story: dict):
     check = story.get("last_test_check")
     return classify_park(
-        story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None}
+        story, with_lint_evidence(story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None})
     )
 
 

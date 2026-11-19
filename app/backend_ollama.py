@@ -68,7 +68,7 @@ _REVIEW_LOG_TRUNCATE = 2000
 # reading is not evidence about whether it can serve - resource_status()
 # skips the free-memory floor for these providers (reachability still
 # applies). Future hosted providers extend this registry.
-_HOSTED_PROVIDERS = frozenset({"litellm", "gateway"})
+_HOSTED_PROVIDERS = frozenset({"litellm", "gateway", "openai"})
 
 _DEFAULT_MIN_FREE_MEMORY_MB = "512"
 # Providers that pin a model's memory for the whole process lifetime with
@@ -142,7 +142,7 @@ class OllamaDriver:
         # a live production-shaped run where review (ollama) inherited
         # dispatch's (mlx) PIPELINE_LOCAL_ENDPOINT override and 404'd
         # probing Ollama's /api/tags against MLX's port.
-        if self.provider.name == "gateway":
+        if self.provider.name in ("gateway", "openai"):
             self.endpoint = self.provider.default_endpoint
         else:
             self.endpoint = (

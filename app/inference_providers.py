@@ -28,6 +28,7 @@ import httpx
 
 from app.credentials import CredentialMissing, CredentialRef, resolve_for_injection
 from app.gateway_provider import GatewayProvider
+from app.openai_provider import OpenAIProvider
 from pipeline.actor import current_namespace
 
 # The 2026-09-02 scheduler freeze (daemon pid 1609 blocked ~40 min in
@@ -587,6 +588,7 @@ _PROVIDERS: dict[str, type] = {
     "mlx": MLXProvider,
     "litellm": LiteLLMProvider,
     "gateway": GatewayProvider,
+    "openai": OpenAIProvider,
 }
 
 

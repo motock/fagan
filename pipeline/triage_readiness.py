@@ -30,6 +30,7 @@ from typing import Any
 
 from .module_ref import _ModuleRef
 from .store_records import InvalidRecordKeyError, validate_plan_name
+from .triage_outcomes import HIGH_RISK_MERGE_CLASS
 from .triage_park_classes import ALLOWED_ACTIONS
 
 #: The configured Store. Plans and decision records are read only through it
@@ -53,8 +54,18 @@ MIN_PAIRED_DECISIONS = 20
 MAX_FALSE_PARK_PERCENT = 10
 
 _RULING_QUESTION = "failure triage"
+_ADJUDICATION_QUESTION = "high-risk merge adjudication"
 _RESOLUTION_QUESTION = "human resolution"
 _UNKNOWN_CLASS = "unknown"
+
+#: The ruling that lets a high-risk merge go ahead.
+_MERGE_PROCEED = "proceed"
+
+#: The ruling that holds a high-risk merge for a human.
+_MERGE_PARK = "park"
+
+#: The human action that holds a merge the machine would have let go.
+_HUMAN_MERGE_HELD = "merge_held"
 
 
 def _tally() -> dict[str, int]:
@@ -97,6 +108,27 @@ def _score(tally: dict[str, int], action: Any, human_action: Any) -> None:
         tally["agree"] += 1
 
 
+def _score_merge(tally: dict[str, int], ruling: Any, human_action: Any) -> None:
+    """Score one paired high-risk merge adjudication.
+
+    The human's answer to a merge adjudication is ``merge_held``, not ``park``.
+    A ``proceed`` ruling that the human held agrees with the machine; a
+    ``proceed`` ruling the human answered some other way is a false proceed. A
+    ``park`` ruling that the human held is a false park; every other pairing
+    agrees with what the machine ruled.
+    """
+    held = human_action == _HUMAN_MERGE_HELD
+    if ruling == _MERGE_PROCEED:
+        if held:
+            tally["agree"] += 1
+        else:
+            tally["false_proceed"] += 1
+    elif ruling == _MERGE_PARK and held:
+        tally["false_park"] += 1
+    else:
+        tally["agree"] += 1
+
+
 def _verdict(tally: dict[str, int]) -> dict[str, Any]:
     paired = tally["paired_count"]
     false_park = tally["false_park"]
@@ -121,27 +153,66 @@ def readiness(decisions: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
     Every class in :data:`pipeline.triage_park_classes.ALLOWED_ACTIONS` is
     reported, even with no decisions, so an empty input yields a denial for
-    each class. A class seen only in the data is reported too. Each verdict
-    lists its ``blockers``; an ineligible class always names at least one.
+    each class, and so is ``high_risk_merge``. A class seen only in the data is
+    reported too. Each verdict lists its ``blockers``; an ineligible class
+    always names at least one.
     """
     records = list(decisions)
     resolutions = _latest_resolutions(records)
     tallies: dict[str, dict[str, int]] = {name: _tally() for name in ALLOWED_ACTIONS}
+    tallies.setdefault(HIGH_RISK_MERGE_CLASS, _tally())
     for ruling in records:
-        if ruling.get("question") != _RULING_QUESTION:
+        question = ruling.get("question")
+        if question == _ADJUDICATION_QUESTION:
+            _tally_adjudication(tallies, resolutions, ruling)
+            continue
+        if question != _RULING_QUESTION:
             continue
         name = ruling.get("park_class") or _UNKNOWN_CLASS
         tally = tallies.setdefault(name, _tally())
         tally["shadow_count"] += 1
-        decided_at = ruling.get("decided_at")
-        if decided_at is None:
-            continue
-        resolution = resolutions.get((ruling.get("story_key"), decided_at))
+        resolution = _paired_resolution(resolutions, ruling)
         if resolution is None:
             continue
         tally["paired_count"] += 1
         _score(tally, ruling.get("action"), resolution.get("human_action"))
     return {name: _verdict(tally) for name, tally in tallies.items()}
+
+
+def _paired_resolution(
+    resolutions: dict[tuple[Any, Any], dict[str, Any]], ruling: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Return the resolution that answers ``ruling``, or ``None``.
+
+    A ruling with no ``decided_at`` cannot be pointed at, and a resolution with
+    no ``ruling_ref`` pairs with nothing, so either way nothing pairs.
+    """
+    decided_at = ruling.get("decided_at")
+    if decided_at is None:
+        return None
+    return resolutions.get((ruling.get("story_key"), decided_at))
+
+
+def _tally_adjudication(
+    tallies: dict[str, dict[str, int]],
+    resolutions: dict[tuple[Any, Any], dict[str, Any]],
+    ruling: dict[str, Any],
+) -> None:
+    """Count one high-risk merge adjudication in its own class.
+
+    An adjudication with an empty ``ruling`` is the fail-closed record of an
+    unparseable reply: it ruled nothing, so it is not a shadow decision here.
+    """
+    merge_ruling = ruling.get("ruling")
+    if not merge_ruling:
+        return
+    tally = tallies.setdefault(HIGH_RISK_MERGE_CLASS, _tally())
+    tally["shadow_count"] += 1
+    resolution = _paired_resolution(resolutions, ruling)
+    if resolution is None:
+        return
+    tally["paired_count"] += 1
+    _score_merge(tally, merge_ruling, resolution.get("human_action"))
 
 
 def _read_decisions(plan: str) -> list[dict[str, Any]]:

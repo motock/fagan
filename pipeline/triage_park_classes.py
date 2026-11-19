@@ -13,6 +13,9 @@ caller (see ``pipeline.triage.rule_on_story``).
 import re
 from dataclasses import dataclass, field
 
+# with_lint_evidence is re-exported so pipeline.triage reads it from this module.
+from .triage_lint_evidence import lint_paths, with_lint_evidence  # noqa: F401
+
 # Actions the triage vocabulary added with the park classes. Each has only a
 # shadow-only executor stub until its own story replaces it.
 NEW_ACTIONS = frozenset({"resolve_rebase", "retry_transient", "rebrief", "approve_test_edit", "resume_review"})
@@ -44,6 +47,7 @@ ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "brief_conflicts_existing_test": frozenset({"amend_scope", "approve_test_edit", "rebrief", "park_for_human"}),
     "env_tool_missing": frozenset({"repo_issue", "park_for_human"}),
     "agent_failed_after_push": frozenset({"resume_review", "park_for_human"}),
+    "own_lint_failure": frozenset({"rebrief", "park_for_human"}),
     "unknown": EXISTING_ACTIONS,
 }
 
@@ -136,7 +140,35 @@ def _classify(view: dict) -> ParkClass:
         return ParkClass("high_risk_hold", {})
     if _failed_after_push(view):
         return ParkClass("agent_failed_after_push", {})
+    own_lint = _own_lint_facts(view)
+    if own_lint is not None:
+        return ParkClass("own_lint_failure", own_lint)
     return ParkClass("unknown", {})
+
+
+def _own_lint_facts(view: dict) -> dict | None:
+    """A red lint gate on a green suite, naming only files the story itself touched.
+
+    The branch list comes from ``with_lint_evidence``; every named file must be
+    on it or in the story's ``files``. A file outside both is a red baseline.
+    """
+    lint = view.get("last_lint_check")
+    test = view.get("last_test_check")
+    if not isinstance(lint, dict) or not isinstance(lint.get("returncode"), int) or lint["returncode"] == 0:
+        return None
+    if not isinstance(test, dict) or test.get("returncode") != 0:
+        return None
+    stdout = _text(view["last_lint_check"], "stdout_tail")
+    paths = lint_paths(stdout + "\n" + _text(view["last_lint_check"], "stderr_tail"))
+    owned = set(_branch_paths(view)) | set(_files(view))
+    if not paths or not all(path in owned for path in paths):
+        return None
+    return {"paths": paths, "lint_excerpt": stdout[-1500:]}
+
+
+def _branch_paths(view: dict) -> list:
+    value = view.get("branch_paths")
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _scope_conflict_paths(view: dict) -> list:

@@ -33,7 +33,7 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label, _escalation_target)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
-from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park
+from .triage_park_classes import ALLOWED_ACTIONS, NEW_ACTIONS, check_ruling_allowed, classify_park, with_lint_evidence
 from .triage_digest import sweep_digest
 from .test_scope_run import is_scoped
 from .triage_executors import EXECUTORS
@@ -940,7 +940,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
     """
     stage = "policy"
     check = story.get("last_test_check")
-    park = classify_park(story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None})
+    park = classify_park(story, with_lint_evidence(story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None}))
     park_lines = f"OBSERVED PARK CLASS: {park.name} facts={json.dumps(park.facts, sort_keys=True, default=str)}\nALLOWED ACTIONS: {', '.join(sorted(ALLOWED_ACTIONS[park.name]))}\n"
     try:
         policy = _load_policy()

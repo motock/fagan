@@ -53,6 +53,9 @@ __all__ = [
 ENV_VAR = "PIPELINE_MERGE_REVERIFY_DETACHED"
 LOG_TAIL_CHARS = 2000
 _VALID_STATES = frozenset({"pass", "fail", "error"})
+# The job kinds share this module and differ only in their result directory:
+# a local-checks job never deletes a re-verify job's result, or the reverse.
+JOB_KINDS = frozenset({"merge_reverify", "merge_local_checks"})
 
 
 def detached_enabled() -> bool:
@@ -78,7 +81,13 @@ def detached_enabled() -> bool:
 
 
 def start_merge_reverify(
-    plan_name: str, story_key: str, worktree: str, state_root: Path
+    plan_name: str,
+    story_key: str,
+    worktree: str,
+    state_root: Path,
+    *,
+    kind: str = "merge_reverify",
+    with_lint: bool = False,
 ) -> dict:
     """Spawn the detached job and return its handle.
 
@@ -86,9 +95,15 @@ def start_merge_reverify(
     is an aware ISO-8601 UTC timestamp the caller feeds back to
     :func:`collect_merge_reverify` for the timeout budget.
 
-    Raises ``ValueError`` (naming the argument, never its value) for a key that
-    could traverse a path or a worktree that is not an existing directory.
+    ``kind`` names the job directory (``state_root / kind / story_key``);
+    ``with_lint`` makes the child also run the repo's lint gate.
+
+    Raises ``ValueError`` (naming the argument, never its value) for an unknown
+    ``kind``, a key that could traverse a path, or a worktree that is not an
+    existing directory.
     """
+    if kind not in JOB_KINDS:
+        raise ValueError("invalid kind")
     try:
         _validate_key(plan_name)
     except ValueError:
@@ -103,7 +118,7 @@ def start_merge_reverify(
     # Resolve before use: PYTHONPYCACHEPREFIX is interpreted by the child, and
     # a relative value would be resolved against the child's cwd (the control
     # plane's source root) rather than the caller's.
-    job_dir = (Path(state_root) / "merge_reverify" / story_key).resolve()
+    job_dir = (Path(state_root) / kind / story_key).resolve()
     job_dir.mkdir(parents=True, exist_ok=True)
     # mkdir's mode is filtered by the process umask and does not re-tighten an
     # existing directory, so chmod it explicitly: the result and the log carry
@@ -121,17 +136,20 @@ def start_merge_reverify(
     # matches the commit this job grades (see the Popen call below).
     shutil.rmtree(pycache_dir, ignore_errors=True)
 
+    argv = [
+        sys.executable,
+        "-m",
+        "pipeline.merge_reverify",
+        plan_name,
+        story_key,
+        worktree,
+        str(result_path),
+    ]
+    if with_lint:
+        argv.append("--lint")
     with open(log_path, "ab") as log_file:
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "pipeline.merge_reverify",
-                plan_name,
-                story_key,
-                worktree,
-                str(result_path),
-            ],
+            argv,
             cwd=Path(pipeline.__file__).resolve().parent.parent,
             # Give the grading child its own bytecode cache.  The worktree it
             # grades is rebased in place and reused across commits, and CPython
@@ -314,20 +332,23 @@ def main(argv: list[str] | None = None) -> int:
     """Run one detached re-verify and write its result; 0 on a verdict, else 1.
 
     Usage: ``python -m pipeline.merge_reverify <plan> <story_key> <worktree>
-    <result_path>``.  ``0`` covers both a green gate (``state == "pass"``) and a
-    red one (``state == "fail"``); ``1`` means the job itself failed
-    (``state == "error"``).
+    <result_path> [--lint]``.  ``0`` covers both a green gate (``state ==
+    "pass"``) and a red one (``state == "fail"``); ``1`` means the job itself
+    failed (``state == "error"``).  ``--lint`` also runs the repo's lint gate
+    and reports it under ``checks["lint"]``.
     """
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 4:
+    with_lint = len(args) == 5 and args[4] == "--lint"
+    if len(args) not in (4, 5) or (len(args) == 5 and not with_lint):
         return 1
-    plan_name, story_key, worktree, result_path = args
+    plan_name, story_key, worktree, result_path = args[:4]
 
     result: dict[str, Any] = {
         "state": "pass",
         "error": "",
         "sha": None,
         "last_test_check": None,
+        "checks": {"tests": "skipped", "build": "skipped", "lint": "skipped"},
     }
     story: dict | None = None
     try:
@@ -359,11 +380,26 @@ def main(argv: list[str] | None = None) -> int:
         if acc.get("state") == "fail":
             result["state"] = "fail"
             result["error"] = "acceptance reverify fail: " + acc.get("error", "")
+            result["checks"]["tests"] = "fail"
         else:
+            result["checks"]["tests"] = "pass" if acc.get("state") == "pass" else "skipped"
             build = server._reverify_build(worktree, settings=settings)
             if build.get("state") == "fail":
                 result["state"] = "fail"
                 result["error"] = "build reverify fail: " + build.get("error", "")
+                result["checks"]["build"] = "fail"
+            else:
+                result["checks"]["build"] = "pass" if build.get("state") == "pass" else "skipped"
+        if with_lint and result["state"] == "pass":
+            lint = server._run_lint_gate(Path(worktree), dict(os.environ))
+            if lint is None:
+                result["checks"]["lint"] = "not configured"
+            elif lint.get("returncode") != 0:
+                result["state"] = "fail"
+                result["error"] = "lint reverify fail"
+                result["checks"]["lint"] = "fail"
+            else:
+                result["checks"]["lint"] = "pass"
     except Exception as exc:  # noqa: BLE001 - the job must always write a result
         # The class name alone: exception text can carry tokens, payloads and
         # paths, and this result is logged and surfaced to operators.

@@ -44,6 +44,11 @@ from pipeline import server as server_mod
 # end-to-end test below.
 from pipeline import advance as advance_mod
 
+
+@pytest.fixture(autouse=True)
+def _triage_execute_mode(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+
 HOLD_REASON = "high risk held for human review"
 POLICY_PATH = Path(__file__).resolve().parents[2] / "overlord-policy.md"
 

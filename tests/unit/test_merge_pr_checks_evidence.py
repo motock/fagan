@@ -58,6 +58,11 @@ from pipeline import pr as pr_mod
 # at the bottom of this file.
 from pipeline import advance as advance_mod
 
+
+@pytest.fixture(autouse=True)
+def _triage_execute_mode(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+
 HOLD_REASON = "high risk held for human review"
 PROCEED_REPLY = "RULING: proceed\nRATIONALE: checks are green and contained"
 PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin"

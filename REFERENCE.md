@@ -2592,7 +2592,7 @@ The overlord's failure-triage sweep rules on parked and failed stories. It is of
 2. **Start in shadow.** `PIPELINE_TRIAGE_MODE` defaults to `shadow`. In shadow, the five park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`, `resume_review`) are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them. The switch is global, so it promotes all five at once; see the promotion rule in `overlord-policy.md`.
 3. **Read the digest.** A sweep that ruled on at least one story sends one `triage_sweep_summary` notification. It gives the ruling count, counts by park class and by action, and the story keys split into `Executed`, `Shadow` and `Held`. `Shadow` was recorded but not run. `Held` left the story for a human (`dry-run` autonomy, or a `park_for_human` ruling). `Executed` ran its action. The digest is capped at 1000 characters and carries no rationale text.
 4. **Read the decisions log.** Each ruling is appended to the plan's decisions log with `decided_by: overlord-triage` and the observed `park_class`. Each execution record carries `mode` (`shadow`, `dry-run`, or the autonomy level) and the story's prior status and parked reason, so an action can be reversed by hand.
-5. **Know what executes today.** Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions (`escalate_model`, `split_story`, `repo_issue`, `park_for_human`, `mark_done`, `patch_acceptance`, `amend_scope`) once the sweep is on, whatever `PIPELINE_TRIAGE_MODE` is. That includes the default `gated`. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges. The five new actions are shadow by default because their executors are new. Set `PIPELINE_AUTONOMY=dry-run` to keep the sweep recording and notifying without acting.
+5. **Know what executes today.** Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions (`escalate_model`, `split_story`, `repo_issue`, `park_for_human`, `mark_done`, `patch_acceptance`, `amend_scope`) once the sweep is on, whatever `PIPELINE_TRIAGE_MODE` is. That includes the default `gated`. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges, and a `proceed` ruling merges only when the plan's triage mode is `execute`; in `shadow` (the default) the ruling is recorded and the merge is held for a human. The five new actions are shadow by default because their executors are new. Set `PIPELINE_AUTONOMY=dry-run` to keep the sweep recording and notifying without acting.
 6. **Scoped suite evidence.** For a story dispatched with `test_scope` resolving to `scoped`, the suite check the overlord sees runs that story's recorded scoped targets, not the full suite. A timeout or error fails open to silence (`PIPELINE_TRIAGE_SUITE_TIMEOUT`, default 240 seconds).
 
 ### Promotion rule (shadow to execute)
@@ -3124,7 +3124,10 @@ request.
   action. Start here when trying a new plan.
 - `gated` (default) — act unattended up to `PIPELINE_RISK_THRESHOLD`; park higher.
 - `full` — act on all tiers. A `park-and-ping` (high risk) merge is not held
-  automatically: the overlord adjudicates it and the ruling is recorded.
+  automatically: the overlord adjudicates it and the ruling is recorded. A
+  `proceed` ruling merges only when the plan's triage mode is `execute`; in
+  `shadow` (the default) the ruling is recorded and the merge is held for a
+  human.
 - `PIPELINE_AUTO_MERGE=0` overrides every level above at the merge gate only — nothing else is gated.
 
 ### Opt-in gates: repo roots, worktree namespace, and plan approval

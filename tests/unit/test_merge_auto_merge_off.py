@@ -39,6 +39,11 @@ from pipeline import plan_completion as plan_completion_mod
 from pipeline import pr as pr_mod
 from pipeline import server as server_mod
 
+
+@pytest.fixture(autouse=True)
+def _triage_execute_mode(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+
 # pipeline/config.py: PIPELINE_AUTO_MERGE = os.environ.get("PIPELINE_AUTO_MERGE", "1") != "0"
 # i.e. the flag is a parsed bool that defaults to True when unset.
 DEFAULT_ON = True

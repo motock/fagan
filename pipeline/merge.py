@@ -536,7 +536,11 @@ def _merge_decision(
     come from the plan's settings (pipeline.autonomy_settings); without it,
     from the environment as before.
     """
-    from .autonomy_settings import effective_auto_merge, effective_autonomy
+    from .autonomy_settings import (
+        effective_auto_merge,
+        effective_autonomy,
+        effective_triage_mode,
+    )
     from .config import PIPELINE_AUTO_MERGE
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
@@ -561,7 +565,27 @@ def _merge_decision(
     )
     if risk_rank >= _RISK_ORDER["high"]:
         if autonomy == "full":
-            return _adjudicate_high_risk_merge(story, plan_name)
+            decision = _adjudicate_high_risk_merge(story, plan_name)
+            legacy = (
+                "execute"
+                if os.environ.get("PIPELINE_TRIAGE_MODE", "").strip().lower() == "execute"
+                else "shadow"
+            )
+            triage_mode = effective_triage_mode(legacy, context)
+            if decision["action"] == "merge" and triage_mode != "execute":
+                logging.getLogger("pipeline").info(
+                    "high-risk merge held: triage mode is not execute",
+                    extra={
+                        "plan_name": plan_name,
+                        "story_key": story.get("key"),
+                        "triage_mode": triage_mode,
+                    },
+                )
+                return {
+                    "action": "park",
+                    "reason": "overlord ruled proceed (shadow: held for a human)",
+                }
+            return decision
         return {"action": "park", "reason": "high risk held for human review"}
     if autonomy == "full":
         return {"action": "merge", "reason": "autonomy=full"}

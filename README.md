@@ -530,7 +530,9 @@ follows `~/.claude/overlord-policy.md` (plus an optional per-repo
    review and notify. Anything irreversible, security/auth, money, production
    config, or breaking changes. **Held for a human in dry-run and gated; in
    `full` the overlord adjudicates it and records the ruling for post-hoc
-   audit.**
+   audit. A `proceed` ruling merges only when the plan's triage mode is
+   `execute`; in `shadow` (the default) the ruling is recorded and the merge
+   is held for a human.**
 
 The overlord returns a structured ruling (`RULING` / `TIER` / `RISK` /
 `RATIONALE` / `NOTIFY_USER`) that is parsed and written to the plan's decisions
@@ -671,7 +673,9 @@ documented ways — read this before pointing it at anything you care about.
   suggestion** — high-risk decisions (irreversible actions, auth/security,
   money, production config, breaking changes) stop for a human in `dry-run` and
   `gated`; in `full` the overlord adjudicates the high-risk merge hold and
-  records the ruling for post-hoc audit. Start any new deployment at
+  records the ruling for post-hoc audit. A `proceed` ruling merges only when
+  the plan's triage mode is `execute`; in `shadow` (the default) the ruling is
+  recorded and the merge is held for a human. Start any new deployment at
   `PIPELINE_AUTONOMY=dry-run` and read the decisions log before trusting
   `gated` or `full`.
 - **This is a single-maintainer research project**, not a maintained product

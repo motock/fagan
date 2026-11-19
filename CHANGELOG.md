@@ -9,6 +9,10 @@ in practice.
 
 ## [Unreleased]
 
+### Changed
+
+- Under `PIPELINE_AUTONOMY=full`, a high-risk merge the overlord rules `proceed` is now held for a human unless the plan's `triage_mode` is `execute`. The ruling is still recorded in the decisions log.
+
 ## [0.10.0] - 2026-11-17
 
 ### Added

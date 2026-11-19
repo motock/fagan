@@ -283,3 +283,9 @@ def test_flag_off_does_not_block_human_approve_merge(monkeypatch, tmp_path):
     assert result == {"ok": True, "story_key": "AM2-1", "status": "done"}
     assert merged == [(str(worktree), "AM2-1")]
     assert manifest["stories"]["AM2-1"]["status"] == "done"
+
+
+@pytest.fixture(autouse=True)
+def _high_risk_merge_tier_auto(monkeypatch):
+    """These tests pin the adjudication itself, so the class is promoted to ``auto``."""
+    monkeypatch.setattr("pipeline.overlord_class_mode.matrix_tier", lambda decision_class: "auto")

@@ -66,11 +66,14 @@ When a branch has been reviewed and is a candidate to merge:
 The classes of decision the overlord may take unattended, and the tier each is
 allowed, are defined in `overlord-authority.json` (see ADR 0014). Where that
 file's tier for a class is `human`, the overlord parks that class regardless of
-the autonomy level. The merge gate is not yet bound to the matrix — nothing in
-the merge path reads the file — so `high_risk_merge` is the one class the
-autonomy level still decides: `dry-run` and `gated` hold it, and `full` has the
-overlord adjudicate it as the bullet below describes. Once the gate folds the
-matrix, that class resolves to `human` and the merge parks at every level. This
+the autonomy level. The merge gate reads the matrix: in `full` the overlord
+adjudicates a high-risk merge, and a `proceed` ruling merges only when
+`triage_mode` is `execute` and the matrix's `high_risk_merge` tier is
+`auto+notify` or `auto`. The shipped tier is `human`, so the class resolves to
+`human` and the merge parks at every level until an organization promotes it; an
+unreadable matrix also resolves it to `human`. A park class the matrix names
+follows its tier the same way, and a park class it does not name follows
+`triage_mode` alone. `triage_mode` set to `shadow` holds every class. This
 policy never grants authority the matrix withholds.
 
 ## Autonomy levels (`PIPELINE_AUTONOMY`)
@@ -83,7 +86,7 @@ policy never grants authority the matrix withholds.
   `park-and-ping` tier) is not held automatically: the overlord adjudicates it,
   rules `proceed` or `park` with a rationale, and the ruling is recorded in the
   decisions log; an absent or unparseable reply fails closed to the hold. A
-  `proceed` ruling merges only when the plan's triage mode is `execute`; in
+  `proceed` ruling merges only when the plan's triage mode is `execute` and the authority matrix's `high_risk_merge` tier is `auto+notify` or `auto` (shipped: `human`); in
   `shadow` (the default) the ruling is recorded and the merge is held for a
   human.
 
@@ -128,7 +131,7 @@ The overlord should choose the honest action even when the pipeline cannot execu
 
 The phrase `fail closed` means that an absent, unparseable, or unrecognized ACTION value fails closed to `park_for_human`;
 
-In `dry-run` and `gated`, triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling. In `full` the overlord adjudicates the high-risk merge gate — it is asked to rule `proceed` or `park` with a rationale, the ruling is recorded in the decisions log, and an absent or unparseable reply fails closed to the hold. A `proceed` ruling merges only when the plan's triage mode is `execute`; in `shadow` (the default) the ruling is recorded and the merge is held for a human.
+In `dry-run` and `gated`, triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling. In `full` the overlord adjudicates the high-risk merge gate — it is asked to rule `proceed` or `park` with a rationale, the ruling is recorded in the decisions log, and an absent or unparseable reply fails closed to the hold. A `proceed` ruling merges only when the plan's triage mode is `execute` and the authority matrix's `high_risk_merge` tier is `auto+notify` or `auto` (shipped: `human`); in `shadow` (the default) the ruling is recorded and the merge is held for a human.
 
 ### Parked-story resolution
 
@@ -321,7 +324,7 @@ This section is for the operator, not a ruling instruction. The sweep is off unl
 
 - The five park-class actions (`resolve_rebase`, `retry_transient`, `rebrief`, `approve_test_edit`, `resume_review`) run in shadow by default: they are recorded and notified as "would have done", and the story is left untouched. `PIPELINE_TRIAGE_MODE=execute` runs them, for all five at once.
 - Each sweep sends one `triage_sweep_summary` digest: counts by park class and action, and story keys split into `Executed`, `Shadow` and `Held`. The decisions log holds each ruling with its `park_class` and the `mode` it ran under.
-- Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions once the sweep is on. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges; a `proceed` ruling merges only when the plan's triage mode is `execute`, and in `shadow` the merge is held for a human.
+- Any `PIPELINE_AUTONOMY` other than `dry-run` executes the seven existing actions once the sweep is on. `PIPELINE_AUTONOMY=full` also adjudicates `risk: high` merges; a `proceed` ruling merges only when the plan's triage mode is `execute` and the authority matrix's `high_risk_merge` tier is `auto+notify` or `auto` (shipped: `human`), and in `shadow` the merge is held for a human.
 - Promotion rule: set `PIPELINE_TRIAGE_MODE=execute` only after at least 20 shadow decisions have been reviewed against live evidence, with no false proceed and false parks at most 10% of the reviewed decisions. Any false proceed sets the mode back to `shadow`.
 
 ## Output contract

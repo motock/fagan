@@ -584,3 +584,9 @@ def test_gathered_pr_checks_land_in_the_persisted_manifest(plan_dir, monkeypatch
     assert len(prompts) == 1
     assert "PR CHECKS: (none)" not in prompts[0]
     assert "'state': 'pass'" in prompts[0]
+
+
+@pytest.fixture(autouse=True)
+def _high_risk_merge_tier_auto(monkeypatch):
+    """These tests pin the adjudication itself, so the class is promoted to ``auto``."""
+    monkeypatch.setattr("pipeline.overlord_class_mode.matrix_tier", lambda decision_class: "auto")

@@ -56,6 +56,7 @@ _LEGACY_ENV = {
     ("model", "anthropic_api_key"): "PIPELINE_ANTHROPIC_API_KEY",
     ("model", "claude_oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN",
     ("model", "ollama_api_key"): "OLLAMA_API_KEY",
+    ("model", "openai_api_key"): "OPENAI_API_KEY",
 }
 
 # The one literal that names the default namespace here. It equals the store
@@ -73,6 +74,7 @@ _ENV_CREDENTIAL_NAMES = frozenset(
     {
         "PIPELINE_ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
     }
 )
 

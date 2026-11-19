@@ -417,6 +417,15 @@ request is sent, and the connection is pinned to the validated address. A
 namespace with no gateway credential fails loudly rather than borrowing another
 tenant's endpoint.
 
+## OpenAI (direct)
+
+Provider `openai` calls OpenAI's Responses API at https://api.openai.com. The host is fixed and not configurable.
+
+- List models under `providers.openai.models` in `model_registry.json`, by OpenAI's model id (for example `gpt-6.1-terra`, `gpt-6.2-sol`).
+- The API key is the per-namespace credential `openai_api_key` (purpose `model`). The default namespace falls back to `OPENAI_API_KEY`.
+- `think` maps to reasoning effort: `true` is `medium`; a string such as `high` is passed through.
+- Requests set `store: false`, so OpenAI does not keep them.
+
 ## 4. Configuration reference
 
 These variables go in `deploy/standalone/.env`. The compose file consumes them

@@ -14,8 +14,10 @@ import datetime as _dt
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
+import traceback
 
 from pipeline import manifest_source
 from pipeline.scheduler_timeouts import _heartbeat_interval_seconds
@@ -28,6 +30,46 @@ logger = logging.getLogger("pipeline.scheduler_daemon")
 # Upstream revisions already announced as stale (story SSA-1). Module-level so
 # the dedup survives across the daemon's many health writes; never reassigned.
 STALE_CHECKOUT_NOTIFIED: set[str] = set()
+
+
+# A stuck worker's stack is truncated to its last lines: the innermost frames
+# (the wedged call) are the useful ones, and an unbounded stack would bloat
+# the log line for a deep recursion.
+_STUCK_STACK_MAX_LINES = 60
+
+
+def describe_stuck_worker(worker) -> dict:
+    """Return ``{"stack": ..., "plan_name": ...}`` for an abandoned *worker*.
+
+    ``stack`` is the formatted stack of the thread's live frame (its last
+    ``_STUCK_STACK_MAX_LINES`` lines), ``""`` when the thread has no live
+    frame any more. ``plan_name`` is the first ``str`` ``plan_name`` local
+    found walking from that frame outwards, ``""`` when there is none — the
+    daemon logs it so triage knows which plan's ``_plan_lock`` is leaked.
+
+    Only that single local is read: a wedged reconcile frame can hold a
+    token, a request body or a diff, and none of it may reach a log record.
+    Never raises — the caller is in the middle of abandoning a worker and
+    must not turn a wedged phase into a crashed daemon.
+    """
+    try:
+        frame = sys._current_frames().get(worker.ident)
+        if frame is None:
+            return {"stack": "", "plan_name": ""}
+        plan_name = ""
+        probe = frame
+        while probe is not None:
+            candidate = probe.f_locals.get("plan_name")
+            if isinstance(candidate, str):
+                plan_name = candidate
+                break
+            probe = probe.f_back
+        stack = "".join(traceback.format_stack(frame))
+        lines = stack.splitlines()[-_STUCK_STACK_MAX_LINES:]
+        return {"stack": "\n".join(lines), "plan_name": plan_name}
+    except Exception:  # pragma: no cover - defensive: must never raise
+        logger.debug("describe_stuck_worker failed", exc_info=True)
+        return {"stack": "", "plan_name": ""}
 
 
 def join_with_heartbeat(daemon, worker, timeout_s, label):
@@ -131,6 +173,22 @@ def run_with_watchdog(daemon, fn, *, timeout_s, label):
     daemon._consecutive_abandons += 1
     daemon._abandoned_workers.append((worker, daemon._clock()))
     mark_worker_abandoned(worker)
+    # cops-03: the daemon can neither join nor kill this thread, so the only
+    # actionable evidence of what wedged is its stack and the plan it was
+    # working on. Log it exactly once, here, at the abandonment point: the
+    # per-tick "still alive" warning repeats for the whole grace window and
+    # says nothing about WHERE the worker is stuck.
+    stuck = describe_stuck_worker(worker)
+    logger.error(
+        "watched phase abandoned; stuck worker stack follows",
+        extra={
+            "phase": label,
+            "worker": worker.name,
+            "elapsed_s": round(elapsed, 1),
+            "plan_name": stuck["plan_name"],
+            "stack": stuck["stack"],
+        },
+    )
     return False, elapsed
 
 

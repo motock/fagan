@@ -112,6 +112,12 @@ from pipeline.scheduler_timeouts import (  # noqa: F401
     _scan_join_timeout_seconds,
 )
 
+# cops-03: minimum seconds between two "still alive ... waiting out the grace
+# window" WARNINGs for the same abandoned worker. The warning used to fire on
+# every loop iteration (once per second for the 300s default grace window);
+# the first emission and the final grace-exit ERROR are unchanged.
+_ABANDON_WARNING_INTERVAL_S = 30.0
+
 
 class SchedulerDaemon:
     """Drives the event-driven pipeline's scan + reconcile cadence.
@@ -190,6 +196,13 @@ class SchedulerDaemon:
         # each tick and raises SystemExit(1) once a survivor outlives the
         # grace window (``_abandon_worker_grace_seconds``).
         self._abandoned_workers = []
+        # cops-03: last loop time each abandoned worker's "still alive ...
+        # waiting out the grace window" WARNING was emitted, keyed by the
+        # worker thread. The warning used to fire on EVERY tick (one line per
+        # second for the whole 300s grace window); it is now throttled to at
+        # most one per worker per ``_ABANDON_WARNING_INTERVAL_S``. Entries are
+        # pruned with the ledger so a dead worker leaves no state behind.
+        self._abandoned_worker_warned_at = {}
         # The most recent drain worker (story SWH-03): kept across ticks so a
         # worker abandoned by the join timeout below can be recognized as
         # still alive on the next tick, which must skip its drain rather than
@@ -608,6 +621,12 @@ class SchedulerDaemon:
             for worker, ts in self._abandoned_workers
             if worker.is_alive()
         ]
+        # cops-03: prune the warning throttle in step with the ledger.
+        self._abandoned_worker_warned_at = {
+            worker: warned_at
+            for worker, warned_at in self._abandoned_worker_warned_at.items()
+            if worker.is_alive()
+        }
         grace_s = _abandon_worker_grace_seconds()
         now = self._clock()
         # Boundary tolerance: ``now - ts`` is a difference of two large
@@ -650,6 +669,12 @@ class SchedulerDaemon:
                     logger.exception("write_health failed")
             raise SystemExit(1)
         for worker, ts in self._abandoned_workers:
+            warned_at = self._abandoned_worker_warned_at.get(worker)
+            if warned_at is not None and now - warned_at < _ABANDON_WARNING_INTERVAL_S:
+                # cops-03: this worker's wait was already announced within the
+                # last 30s; the final grace-exit ERROR below is unchanged.
+                continue
+            self._abandoned_worker_warned_at[worker] = now
             logger.warning(
                 "abandoned watchdog worker %r still alive %ds after its "
                 "abandonment; waiting out the %.0fs grace window before "

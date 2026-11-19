@@ -42,8 +42,16 @@ def _normalized(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
-def _reference_section_around(entry: str) -> str:
-    """The REFERENCE.md section that contains *entry* (heading to next heading)."""
+def _reference_section_around(entry: str, *, include_following: bool = False) -> str:
+    """The REFERENCE.md section that contains *entry* (heading to next heading).
+
+    With *include_following* the section immediately after the entry's own
+    section is appended too. The cleanup rule is stated in its own short
+    section directly below the MCP tool list rather than inside it, because
+    tests/unit/test_readme_reference_split.py pins that list byte-for-byte
+    against the pre-split README; "next to the entry" therefore means the
+    entry's section plus the section that follows it.
+    """
     lines = REFERENCE_MD.read_text(encoding="utf-8").splitlines()
     index = next((i for i, line in enumerate(lines) if entry in line), None)
     assert index is not None, f"REFERENCE.md has no {entry!r} entry"
@@ -53,6 +61,11 @@ def _reference_section_around(entry: str) -> str:
     end = index + 1
     while end < len(lines) and not lines[end].startswith("#"):
         end += 1
+    if include_following:
+        assert end < len(lines), f"REFERENCE.md has no section after {entry!r}"
+        end += 1
+        while end < len(lines) and not lines[end].startswith("#"):
+            end += 1
     return "\n".join(lines[start:end])
 
 
@@ -361,8 +374,10 @@ def test_the_docstring_did_not_grow():
 
 
 def test_the_reference_states_the_cleanup_rule():
-    """The tool-list entry states the cleanup rule."""
-    section = _normalized(_reference_section_around("`mark_story_done(...)`"))
+    """The cleanup rule is stated next to the tool-list entry."""
+    section = _normalized(
+        _reference_section_around("`mark_story_done(...)`", include_following=True)
+    )
 
     assert "worktree" in section, "the entry must mention the worktree"
     assert "worktree_root" in section, "the entry must name WORKTREE_ROOT"

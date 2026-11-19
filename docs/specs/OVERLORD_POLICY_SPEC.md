@@ -107,7 +107,8 @@ Under the `full` autonomy level a `risk: high` merge is not always held: the
 harness asks the authority to adjudicate the hold, ruling `proceed` or `park`
 with a rationale, and records the ruling for post-hoc audit. In `dry-run` and
 `gated` the high-risk merge is always parked for a human. An adopting harness
-MAY keep the stricter always-hold floor.
+MAY keep the stricter always-hold floor. An adopting harness MAY additionally
+hold a `proceed` ruling until its triage rulings are promoted; this harness does.
 
 ## 5. Escalation protocol and audit trail
 

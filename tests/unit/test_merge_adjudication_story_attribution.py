@@ -54,6 +54,11 @@ from pipeline import persistence as persistence_mod
 # integration-grade tests below.
 from pipeline import advance as advance_mod
 
+
+@pytest.fixture(autouse=True)
+def _triage_execute_mode(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRIAGE_MODE", "execute")
+
 HOLD_REASON = "high risk held for human review"
 PLAN = "MERGEATTR-PLAN"
 PROCEED_REPLY = "RULING: proceed\nRATIONALE: ok"

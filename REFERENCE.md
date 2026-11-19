@@ -2603,6 +2603,8 @@ Set `PIPELINE_TRIAGE_MODE=execute` only when all of the following hold, measured
 - no reviewed decision is a **false proceed** (a recommended action that was wrong or unsafe to take);
 - **false parks** (a ruling that held a story the reviewer judged safe to act on) are at most 10% of the reviewed decisions.
 
+The 20 and the 10% are the shipped defaults and the loosest values allowed. An organization tightens them with the authority-matrix rules `readiness.min_paired` and `readiness.max_false_park_percent` (`overlord-authority.json`, or a team layer that may only tighten further). An org-layer value outside the rule's bounds makes the matrix unusable, so the shipped defaults apply; a team-layer value looser than the org's is refused as a violation and the org's value stands. The report prints the thresholds in force and each class's current matrix tier, or `not governed` for a park class the matrix does not name.
+
 Any false proceed sets `PIPELINE_TRIAGE_MODE` back to `shadow` until the rule is met again.
 
 `python -m pipeline.triage_readiness --plan <plan> [...]` (or `--all`; `--json` for JSON) does the counting: it pairs each shadow ruling with the human resolution recorded beside it (by `pipeline.unpark` or `unblock_story`) and prints, per park class, the shadow and paired counts, agreements, false proceeds, false parks, the false-park rate and whether the class is eligible. It is read-only.

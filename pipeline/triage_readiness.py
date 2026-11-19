@@ -28,7 +28,9 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+from .authority_matrix import FileLayerSource
 from .module_ref import _ModuleRef
+from .overlord_class_mode import matrix_tier
 from .store_records import InvalidRecordKeyError, validate_plan_name
 from .triage_outcomes import HIGH_RISK_MERGE_CLASS
 from .triage_park_classes import ALLOWED_ACTIONS
@@ -52,6 +54,13 @@ MIN_PAIRED_DECISIONS = 20
 #: Compared as integers (``false_park * 100 <= MAX * paired``) so a rate of
 #: exactly 10% is eligible and no float rounding decides the boundary.
 MAX_FALSE_PARK_PERCENT = 10
+
+#: Authority-matrix rule ids that an organization may tighten (tighten-only).
+_MIN_PAIRED_RULE = "readiness.min_paired"
+_RATE_RULE = "readiness.max_false_park_percent"
+
+#: The tier label for a park class the authority matrix does not name.
+_NOT_GOVERNED = "not governed"
 
 _RULING_QUESTION = "failure triage"
 _ADJUDICATION_QUESTION = "high-risk merge adjudication"
@@ -129,34 +138,73 @@ def _score_merge(tally: dict[str, int], ruling: Any, human_action: Any) -> None:
         tally["agree"] += 1
 
 
-def _verdict(tally: dict[str, int]) -> dict[str, Any]:
+def _number(value: Any, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value
+
+
+def thresholds() -> dict[str, Any]:
+    """Return the promotion thresholds in force: ``min_paired`` and ``max_false_park_percent``.
+
+    The shipped constants are the loosest values allowed. An organization or
+    team layer of the authority matrix may tighten them; a value that is
+    missing or not a number falls back to the constant. The result is clamped
+    in code as well, so an edited matrix bound cannot loosen the thresholds.
+    Never raises: an unusable matrix yields the constants.
+    """
+    resolved = FileLayerSource().resolve()
+    values = resolved.values if resolved is not None else {}
+    min_paired = _number(values.get(_MIN_PAIRED_RULE), MIN_PAIRED_DECISIONS)
+    max_percent = _number(values.get(_RATE_RULE), MAX_FALSE_PARK_PERCENT)
+    return {
+        "min_paired": max(min_paired, MIN_PAIRED_DECISIONS),
+        "max_false_park_percent": min(max_percent, MAX_FALSE_PARK_PERCENT),
+    }
+
+
+def _tier_label(decision_class: str) -> str:
+    tier = matrix_tier(decision_class)
+    return _NOT_GOVERNED if tier is None else tier
+
+
+def _verdict(tally: dict[str, int], limits: dict[str, Any], tier: str) -> dict[str, Any]:
     paired = tally["paired_count"]
     false_park = tally["false_park"]
     false_proceed = tally["false_proceed"]
+    min_paired = limits["min_paired"]
+    max_percent = limits["max_false_park_percent"]
     blockers: list[str] = []
-    if paired < MIN_PAIRED_DECISIONS:
-        blockers.append(f"{paired} paired decisions, {MIN_PAIRED_DECISIONS} required")
+    if paired < min_paired:
+        blockers.append(f"{paired} paired decisions, {min_paired} required")
     if false_proceed:
         blockers.append(f"{false_proceed} false proceed(s), none allowed")
-    if paired and false_park * 100 > MAX_FALSE_PARK_PERCENT * paired:
-        blockers.append(f"false-park rate above {MAX_FALSE_PARK_PERCENT}%")
+    if paired and false_park * 100 > max_percent * paired:
+        blockers.append(f"false-park rate above {max_percent}%")
     return {
         **tally,
         "false_park_rate": false_park / paired if paired else None,
         "eligible": not blockers,
         "blockers": blockers,
+        "thresholds": limits,
+        "tier": tier,
     }
 
 
-def readiness(decisions: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def readiness(
+    decisions: Iterable[dict[str, Any]], limits: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
     """Return the promotion readiness of each park class in ``decisions``.
 
     Every class in :data:`pipeline.triage_park_classes.ALLOWED_ACTIONS` is
     reported, even with no decisions, so an empty input yields a denial for
     each class, and so is ``high_risk_merge``. A class seen only in the data is
-    reported too. Each verdict lists its ``blockers``; an ineligible class
-    always names at least one.
+    reported too. Each verdict lists its ``blockers``, the ``thresholds`` it was
+    judged against and the class's matrix ``tier``; an ineligible class always
+    names at least one blocker. ``limits`` defaults to :func:`thresholds`.
     """
+    if limits is None:
+        limits = thresholds()
     records = list(decisions)
     resolutions = _latest_resolutions(records)
     tallies: dict[str, dict[str, int]] = {name: _tally() for name in ALLOWED_ACTIONS}
@@ -176,7 +224,9 @@ def readiness(decisions: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             continue
         tally["paired_count"] += 1
         _score(tally, ruling.get("action"), resolution.get("human_action"))
-    return {name: _verdict(tally) for name, tally in tallies.items()}
+    return {
+        name: _verdict(tally, limits, _tier_label(name)) for name, tally in tallies.items()
+    }
 
 
 def _paired_resolution(
@@ -223,15 +273,21 @@ def _read_decisions(plan: str) -> list[dict[str, Any]]:
 
 
 def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
-    header = f"{'plan':<24}{'class':<28}{'shadow':>7}{'paired':>8}{'agree':>7}{'f-proc':>7}{'f-park':>7}{'rate':>7}  eligible"
+    limits = thresholds()
+    print(
+        f"thresholds: min paired {limits['min_paired']}, "
+        f"max false-park {limits['max_false_park_percent']}%"
+    )
+    header = f"{'plan':<24}{'class':<28}{'shadow':>7}{'paired':>8}{'agree':>7}{'f-proc':>7}{'f-park':>7}{'rate':>7}  eligible  tier"
     print(header)
     for plan, classes in report.items():
         for name, cls in classes.items():
             rate = "-" if cls["false_park_rate"] is None else f"{cls['false_park_rate']:.0%}"
+            eligible = "yes" if cls["eligible"] else "no"
             print(
                 f"{plan:<24}{name:<28}{cls['shadow_count']:>7}{cls['paired_count']:>8}"
                 f"{cls['agree']:>7}{cls['false_proceed']:>7}{cls['false_park']:>7}{rate:>7}  "
-                f"{'yes' if cls['eligible'] else 'no'}"
+                f"{eligible:<8}  {cls['tier']}"
             )
 
 

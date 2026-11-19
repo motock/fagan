@@ -2594,6 +2594,10 @@ Any false proceed sets `PIPELINE_TRIAGE_MODE` back to `shadow` until the rule is
 
 `python -m pipeline.triage_readiness --plan <plan> [...]` (or `--all`; `--json` for JSON) does the counting: it pairs each shadow ruling with the human resolution recorded beside it (by `pipeline.unpark` or `unblock_story`) and prints, per park class, the shadow and paired counts, agreements, false proceeds, false parks, the false-park rate and whether the class is eligible. It is read-only.
 
+Rulings and human resolutions are stored in the record store - the same decisions stream `pipeline.triage_readiness` reads - when the configured store keeps its own decision records; the file store keeps them in `<plan>.decisions.json`. Records written to `<plan>.decisions.json` before this change stay in those files and are not counted by a store-backed report.
+
+A high-risk merge is a shadow decision too, and it is reported as its own class, `high_risk_merge`, from the `high-risk merge adjudication` records (the ones whose `ruling` is `proceed` or `park`). It is scored on its own rule, because the human answer to a merge adjudication is `merge_held` rather than `park`: a `proceed` ruling is a **false proceed** unless the human action was `merge_held`, and a `park` ruling is a **false park** when the human action was `merge_held`. Every other pairing agrees. An adjudication whose `ruling` is empty (an unparseable reply) is not counted.
+
 ## Configuration (environment variables)
 ### Message broker (NATS JetStream)
 

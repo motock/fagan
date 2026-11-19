@@ -21,7 +21,8 @@ from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
 from .parsers import _is_transient_backend_exception
-from .persistence import _append_decision, _plan_role_config
+from .decision_log import append_decision as _append_decision
+from .persistence import _plan_role_config
 from .build_detect import detect_test_command
 from .build_detect import _lint_acceptance_fixtures, _pytest_acceptance_fixtures
 from .oracle_gate import acceptance_digests, validate_acceptance_fixtures

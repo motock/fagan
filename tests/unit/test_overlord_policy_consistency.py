@@ -17,8 +17,9 @@ Four guards, each of which fails if the old sentence is restored:
    shipped matrix resolves ``high_risk_merge`` to ``human``
    (``authority_matrix.tier_for``), so the paragraph that cites it may not also
    promise that every ``human`` class parks while ``full`` adjudicates one of
-   them. The paragraph must name the unbound merge gate as the reason the
-   ``full`` bullet is the rule in force today.
+   them. The paragraph must say the merge gate reads the matrix, so the
+   ``high_risk_merge`` tier decides the merge and parks it at every level
+   while the tier is ``human``.
 
 The raw documents are hard-wrapped, so a naive substring search cannot see a
 sentence split across a line break. Everything here runs through
@@ -104,9 +105,8 @@ def test_policy_reconciles_with_shipped_matrix():
     shipped in this repo answers ``human`` for a high-risk merge. The policy
     therefore cannot cite the matrix *and* claim that every ``human`` class
     parks while ``full`` adjudicates one of them. What it must say instead is
-    that the merge gate does not read the matrix yet - so the ``full`` bullet
-    is the rule in force - and that binding the gate would park the merge at
-    every level.
+    that the merge gate reads the matrix: ``full`` adjudicates the merge, and
+    the folded tier (``human`` today) parks it at every level.
     """
     from pipeline.authority_matrix import FileLayerSource, tier_for
 
@@ -123,9 +123,9 @@ def test_policy_reconciles_with_shipped_matrix():
     paragraph = flat[start:end]
     print(f"merge adjudication matrix paragraph: {paragraph!r}")
 
-    assert "The merge gate is not yet bound to the matrix" in paragraph, (
-        "the paragraph must name the unbound merge gate as the reason `full` "
-        f"still adjudicates; got: {paragraph!r}"
+    assert "The merge gate reads the matrix" in paragraph, (
+        "the paragraph must say the merge gate folds the matrix tier into a "
+        f"`full` adjudication; got: {paragraph!r}"
     )
     assert "resolves to `human` and the merge parks at every level" in paragraph, (
         "the paragraph must state that folding the matrix parks the high-risk "

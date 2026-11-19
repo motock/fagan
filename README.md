@@ -531,7 +531,7 @@ follows `~/.claude/overlord-policy.md` (plus an optional per-repo
    config, or breaking changes. **Held for a human in dry-run and gated; in
    `full` the overlord adjudicates it and records the ruling for post-hoc
    audit. A `proceed` ruling merges only when the plan's triage mode is
-   `execute`; in `shadow` (the default) the ruling is recorded and the merge
+   `execute` and the authority matrix's `high_risk_merge` tier is `auto+notify` or `auto` (shipped: `human`); in `shadow` (the default) the ruling is recorded and the merge
    is held for a human.**
 
 The overlord returns a structured ruling (`RULING` / `TIER` / `RISK` /
@@ -674,7 +674,7 @@ documented ways — read this before pointing it at anything you care about.
   money, production config, breaking changes) stop for a human in `dry-run` and
   `gated`; in `full` the overlord adjudicates the high-risk merge hold and
   records the ruling for post-hoc audit. A `proceed` ruling merges only when
-  the plan's triage mode is `execute`; in `shadow` (the default) the ruling is
+  the plan's triage mode is `execute` and the authority matrix's `high_risk_merge` tier is `auto+notify` or `auto` (shipped: `human`); in `shadow` (the default) the ruling is
   recorded and the merge is held for a human. Start any new deployment at
   `PIPELINE_AUTONOMY=dry-run` and read the decisions log before trusting
   `gated` or `full`.

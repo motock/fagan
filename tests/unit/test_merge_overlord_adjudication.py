@@ -528,3 +528,9 @@ def test_merge_adjudication_plan_context_is_reset_between_calls(plan_dir, monkey
     assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-1")] == ["A"]
     assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-2")] == ["B"]
     assert [r["story_key"] for r in _default_decisions(plan_dir)] == ["C"]
+
+
+@pytest.fixture(autouse=True)
+def _high_risk_merge_tier_auto(monkeypatch):
+    """These tests pin the adjudication itself, so the class is promoted to ``auto``."""
+    monkeypatch.setattr("pipeline.overlord_class_mode.matrix_tier", lambda decision_class: "auto")

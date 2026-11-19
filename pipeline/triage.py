@@ -18,6 +18,7 @@ import logging
 import json
 from . import bound_records
 from .overlord import _invoke_overlord, _load_policy
+from .overlord_class_mode import class_mode
 from .persistence import _notify_user
 from .parsers import _parse_ruling
 from .parsers import _is_transient_backend_exception
@@ -303,7 +304,7 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest) -> str
     prior_status = story.get("status")
     prior_parked_reason = story.get("parked_reason")
     action = ruling.get("action", "unknown")
-    if action in NEW_ACTIONS and _triage_mode(manifest) == "shadow":
+    if action in NEW_ACTIONS and class_mode(ruling.get("park_class"), _triage_mode(manifest)) == "shadow":
         _notify_user(plan_name, f"{story_key} triage shadow: {action} - {ruling.get('rationale', '')}")
         _record_execution(plan_name, story_key, action, "shadow", "shadow", prior_status, prior_parked_reason)
         return "shadow"

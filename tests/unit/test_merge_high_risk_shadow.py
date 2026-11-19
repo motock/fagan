@@ -218,3 +218,9 @@ def test_shadow_hold_log_carries_no_prompt_or_rationale(monkeypatch, caplog):
 
     text = " ".join(r.getMessage() for r in caplog.records)
     assert not re.search(r"checks are green|Rewrite the auth token cache", text)
+
+
+@pytest.fixture(autouse=True)
+def _high_risk_merge_tier_auto(monkeypatch):
+    """These tests pin the adjudication itself, so the class is promoted to ``auto``."""
+    monkeypatch.setattr("pipeline.overlord_class_mode.matrix_tier", lambda decision_class: "auto")

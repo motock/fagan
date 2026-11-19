@@ -317,3 +317,9 @@ def test_append_failure_warning_names_the_story(plan_dir, monkeypatch, caplog):
         "failed to append merge adjudication record for SOME-KEY" in message
         for message in messages
     ), messages
+
+
+@pytest.fixture(autouse=True)
+def _high_risk_merge_tier_auto(monkeypatch):
+    """These tests pin the adjudication itself, so the class is promoted to ``auto``."""
+    monkeypatch.setattr("pipeline.overlord_class_mode.matrix_tier", lambda decision_class: "auto")

@@ -37,6 +37,7 @@ from .ci import (
     settings_for_plan,
 )
 from .concurrency import _plan_lock
+from .overlord_class_mode import class_mode, matrix_tier
 from .ruling_snapshot import ruling_input
 from .triage_outcomes import record_resolution_if_ruled
 
@@ -575,19 +576,30 @@ def _merge_decision(
                 else "shadow"
             )
             triage_mode = effective_triage_mode(legacy, context)
-            if decision["action"] == "merge" and triage_mode != "execute":
-                logging.getLogger("pipeline").info(
-                    "high-risk merge held: triage mode is not execute",
-                    extra={
-                        "plan_name": plan_name,
-                        "story_key": story.get("key"),
-                        "triage_mode": triage_mode,
-                    },
-                )
-                return {
-                    "action": "park",
-                    "reason": "overlord ruled proceed (shadow: held for a human)",
-                }
+            if decision["action"] == "merge":
+                verdict = class_mode("high_risk_merge", triage_mode)
+                if verdict == "shadow":
+                    logging.getLogger("pipeline").info(
+                        "high-risk merge held: not allowed at this triage mode and authority tier",
+                        extra={
+                            "plan_name": plan_name,
+                            "story_key": story.get("key"),
+                            "triage_mode": triage_mode,
+                            "tier": matrix_tier("high_risk_merge"),
+                        },
+                    )
+                    if triage_mode != "execute":
+                        reason = "overlord ruled proceed (shadow: held for a human)"
+                    else:
+                        reason = "overlord ruled proceed (authority tier human: held for a human)"
+                    return {"action": "park", "reason": reason}
+                if verdict == "notify":
+                    from .persistence import _notify_user
+
+                    _notify_user(
+                        plan_name,
+                        f"{story.get('key')} high-risk merge proceeding at tier auto+notify",
+                    )
             return decision
         return {"action": "park", "reason": "high risk held for human review"}
     if autonomy == "full":

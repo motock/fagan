@@ -39,6 +39,24 @@
       "bounds": {"loosest": "auto+notify"}
     },
     {
+      "id": "readiness.min_paired",
+      "class": "readiness",
+      "type": "numeric",
+      "value": 20,
+      "tighter": "higher",
+      "delegation": "tighten_only",
+      "bounds": {"min": 20, "max": 100000}
+    },
+    {
+      "id": "readiness.max_false_park_percent",
+      "class": "readiness",
+      "type": "numeric",
+      "value": 10,
+      "tighter": "lower",
+      "delegation": "tighten_only",
+      "bounds": {"min": 0, "max": 10}
+    },
+    {
       "id": "gate_precondition_bypass",
       "class": "gate_precondition_bypass",
       "type": "flag",

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import bound_records
+from .actor import actor_id
 from .audit import record_audit
 from .branch_names import story_branch
 from .ci import (
@@ -36,6 +37,7 @@ from .ci import (
     settings_for_plan,
 )
 from .concurrency import _plan_lock
+from .triage_outcomes import record_resolution_if_ruled
 
 _lock_state = {}
 
@@ -806,6 +808,13 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 "notify_if_plan_completed failed for %s", plan_name
             )
         _maybe_record_retro(plan_name, manifest)
+    record_resolution_if_ruled(
+        plan_name,
+        story_key,
+        human_action="merge_held",
+        new_status="done",
+        principal=actor_id(),
+    )
     _mark_plane_done(story_key, plan_name)
     if mcp_touched:
         _notify_user(plan_name, _mcp_restart_notice(mcp_touched))

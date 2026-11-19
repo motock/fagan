@@ -310,6 +310,19 @@ unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
   `skipped: "locked"` with `retry_after_seconds`; a refused value is never
   echoed.
 
+The same `human resolution` is recorded automatically, beside the story's
+latest overlord ruling, whenever a person acts on a story whose ruling is
+still unanswered (`pipeline.triage_outcomes.record_resolution_if_ruled`): on a
+successful `approve_merge`, and on a `mark_story_done` that closes a PR merged
+outside the pipeline, with `human_action` `merge_held` and the new status
+`done`; and on a `set_story_status` that moves a story off `parked` or
+`pr_open`, with `human_action` `park` when the new status is `failed`,
+`blocked` or `parked`, `retry` when it is `todo`, `interrupted` or
+`changes_requested`, and `other` for any other status. Each ruling is answered
+once -- a repeat for the same ruling writes nothing, while a new ruling for the
+story is answered again. The record never fails the merge or the status change:
+a failed write is logged as a warning and the action still succeeds.
+
 Plan approval can also be decided from the dashboard. The plan detail header's
 **Review** button opens a panel that shows the plan's approval status, its
 warnings and whether the stored digest still matches the plan on disk. An

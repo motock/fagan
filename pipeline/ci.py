@@ -813,6 +813,20 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
     # The manifest is saved and the plan lock released: only now remove the
     # story's worktree and local branch (git must never run under the lock).
+    #
+    # This body is rebound onto ``pipeline.server``'s namespace, so the two
+    # names the hook needs are imported here, the way ``authorize`` above is.
+    if merged_outside_pipeline:
+        from .actor import actor_id
+        from .triage_outcomes import record_resolution_if_ruled
+
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action="merge_held",
+            new_status="done",
+            principal=actor_id(),
+        )
     _cleanup_finished_worktree(plan_name, story_key, worktree)
     return result
 

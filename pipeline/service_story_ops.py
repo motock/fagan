@@ -7,8 +7,26 @@ pipeline.service, so tests patching pipeline.server still land.
 from typing import Any
 
 from pipeline import worktree_diff
+from pipeline.actor import actor_id
 from pipeline.concurrency import command_lock_wait_seconds
 from pipeline.plan_approval import approval_enabled, reset_if_changed
+from pipeline.triage_outcomes import record_resolution_if_ruled
+
+#: The new statuses that mean the machine parked the story again.
+_PARK_STATUSES = frozenset({"failed", "blocked", "parked"})
+#: The new statuses that mean the story goes back to work.
+_RETRY_STATUSES = frozenset({"todo", "interrupted", "changes_requested"})
+#: The statuses a story is parked at, so leaving one answers a ruling.
+_RULED_STATUSES = frozenset({"parked", "pr_open"})
+
+
+def _human_action_for_status(status: str) -> str:
+    """The human action that moving a story to ``status`` represents."""
+    if status in _PARK_STATUSES:
+        return "park"
+    if status in _RETRY_STATUSES:
+        return "retry"
+    return "other"
 
 
 def _set_story_status_impl(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:
@@ -34,11 +52,21 @@ def _set_story_status_impl(self, plan_name: str, story_key: str, status: str) ->
         story = manifest["stories"].get(story_key)
         if story is None:
             return {"ok": False, "error": f"No such story {story_key!r}"}
+        previous_status = story.get("status")
         story["status"] = status
         if status != "parked":
             story.pop("parked_reason", None)
         _store.save_manifest(plan_name, manifest)
-        return {"ok": True, "story_key": story_key, "status": status}
+
+    if previous_status in _RULED_STATUSES and status != previous_status:
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action=_human_action_for_status(status),
+            new_status=status,
+            principal=actor_id(),
+        )
+    return {"ok": True, "story_key": story_key, "status": status}
 
 
 def _get_story_diff_impl(

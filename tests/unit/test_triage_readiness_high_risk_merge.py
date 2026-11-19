@@ -21,6 +21,8 @@ classes are covered by their own test module.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from pipeline import triage_readiness as tr
@@ -28,6 +30,9 @@ from pipeline import triage_readiness as tr
 _CLASS = "high_risk_merge"
 _STORY = "HRM-S1"
 _DECIDED_AT = "2026-11-06T10:00:00+00:00"
+
+_REFERENCE = Path(__file__).resolve().parents[2] / "REFERENCE.md"
+_PROMOTION_HEADING = "### Promotion rule (shadow to execute)"
 
 
 def _adjudication(ruling: str = "proceed", **overrides) -> dict:
@@ -222,3 +227,42 @@ def test_the_false_park_rate_of_the_class_is_reported() -> None:
     report = tr.readiness([ruling, _human(ruling, "merge_held")])
 
     assert _cls(report)["false_park_rate"] == pytest.approx(1.0)
+
+
+# --- the promotion rule is documented ----------------------------------------
+
+
+def _promotion_section() -> str:
+    lines = _REFERENCE.read_text(encoding="utf-8").splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith(_PROMOTION_HEADING)),
+        None,
+    )
+    assert start is not None, "REFERENCE.md has no promotion-rule section"
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("#"):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_the_promotion_rule_names_the_record_store() -> None:
+    section = _promotion_section()
+
+    assert "record store" in section
+    assert "triage_readiness" in section
+
+
+def test_the_promotion_rule_names_the_high_risk_merge_class() -> None:
+    section = _promotion_section()
+
+    assert _CLASS in section
+    assert "high-risk merge adjudication" in section
+    assert "merge_held" in section
+
+
+def test_the_promotion_rule_says_the_legacy_records_are_not_counted() -> None:
+    section = _promotion_section()
+
+    assert "<plan>.decisions.json" in section

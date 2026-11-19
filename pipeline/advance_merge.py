@@ -411,7 +411,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         REVIEW_REBIND_MAX_ATTEMPTS,
         binding_denial_action,
         branch_head_sha,
-        check,
+        check_with_worktree,
         deny,
         rebind_after_pipeline_push,
     )
@@ -526,7 +526,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # instead of merging with zero binding verification.
         gate_branch = branch or _degraded_ci_branch(key)
         head = branch_head_sha(gate_branch)
-        binding = check(story, head)
+        binding = check_with_worktree(story, head, story.get("worktree", ""))
         if not binding["ok"]:
             # b4 evidence (2026-11-09/10): the recovery from a stale approval
             # was a MANUAL forced re-review, which APPROVED the new head -

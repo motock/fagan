@@ -7,13 +7,26 @@ module is the consumer that enforces it at merge time, so a commit pushed
 after the review (agent rework, a human push) can no longer ride the earlier
 approval into the default branch.
 
-Two pieces:
+Four pieces:
 
 ``check(story, branch_head_sha)``
     Pure, deny-by-default predicate. Allowed only when the verdict is
     ``APPROVE`` *and* ``review_verdict_sha`` is a non-empty ``str`` equal to
     ``branch_head_sha``. Never raises and never mutates ``story``, so a denied
     call cannot corrupt the binding for the next caller.
+
+``worktree_head_state(worktree)``
+    The local evidence the remote tip cannot carry: the worktree's HEAD and
+    whether it has uncommitted tracked changes (``agent.log`` aside). A
+    missing or non-git worktree reports no head; an unreadable status reports
+    dirty.
+
+``check_with_worktree(story, branch_head_sha, worktree)``
+    ``check`` plus that local evidence: a commit that exists only in the
+    worktree (a wall-clock-timeout WIP commit, an agent's local fix) or an
+    uncommitted edit was never reviewed, and is refused before the merge
+    gate's pre-rebase checkpoint could publish it. A remote denial, or no
+    usable worktree, returns the plain ``check`` result.
 
 ``branch_head_sha(branch)``
     The one I/O helper the call sites need: the story branch tip on the
@@ -109,6 +122,100 @@ def check(story: object, branch_head_sha: object) -> dict:
             "ok": False,
             "reason": f"could not verify the approval binding; {RERUN}",
         }
+
+
+def worktree_head_state(worktree: str) -> tuple[str | None, bool]:
+    """The local HEAD of ``worktree`` and whether it has uncommitted changes.
+
+    Returns ``(head, dirty)``. ``(None, False)`` means "no usable worktree"
+    (a missing path, a plain directory, an unusable checkout): the caller then
+    falls back to the remote-only ``check`` rather than refusing a story whose
+    checkout is simply gone. A ``git status`` that cannot be read is reported
+    as dirty - fail closed - because an unreadable status may be hiding an
+    uncommitted edit that the review never saw.
+
+    ``--untracked-files=no`` keeps brand-new files out of the verdict: they
+    are not part of the reviewed commit either way, and a worktree full of
+    scratch files must not block a legitimate merge. ``agent.log`` is the
+    pipeline's own append-only log, so its churn is not story content.
+    """
+    try:
+        head = _git(["rev-parse", "--verify", "HEAD"], worktree)
+        if head is None or head.returncode != 0:
+            return (None, False)
+        sha = (head.stdout or "").strip()
+        if not sha:
+            return (None, False)
+        status = _git(["status", "--porcelain", "--untracked-files=no"], worktree)
+        if status is None or status.returncode != 0:
+            logger.warning(
+                "cannot read the working tree status; treating it as dirty",
+                extra={"worktree_head": _short(sha)},
+            )
+            return (sha, True)
+        dirty = any(
+            not line.endswith("agent.log")
+            for line in (status.stdout or "").splitlines()
+        )
+        return (sha, dirty)
+    except Exception:
+        logger.exception(
+            "local worktree probe failed; falling back to the remote check"
+        )
+        return (None, False)
+
+
+def check_with_worktree(
+    story: object, branch_head_sha: object, worktree: object
+) -> dict:
+    """``check`` plus the local evidence the remote tip cannot carry.
+
+    The review grades the *remote* tip, so a commit that exists only in the
+    story worktree (a wall-clock-timeout WIP commit, an agent's local fix) is
+    invisible to ``check`` - and the merge gate's pre-rebase checkpoint would
+    publish it. The same holds for an uncommitted edit. Both are refused here,
+    before that checkpoint can act.
+
+    Denies by default and never mutates ``story``. A remote denial is returned
+    unchanged (the local probe is not consulted), and so is the ``check``
+    result when the worktree is unusable: absent evidence must not invent a
+    refusal. The shas are compared in full; the short forms are for the
+    message only.
+    """
+    binding = check(story, branch_head_sha)
+    if not binding["ok"]:
+        return binding
+    if not isinstance(worktree, str) or not worktree:
+        return binding
+    local, dirty = worktree_head_state(worktree)
+    if local is None:
+        return binding
+    bound = story["review_verdict_sha"]
+    if local != bound:
+        logger.warning(
+            "local worktree HEAD is not the reviewed commit; refusing to merge",
+            extra={
+                "local_head": _short(local),
+                "review_verdict_sha": _short(bound),
+            },
+        )
+        return {
+            "ok": False,
+            "reason": f"local HEAD {_short(local)} is not the reviewed {_short(bound)}; {RERUN}",
+        }
+    if dirty:
+        logger.warning(
+            "the story worktree has uncommitted changes; refusing to merge",
+            extra={
+                "worktree_head": _short(local),
+                "review_verdict_sha": _short(bound),
+            },
+        )
+        return {
+            "ok": False,
+            "reason": f"uncommitted changes in the story worktree; {RERUN}",
+        }
+    return binding
 
 
 def branch_head_sha(branch: str, *, repo_root: object = None) -> str | None:
@@ -330,6 +437,8 @@ __all__ = [
     "binding_denial_action",
     "branch_head_sha",
     "check",
+    "check_with_worktree",
     "rebind_after_pipeline_push",
     "refuse",
+    "worktree_head_state",
 ]

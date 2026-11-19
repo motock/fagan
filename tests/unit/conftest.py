@@ -311,4 +311,8 @@ def _stub_review_binding_head_probe(request, monkeypatch):
         return real_rebind(story, pushed_sha)
 
     monkeypatch.setattr(review_merge_binding, "branch_head_sha", lambda *a, **k: tip["sha"])
+    # The local worktree probe is stubbed too: these fixtures drive the gate
+    # over fake/tmp worktrees whose HEAD is not the stubbed review sha, so the
+    # gate would refuse them on the local probe alone.
+    monkeypatch.setattr(review_merge_binding, "worktree_head_state", lambda *a, **k: (None, False))
     monkeypatch.setattr(review_merge_binding, "rebind_after_pipeline_push", rebind)

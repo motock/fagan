@@ -75,6 +75,9 @@ ADVANCE_PATH = Path(__file__).resolve().parents[2] / "pipeline" / "advance.py"
 ADVANCE_MERGE_PATH = (
     Path(__file__).resolve().parents[2] / "pipeline" / "advance_merge.py"
 )
+MERGE_READJUDICATION_PATH = (
+    Path(__file__).resolve().parents[2] / "pipeline" / "merge_readjudication.py"
+)
 
 
 def _story(**overrides):
@@ -772,7 +775,13 @@ def test_gather_failure_leaves_the_old_snapshot_intact(
 
 
 def test_advance_source_writes_the_snapshot_and_reads_it_back():
-    src = ADVANCE_PATH.read_text() + "\n" + ADVANCE_MERGE_PATH.read_text()
+    src = (
+        ADVANCE_PATH.read_text()
+        + "\n"
+        + ADVANCE_MERGE_PATH.read_text()
+        + "\n"
+        + MERGE_READJUDICATION_PATH.read_text()
+    )
     assert src.count("merge_park_evidence") >= 2, (
         "pipeline/advance.py must both write merge_park_evidence at park time "
         "and read it in the re-adjudication predicate"
@@ -784,7 +793,13 @@ def test_advance_source_writes_the_snapshot_and_reads_it_back():
 
 
 def test_readjudication_uses_the_non_polling_gather_and_the_branch_resolver():
-    src = ADVANCE_PATH.read_text() + "\n" + ADVANCE_MERGE_PATH.read_text()
+    src = (
+        ADVANCE_PATH.read_text()
+        + "\n"
+        + ADVANCE_MERGE_PATH.read_text()
+        + "\n"
+        + MERGE_READJUDICATION_PATH.read_text()
+    )
     assert "_ci_status_once" in src, (
         "the re-adjudication pass must gather the current single-poll CI state "
         "with _ci_status_once"

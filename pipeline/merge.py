@@ -37,6 +37,7 @@ from .ci import (
     settings_for_plan,
 )
 from .concurrency import _plan_lock
+from .ruling_snapshot import ruling_input
 from .triage_outcomes import record_resolution_if_ruled
 
 _lock_state = {}
@@ -482,6 +483,7 @@ def _adjudicate_high_risk_merge(
             "question": "high-risk merge adjudication",
             "ruling": "",
             "rationale": "unparseable overlord reply; failed closed to the hold",
+            "input": ruling_input(evidence=prompt, prompt=prompt, policy=None, context_digests=None, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
@@ -493,6 +495,7 @@ def _adjudicate_high_risk_merge(
             "question": "high-risk merge adjudication",
             "ruling": parsed["ruling"],
             "rationale": parsed["rationale"],
+            "input": ruling_input(evidence=prompt, prompt=prompt, policy=None, context_digests=None, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",

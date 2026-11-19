@@ -23,6 +23,7 @@ from .parsers import _parse_ruling
 from .parsers import _is_transient_backend_exception
 from .decision_log import append_decision as _append_decision
 from .persistence import _plan_role_config
+from .ruling_snapshot import ruling_input
 from .build_detect import detect_test_command
 from .build_detect import _lint_acceptance_fixtures, _pytest_acceptance_fixtures
 from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
@@ -985,6 +986,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
         "story_key": story_key,
         "question": "failure triage",
         **ruling,
+        "input": ruling_input(evidence=prompt[len(policy):] if stage != "policy" else evidence, prompt=prompt if stage != "policy" else None, policy=policy if stage != "policy" else None, context_digests=None, park_class=park.name, plan_role_config=_plan_role_config(plan_name)),
         "decided_by": "overlord-triage",
         "decided_at": datetime.now(timezone.utc).isoformat(),
     }

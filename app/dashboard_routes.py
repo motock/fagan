@@ -61,6 +61,19 @@ def wedge_verdict(*args: Any, **kwargs: Any) -> Any:
     return _dashboard().wedge_verdict(*args, **kwargs)
 
 
+def _decisions_without_input(decisions: list[Any]) -> list[Any]:
+    """Drop each ruling's ``input`` snapshot from the plan-detail response.
+
+    The console polls this response every few seconds and a snapshot can run
+    to 16 KB per ruling; the full record stays in the store. Non-dict entries
+    pass through unchanged.
+    """
+    return [
+        {k: v for k, v in decision.items() if k != "input"} if isinstance(decision, dict) else decision
+        for decision in decisions
+    ]
+
+
 def get_plan(plan_name: str) -> dict[str, Any]:
     manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
@@ -136,7 +149,7 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         "notification_records": _collapse_duplicate_notifications(
             _store.get_notification_records(plan_name)
         ),
-        "decisions": _store.get_decisions(plan_name),
+        "decisions": _decisions_without_input(_store.get_decisions(plan_name)),
     }
 
 

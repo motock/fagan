@@ -19,12 +19,20 @@ prompt, a payload, or the text of a file's contents.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from . import decision_log, persistence
 
-__all__ = ["HUMAN_ACTIONS", "latest_failure_ruling", "record_human_resolution"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "HUMAN_ACTIONS",
+    "latest_failure_ruling",
+    "record_human_resolution",
+    "record_resolution_if_ruled",
+]
 
 #: What a human did to a parked story. A fixed set, so a resolution can be
 #: counted and compared across plans; anything else is refused before a write.
@@ -138,3 +146,69 @@ def record_human_resolution(
     else:
         persistence._append_decision(plan_name, record)
     return record
+
+
+def _already_answered(plan_name: str, story_key: str, ruling_ref: Any) -> bool:
+    """True when a resolution already links this story to this ruling."""
+    for record in _read_decisions(plan_name):
+        if (
+            record.get("question") == "human resolution"
+            and record.get("story_key") == story_key
+            and record.get("ruling_ref") == ruling_ref
+        ):
+            return True
+    return False
+
+
+def record_resolution_if_ruled(
+    plan_name: str,
+    story_key: str,
+    *,
+    human_action: str,
+    new_status: str,
+    principal: str,
+) -> dict[str, Any] | None:
+    """Record a ``human resolution`` for a story with an unanswered ruling.
+
+    A person merging a story, closing a merge they made themselves, or moving a
+    story off ``parked`` / ``pr_open`` has answered the overlord's ruling on that
+    story. This writes that answer beside the ruling, once per ruling: the
+    dedupe key is the ruling's ``decided_at``, so a new ruling for the same story
+    is answered again while a repeated call for the same ruling is not.
+
+    Returns:
+        The ``human resolution`` record when one was written, otherwise
+        ``None`` -- no ruling on record, or this ruling already answered.
+
+    Never raises: a failed write is logged at ``WARNING`` with identifiers only
+    (the plan and the story), because a missing audit record must not fail the
+    merge or the status change the person asked for.
+    """
+    try:
+        ruling = latest_failure_ruling(plan_name, story_key)
+        if ruling is None:
+            return None
+        ruling_ref = ruling.get("decided_at")
+        if _already_answered(plan_name, story_key, ruling_ref):
+            return None
+        return record_human_resolution(
+            plan_name,
+            story_key,
+            human_action=human_action,
+            new_status=new_status,
+            principal=principal,
+        )
+    except Exception:  # noqa: BLE001 - a failed audit record must not fail the caller
+        logger.warning(
+            "could not record the human resolution for %s in plan %s",
+            story_key,
+            plan_name,
+            extra={
+                "plan_name": plan_name,
+                "story_key": story_key,
+                "human_action": human_action,
+                "new_status": new_status,
+                "outcome": "resolution_not_recorded",
+            },
+        )
+        return None

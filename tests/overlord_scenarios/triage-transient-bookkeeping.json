@@ -1,0 +1,9 @@
+{
+  "id": "triage-transient-bookkeeping",
+  "kind": "triage",
+  "description": "The plan lock was briefly contended while recording a ruling; the lock is free now, so a retry is correct.",
+  "park_class": "transient_bookkeeping",
+  "question": "\nTRIAGE QUESTION: this story is terminal (status=parked). Decide what to do about it.\nEVIDENCE:\nplan lock contended while recording the rebrief; the next tick found the lock free\nOBSERVED PARK CLASS: transient_bookkeeping facts={\"marker\": \"plan lock contended\"}\nALLOWED ACTIONS: park_for_human, retry_transient\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ...",
+  "expected": ["retry_transient"],
+  "forbidden": []
+}

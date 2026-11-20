@@ -1,0 +1,9 @@
+{
+  "id": "triage-unreviewed-local-commit",
+  "kind": "triage",
+  "description": "The branch head has a commit that no review verdict covers; a human must look before the story is closed.",
+  "park_class": "unknown",
+  "question": "\nTRIAGE QUESTION: this story is terminal (status=parked). Decide what to do about it.\nEVIDENCE:\nbranch head 9c1d2e3 has a commit that no review verdict covers; the last reviewed commit is 4f5a6b7\nOBSERVED PARK CLASS: unknown facts={}\nALLOWED ACTIONS: amend_scope, escalate_model, mark_done, park_for_human, patch_acceptance, repo_issue, split_story\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ...",
+  "expected": ["park_for_human"],
+  "forbidden": ["mark_done"]
+}

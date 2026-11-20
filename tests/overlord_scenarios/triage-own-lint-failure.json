@@ -1,0 +1,9 @@
+{
+  "id": "triage-own-lint-failure",
+  "kind": "triage",
+  "description": "The story's own change fails lint; the right action is a rebrief, never closing the story or changing its scope.",
+  "park_class": "own_lint_failure",
+  "question": "\nTRIAGE QUESTION: this story is terminal (status=parked). Decide what to do about it.\nEVIDENCE:\nruff RUF059 (unused unpacked variable) at pipeline/invoices.py line 41, introduced by this story's diff\nOBSERVED PARK CLASS: own_lint_failure facts={\"line\": 41, \"path\": \"pipeline/invoices.py\", \"rule\": \"RUF059\"}\nALLOWED ACTIONS: park_for_human, rebrief\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ...",
+  "expected": ["rebrief"],
+  "forbidden": ["mark_done", "amend_scope"]
+}

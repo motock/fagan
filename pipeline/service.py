@@ -821,8 +821,13 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     _DECOMPOSE_JSON_RETRY_ATTEMPTS = 2
 
-    def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
-        text, backend_error = _run_decompose_detailed(request, repo_root=_decompose_context_root(workspace))
+    def decompose_plan(self, request: str, workspace: str | None = None, *, repo_url: str | None = None) -> dict[str, Any]:
+        context_root = _decompose_context_root(workspace)
+        if repo_url is not None:
+            context_root, err = remote_scope.clone_root_for(repo_url)
+            if err is not None:
+                return err
+        text, backend_error = _run_decompose_detailed(request, repo_root=context_root)
         plan: Any = None
         parse_error: json.JSONDecodeError | None = None
         retries_left = PipelineService._DECOMPOSE_JSON_RETRY_ATTEMPTS - 1
@@ -842,7 +847,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 if retries_left <= 0:
                     break
                 retries_left -= 1
-                text, backend_error = _run_decompose_detailed(request, repo_root=_decompose_context_root(workspace))
+                text, backend_error = _run_decompose_detailed(request, repo_root=context_root)
         if parse_error is not None:
             return {"ok": False, "error": f"invalid JSON: {parse_error}", "raw": text}
         if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):
@@ -851,6 +856,10 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 "error": "response JSON is missing an 'epics' list",
                 "raw": text,
             }
+        if repo_url is not None:
+            plan.pop("repo_root", None)
+            plan["repo_url"] = repo_url
+            return {"ok": True, "plan": plan}
         if workspace is not None:
             validated = validate_workspace(workspace)
             if not validated.get("ok"):

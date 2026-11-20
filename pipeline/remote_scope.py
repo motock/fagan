@@ -175,6 +175,25 @@ def resolve_repo_url(plan: dict) -> dict | None:
     return None
 
 
+def clone_root_for(url: Any) -> tuple[str | None, dict | None]:
+    """Clone or refresh *url* and return its managed path, for a decompose.
+
+    Returns ``(path, None)`` on success or ``(None, error_dict)`` on refusal.
+    It is the same allow-listed path :func:`resolve_repo_url` takes: the URL
+    is checked by ``_invalid_repo_url`` and cloned by ``_ensure_clone`` (which
+    runs ``repo_clone.ensure_clone``, so ``parse_repo_url`` and
+    ``PIPELINE_REPO_URL_HOSTS`` decide what is cloned). A refusal runs no
+    model, so the caller returns it without any decompose call.
+    """
+    err = _invalid_repo_url(url)
+    if err is not None:
+        return None, err
+    path, err = _ensure_clone(url)
+    if err is not None:
+        return None, err
+    return str(path), None
+
+
 def refresh_plan_clone(plan: dict | None) -> dict | None:
     """Re-fetch the clone named by a staged plan's ``repo_url``, or return ``None``.
 

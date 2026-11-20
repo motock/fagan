@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Dashboard chat tells the planner which plan is selected, so "this plan" means the plan the person chose.
+
 - Under `PIPELINE_AUTONOMY=full`, a high-risk merge the overlord rules `proceed` is now held for a human unless the plan's `triage_mode` is `execute`. The ruling is still recorded in the decisions log.
 
 - Under OIDC, dashboard chat tool calls (`/api/chat`, `/api/chat/stream`) now act as the signed-in caller instead of failing with 401 Unauthorized.

@@ -3619,6 +3619,8 @@ repository URL` (the URL is never echoed) before it reaches the planner. A chat 
 request without `repo_url` behaves as before. Dispatch and merge of the saved plan
 still need the enterprise repository grant; `repo_url` does not widen them.
 
+**Naming the selected plan (`plan_name`).** `POST /api/chat` and `POST /api/chat/stream` take an optional `plan_name` naming the plan the person selected in the dashboard; the planner treats it as the default plan, so "this plan" means that plan. A `plan_name` the pipeline refuses as a plan key (`pipeline.server._validate_key`) is refused with HTTP 400 `plan_name is not a valid plan name` (the value is never echoed) before any model call; an empty `plan_name` is the same as none.
+
 **Ending a session.** A session ends at 30 minutes of inactivity, at 8 hours
 from login regardless of activity, or at `/auth/logout` — whichever comes first.
 Revoking the session at the identity provider does not reach a live dashboard

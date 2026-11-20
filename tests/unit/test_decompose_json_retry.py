@@ -196,7 +196,22 @@ def test_decompose_plan_retry_loop_does_not_wrap_the_first_backend_call():
     mod = ast.parse(textwrap.dedent(source))
     func = mod.body[0]
     assert isinstance(func, ast.FunctionDef)
-    first = func.body[0]
+    # Authorized edit (crr-01, 2026-11-20): a repo_url clone step may precede
+    # the first backend call; that call must still be a top-level assignment
+    # with no loop before it.
+    call_positions = [
+        index
+        for index, statement in enumerate(func.body)
+        if isinstance(statement, ast.Assign)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "_run_decompose_detailed"
+    ]
+    assert call_positions, "decompose_plan must call bare _run_decompose_detailed at top level"
+    assert not any(
+        isinstance(statement, (ast.While, ast.For)) for statement in func.body[: call_positions[0]]
+    ), "no loop may precede or wrap the first backend call"
+    first = func.body[call_positions[0]]
     assert isinstance(first, ast.Assign), (
         f"first statement must be an assignment, got {type(first).__name__}"
     )
@@ -218,7 +233,7 @@ def test_decompose_plan_retry_loop_does_not_wrap_the_first_backend_call():
     # the body, never before/around the first call).
     loops = [
         s
-        for s in func.body[1:]
+        for s in func.body[call_positions[0] + 1 :]
         if isinstance(s, (ast.While, ast.For))
     ]
     assert loops, "retry loop must exist after the first backend call"

@@ -85,6 +85,17 @@
       ],
       "title": "Plan Name"
      },
+     "repo_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Repo Url"
+     },
      "workspace": {
       "anyOf": [
        {
@@ -162,6 +173,17 @@
    },
    "DecomposeRequest": {
     "properties": {
+     "repo_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Repo Url"
+     },
      "request": {
       "title": "Request",
       "type": "string"

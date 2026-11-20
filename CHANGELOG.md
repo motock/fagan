@@ -21,6 +21,8 @@ in practice.
 
 - The plan detail (`GET /api/plans/{plan}`) now reports `archived` for an archived plan, matching the plan list.
 
+- Dashboard chat and `/api/decompose` accept `repo_url`: the planner reads that repository and a plan the chat saves targets it, so a signed-in author can draft and stage a plan for a repository.
+
 ### Security
 
 - Dashboard: `/api/chat/stream` no longer accepts a `k-`-prefixed `X-Pipeline-Api-Key` in place of the shared secret; the unvalidated pass-through let an unauthenticated caller invoke the chat model.

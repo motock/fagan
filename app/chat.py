@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
+from pipeline.repo_clone import RepoUrlError, parse_repo_url
 
 
 def _patch_story_execute(http_client, api_base_url, plan_name, story_key, fields, **kwargs):
@@ -29,6 +30,18 @@ def _patch_story_execute(http_client, api_base_url, plan_name, story_key, fields
 
 def _seg(x):
     return quote(str(x), safe="")
+
+
+def _post_planning_goal(http_client, api_base_url, goal, repo_url=None, **kwargs):
+    body = {"request": goal} if not repo_url else {"request": goal, "repo_url": repo_url}
+    return http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/decompose"), json=body).json()
+
+
+#: Refusal for a chat or decompose request that names both a repository and a
+#: server path. The two are alternatives; a request carrying both is ambiguous.
+REPO_URL_AND_WORKSPACE_ERROR = "name repo_url or workspace, not both"
+REPO_URL_NOT_ALLOWED_ERROR = "repo_url is not an allowed repository URL"
+
 # System prompt used for all chat turns. Assembled AFTER the TOOLS registry
 # below (see the SYSTEM_PROMPT assignment following the TOOLS dict) so the
 # "Available tools:" sentence enumerates every registered tool name instead
@@ -206,9 +219,7 @@ TOOLS: dict[str, dict] = {
     "decompose": {
         "description": "Decompose a goal into a plan.",
         "params": {"goal": "str"},
-        "execute": lambda http_client, api_base_url, goal, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/decompose"), json={"request": goal}).json()
-        ),
+        "execute": _post_planning_goal,
     },
     "save_plan": {
         "description": (
@@ -467,6 +478,43 @@ def _signature_mismatch_error(
     )
 
 
+def _save_plan_args_for_repo_url(args: dict, repo_url: str) -> dict:
+    """Return save_plan's args with the server's repo_url written onto the plan.
+
+    A plan that does not parse to a JSON object is returned unchanged:
+    save_plan answers its own invalid-JSON refusal for it.
+    """
+    try:
+        plan = json.loads(args.get("plan_json"))
+    except (TypeError, json.JSONDecodeError):
+        return args
+    if not isinstance(plan, dict):
+        return args
+    plan.pop("repo_root", None)
+    plan.pop("workspace", None)
+    plan["repo_url"] = repo_url
+    return {**args, "plan_json": json.dumps(plan)}
+
+
+def _args_for_repo_url(name: str, args: dict, repo_url: str | None) -> dict:
+    """Return the args a tool call is sent with, the server's repo_url in place.
+
+    The model never chooses the repository when the request names one: a
+    model-sent repo_url is replaced, and save_plan's repo_root and workspace
+    are dropped. With no repo_url, decompose still drops a model-sent
+    repo_url so its body stays {"request": goal}. Every other call is returned
+    unchanged.
+    """
+    if name == "decompose":
+        args = {key: value for key, value in args.items() if key != "repo_url"}
+        if repo_url:
+            args["repo_url"] = repo_url
+        return args
+    if name == "save_plan" and repo_url:
+        return _save_plan_args_for_repo_url(args, repo_url)
+    return args
+
+
 def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict:
     """Execute a tool by name.
 
@@ -588,7 +636,7 @@ class ChatService:
         self._resolved_model = resolution.model
         return driver, resolution.model
 
-    def stream_turn(self, message, *, plan_name=None, history=None, workspace=None):
+    def stream_turn(self, message, *, plan_name=None, history=None, workspace=None, repo_url=None):
         """Yield one chat turn loop's progress as event dicts.
 
         Rename-and-delegate shape (SSE-02): this generator owns the loop logic
@@ -612,6 +660,11 @@ class ChatService:
             system_prompt = SYSTEM_PROMPT
             if workspace:
                 system_prompt += f"\nThe active workspace is {workspace}. Use this absolute path as repo_root when authoring a plan."
+            if repo_url:
+                system_prompt += (
+                    f"\nThe active repository is {repo_url}. Plans you draft and save target that repository; "
+                    "the server records it on the plan, so do not add repo_root or repo_url to plan JSON yourself."
+                )
             response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             yield {"type": "turn", "data": {"n": turns}}
             parsed = _parse_tool_calls(response)
@@ -651,10 +704,11 @@ class ChatService:
             # instead of re-stating every earlier block (quadratic growth).
             iteration_start = len(tool_calls_made)
             for call in parsed:
-                yield {"type": "tool_call", "data": {"name": call["name"], "args": call["args"]}}
-                result = _execute_tool(call["name"], call["args"], self._http_client, self._api_base_url)
-                yield {"type": "tool_result", "data": {"name": call["name"], "args": call["args"], "result": result}}
-                tool_calls_made.append({"name": call["name"], "args": call["args"], "result": result})
+                args = _args_for_repo_url(call["name"], call["args"], repo_url)
+                yield {"type": "tool_call", "data": {"name": call["name"], "args": args}}
+                result = _execute_tool(call["name"], args, self._http_client, self._api_base_url)
+                yield {"type": "tool_result", "data": {"name": call["name"], "args": args, "result": result}}
+                tool_calls_made.append({"name": call["name"], "args": args, "result": result})
             result_blocks = []
             for call in tool_calls_made[iteration_start:]:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
@@ -683,7 +737,7 @@ class ChatService:
         yield {"type": "result", "data": {"reply": cap_reply, "tool_calls": tool_calls_made, "turns": turns}}
         return
 
-    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
+    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None, repo_url=None) -> dict:
         """Run one chat turn loop to completion and return its final result.
 
         Thin drain over :meth:`stream_turn` (SSE-02): the loop logic lives in
@@ -692,7 +746,7 @@ class ChatService:
         returned before the refactor. Signature and return value unchanged.
         """
         result = None
-        for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace):
+        for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace, repo_url=repo_url):
             if event.get("type") == "result":
                 result = event["data"]
         return result
@@ -703,6 +757,7 @@ class ChatService:
 class ChatRequest(BaseModel):
     plan_name: str | None = None
     workspace: str | None = None
+    repo_url: str | None = None
     message: str
     history: list[dict] | None = None
 
@@ -713,6 +768,25 @@ class ChatResponse(BaseModel):
 
 chat_router = APIRouter()
 
+
+def _refuse_repo_url_with_workspace(req: ChatRequest) -> None:
+    """Refuse a request naming both a repository and a server path, before any model call."""
+    if req.repo_url and req.workspace:
+        raise HTTPException(status_code=400, detail=REPO_URL_AND_WORKSPACE_ERROR)
+    if req.repo_url:
+        # Checked here, before the URL is written into the system prompt; the
+        # clone path re-checks it. The refusal never echoes the URL.
+        try:
+            parse_repo_url(req.repo_url)
+        except RepoUrlError:
+            raise HTTPException(status_code=400, detail=REPO_URL_NOT_ALLOWED_ERROR) from None
+
+
+def _repo_url_kwargs(req: ChatRequest) -> dict:
+    """Forward repo_url to the turn only when it is set, so a turn without one keeps its call shape."""
+    return {"repo_url": req.repo_url} if req.repo_url else {}
+
+
 @chat_router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(
     req: ChatRequest,
@@ -721,12 +795,13 @@ def chat_endpoint(
 ) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
+    _refuse_repo_url_with_workspace(req)
     svc = ChatService(
         api_key=x_pipeline_api_key,
         api_base_url=_resolve_chat_api_base_url(request),
         caller_headers=_caller_credential_headers(request),
     )
-    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
+    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace, **_repo_url_kwargs(req))
     return ChatResponse(**result)
 
 
@@ -755,6 +830,7 @@ def chat_stream_endpoint(
 ):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
+    _refuse_repo_url_with_workspace(req)
     svc = ChatService(
         api_key=x_pipeline_api_key,
         api_base_url=_resolve_chat_api_base_url(request),
@@ -763,7 +839,7 @@ def chat_stream_endpoint(
 
     def event_stream():
         try:
-            for event in svc.stream_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace):
+            for event in svc.stream_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace, **_repo_url_kwargs(req)):
                 yield _sse_pack(event)
         except Exception:
             logging.getLogger("pipeline").exception("chat stream failed")

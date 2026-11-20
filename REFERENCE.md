@@ -3600,6 +3600,23 @@ proof the chat request itself passed (`Sec-Fetch-Site: same-origin`). The caller
 can therefore see and do only what the signed-in caller can. Chat-origin refusals
 still apply to these calls.
 
+**Naming the repository (`repo_url`).** `POST /api/chat`, `POST /api/chat/stream`
+and `POST /api/decompose` accept an optional `repo_url`, an HTTPS URL of a
+repository on the host's allow-list (`PIPELINE_REPO_URL_HOSTS`, see the `parse_repo_url`
+rules). The server clones or refreshes it into its managed path, through the same
+path `save_plan` takes for a `repo_url` plan. With `repo_url` set, `/api/decompose`
+reads that clone's `.fagan.json` context and never the active workspace, and the
+returned plan carries `repo_url` with no `repo_root`. In a chat turn, the planner
+is told the active repository, and the server — not the model — writes `repo_url`
+onto each `decompose` call and each `save_plan` plan; any `repo_root`, `workspace`
+or `repo_url` the model put in the plan JSON is dropped. A request naming both
+`repo_url` and `workspace` (a non-empty value of either) is refused with HTTP 400
+`name repo_url or workspace, not both` before any model call; a chat request whose
+`repo_url` fails those rules is refused with HTTP 400 `repo_url is not an allowed
+repository URL` (the URL is never echoed) before it reaches the planner. A chat or decompose
+request without `repo_url` behaves as before. Dispatch and merge of the saved plan
+still need the enterprise repository grant; `repo_url` does not widen them.
+
 **Ending a session.** A session ends at 30 minutes of inactivity, at 8 hours
 from login regardless of activity, or at `/auth/logout` — whichever comes first.
 Revoking the session at the identity provider does not reach a live dashboard

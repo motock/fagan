@@ -454,9 +454,10 @@ class TestSourceShape:
     def test_stream_turn_signature_matches_the_brief(self) -> None:
         signature = inspect.signature(ChatService.stream_turn)
         names = [p.name for p in signature.parameters.values()]
-        assert names == ["self", "message", "plan_name", "history", "workspace"]
+        # Authorized edit (crr-01, 2026-11-20): keyword-only repo_url added.
+        assert names == ["self", "message", "plan_name", "history", "workspace", "repo_url"]
         assert signature.parameters["message"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-        for name in ("plan_name", "history", "workspace"):
+        for name in ("plan_name", "history", "workspace", "repo_url"):
             parameter = signature.parameters[name]
             assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
             assert parameter.default is None
@@ -464,8 +465,9 @@ class TestSourceShape:
     def test_execute_turn_signature_is_unchanged(self) -> None:
         signature = inspect.signature(ChatService.execute_turn)
         names = [p.name for p in signature.parameters.values()]
-        assert names == ["self", "message", "plan_name", "history", "workspace"]
-        for name in ("plan_name", "history", "workspace"):
+        # Authorized edit (crr-01, 2026-11-20): keyword-only repo_url added.
+        assert names == ["self", "message", "plan_name", "history", "workspace", "repo_url"]
+        for name in ("plan_name", "history", "workspace", "repo_url"):
             parameter = signature.parameters[name]
             assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
             assert parameter.default is None

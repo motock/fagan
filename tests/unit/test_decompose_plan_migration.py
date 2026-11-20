@@ -78,8 +78,9 @@ def test_method_takes_self_and_request_with_original_signature():
     params = list(sig.parameters.keys())
     assert params[0] == "self", f"first param must be self, got {params[0]!r}"
     assert "request" in params, "method must keep the original 'request' parameter"
-    assert params == ["self", "request", "workspace"], f"unexpected params: {params}"
-    assert params == ["self", "request", "workspace"], f"unexpected params: {params}"
+    # Authorized edit (crr-01, 2026-11-20): decompose_plan gains a keyword-only repo_url.
+    assert params == ["self", "request", "workspace", "repo_url"], f"unexpected params: {params}"
+    assert sig.parameters["repo_url"].kind is inspect.Parameter.KEYWORD_ONLY
     # Original return annotation is dict[str, Any].
     ret = sig.return_annotation
     assert ret is not inspect.Signature.empty, "return annotation must be preserved"
@@ -334,7 +335,22 @@ def test_method_first_statement_is_run_decompose_call():
     mod = ast.parse(textwrap.dedent(source))
     func = mod.body[0]
     assert isinstance(func, ast.FunctionDef)
-    first = func.body[0]
+    # Authorized edit (crr-01, 2026-11-20): a repo_url clone step may precede
+    # the first backend call; that call must still be a top-level assignment
+    # with no loop before it.
+    call_positions = [
+        index
+        for index, statement in enumerate(func.body)
+        if isinstance(statement, ast.Assign)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "_run_decompose_detailed"
+    ]
+    assert call_positions, "decompose_plan must call bare _run_decompose_detailed at top level"
+    assert not any(
+        isinstance(statement, (ast.While, ast.For)) for statement in func.body[: call_positions[0]]
+    ), "no loop may precede or wrap the first backend call"
+    first = func.body[call_positions[0]]
     # First statement: text, backend_error = _run_decompose_detailed(request)
     assert isinstance(first, ast.Assign), (
         f"first statement must be an assignment, got {type(first).__name__}"

@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.auth import refuse_chat_origin
+from app.chat import REPO_URL_AND_WORKSPACE_ERROR
 from app.dashboard_models import DecomposeRequest, IngestPlanRequest, SavePlanRequest
 from app.dashboard_refusal import raise_if_forbidden
 from pipeline.actor import current_correlation_id, current_namespace, current_principal
@@ -63,12 +64,18 @@ def save_plan(plan_name: str, request: SavePlanRequest):
 
 
 def decompose_route(request: DecomposeRequest):
-    workspace = (
-        request.workspace
-        if request.workspace is not None
-        else _service.get_active_workspace()
-    )
-    result = _service.decompose_plan(request.request, workspace)
+    if request.repo_url and request.workspace:
+        raise HTTPException(status_code=400, detail=REPO_URL_AND_WORKSPACE_ERROR)
+    if request.repo_url:
+        # The repository is named by URL: the active workspace is not read.
+        result = _service.decompose_plan(request.request, None, repo_url=request.repo_url)
+    else:
+        workspace = (
+            request.workspace
+            if request.workspace is not None
+            else _service.get_active_workspace()
+        )
+        result = _service.decompose_plan(request.request, workspace)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

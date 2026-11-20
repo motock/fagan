@@ -17,6 +17,10 @@ in practice.
 
 - The dashboard story log now shows the agent log that dispatch records in the story worktree, instead of "No agent log yet" for every dispatched story. An absolute log path is served only when it resolves under the worktree root; anything else still reads as unavailable.
 
+- Approving a held merge now waits for a busy plan the way other operator commands do (`PIPELINE_COMMAND_LOCK_WAIT_SECONDS`), and answers 409 instead of 404 when the plan stays busy, so a retriable refusal no longer looks like a missing story.
+
+- The plan detail (`GET /api/plans/{plan}`) now reports `archived` for an archived plan, matching the plan list.
+
 ### Security
 
 - Dashboard: `/api/chat/stream` no longer accepts a `k-`-prefixed `X-Pipeline-Api-Key` in place of the shared secret; the unvalidated pass-through let an unauthenticated caller invoke the chat model.

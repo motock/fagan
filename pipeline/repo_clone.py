@@ -84,10 +84,6 @@ _ALLOWED_SCHEMES = ("https",)
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._-]+")
 _PATH_RE = re.compile(r"/([^/]+)/([^/]+)")
 _HTTPS_PREFIX = "https://"
-# Userinfo of an https URL: everything up to the '@', with no whitespace and no
-# '/' (a '/' ends the authority). Anchored at each prefix and stopped by the
-# next delimiter, so a scan is linear and the length is never capped.
-_URL_USERINFO_RE = re.compile(r"[^\s/@]*@")
 _WHITESPACE_RE = re.compile(r"\s")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _BRANCH_REF_RE = re.compile(r"refs/heads/[A-Za-z0-9._/@+-]+")
@@ -169,14 +165,19 @@ def _redact(text: str) -> str:
         if start < 0:
             break
         auth = start + len(_HTTPS_PREFIX)
-        userinfo = _URL_USERINFO_RE.match(text, auth)
-        if userinfo is None:
-            # No '@' before the authority ends: nothing to hide at this prefix.
+        # Userinfo runs up to the first '@' before the authority ends (a '/').
+        # It may not contain whitespace. Plain str scans, no regex, so a long
+        # run of prefixes cannot backtrack.
+        slash = text.find("/", auth)
+        limit = slash if slash >= 0 else len(text)
+        at = text.find("@", auth, limit)
+        if at < 0 or any(c.isspace() for c in text[auth:at]):
+            # No userinfo at this prefix: nothing to hide here.
             scan = auth
             continue
         parts.append(text[copied:auth])
         parts.append("***@")
-        copied = scan = userinfo.end()
+        copied = scan = at + 1
     parts.append(text[copied:])
     return "".join(parts)
 

@@ -99,3 +99,21 @@ def test_should_redact_a_hostile_input_in_linear_time():
 
     assert redacted == hostile
     assert elapsed < 1.0
+
+
+def test_should_redact_userinfo_without_a_regex():
+    assert not hasattr(repo_clone, "_URL_USERINFO_RE")
+
+    redacted = repo_clone._redact("x https://u:p@h/r y https://h/a@b")
+
+    assert redacted == "x https://***@h/r y https://h/a@b"
+
+
+def test_should_redact_a_long_prefix_run_quickly():
+    hostile = "https://" * 50_000 + "@"
+
+    started = time.perf_counter()
+    repo_clone._redact(hostile)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 2.0

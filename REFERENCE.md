@@ -445,7 +445,7 @@ scripts/dashboard.sh start                 # http://127.0.0.1:8000
 
 `scripts/dashboard.sh` runs `uvicorn dashboard:app` detached in its own
 session, records the pid to `.dashboard.<port>.pid`, and logs to `dashboard.log`
-(both in the repo root, gitignored). Subcommands:
+(both in the repo root, gitignored). Set `PIPELINE_PYTHON` to name the interpreter to run the dashboard with; it takes precedence over `.venv` and a `python3` on PATH. Subcommands:
 
 | Command | Effect |
 |---|---|

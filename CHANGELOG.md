@@ -29,6 +29,8 @@ in practice.
 
 - Ingest can read organization-level context sources from an operator-selected provider (`PIPELINE_ORG_CONTEXT_PLUGIN`) in addition to `PIPELINE_CONTEXT_CONFIG`; a provider failure refuses the ingest.
 
+- `scripts/dashboard.sh` honours `PIPELINE_PYTHON` as the interpreter it runs the dashboard with, ahead of `.venv` and PATH, and refuses an unusable value instead of falling back; the dashboard script tests now pass in a git worktree with no `.venv`.
+
 ### Security
 
 - Dashboard: `/api/chat/stream` no longer accepts a `k-`-prefixed `X-Pipeline-Api-Key` in place of the shared secret; the unvalidated pass-through let an unauthenticated caller invoke the chat model.

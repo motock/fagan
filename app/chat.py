@@ -61,6 +61,44 @@ _DEFERRED_NUDGE_PHRASES = (
 
 
 
+def _caller_credential_headers(request: Request | None) -> dict[str, str]:
+    """The caller's own credential, for ChatService's internal tool calls.
+
+    The tool client calls this server's own ``/api/*`` routes. Under OIDC those
+    routes authenticate a bearer token or the session cookie, never the shared
+    key, so a tool call with no caller credential is refused with 401. Forwarding
+    the caller's own credential makes each tool call act as that principal, with
+    its roles and namespace. A service credential of the chat's own would let any
+    chat user act beyond their own roles, so none is ever substituted.
+
+    A bearer token wins over the cookie, matching ``authenticate_api_request``,
+    so a rejected bearer never falls back to the cookie. Returns ``{}`` when the
+    request has no credential, which leaves shared-secret mode unchanged.
+    """
+    from app.oidc_login import SESSION_COOKIE
+    from pipeline.namespace_access import NAMESPACE_HEADER
+
+    if request is None:
+        return {}
+    headers: dict[str, str] = {}
+    scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
+    bearer = token.strip()
+    if scheme.lower() == "bearer" and bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    else:
+        session_id = request.cookies.get(SESSION_COOKIE)
+        if not session_id:
+            return {}
+        headers["Cookie"] = f"{SESSION_COOKIE}={session_id}"
+        # The outer POST already passed allows_cookie_write's same-origin proof
+        # before this handler ran, so the internal hop is marked the same way.
+        headers["Sec-Fetch-Site"] = "same-origin"
+    namespaces = request.headers.getlist(NAMESPACE_HEADER)
+    if len(namespaces) == 1:
+        headers[NAMESPACE_HEADER] = namespaces[0]
+    return headers
+
+
 def _resolve_chat_api_base_url(request: Request | None = None) -> str | None:
     """Resolve ChatService's internal api_base_url for one /api/chat call.
 
@@ -490,7 +528,16 @@ class ChatService:
         Maximum number of turns for the chat loop.  A positive integer is required; a non‑positive value is rejected at construction.
     """
 
-    def __init__(self, *, driver=None, http_client=None, api_base_url=None, max_turns=None, api_key: str | None = None):
+    def __init__(
+        self,
+        *,
+        driver=None,
+        http_client=None,
+        api_base_url=None,
+        max_turns=None,
+        api_key: str | None = None,
+        caller_headers: dict[str, str] | None = None,
+    ):
         self._driver = driver
         self._api_base_url = api_base_url or os.environ.get("PIPELINE_CHAT_API_BASE", "http://127.0.0.1:8000")
         # The decompose tool resolves synchronously over this client to a real
@@ -509,6 +556,8 @@ class ChatService:
             self._http_client.headers[ORIGIN_HEADER] = ORIGIN_CHAT
         if api_key and hasattr(self._http_client, "headers"):
             self._http_client.headers["X-Pipeline-Api-Key"] = api_key
+        if caller_headers and hasattr(self._http_client, "headers"):
+            self._http_client.headers.update(caller_headers)
         raw_max = max_turns if max_turns is not None else int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))
         if raw_max <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {raw_max}")
@@ -672,7 +721,11 @@ def chat_endpoint(
 ) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    svc = ChatService(api_key=x_pipeline_api_key, api_base_url=_resolve_chat_api_base_url(request))
+    svc = ChatService(
+        api_key=x_pipeline_api_key,
+        api_base_url=_resolve_chat_api_base_url(request),
+        caller_headers=_caller_credential_headers(request),
+    )
     result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
     return ChatResponse(**result)
 
@@ -702,7 +755,11 @@ def chat_stream_endpoint(
 ):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    svc = ChatService(api_key=x_pipeline_api_key, api_base_url=_resolve_chat_api_base_url(request))
+    svc = ChatService(
+        api_key=x_pipeline_api_key,
+        api_base_url=_resolve_chat_api_base_url(request),
+        caller_headers=_caller_credential_headers(request),
+    )
 
     def event_stream():
         try:

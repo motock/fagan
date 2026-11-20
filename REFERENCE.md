@@ -3598,6 +3598,13 @@ pass-through that exists in shared-secret mode still does not exist under OIDC:
 that stream authenticates by the API key, so `/api/chat/stream` needs a bearer
 token or a session cookie like any other `/api/` route.
 
+Under OIDC the chat's internal tool calls carry the caller's own credential: the
+bearer token if one was presented, otherwise the session cookie, with the same-origin
+proof the chat request itself passed (`Sec-Fetch-Site: same-origin`). The caller's
+`X-Fagan-Namespace` header is forwarded too when exactly one was sent. A chat tool
+can therefore see and do only what the signed-in caller can. Chat-origin refusals
+still apply to these calls.
+
 **Ending a session.** A session ends at 30 minutes of inactivity, at 8 hours
 from login regardless of activity, or at `/auth/logout` — whichever comes first.
 Revoking the session at the identity provider does not reach a live dashboard

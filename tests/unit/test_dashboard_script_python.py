@@ -7,6 +7,7 @@ An explicit PIPELINE_PYTHON now wins, and an unusable one is refused.
 """
 from __future__ import annotations
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -77,3 +78,19 @@ def test_should_ignore_an_empty_pipeline_python(env):
 
     assert "PIPELINE_PYTHON" not in res.stderr
     assert "PIPELINE_PYTHON" not in res.stdout
+
+
+def test_should_accept_a_pipeline_python_name_found_on_path(env, tmp_path):
+    env_, _port = env
+    marker = tmp_path / "invocations.log"
+    shim = _write_recording_python(tmp_path, marker)
+    shim_on_path = tmp_path / "dst01-recording-python"
+    shim_on_path.write_bytes(shim.read_bytes())
+    shim_on_path.chmod(shim.stat().st_mode)
+    env_["PATH"] = f"{tmp_path}{os.pathsep}{env_['PATH']}"
+    env_["PIPELINE_PYTHON"] = shim_on_path.name
+
+    res = _run_script("start", env=env_)
+
+    assert res.returncode == 0, res.stderr
+    assert "import fastapi, uvicorn" in marker.read_text()

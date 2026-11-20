@@ -591,9 +591,16 @@ def _repo_read_kwargs(repo_url: str | None) -> dict:
     if repo_url is None:
         return {}
     try:
-        return {'root': str(managed_path(repo_url))}
-    except RepoUrlError:
+        path = managed_path(repo_url)
+        base = os.path.normpath(os.path.realpath(os.environ["PIPELINE_REPOS_ROOT"]))
+    except (RepoUrlError, KeyError):
         raise HTTPException(status_code=400, detail=_REPO_URL_NOT_ALLOWED_DETAIL) from None
+    # Re-checked here, where the sanitiser is visible to CodeQL; managed_path's
+    # own containment check is the first line of defence.
+    candidate = os.path.normpath(os.path.realpath(str(path)))
+    if not candidate.startswith(base + os.sep):
+        raise HTTPException(status_code=400, detail=_REPO_URL_NOT_ALLOWED_DETAIL)
+    return {'root': candidate}
 
 
 @app.get('/api/workspace/file', responses={200: {"model": dashboard_schemas.WorkspaceFileResponse}})

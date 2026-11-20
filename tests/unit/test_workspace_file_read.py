@@ -91,11 +91,12 @@ def test_read_workspace_file_method_exists():
 
 def test_read_workspace_file_signature():
     sig = inspect.signature(PipelineService.read_workspace_file)
-    assert list(sig.parameters) == ["self", "relative_path", "max_bytes"]
+    assert list(sig.parameters) == ["self", "relative_path", "max_bytes", "root"]
     assert sig.parameters["relative_path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     # max_bytes must be keyword-only with the 200_000 default.
     assert sig.parameters["max_bytes"].kind is inspect.Parameter.KEYWORD_ONLY
     assert sig.parameters["max_bytes"].default == 200_000
+    assert (sig.parameters["root"].kind, sig.parameters["root"].default) == (inspect.Parameter.KEYWORD_ONLY, None)
     assert sig.return_annotation is dict or sig.return_annotation == "dict"
 
 

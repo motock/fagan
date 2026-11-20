@@ -110,6 +110,20 @@ def test_should_refuse_a_path_that_escapes_the_clone(client, repos_root, no_acti
     assert str(repos_root) not in response.text
 
 
+def test_should_refuse_a_clone_path_outside_the_repos_root(client, tmp_path, monkeypatch, no_active_workspace):
+    outside = tmp_path / "elsewhere" / "widgets"
+    outside.mkdir(parents=True)
+    (outside / "README.md").write_text("outside the root\n", encoding="utf-8")
+    monkeypatch.setattr(d, "managed_path", lambda url: outside)
+
+    response = client.get("/api/workspace/file", params={"path": "README.md", "repo_url": REPO_URL})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": REFUSED_DETAIL}
+    assert "outside the root" not in response.text
+    assert str(outside) not in response.text
+
+
 def test_should_answer_repository_not_cloned_yet_for_a_missing_clone(client, tmp_path, monkeypatch, no_active_workspace):
     monkeypatch.setenv("PIPELINE_REPOS_ROOT", str(tmp_path / "empty"))
 

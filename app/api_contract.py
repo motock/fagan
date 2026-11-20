@@ -34,7 +34,7 @@ SPEC_PATH = "/api/openapi.json"
 #: ``docs/api/openapi.json`` is the snapshot of that surface and
 #: ``scripts/api_contract.py check`` refuses a breaking difference that a MAJOR
 #: bump does not license.
-API_VERSION = "1.0.0"
+API_VERSION = "1.1.0"
 
 #: The only environment value that means "publish"; compared after stripping
 #: surrounding whitespace so ``PIPELINE_DASHBOARD_PUBLIC_DOCS=" 1 "`` (a common

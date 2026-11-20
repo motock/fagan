@@ -62,8 +62,15 @@ on them.
    A re-ingest changes the input only for the next fresh dispatch.
 6. **Phases are an explicit allow-list per release.** Phase 1 honors `dispatch`,
    `review`, and `security_review`; `planner` and `test_author` follow in phase
-   2; `overlord` and `triage` are later. An unsupported phase, provider, or mode
-   is rejected at ingest, never accepted and ignored. `decompose` is
+   2; `overlord` is later. An unsupported phase, provider, or mode
+   is rejected at ingest, never accepted and ignored.
+   2026-11: `triage` and `merge_adjudication` are now honored. Their context is
+   rendered after the shipped `overlord-policy.md` baseline (a per-repo
+   `.overlord-policy.md` override still applies first), pinned by the
+   dispatch-time digest, and recorded in each ruling's `input.context_digests`
+   so a replay sees the same context. Context guides the overlord's judgment
+   and never grants authority: the authority matrix and allowed actions are
+   enforced in code. `decompose` is
    restricted to repo-level configuration (`.fagan.json`) because it runs
    before a plan exists, so there is no plan-level block to read.
 7. **MCP is a fetch adapter, never a delivery mechanism.** If supported, the

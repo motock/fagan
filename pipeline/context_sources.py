@@ -27,7 +27,7 @@ _store = LiveRef("_store")
 
 SUPPORTED_PROVIDERS = ("dir",)
 SUPPORTED_MODES = ("prompt",)
-SUPPORTED_PHASES = ("dispatch", "review", "security_review")
+SUPPORTED_PHASES = ("dispatch", "review", "security_review", "triage", "merge_adjudication")
 SUPPORTED_AUTHORITIES = ("reference", "policy")
 
 DEFAULT_MAX_CHARS = 20000
@@ -201,17 +201,30 @@ def render_context_block(resolved: list[dict], *, max_total_chars: int) -> str:
     one is skipped with a visible line. Skip lines and the truncation marker
     are not counted against ``max_total_chars``.
     """
+    return render_context_block_with_digests(resolved, max_total_chars=max_total_chars)[0]
+
+
+def render_context_block_with_digests(
+    resolved: list[dict], *, max_total_chars: int
+) -> tuple[str, list[str]]:
+    """Render as ``render_context_block`` does, and return the digests of the sources it rendered.
+
+    The digests are in render order and exclude any optional source skipped
+    for budget, so they name exactly the context the prompt carries.
+    """
     if max_total_chars < 1:
         raise ValueError("max_total_chars must be a positive integer")
     if not resolved:
-        return ""
+        return "", []
     parts = [_PREAMBLE]
+    digests: list[str] = []
     used = len(_PREAMBLE)
     skipped = False
     for source in resolved:
         section = _render_section(source)
         if used + len(section) <= max_total_chars:
             parts.append(section)
+            digests.append(source["digest"])
             used += len(section)
         elif source.get("required", True):
             raise ContextSourceError(
@@ -222,7 +235,7 @@ def render_context_block(resolved: list[dict], *, max_total_chars: int) -> str:
             skipped = True
     if skipped:
         parts.append(f"\n[... context truncated at {max_total_chars} chars ...]\n")
-    return "".join(parts)
+    return "".join(parts), digests
 
 
 # ---------- dir provider, secret scan, snapshot store ----------

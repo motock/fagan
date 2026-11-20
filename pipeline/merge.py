@@ -40,6 +40,7 @@ from .concurrency import _plan_lock
 from .merge_diff_evidence import render_diff_evidence
 from .merge_local_checks import render_local_checks_line
 from .overlord_class_mode import class_mode, matrix_tier
+from .overlord_context import overlord_context
 from .ruling_snapshot import ruling_input
 from .triage_outcomes import record_resolution_if_ruled
 
@@ -472,8 +473,11 @@ def _adjudicate_high_risk_merge(
         "RULING: proceed|park\n"
         "RATIONALE: <one line>\n"
     )
+    ctx_block, ctx_digests = overlord_context(plan_name, story_key, "merge_adjudication")
+    head, marker, closing = prompt.rpartition("Respond in this exact format:")
+    sent_prompt = head + ctx_block + marker + closing
     try:
-        raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+        raw = _invoke_overlord(sent_prompt, plan_role_config=_plan_role_config(plan_name))
         parsed = _parse_merge_ruling(raw or "")
     except Exception as exc:  # noqa: BLE001 - overlord failure fails closed
         parsed = None
@@ -488,7 +492,7 @@ def _adjudicate_high_risk_merge(
             "question": "high-risk merge adjudication",
             "ruling": "",
             "rationale": "unparseable overlord reply; failed closed to the hold",
-            "input": ruling_input(evidence=prompt, prompt=prompt, policy=None, context_digests=None, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
+            "input": ruling_input(evidence=prompt, prompt=sent_prompt, policy=None, context_digests=ctx_digests, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
@@ -500,7 +504,7 @@ def _adjudicate_high_risk_merge(
             "question": "high-risk merge adjudication",
             "ruling": parsed["ruling"],
             "rationale": parsed["rationale"],
-            "input": ruling_input(evidence=prompt, prompt=prompt, policy=None, context_digests=None, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
+            "input": ruling_input(evidence=prompt, prompt=sent_prompt, policy=None, context_digests=ctx_digests, park_class="high_risk_merge", plan_role_config=_plan_role_config(plan_name)),
             "prior_status": prior_status,
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",

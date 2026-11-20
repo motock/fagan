@@ -18,6 +18,7 @@ import logging
 import json
 from . import bound_records
 from .overlord import _invoke_overlord, _load_policy
+from .overlord_context import overlord_context
 from .overlord_class_mode import class_mode
 from .persistence import _notify_user
 from .parsers import _parse_ruling
@@ -944,9 +945,9 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
     park = classify_park(story, with_lint_evidence(story, {"test_output": check.get("stdout_tail") if isinstance(check, dict) else None}))
     park_lines = f"OBSERVED PARK CLASS: {park.name} facts={json.dumps(park.facts, sort_keys=True, default=str)}\nALLOWED ACTIONS: {', '.join(sorted(ALLOWED_ACTIONS[park.name]))}\n"
     try:
-        policy = _load_policy()
+        policy, (ctx_block, ctx_digests) = _load_policy(), overlord_context(plan_name, story_key, "triage")
         # Build prompt
-        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\n{park_lines}Please respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ..."
+        prompt = f"{policy}{ctx_block}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\n{park_lines}Please respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nDIAGNOSIS: ... (optional; for ACTION rebrief, at most two plain sentences)\nACTION: ..."
         stage = "overlord"
         # Call overlord
         raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
@@ -987,7 +988,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
         "story_key": story_key,
         "question": "failure triage",
         **ruling,
-        "input": ruling_input(evidence=prompt[len(policy):] if stage != "policy" else evidence, prompt=prompt if stage != "policy" else None, policy=policy if stage != "policy" else None, context_digests=None, park_class=park.name, plan_role_config=_plan_role_config(plan_name)),
+        "input": ruling_input(evidence=prompt[len(policy) + len(ctx_block):] if stage != "policy" else evidence, prompt=prompt if stage != "policy" else None, policy=policy if stage != "policy" else None, context_digests=ctx_digests if stage != "policy" else None, park_class=park.name, plan_role_config=_plan_role_config(plan_name)),
         "decided_by": "overlord-triage",
         "decided_at": datetime.now(timezone.utc).isoformat(),
     }

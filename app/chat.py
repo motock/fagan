@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
+from pipeline.repo_clone import RepoUrlError, parse_repo_url
 
 
 def _patch_story_execute(http_client, api_base_url, plan_name, story_key, fields, **kwargs):
@@ -31,7 +32,7 @@ def _seg(x):
     return quote(str(x), safe="")
 
 
-def _decompose_execute(http_client, api_base_url, goal, repo_url=None, **kwargs):
+def _post_planning_goal(http_client, api_base_url, goal, repo_url=None, **kwargs):
     body = {"request": goal} if not repo_url else {"request": goal, "repo_url": repo_url}
     return http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/decompose"), json=body).json()
 
@@ -39,6 +40,7 @@ def _decompose_execute(http_client, api_base_url, goal, repo_url=None, **kwargs)
 #: Refusal for a chat or decompose request that names both a repository and a
 #: server path. The two are alternatives; a request carrying both is ambiguous.
 REPO_URL_AND_WORKSPACE_ERROR = "name repo_url or workspace, not both"
+REPO_URL_NOT_ALLOWED_ERROR = "repo_url is not an allowed repository URL"
 
 # System prompt used for all chat turns. Assembled AFTER the TOOLS registry
 # below (see the SYSTEM_PROMPT assignment following the TOOLS dict) so the
@@ -217,7 +219,7 @@ TOOLS: dict[str, dict] = {
     "decompose": {
         "description": "Decompose a goal into a plan.",
         "params": {"goal": "str"},
-        "execute": _decompose_execute,
+        "execute": _post_planning_goal,
     },
     "save_plan": {
         "description": (
@@ -771,6 +773,13 @@ def _refuse_repo_url_with_workspace(req: ChatRequest) -> None:
     """Refuse a request naming both a repository and a server path, before any model call."""
     if req.repo_url and req.workspace:
         raise HTTPException(status_code=400, detail=REPO_URL_AND_WORKSPACE_ERROR)
+    if req.repo_url:
+        # Checked here, before the URL is written into the system prompt; the
+        # clone path re-checks it. The refusal never echoes the URL.
+        try:
+            parse_repo_url(req.repo_url)
+        except RepoUrlError:
+            raise HTTPException(status_code=400, detail=REPO_URL_NOT_ALLOWED_ERROR) from None
 
 
 def _repo_url_kwargs(req: ChatRequest) -> dict:

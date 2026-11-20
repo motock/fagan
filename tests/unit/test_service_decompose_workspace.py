@@ -111,9 +111,12 @@ def test_signature_gains_workspace_param_defaulting_to_none():
     assert method is not None, "PipelineService.decompose_plan does not exist"
     sig = inspect.signature(method)
     params = list(sig.parameters.keys())
-    assert params == ["self", "request", "workspace"], (
-        f"expected (self, request, workspace), got {params}"
+    # Authorized edit (crr-01, 2026-11-20): decompose_plan gains a keyword-only repo_url.
+    assert params == ["self", "request", "workspace", "repo_url"], (
+        f"expected (self, request, workspace, *, repo_url), got {params}"
     )
+    assert sig.parameters["repo_url"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["repo_url"].default is None
     ws_param = sig.parameters["workspace"]
     assert ws_param.default is None, "workspace must default to None"
     ann = ws_param.annotation

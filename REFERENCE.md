@@ -3611,7 +3611,9 @@ is told the active repository, and the server — not the model — writes `repo
 onto each `decompose` call and each `save_plan` plan; any `repo_root`, `workspace`
 or `repo_url` the model put in the plan JSON is dropped. A request naming both
 `repo_url` and `workspace` (a non-empty value of either) is refused with HTTP 400
-`name repo_url or workspace, not both` before any model call. A chat or decompose
+`name repo_url or workspace, not both` before any model call; a chat request whose
+`repo_url` fails those rules is refused with HTTP 400 `repo_url is not an allowed
+repository URL` (the URL is never echoed) before it reaches the planner. A chat or decompose
 request without `repo_url` behaves as before. Dispatch and merge of the saved plan
 still need the enterprise repository grant; `repo_url` does not widen them.
 

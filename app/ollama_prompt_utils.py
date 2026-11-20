@@ -354,11 +354,15 @@ def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
     ``_BASH_TIMEOUT_S`` is read at call time (not default-bound) so tests can
     shrink it. Only the shell is signalled on timeout; a pipeline's orphaned
     children may outlive this call, but the caller -- which is what wedged --
-    is always released.
+    is always released. The child gets the same secret-stripped environment a
+    dispatched agent gets.
     """
+    from pipeline.execution import _strip_agent_secrets
+
     return subprocess.run(
         cmd, check=False, shell=True, cwd=cwd,
         capture_output=True, text=True, timeout=_BASH_TIMEOUT_S,
+        env=_strip_agent_secrets(dict(os.environ)),
     )
 
 
@@ -367,7 +371,12 @@ def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
 def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
     """Execute a review (read-only) tool: bash (run commands) or view_file."""
     if fn == "view_file":
-        path = cwd / args.get("path", "")
+        from pipeline.workspace_fs import resolve_within_workspace
+
+        try:
+            path = resolve_within_workspace(str(cwd), args.get("path") or "")
+        except ValueError:
+            return f"ERROR: {args.get('path')} is not a path inside the worktree."
         if not path.exists():
             return f"ERROR: {args.get('path')} does not exist."
         lines = path.read_text().splitlines(keepends=True)

@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
+from pipeline import server as _server
 from pipeline.repo_clone import RepoUrlError, parse_repo_url
 
 
@@ -41,6 +42,9 @@ def _post_planning_goal(http_client, api_base_url, goal, repo_url=None, **kwargs
 #: server path. The two are alternatives; a request carrying both is ambiguous.
 REPO_URL_AND_WORKSPACE_ERROR = "name repo_url or workspace, not both"
 REPO_URL_NOT_ALLOWED_ERROR = "repo_url is not an allowed repository URL"
+#: Refusal for a plan_name the pipeline would not accept as a plan key. The
+#: value is never echoed back, and it never reaches a prompt.
+PLAN_NAME_ERROR = "plan_name is not a valid plan name"
 
 # System prompt used for all chat turns. Assembled AFTER the TOOLS registry
 # below (see the SYSTEM_PROMPT assignment following the TOOLS dict) so the
@@ -665,6 +669,11 @@ class ChatService:
                     f"\nThe active repository is {repo_url}. Plans you draft and save target that repository; "
                     "the server records it on the plan, so do not add repo_root or repo_url to plan JSON yourself."
                 )
+            if plan_name:
+                system_prompt += (
+                    f"\nThe user has selected the plan {plan_name}. When they say \"this plan\" or do not name a plan, "
+                    f"they mean {plan_name}: use it as plan_name, and call get_plan for its current state before describing it."
+                )
             response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             yield {"type": "turn", "data": {"n": turns}}
             parsed = _parse_tool_calls(response)
@@ -782,6 +791,16 @@ def _refuse_repo_url_with_workspace(req: ChatRequest) -> None:
             raise HTTPException(status_code=400, detail=REPO_URL_NOT_ALLOWED_ERROR) from None
 
 
+def _refuse_unsafe_plan_name(req: ChatRequest) -> None:
+    """Refuse a plan_name the pipeline would not accept as a plan key, before any model call."""
+    if not req.plan_name:
+        return
+    try:
+        _server._validate_key(req.plan_name)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=PLAN_NAME_ERROR) from None
+
+
 def _repo_url_kwargs(req: ChatRequest) -> dict:
     """Forward repo_url to the turn only when it is set, so a turn without one keeps its call shape."""
     return {"repo_url": req.repo_url} if req.repo_url else {}
@@ -796,6 +815,7 @@ def chat_endpoint(
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
     _refuse_repo_url_with_workspace(req)
+    _refuse_unsafe_plan_name(req)
     svc = ChatService(
         api_key=x_pipeline_api_key,
         api_base_url=_resolve_chat_api_base_url(request),
@@ -831,6 +851,7 @@ def chat_stream_endpoint(
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
     _refuse_repo_url_with_workspace(req)
+    _refuse_unsafe_plan_name(req)
     svc = ChatService(
         api_key=x_pipeline_api_key,
         api_base_url=_resolve_chat_api_base_url(request),

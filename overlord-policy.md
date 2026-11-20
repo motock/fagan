@@ -65,6 +65,12 @@ When a branch has been reviewed and is a candidate to merge:
 - In a high-risk merge adjudication the `LOCAL CHECKS` line reports the repo's own
   tests, lint and build on the exact commit. A red result never reaches you: the
   merge parks first. `unavailable` or `not run` is missing evidence, not a pass.
+- In a high-risk merge adjudication, rule **park** when the `DIFF EVIDENCE` block
+  shows changes outside the declared `files` that the summary does not explain,
+  an existing test modified or deleted without a reason in the summary, or a
+  break from a convention visible in the surrounding code that you can name (for
+  example, a route added without the guard its siblings use). Cite the file in
+  the rationale. `DIFF EVIDENCE: unavailable` is missing evidence, not a pass.
 
 The classes of decision the overlord may take unattended, and the tier each is
 allowed, are defined in `overlord-authority.json` (see ADR 0014). Where that

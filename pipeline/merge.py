@@ -37,6 +37,7 @@ from .ci import (
     settings_for_plan,
 )
 from .concurrency import _plan_lock
+from .merge_diff_evidence import render_diff_evidence
 from .merge_local_checks import render_local_checks_line
 from .overlord_class_mode import class_mode, matrix_tier
 from .ruling_snapshot import ruling_input
@@ -466,6 +467,7 @@ def _adjudicate_high_risk_merge(
         f"{story.get('security_review_verdict') or '(none)'}\n"
         f"{_render_pr_checks_line(story)}\n"
         f"{render_local_checks_line(story)}\n"
+        f"{render_diff_evidence(story)}\n"
         "Respond in this exact format:\n"
         "RULING: proceed|park\n"
         "RATIONALE: <one line>\n"

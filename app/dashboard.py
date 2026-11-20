@@ -27,6 +27,7 @@ from app import (
     chat,
     dashboard_cors,
     dashboard_schemas,
+    dashboard_security_headers,
     dashboard_ui,
     namespace_exempt,
     oidc_login,
@@ -952,6 +953,7 @@ if _oidc_login_config.enabled:
     oidc_login.mount_auth_routes(app, _oidc_login_config)
 authorization.activate_authorizer()
 
+dashboard_security_headers.install(app)
 # Outermost: the last middleware added wins, so this follows every @app.middleware.
 dashboard_cors.install(app)
 _dashboard_ui_enabled = dashboard_ui.ui_enabled()

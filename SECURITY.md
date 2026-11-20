@@ -74,3 +74,4 @@ A few things worth knowing when assessing this codebase's attack surface:
   variables only — never commit them, and never put them in a plan JSON or
   `agent_instructions`, which are logged and may be shown to a dispatched
   model.
+- **Every dashboard response carries fixed security headers** (`app/dashboard_security_headers.py`): `Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The dashboard therefore cannot be embedded in a frame, including by a reverse proxy's own pages. The policy does not restrict script sources.

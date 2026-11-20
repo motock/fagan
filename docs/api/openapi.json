@@ -1056,7 +1056,7 @@
  },
  "info": {
   "title": "Agent Pipeline Dashboard",
-  "version": "1.0.0"
+  "version": "1.1.0"
  },
  "openapi": "3.1.0",
  "paths": {
@@ -3152,6 +3152,22 @@
        "title": "Path",
        "type": "string"
       }
+     },
+     {
+      "in": "query",
+      "name": "repo_url",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Repo Url"
+      }
      }
     ],
     "responses": {
@@ -3192,6 +3208,22 @@
        "title": "Path",
        "type": "string"
       }
+     },
+     {
+      "in": "query",
+      "name": "repo_url",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Repo Url"
+      }
      }
     ],
     "responses": {
@@ -3230,6 +3262,22 @@
       "schema": {
        "title": "Pattern",
        "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "repo_url",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Repo Url"
       }
      }
     ],

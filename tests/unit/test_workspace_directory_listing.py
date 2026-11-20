@@ -113,11 +113,12 @@ def test_list_workspace_directory_method_exists():
 
 def test_list_workspace_directory_signature():
     sig = inspect.signature(PipelineService.list_workspace_directory)
-    assert list(sig.parameters) == ["self", "relative_path"]
+    assert list(sig.parameters) == ["self", "relative_path", "root"]
     assert sig.parameters["relative_path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     # relative_path must be a plain parameter with the '' default -- NOT
     # keyword-only, and not required.
     assert sig.parameters["relative_path"].default == ""
+    assert (sig.parameters["root"].kind, sig.parameters["root"].default) == (inspect.Parameter.KEYWORD_ONLY, None)
     assert sig.return_annotation is dict or sig.return_annotation == "dict"
 
 

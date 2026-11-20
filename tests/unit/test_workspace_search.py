@@ -153,13 +153,14 @@ def test_search_workspace_method_exists_with_contracted_signature():
     )
     sig = inspect.signature(PipelineService.search_workspace)
     names = list(sig.parameters)
-    assert names == ["self", "pattern", "max_results"]
+    assert names == ["self", "pattern", "max_results", "root"]
     pattern = sig.parameters["pattern"]
     assert pattern.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert pattern.default is inspect.Parameter.empty
     max_results = sig.parameters["max_results"]
     assert max_results.kind is inspect.Parameter.KEYWORD_ONLY
     assert max_results.default == 200
+    assert (sig.parameters["root"].kind, sig.parameters["root"].default) == (inspect.Parameter.KEYWORD_ONLY, None)
 
 
 def test_no_active_workspace(service, monkeypatch):

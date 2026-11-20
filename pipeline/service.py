@@ -23,6 +23,7 @@ import subprocess
 from typing import Any
 
 from pipeline import cross_plan, plan_activity, wake, workspace_reader
+from pipeline import workspace_fs as _workspace_fs
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.store_records import UnknownNamespaceError
 from pipeline.telemetry import record_dispatch_attempt
@@ -421,10 +422,10 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return None
         return path
 
-    def read_workspace_file(self, relative_path: str, *, max_bytes: int = 200_000) -> dict:
-        """Read a UTF-8 text file from the active workspace.
+    def read_workspace_file(self, relative_path: str, *, max_bytes: int = 200_000, root: str | None = None) -> dict:
+        """Read a UTF-8 text file from the active workspace, or from ``root`` when given.
 
-        Resolves ``relative_path`` inside the active workspace via
+        Resolves ``relative_path`` inside that directory via
         :func:`pipeline.workspace_fs.resolve_within_workspace` and returns
         its contents as text.  Every failure mode returns a dict with
         ``ok`` false and a fixed generic error string; the resolved or
@@ -432,10 +433,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         runs before the file is opened, so an oversized file is never read
         into memory.
         """
-        active = self.get_active_workspace()
-        if active is None:
-            return {'ok': False, 'error': 'no active workspace'}
-        import pipeline.workspace_fs as _workspace_fs
+        active, error = _workspace_fs.read_root(root, None if root is not None else self.get_active_workspace())
+        if error is not None:
+            return error
         try:
             resolved = _workspace_fs.resolve_within_workspace(active, relative_path)
         except ValueError:
@@ -451,8 +451,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return {'ok': False, 'error': 'not a text file'}
         return {'ok': True, 'path': relative_path, 'content': content}
 
-    def list_workspace_directory(self, relative_path: str = '') -> dict:
-        """List the immediate children of a directory in the active workspace.
+    def list_workspace_directory(self, relative_path: str = '', *, root: str | None = None) -> dict:
+        """List the immediate children of a directory in the active workspace (or ``root``).
 
         Mirrors :meth:`read_workspace_file`'s error-shape conventions: every
         failure mode returns a dict with ``ok`` false and a fixed generic
@@ -466,10 +466,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         spelling outright, so the empty path is mapped onto ``'.'`` before
         resolution.
         """
-        active = self.get_active_workspace()
-        if active is None:
-            return {'ok': False, 'error': 'no active workspace'}
-        import pipeline.workspace_fs as _workspace_fs
+        active, error = _workspace_fs.read_root(root, None if root is not None else self.get_active_workspace())
+        if error is not None:
+            return error
         # resolve_within_workspace rejects the empty spelling outright; the
         # brief mandates that '' addresses the workspace ROOT, so map it onto
         # the resolver's canonical root spelling for resolution only -- the
@@ -498,8 +497,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         entries.sort(key=lambda e: e['name'])
         return {'ok': True, 'path': relative_path, 'entries': entries}
 
-    def search_workspace(self, pattern: str, *, max_results: int = 200) -> dict:
-        """Search the active workspace with grep and return matching lines.
+    def search_workspace(self, pattern: str, *, max_results: int = 200, root: str | None = None) -> dict:
+        """Search the active workspace (or ``root``) with grep and return matching lines.
 
         Mirrors :meth:`read_workspace_file` / :meth:`list_workspace_directory`'s
         error-shape conventions: every failure mode returns a dict with ``ok``
@@ -512,9 +511,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         injection regardless of its content.  grep's exit code 1 means "nothing
         matched" and is reported as a successful empty search, not an error.
         """
-        active = self.get_active_workspace()
-        if active is None:
-            return {'ok': False, 'error': 'no active workspace'}
+        active, error = _workspace_fs.read_root(root, None if root is not None else self.get_active_workspace())
+        if error is not None:
+            return error
         if not isinstance(pattern, str) or '\x00' in pattern or pattern == '':
             return {'ok': False, 'error': 'invalid pattern'}
         try:

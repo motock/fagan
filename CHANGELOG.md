@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Dashboard chat's file, directory and search tools read the repository the turn names (its managed clone) instead of the process-wide active workspace the console cannot set, so "summarize this code base" works. The `GET /api/workspace/file|files|search` routes take an optional `repo_url`; without it they behave as before.
+
 - Dashboard chat proposes every state-changing action (ingest, approve, dispatch, interrupt, patch, review, done, checkpoint, advance, pause, resume, answer decision) and never runs one itself: the person presses Run, and the console calls the existing route with their own credentials. `approve_merge` now refuses the chat origin.
 
 - Dashboard chat tells the planner which plan is selected, so "this plan" means the plan the person chose.

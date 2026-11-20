@@ -115,6 +115,7 @@ from pipeline.host_state import build_host_state
 from pipeline.live_ref import LiveRef
 from pipeline.log_format import configure_logging_from_env
 from pipeline.namespace_access import serve_http_in_namespace
+from pipeline.repo_clone import RepoUrlError, managed_path
 from pipeline.server import PipelineService
 from pipeline.topology_identity import resolved_runtime, resolved_topology
 from pipeline.usage import collect_backend_status
@@ -577,25 +578,50 @@ def set_workspace_route(
     return result
 
 
+_REPO_URL_NOT_ALLOWED_DETAIL = "repo_url is not an allowed repository URL"
+
+
+def _repo_read_kwargs(repo_url: str | None) -> dict:
+    """Name the managed clone a read serves; empty when no repo_url is given.
+
+    ``managed_path`` is the only resolver: it applies the allow-list and the
+    root-containment check. Its refusal answers a fixed detail that never
+    echoes the URL or the path.
+    """
+    if repo_url is None:
+        return {}
+    try:
+        path = managed_path(repo_url)
+        base = os.path.normpath(os.path.realpath(os.environ["PIPELINE_REPOS_ROOT"]))
+    except (RepoUrlError, KeyError):
+        raise HTTPException(status_code=400, detail=_REPO_URL_NOT_ALLOWED_DETAIL) from None
+    # Re-checked here, where the sanitiser is visible to CodeQL; managed_path's
+    # own containment check is the first line of defence.
+    candidate = os.path.normpath(os.path.realpath(str(path)))
+    if not candidate.startswith(base + os.sep):
+        raise HTTPException(status_code=400, detail=_REPO_URL_NOT_ALLOWED_DETAIL)
+    return {'root': candidate}
+
+
 @app.get('/api/workspace/file', responses={200: {"model": dashboard_schemas.WorkspaceFileResponse}})
-def read_workspace_file_route(path: str):
-    result = _service.read_workspace_file(path)
+def read_workspace_file_route(path: str, repo_url: str | None = None):
+    result = _service.read_workspace_file(path, **_repo_read_kwargs(repo_url))
     if not result.get('ok'):
         raise HTTPException(status_code=400, detail=result.get('error'))
     return result
 
 
 @app.get('/api/workspace/files', responses={200: {"model": dashboard_schemas.WorkspaceEntriesResponse}})
-def list_workspace_directory_route(path: str = ''):
-    result = _service.list_workspace_directory(path or '')
+def list_workspace_directory_route(path: str = '', repo_url: str | None = None):
+    result = _service.list_workspace_directory(path or '', **_repo_read_kwargs(repo_url))
     if not result.get('ok'):
         raise HTTPException(status_code=400, detail=result.get('error'))
     return result
 
 
 @app.get('/api/workspace/search', responses={200: {"model": dashboard_schemas.WorkspaceSearchResponse}})
-def search_workspace_route(pattern: str):
-    result = _service.search_workspace(pattern)
+def search_workspace_route(pattern: str, repo_url: str | None = None):
+    result = _service.search_workspace(pattern, **_repo_read_kwargs(repo_url))
     if not result.get('ok'):
         raise HTTPException(status_code=400, detail=result.get('error'))
     return result

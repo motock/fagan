@@ -61,7 +61,22 @@ from urllib.parse import unquote
 
 from pipeline.workspace import _MAX_DECODE_PASSES, WorkspaceSecurityError
 
-__all__ = ["resolve_within_workspace"]
+__all__ = ["read_root", "resolve_within_workspace"]
+
+
+def read_root(root: str | None, active: str | None) -> tuple[str | None, dict | None]:
+    """Return ``(directory, None)`` to read from, or ``(None, error)``.
+
+    ``root`` names a managed repository clone and is used when given; ``None``
+    falls back to ``active``, the process-global active workspace.
+    """
+    if root is None:
+        if active is None:
+            return None, {'ok': False, 'error': 'no active workspace'}
+        return active, None
+    if not os.path.isdir(root):
+        return None, {'ok': False, 'error': 'repository not cloned yet'}
+    return root, None
 
 
 def _reject_unsafe_relative(text: str) -> None:

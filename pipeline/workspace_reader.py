@@ -9,8 +9,10 @@ faked in tests.
 Every containment check is part of the contract, not an implementation
 detail:
 
-* the story log must resolve inside the plans directory (an absolute log path
-  in the manifest, or a path that resolves outside it, is unavailable),
+* a relative story log must resolve inside the plans directory; an absolute
+  story log is served only when it resolves inside ``WORKTREE_ROOT``, because
+  dispatch records each agent log as an absolute path in its worktree. Any
+  other absolute path, or a path that resolves outside its root, is unavailable,
 * the worktree file must resolve inside ``WORKTREE_ROOT`` (a relative
   worktree, a traversal filename, or a target that resolves - via ``..`` or a
   symlink - outside the root is unavailable),
@@ -99,15 +101,15 @@ class LocalWorkspaceReader:
         if not isinstance(raw_log, str) or not raw_log:
             return empty
         log_path = Path(raw_log)
-        if log_path.is_absolute():
-            # Manifests store log paths relative to the story-log root; an
-            # absolute path is a corrupt/hand-edited manifest we fail closed
-            # on (resolving an absolute path under a CWD we don't control
-            # would be unsafe).
-            return empty
-        root = _story_log_root()
-        log_path = root / raw_log
         try:
+            if log_path.is_absolute():
+                # Dispatch records each story's agent log as an absolute path
+                # inside its worktree, so an absolute path is served only when
+                # it resolves under WORKTREE_ROOT; anywhere else is refused.
+                root = WORKTREE_ROOT.resolve()
+            else:
+                root = _story_log_root()
+                log_path = root / raw_log
             log_path = log_path.resolve(strict=False)
             root_resolved = root.resolve()
             if log_path != root_resolved and not log_path.is_relative_to(root_resolved):

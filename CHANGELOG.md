@@ -15,6 +15,8 @@ in practice.
 
 - Under OIDC, dashboard chat tool calls (`/api/chat`, `/api/chat/stream`) now act as the signed-in caller instead of failing with 401 Unauthorized.
 
+- The dashboard story log now shows the agent log that dispatch records in the story worktree, instead of "No agent log yet" for every dispatched story. An absolute log path is served only when it resolves under the worktree root; anything else still reads as unavailable.
+
 ## [0.10.0] - 2026-11-17
 
 ### Added

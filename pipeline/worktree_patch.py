@@ -72,7 +72,8 @@ def is_denied_relative_path(relative_path: str) -> bool:
     dropping empty components, so trailing and duplicate slashes have no
     effect on the verdict.
 
-    Deny rules (deny-by-default, any match denies the whole path):
+    Deny rules (deny-by-default, any match denies the whole path; every
+    comparison is case-insensitive, so ``.GIT`` and ``Claude.MD`` match):
 
     * any component equal to ``.git`` or ``.claude``;
     * any component starting with ``.agent_log``;
@@ -97,12 +98,16 @@ def is_denied_relative_path(relative_path: str) -> bool:
         # DENIED, not allowed and not an error.
         return True
 
+    # Compared case-folded: on a case-insensitive filesystem (the macOS
+    # default) ``.Claude/settings.json`` and ``claude.md`` ARE the protected
+    # files, so an exact-case comparison would let them through.
+    folded = [c.casefold() for c in components]
     return (
-        any(c == ".git" or c == ".claude" for c in components)
-        or any(c.startswith(".agent_log") for c in components)
-        or components[-1]
+        any(c in {".git", ".claude"} for c in folded)
+        or any(c.startswith(".agent_log") for c in folded)
+        or folded[-1]
         in {
-            "CLAUDE.md",
+            "claude.md",
             ".mcp.json",
             "agent.log",
             ".agent_transcript.json",

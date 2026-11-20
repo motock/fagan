@@ -61,7 +61,9 @@ def ui_enabled(environ: Mapping[str, str] | None = None) -> bool:
     raise ValueError(f"{UI_ENV} must be on or off")
 
 
-def index_response(static_dir: Path, read_key: Callable[[], str]) -> HTMLResponse:
+def index_response(
+    static_dir: Path, read_key: Callable[[], str] | None
+) -> HTMLResponse:
     """Serve static/index.html with the shared-secret API key injected.
 
     The browser cannot know the key on its own, so the server reads the
@@ -74,9 +76,14 @@ def index_response(static_dir: Path, read_key: Callable[[], str]) -> HTMLRespons
     ``read_key`` is called per request rather than by the caller: the key is
     created lazily and can be rotated, so freezing it at import (or at
     registration) would serve a stale secret.
+
+    ``read_key=None`` means "this deployment does not use the shared secret":
+    the placeholder is removed and no key is read.
     """
-    key = read_key()
     html_text = (static_dir / "index.html").read_text()
+    if read_key is None:
+        return HTMLResponse(content=html_text.replace("<!--PIPELINE_API_KEY-->", ""))
+    key = read_key()
     script = (
         "<script>window.__PIPELINE_API_KEY__="
         + json.dumps(key).translate(_SCRIPT_ESCAPES)

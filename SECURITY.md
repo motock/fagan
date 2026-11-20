@@ -49,7 +49,7 @@ A few things worth knowing when assessing this codebase's attack surface:
   `DASHBOARD_HOST=0.0.0.0` (or otherwise put it on a network-reachable
   interface), `/` becomes an unauthenticated key handout to anyone who can
   reach that port** — put a reverse proxy or your own auth in front of it
-  before doing that, or leave `DASHBOARD_HOST` at its loopback default.
+  before doing that, or leave `DASHBOARD_HOST` at its loopback default. Under `PIPELINE_IDENTITY_PROVIDER=oidc` the index page carries no key at all: the browser authenticates with its session cookie, so nothing is injected.
 - **The chat tool registry's `read_file`, `list_directory`, and
   `search_code` tools (`app/chat.py`) are prompt-reachable filesystem
   reads.** An attacker who controls chat input can direct the model to call

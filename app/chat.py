@@ -381,6 +381,17 @@ def _available_tools_sentence() -> str:
 
 SYSTEM_PROMPT = _SYSTEM_PROMPT_PREFIX + _available_tools_sentence() + _FINAL_SENTENCE
 
+
+def _selected_plan_sentence(name: str) -> str:
+    """Name the plan the person selected in the dashboard, so "this plan" resolves to it.
+
+    The caller validates *name* as a plan key first; it is prose here, never a path.
+    """
+    return (
+        f"\nThe user has selected the plan {name}. When they say \"this plan\" or do not name a plan, "
+        f"they mean {name}: use it as plan_name, and call get_plan for its current state before describing it."
+    )
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -670,10 +681,7 @@ class ChatService:
                     "the server records it on the plan, so do not add repo_root or repo_url to plan JSON yourself."
                 )
             if plan_name:
-                system_prompt += (
-                    f"\nThe user has selected the plan {plan_name}. When they say \"this plan\" or do not name a plan, "
-                    f"they mean {plan_name}: use it as plan_name, and call get_plan for its current state before describing it."
-                )
+                system_prompt += _selected_plan_sentence(plan_name)
             response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             yield {"type": "turn", "data": {"n": turns}}
             parsed = _parse_tool_calls(response)

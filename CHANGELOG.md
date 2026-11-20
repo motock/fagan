@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Dashboard chat proposes every state-changing action (ingest, approve, dispatch, interrupt, patch, review, done, checkpoint, advance, pause, resume, answer decision) and never runs one itself: the person presses Run, and the console calls the existing route with their own credentials. `approve_merge` now refuses the chat origin.
+
 - Dashboard chat tells the planner which plan is selected, so "this plan" means the plan the person chose.
 
 - Under `PIPELINE_AUTONOMY=full`, a high-risk merge the overlord rules `proceed` is now held for a human unless the plan's `triage_mode` is `execute`. The ruling is still recorded in the decisions log.

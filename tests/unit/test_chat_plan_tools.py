@@ -441,7 +441,8 @@ class TestEndToEndViaLoop:
         body = json.loads(req.content.decode())
         assert body == {"plan_json": '{"epics":[]}'}
 
-    def test_ingest_plan_called_through_loop_records_post(self) -> None:
+    def test_ingest_plan_called_through_loop_is_proposed_not_posted(self) -> None:
+        # cpa-02: the model proposes ingest_plan; the person's Run button posts it.
         transport = _FakeTransport(payload={"ok": True})
         client = httpx.Client(transport=transport)
         driver = _FakeDriver(
@@ -458,12 +459,14 @@ class TestEndToEndViaLoop:
         )
         out = svc.execute_turn("ingest the plan")
         assert out["reply"] == "ingested"
-        assert len(transport.requests) == 1
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/ingest"
-        body = json.loads(req.content.decode())
-        assert body == {"only_epics": ["E1"], "overwrite": True}
+        assert transport.requests == []
+        assert out["proposed_actions"] == [
+            {
+                "id": "pa-1",
+                "name": "ingest_plan",
+                "args": {"plan_name": "demo", "only_epics": ["E1"], "overwrite": True},
+            }
+        ]
 
 
 # =========================================================================== #
@@ -477,14 +480,15 @@ class TestSystemPromptUpdate:
     # The new plan-authoring paragraph must contain these phrases.
     DECOMPOSE_PHRASE = "call decompose with their goal"
     SAVE_PHRASE = "call save_plan to stage the plan"
-    CONFIRM_PHRASE = "Do not call ingest_plan yourself"
-    DISPATCH_PHRASE = "ingestion dispatches stories"
+    CONFIRM_PHRASE = "Calling one of these does NOT run it"
+    DISPATCH_PHRASE = "offer to propose ingest_plan"
 
     def test_contains_plan_authoring_paragraph(self) -> None:
         assert self.DECOMPOSE_PHRASE in SYSTEM_PROMPT
         assert self.SAVE_PHRASE in SYSTEM_PROMPT
         assert self.CONFIRM_PHRASE in SYSTEM_PROMPT
         assert self.DISPATCH_PHRASE in SYSTEM_PROMPT
+        assert "When save_plan succeeds, tell the user the plan is staged; offer to propose ingest_plan." in SYSTEM_PROMPT
 
     def test_paragraph_precedes_final_sentence(self) -> None:
         para_idx = SYSTEM_PROMPT.index(self.DECOMPOSE_PHRASE)

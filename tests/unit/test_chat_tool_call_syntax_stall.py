@@ -369,5 +369,6 @@ class TestSystemPromptCarriesTheCanonicalExample:
         assert prompt.endswith(chat_module._FINAL_SENTENCE)
         # The per-turn workspace sentence is the only place repo_root belongs.
         assert "repo_root" not in prompt
-        assert "approve_merge" not in prompt
+        # cpa-02: approve_merge may be named only as a proposal, never registered.
+        assert "approve_merge" not in chat_module.TOOLS
         assert "set_story_status" not in prompt

@@ -6,6 +6,7 @@ This module implements the ChatService class, which orchestrates a single turn o
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
+from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
 from pipeline import server as _server
 from pipeline.repo_clone import RepoUrlError, parse_repo_url
 
@@ -60,8 +62,9 @@ _SYSTEM_PROMPT_PREFIX = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
-    "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
-    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan to stage the plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Do not call ingest_plan yourself: ingestion dispatches stories, and the ingest endpoint refuses calls made from this chat session's origin - it answers 'origin not permitted', so an ingest call from here can only ever fail. Never tell the user a plan is ingested when it is not. When save_plan succeeds, tell the user the plan is staged and that the next step is to ingest it from the dashboard UI's ingest control, or from an operator's MCP session. "
+    "You can read plan and story status, journals, logs, and checklists. "
+    "You can propose control actions (dispatch, interrupt, patch, review, mark done, checkpoint, advance, pause, resume, answer_decision) and the plan actions ingest_plan, approve_plan and approve_merge. Calling one of these does NOT run it: the user sees a Run button and decides. Tell the user plainly what will happen if they press Run, and never say an action has run unless a later message from the user confirms it. All actions are subject to server-side gates; if one is refused, surface the refusal and do NOT attempt to bypass it. "
+    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan to stage the plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Never tell the user a plan is ingested when it is not. When save_plan succeeds, tell the user the plan is staged; offer to propose ingest_plan. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
     "This session deliberately has no native Claude Code tools and no MCP servers connected - that isolation is by design, for least-privilege - so do not conclude from it that the [TOOL_CALL] instruction is non-functional or unwired: the surrounding chat harness parses [TOOL_CALL] blocks out of your response text and executes them on your behalf, making that protocol the real and only mechanism available in this session, which you must always use to call a tool rather than describing an intended action or answering directly without calling one. "
     "When you call a tool, the JSON goes immediately after the opener and the opener takes no attributes: [TOOL_CALL]{\"name\": \"list_plans\", \"args\": {}}[/TOOL_CALL]. [TOOL_CALL name=list_plans] is NOT a valid call and will not be executed - only the [TOOL_RESULT name=...] tag carries a name attribute. "
@@ -372,10 +375,11 @@ def _available_tools_sentence() -> str:
     takes none), so the model sees the real argument names instead of guessing
     them - the drift that made it invent wrong argument names for save_plan."""
     entries = []
-    for name in sorted(TOOLS):
-        params = TOOLS[name].get("params") or {}
+    listed = {**TOOLS, **PROPOSAL_ONLY_TOOLS}
+    for name in sorted(listed):
+        params = listed[name].get("params") or {}
         params_str = ", ".join(f"{k}: {v}" for k, v in params.items()) or "none"
-        entries.append(f"{name} ({TOOLS[name]['description']}; args: {params_str})")
+        entries.append(f"{name} ({listed[name]['description']}; args: {params_str})")
     return "Available tools: " + ", ".join(entries) + " "
 
 
@@ -483,6 +487,11 @@ def _signature_mismatch_error(
                 inspect.Parameter.KEYWORD_ONLY,
             )
         ]
+    return _invalid_arguments_message(name, args, expected)
+
+
+def _invalid_arguments_message(name: str, args: dict, expected: list[str]) -> str:
+    """The actionable refusal naming the supplied and the expected argument names."""
     supplied = ", ".join(sorted(args)) or "none"
     expected_str = ", ".join(expected) or "none"
     return (
@@ -530,16 +539,57 @@ def _args_for_repo_url(name: str, args: dict, repo_url: str | None) -> dict:
     return args
 
 
+def _action_binding_error(name: str, args: dict) -> str | None:
+    """Return the actionable error when an action call's *args* do not bind.
+
+    ``None`` means the args bind to the tool's declared params, so the call may
+    be proposed. The check binds against a stand-in client and never calls the
+    tool, so it causes no I/O.
+    """
+    if name in PROPOSAL_ONLY_TOOLS:
+        declared = list(PROPOSAL_ONLY_TOOLS[name]["params"])
+        if set(args) != set(declared):
+            return _invalid_arguments_message(name, args, declared)
+        return None
+    execute = TOOLS[name]["execute"]
+    declared = list(TOOLS[name].get("params") or {})
+    try:
+        inspect.signature(execute).bind(None, None, **args)
+    except TypeError:
+        return _signature_mismatch_error(name, execute, args, None, "")
+    # Every execute callable takes **kwargs, so bind alone would drop an unknown arg silently.
+    if set(args) - set(declared):
+        return _invalid_arguments_message(name, args, declared)
+    return None
+
+
+def _turn_record(reply: str, tool_calls: list, turns: int, proposals: list) -> dict:
+    """The final turn record; ``proposed_actions`` is present only when the turn proposed one.
+
+    ``ChatResponse`` defaults the field to an empty list, so ``/api/chat`` always answers it.
+    """
+    record = {"reply": reply, "tool_calls": tool_calls, "turns": turns}
+    if proposals:
+        record["proposed_actions"] = proposals
+    return record
+
+
 def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict:
     """Execute a tool by name.
 
-    If the tool is unknown, return ``{"error": "unknown tool: <name>"}``.  On
+    An action tool (``ACTION_TOOLS``) is never executed here: the model may only
+    propose it, and the person runs it from the console. If the tool is unknown, return ``{"error": "unknown tool: <name>"}``.  On
     success, return ``{"result": <return value>}``.  Any exception raised by
     the tool's ``execute`` callable is caught and returned as an error dict --
     except a signature-mismatch ``TypeError`` (the model called the tool with
     wrong or missing argument names), which is returned as an actionable error
     naming the tool, the supplied arguments and the tool's declared params.
     """
+    if name in ACTION_TOOLS:
+        binding_error = _action_binding_error(name, args)
+        if binding_error is not None:
+            return {"error": binding_error}
+        return {"error": f"{name} must be confirmed by the user"}
     if name not in TOOLS:
         return {"error": f"unknown tool: {name}"}
     execute = TOOLS[name]["execute"]
@@ -667,6 +717,7 @@ class ChatService:
         driver, model_tag = self._resolve_driver()
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
+        proposals: list[dict] = []
         turns = 0
         deferred_nudges = 0
         while turns < self._max_turns:
@@ -713,7 +764,7 @@ class ChatService:
                     )
                     continue
                 yield {"type": "reply", "data": {"text": response}}
-                yield {"type": "result", "data": {"reply": response, "tool_calls": tool_calls_made, "turns": turns}}
+                yield {"type": "result", "data": _turn_record(response, tool_calls_made, turns, proposals)}
                 return
             # Append only THIS iteration's tool results: tool_calls_made is the
             # turn-cumulative list, so slicing from the pre-iteration length
@@ -722,8 +773,16 @@ class ChatService:
             iteration_start = len(tool_calls_made)
             for call in parsed:
                 args = _args_for_repo_url(call["name"], call["args"], repo_url)
+                # An action is proposed, never executed: the person's Run button runs it.
+                binding_error = _action_binding_error(call["name"], args) if call["name"] in ACTION_TOOLS else None
+                if call["name"] in ACTION_TOOLS and binding_error is None:
+                    proposal, result = propose(call["name"], args, len(proposals) + 1)
+                    proposals.append(proposal)
+                    yield {"type": "proposed_action", "data": proposal}
+                    tool_calls_made.append({"name": call["name"], "args": args, "result": result, "proposed": True})
+                    continue
                 yield {"type": "tool_call", "data": {"name": call["name"], "args": args}}
-                result = _execute_tool(call["name"], args, self._http_client, self._api_base_url)
+                result = {"error": binding_error} if binding_error is not None else _execute_tool(call["name"], args, self._http_client, self._api_base_url)
                 yield {"type": "tool_result", "data": {"name": call["name"], "args": args, "result": result}}
                 tool_calls_made.append({"name": call["name"], "args": args, "result": result})
             result_blocks = []
@@ -751,7 +810,7 @@ class ChatService:
                 "I ran out of tool turns before producing an answer. Try "
                 "narrowing the question.\n\n(turn cap reached)"
             )
-        yield {"type": "result", "data": {"reply": cap_reply, "tool_calls": tool_calls_made, "turns": turns}}
+        yield {"type": "result", "data": _turn_record(cap_reply, tool_calls_made, turns, proposals)}
         return
 
     def execute_turn(self, message, *, plan_name=None, history=None, workspace=None, repo_url=None) -> dict:
@@ -782,6 +841,7 @@ class ChatResponse(BaseModel):
     reply: str
     tool_calls: list
     turns: int
+    proposed_actions: list = []
 
 chat_router = APIRouter()
 

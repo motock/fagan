@@ -256,7 +256,8 @@ def test_session_id_never_appears_in_the_chat_response(monkeypatch, hops):
 
 
 def test_write_tool_call_with_session_cookie_reaches_the_route_as_the_caller(monkeypatch, hops):
-    _use_tool(monkeypatch, {"name": "pause_plan", "args": {"plan_name": "no-such-plan"}})
+    # cpa-02: pause_plan is now only proposed, so save_plan is the write the chat still sends itself.
+    _use_tool(monkeypatch, {"name": "save_plan", "args": {"plan_name": "no-such-plan", "plan_json": "{\"epics\": []}"}})
     _, cookie = _session_cookie()
 
     TestClient(d.app).post(CHAT_PATH, json=_list_plans_message(), headers={"Cookie": cookie, **SAME_ORIGIN})

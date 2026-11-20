@@ -170,13 +170,22 @@ def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
             decoded = step
             _reject_unsafe_relative(decoded)
 
-        # 3. Resolve root and candidate, following symlinks. The RAW spelling
-        #    is joined: decoding above was detection, not normalization.
+        # 3. Resolve the root, following symlinks. The candidate is resolved
+        #    in step 4 from the RAW spelling: decoding above was detection,
+        #    not normalization.
         root = Path(workspace_root).resolve()
-        candidate = (root / relative_path).resolve()
 
-        # 4. Containment: the candidate must be the root or below it.
-        if not candidate.is_relative_to(root):
+        # 4. Containment on strings, which CodeQL's path-injection model
+        #    recognises as a sanitizer (Path.is_relative_to is not). The
+        #    separator suffix stops a sibling sharing the root's prefix
+        #    (/x/repo-evil vs /x/repo) from passing. A filesystem-root
+        #    workspace already ends in a separator, so it is not doubled.
+        root_str = os.path.normpath(os.path.realpath(workspace_root))
+        cand_str = os.path.normpath(
+            os.path.realpath(os.path.join(root_str, relative_path))
+        )
+        root_prefix = root_str if root_str.endswith(os.sep) else root_str + os.sep
+        if cand_str != root_str and not cand_str.startswith(root_prefix):
             raise WorkspaceSecurityError("relative path escapes the workspace root")
 
         # 5. Defense in depth: an independent walk over the components that
@@ -196,7 +205,7 @@ def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
             elif not os.path.lexists(spelled):
                 break  # nothing beyond this component exists yet
 
-        return candidate
+        return Path(cand_str)
     except WorkspaceSecurityError:
         raise
     except Exception as exc:

@@ -83,7 +83,11 @@ _ORIGIN_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
 _ALLOWED_SCHEMES = ("https",)
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._-]+")
 _PATH_RE = re.compile(r"/([^/]+)/([^/]+)")
-_URL_CREDENTIALS_RE = re.compile(r"https://[^\s@]*@")
+_HTTPS_PREFIX = "https://"
+# Userinfo of an https URL: everything up to the '@', with no whitespace and no
+# '/' (a '/' ends the authority). Anchored at each prefix and stopped by the
+# next delimiter, so a scan is linear and the length is never capped.
+_URL_USERINFO_RE = re.compile(r"[^\s/@]*@")
 _WHITESPACE_RE = re.compile(r"\s")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _BRANCH_REF_RE = re.compile(r"refs/heads/[A-Za-z0-9._/@+-]+")
@@ -157,7 +161,24 @@ def _config(environ: Mapping[str, str] | None) -> Mapping[str, str]:
 
 def _redact(text: str) -> str:
     """Replace any credential embedded in an https URL with ``***``."""
-    return _URL_CREDENTIALS_RE.sub("https://***@", text)
+    parts: list[str] = []
+    copied = 0  # text[:copied] is already in parts
+    scan = 0  # next position to search for a prefix
+    while True:
+        start = text.find(_HTTPS_PREFIX, scan)
+        if start < 0:
+            break
+        auth = start + len(_HTTPS_PREFIX)
+        userinfo = _URL_USERINFO_RE.match(text, auth)
+        if userinfo is None:
+            # No '@' before the authority ends: nothing to hide at this prefix.
+            scan = auth
+            continue
+        parts.append(text[copied:auth])
+        parts.append("***@")
+        copied = scan = userinfo.end()
+    parts.append(text[copied:])
+    return "".join(parts)
 
 
 def _sanitize(text: str) -> str:

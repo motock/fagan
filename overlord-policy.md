@@ -62,6 +62,9 @@ When a branch has been reviewed and is a candidate to merge:
   threshold** (`PIPELINE_RISK_THRESHOLD`, default `low`).
 - Otherwise **park the PR**: leave it open, record the decision, and notify the
   user. A `VERDICT: REQUEST_CHANGES` is never merged.
+- In a high-risk merge adjudication the `LOCAL CHECKS` line reports the repo's own
+  tests, lint and build on the exact commit. A red result never reaches you: the
+  merge parks first. `unavailable` or `not run` is missing evidence, not a pass.
 
 The classes of decision the overlord may take unattended, and the tier each is
 allowed, are defined in `overlord-authority.json` (see ADR 0014). Where that

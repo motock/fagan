@@ -8,7 +8,6 @@ The names this module reads that are bound at module level in
 """
 
 import logging
-import math
 import os
 import subprocess
 import time
@@ -16,10 +15,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import access_hooks, bound_records, merge_reverify
+from . import access_hooks, bound_records, merge_local_checks, merge_reverify
 from .ci import SettingsContext, gate_record, settings_for_plan
 from .concurrency import _released_plan_lock
 from .host_state import build_host_state
+from .merge_local_checks import (  # re-exported for pipeline.advance_merge callers
+    MERGE_REVERIFY_TIMEOUT_DEFAULT,  # noqa: F401
+)
 from .merge_readjudication import (  # re-exported for pipeline.advance
     _MERGE_HOLD_REASON,  # noqa: F401
     _readjudicate_parked_merge_hold,
@@ -48,9 +50,6 @@ CONFLICT_REWORK_MAX_DEFAULT = 2
 _REVERIFY_PASS = "pass"
 _REVERIFY_FAIL = "fail"
 
-# Default wall-clock budget for one detached re-verify, overridable with
-# PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS.
-MERGE_REVERIFY_TIMEOUT_DEFAULT = 1800.0
 
 def _merge_readiness_timeout(settings: SettingsContext) -> float:
     """Wall-clock budget for one merge-readiness poll, in seconds.
@@ -224,6 +223,16 @@ def _merge_reverify_gate(
     and collected on a later one, so a full suite plus a build no longer
     blocks the advance tick.
     """
+    local = story.get("local_checks")
+    if (
+        isinstance(local, dict)
+        and local.get("state") == "pass"
+        and local.get("sha") == pushed_sha
+    ):
+        # The pre-ruling local checks already ran tests, build and lint on this
+        # exact commit and passed: re-running them would grade nothing new.
+        return "", False
+
     if not merge_reverify.detached_enabled():
         # Independent of review: re-run the acceptance oracle against the
         # just-rebased branch right before merging. Closes the gap CI alone
@@ -266,18 +275,7 @@ def _merge_reverify_gate(
         summary.setdefault("reverify_pending", []).append(key)
         return "", True
 
-    timeout = MERGE_REVERIFY_TIMEOUT_DEFAULT
-    raw = os.environ.get("PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS")
-    if raw is not None:
-        try:
-            value = float(raw)
-        except ValueError:
-            value = float("nan")
-        # NaN fails every comparison and inf would hand subprocess an
-        # unbounded budget, so only a finite positive value overrides.
-        if math.isfinite(value) and value > 0:
-            timeout = value
-    res = collect_merge_reverify(job, timeout)
+    res = collect_merge_reverify(job, merge_local_checks.reverify_timeout())
     if res is None:
         summary.setdefault("reverify_pending", []).append(key)
         return "", True
@@ -352,6 +350,19 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # so a second positional argument would break them. The explicit
         # ``plan_name`` parameter stays for direct callers; production flows
         # the name through this context, which ``_adjudicate_merges`` owns.
+        if (
+            decision is None
+            and story["status"] == "pr_open"
+            and merge_local_checks.adjudication_due(story, plan_name)
+        ):
+            # The repo's own tests, build and lint run on the branch head before
+            # the overlord rules on a high-risk merge. A wait is no verdict yet:
+            # nothing is ruled, parked or merged, and the manifest write at the
+            # end of this function still persists the job handle (ci_wait).
+            local = merge_local_checks.local_checks_gate(plan_name, key, story, summary)
+            if local is not None and local["action"] == "wait":
+                continue
+            decision = local
         if decision is None:
             with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(
                 key
@@ -363,6 +374,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             _rv_job = story.pop("merge_reverify", None)
             if _rv_job:
                 cancel_merge_reverify(_rv_job)
+            _lc_job = story.pop("merge_local_checks_job", None)
+            if _lc_job:
+                cancel_merge_reverify(_lc_job)
             story["status"] = "parked"
             story["parked_reason"] = decision["reason"]
             # MERGEPARK-2: record the evidence this ruling was made on, so a

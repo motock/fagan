@@ -1753,7 +1753,7 @@ fields:
 | `provider` | yes | this release: `dir` only |
 | `uri` | yes | `dir`: absolute path with no `..` segment |
 | `include` / `exclude` | no | relative glob lists (no leading `/`, no `..`); default include `["**/*"]`, default exclude `[]` |
-| `phases` | yes | non-empty subset of `dispatch`, `review`, `security_review`; any other phase is rejected in this release |
+| `phases` | yes | non-empty subset of `dispatch`, `review`, `security_review`, `triage`, `merge_adjudication`; any other phase (including `overlord`) is rejected in this release. `triage` and `merge_adjudication` render into the overlord's failure-triage and high-risk-merge prompts after the shipped `overlord-policy.md` (a per-repo `.overlord-policy.md` still applies first). Like review, they render only snapshots recorded at dispatch, so a source reaches the overlord only if it also lists `dispatch`. Context guides the overlord's judgment but never grants authority: the authority matrix and allowed actions are enforced in code |
 | `mode` | no | default `prompt`; this release: `prompt` only |
 | `authority` | no | `reference` (default) or `policy` |
 | `priority` | no | integer, default `0`; higher wins within the same authority |

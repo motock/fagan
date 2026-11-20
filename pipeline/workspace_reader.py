@@ -99,15 +99,15 @@ class LocalWorkspaceReader:
         if not isinstance(raw_log, str) or not raw_log:
             return empty
         log_path = Path(raw_log)
-        if log_path.is_absolute():
-            # Manifests store log paths relative to the story-log root; an
-            # absolute path is a corrupt/hand-edited manifest we fail closed
-            # on (resolving an absolute path under a CWD we don't control
-            # would be unsafe).
-            return empty
-        root = _story_log_root()
-        log_path = root / raw_log
         try:
+            if log_path.is_absolute():
+                # Dispatch records each story's agent log as an absolute path
+                # inside its worktree, so an absolute path is served only when
+                # it resolves under WORKTREE_ROOT; anywhere else is refused.
+                root = WORKTREE_ROOT.resolve()
+            else:
+                root = _story_log_root()
+                log_path = root / raw_log
             log_path = log_path.resolve(strict=False)
             root_resolved = root.resolve()
             if log_path != root_resolved and not log_path.is_relative_to(root_resolved):

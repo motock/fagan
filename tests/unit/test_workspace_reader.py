@@ -517,3 +517,65 @@ def test_dashboard_routes_read_workspace_files_through_the_reader(
     assert res.status_code == 200
     assert res.json()["plan"] == sentinel
     assert res.json()["scratchpad"] == sentinel
+
+
+# ---------------------------------------------------------------------------
+# absolute story-log paths under WORKTREE_ROOT (slw-01)
+# ---------------------------------------------------------------------------
+# Dispatch records each story's agent log as an absolute path inside the
+# story's worktree. Those logs are served only when they resolve under
+# WORKTREE_ROOT; every other absolute path stays refused.
+
+
+def test_read_story_log_serves_an_absolute_log_under_the_worktree_root(
+    plans, roots
+):
+    log = _write(roots / "S1" / "agent.log", "\n".join(f"line {i}" for i in range(5)))
+
+    got = _reader().read_story_log("demo", "S1", _manifest(str(log)), lines=2)
+
+    assert got == {"available": True, "lines": ["line 3", "line 4"]}
+
+
+def test_log_route_serves_the_worktree_agent_log(client, plan_root, roots):
+    log = _write(roots / "S1" / "agent.log", "first line\nsecond line\n")
+    _write_manifest(plan_root, "demo", {"S1": {"log": str(log)}})
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+
+    assert res.status_code == 200
+    assert res.json() == {"available": True, "lines": ["first line", "second line"]}
+
+
+def test_read_story_log_rejects_an_absolute_path_escaping_the_worktree_root(
+    plans, roots, tmp_path
+):
+    _write(tmp_path / "secret.log", "SECRET\n")
+    escaping = roots / "S1" / ".." / ".." / "secret.log"
+
+    got = _reader().read_story_log("demo", "S1", _manifest(str(escaping)))
+
+    assert got == {"available": False, "lines": []}
+
+
+def test_read_story_log_rejects_a_symlink_leaving_the_worktree_root(
+    plans, roots, tmp_path
+):
+    secret = _write(tmp_path / "secret.log", "SECRET\n")
+    (roots / "S1").mkdir(parents=True)
+    link = roots / "S1" / "agent.log"
+    link.symlink_to(secret)
+
+    got = _reader().read_story_log("demo", "S1", _manifest(str(link)))
+
+    assert got == {"available": False, "lines": []}
+
+
+def test_read_story_log_reports_a_missing_worktree_log_as_unavailable(
+    plans, roots
+):
+    missing = roots / "S1" / "agent.log"
+
+    got = _reader().read_story_log("demo", "S1", _manifest(str(missing)))
+
+    assert got == {"available": False, "lines": []}

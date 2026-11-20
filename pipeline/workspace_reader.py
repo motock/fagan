@@ -9,8 +9,10 @@ faked in tests.
 Every containment check is part of the contract, not an implementation
 detail:
 
-* the story log must resolve inside the plans directory (an absolute log path
-  in the manifest, or a path that resolves outside it, is unavailable),
+* a relative story log must resolve inside the plans directory; an absolute
+  story log is served only when it resolves inside ``WORKTREE_ROOT``, because
+  dispatch records each agent log as an absolute path in its worktree. Any
+  other absolute path, or a path that resolves outside its root, is unavailable,
 * the worktree file must resolve inside ``WORKTREE_ROOT`` (a relative
   worktree, a traversal filename, or a target that resolves - via ``..`` or a
   symlink - outside the root is unavailable),

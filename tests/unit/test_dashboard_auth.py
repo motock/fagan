@@ -75,8 +75,8 @@ def test_generated_key_file_is_owner_readable_only(key_file):
 # Regression tests for the review finding that ANY caller-chosen
 # "k-"-prefixed X-Pipeline-Api-Key value bypassed the dashboard shared
 # secret on EVERY /api/* route (app/auth.py's unconditional early return).
-# The gate must keep authenticating the caller: the k- pass-through is
-# scoped to the chat stream route only; every other /api/* route still
+# The gate must keep authenticating the caller: a k- prefix is not a
+# credential on any route, so every /api/* route (the chat stream included)
 # requires the dashboard shared secret from the 0600 key file.
 # --------------------------------------------------------------------------- #
 
@@ -163,12 +163,10 @@ def test_valid_dashboard_secret_authenticates():
     assert response.status_code == 200
 
 
-def test_chat_stream_route_accepts_pipeline_passthrough_key(fake_chat_service):
-    """Direct auth-level coverage of the pass-through branch: the chat
-    stream route accepts a k- pipeline key with NO dashboard secret, and the
-    value is forwarded into ChatService as the upstream credential.
-    (Previously this branch was only exercised incidentally by
-    test_chat_stream_endpoint.py's k-123 test.)"""
+def test_chat_stream_route_refuses_k_prefixed_key(fake_chat_service):
+    """A k-prefixed value with no dashboard secret is just a wrong key on the
+    chat stream route: it is refused with the generic 401, and ChatService is
+    never constructed, so the model is never invoked for it."""
     client = TestClient(d.app)
 
     response = client.post(
@@ -177,19 +175,15 @@ def test_chat_stream_route_accepts_pipeline_passthrough_key(fake_chat_service):
         headers={_HEADER: "k-123"},
     )
 
-    assert response.status_code == 200
-    assert fake_chat_service[0]["api_key"] == "k-123"
+    assert response.status_code == 401
+    assert response.json() == {"detail": "unauthorized"}
+    assert fake_chat_service == []
 
 
-def test_chat_stream_gate_documents_k_prefix_acceptance(fake_chat_service):
-    """Documented behavior, pinned: on the chat stream route the gate passes
-    ANY k-prefixed value through without comparing it to the dashboard
-    secret — including garbage like "k-not-a-key". The dashboard gate does
-    not validate the upstream credential; the pipeline itself rejects
-    invalid keys when ChatService's internal calls reach it. Pinning this
-    makes garbage-k- acceptance on the chat route intentional and documented
-    (per review): a future change that starts validating k- values against
-    the dashboard secret here must update this contract deliberately."""
+def test_chat_stream_gate_refuses_garbage_k_value(fake_chat_service):
+    """A garbage k-prefixed value such as "k-not-a-key" is refused on the
+    chat stream route like any other wrong key. The gate compares it to the
+    dashboard secret, and nothing forwards it to the model."""
     client = TestClient(d.app)
 
     response = client.post(
@@ -198,5 +192,6 @@ def test_chat_stream_gate_documents_k_prefix_acceptance(fake_chat_service):
         headers={_HEADER: "k-not-a-key"},
     )
 
-    assert response.status_code == 200
-    assert fake_chat_service[0]["api_key"] == "k-not-a-key"
+    assert response.status_code == 401
+    assert response.json() == {"detail": "unauthorized"}
+    assert fake_chat_service == []

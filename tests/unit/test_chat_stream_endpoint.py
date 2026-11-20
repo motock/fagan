@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 import app.chat as chat_module
 from app import dashboard as d
+from app.auth import get_or_create_api_key
 
 
 # --------------------------------------------------------------------------- #
@@ -201,10 +202,9 @@ def test_stream_constructs_service_with_api_key_and_base_url(client, install_fak
     resp = client.post(
         "/api/chat/stream",
         json={"message": "hello"},
-        headers={"x-pipeline-api-key": "k-123"},
     )
     assert resp.status_code == 200
-    assert created[0].init_kwargs.get("api_key") == "k-123"
+    assert created[0].init_kwargs.get("api_key") == get_or_create_api_key()
     assert "api_base_url" in created[0].init_kwargs
 
 

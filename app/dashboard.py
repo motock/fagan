@@ -238,29 +238,20 @@ async def _enforce_api_key(request: Request, call_next):
         # layer (ADR 0009). This is identity, not enforcement: the middleware
         # binds the principal for the life of the request via pipeline.actor
         # (see below), but nothing yet enforces a role on it.
-        presented_key = request.headers.get("x-pipeline-api-key")
-        if (
-            request.url.path == auth.CHAT_STREAM_PATH
-            and presented_key
-            and presented_key.startswith(auth.PIPELINE_KEY_PREFIX)
-        ):
-            # Chat-stream pass-through: this gate does NOT authenticate the
-            # caller-supplied k- value (the pipeline validates it upstream), so
-            # there is no identity here. Never mistake a pass-through for one.
+        try:
+            request.state.principal = _identity.authenticate(
+                request.headers.get("x-pipeline-api-key")
+            )
+        except IdentityError:
+            # Unreachable for a secret-auth request that just passed the
+            # gate; kept so a provider rejection can never turn a pass
+            # into a 500.
             request.state.principal = None
-        else:
-            try:
-                request.state.principal = _identity.authenticate(presented_key)
-            except IdentityError:
-                # Unreachable for a secret-auth request that just passed the
-                # gate; kept so a provider rejection can never turn a pass
-                # into a 500.
-                request.state.principal = None
     # Bind the actor for this request so every recording site downstream
     # (decisions, approvals, later the audit stream) attributes the action to
     # an authenticated principal. A request that reached this point with no
-    # principal is either a non-/api/ page or the chat-stream k- pass-through;
-    # ANONYMOUS keeps that distinct from the local operator.
+    # principal is a non-/api/ page; ANONYMOUS keeps that distinct from the
+    # local operator.
     principal = getattr(request.state, "principal", None) or ANONYMOUS
     with bind_principal(principal), bind_correlation_id(correlation):
         if not _serves_tenant_data(request.url.path):

@@ -71,16 +71,16 @@ def test_shared_secret_binds_local_operator(key_file):
     assert response.json() == {"actor": "local-operator"}
 
 
-def test_chat_stream_passthrough_binds_anonymous(key_file):
-    """A caller-chosen k- value is a pass-through credential, not an identity:
-    the request must not be attributed to the local operator."""
+def test_chat_stream_k_prefixed_key_is_refused(key_file):
+    """A caller-chosen k- value is not a credential: the request is refused
+    before the route runs, so no actor is bound for it at all."""
     client = TestClient(d.app, headers={_HEADER: "k-abc"})
 
     with _actor_probe(_CHAT_STREAM_PATH):
         response = client.get(_CHAT_STREAM_PATH)
 
-    assert response.status_code == 200
-    assert response.json() == {"actor": "anonymous"}
+    assert response.status_code == 401
+    assert response.json() == {"detail": "unauthorized"}
 
 
 def test_decision_records_actor_and_keeps_client_decided_by(key_file):
@@ -104,13 +104,13 @@ def test_decision_records_actor_and_keeps_client_decided_by(key_file):
 
 
 def test_binding_does_not_leak_out_of_the_request(key_file):
-    """The chat-stream request binds ANONYMOUS for its own duration only; the
-    process must be back to the local operator afterwards."""
+    """A refused chat-stream request binds nothing, and the process stays on
+    the local operator afterwards."""
     client = TestClient(d.app, headers={_HEADER: "k-abc"})
 
     with _actor_probe(_CHAT_STREAM_PATH):
         response = client.get(_CHAT_STREAM_PATH)
 
-    assert response.status_code == 200
-    assert response.json() == {"actor": "anonymous"}
+    assert response.status_code == 401
+    assert response.json() == {"detail": "unauthorized"}
     assert actor.actor_id() == "local-operator"

@@ -566,8 +566,9 @@ UI-only, while propose is also chat-reachable by design (the chat tool
 | `GET /api/worktree/patch/{patch_id}` | `ui` only | Return the full stored record for human review — `diff_text`, `paths`, `added_lines`, `status`, timestamps and the `confirmation_token` (re-derived via `worktree_patch.confirmation_token_for`). Read-only; responds `Cache-Control: no-store` because the body carries a live credential. Unknown/expired ids are `404 "no such patch"`. |
 | `POST /api/worktree/patch/{patch_id}/apply` | `ui` only | Apply the SERVER-STORED record. The body is `ApplyPatchRequest` — exactly one field, `confirmation_token: str` — so a forged `unified_diff` in the body is inert: the diff applied is always the stored record, never anything the caller sends. Engine refusals map to `HTTPException(result["status_code"], result["error"])` (wrong token `403`, active story `409`, already applied `409`); a failed apply leaves the record pending and retryable. |
 
-Neither new route is registered as a chat tool. A `k-`-prefixed key is not a
-credential on any route: it is `401` here like anywhere else.
+Neither new route is registered as a chat tool, and a `k-`-prefixed key is not a
+credential anywhere: a `k-`-prefixed key
+on any of these routes is `401` like anywhere else.
 
 Refused review/apply requests are logged by `app.dashboard` with identifiers only -- route, truncated `patch_id`, an origin class (`absent`/`chat`/`ui`/`other`), and for engine refusals the plan, story, status code and error string. An origin refusal or a wrong token logs at `WARNING`; not-found and other refusals at `INFO`. Tokens, request bodies, diff content and raw header values are never logged.
 ---

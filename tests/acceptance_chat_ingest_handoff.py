@@ -27,8 +27,8 @@ def test_prompt_stages_the_plan_instead_of_ingesting_it():
     assert "When satisfied, call save_plan to stage the plan." in chat.SYSTEM_PROMPT
 
 
-def test_prompt_tells_the_model_not_to_ingest():
-    assert "Do not call ingest_plan yourself" in chat.SYSTEM_PROMPT
+def test_prompt_tells_the_model_calling_an_action_does_not_run_it():
+    assert "Calling one of these does NOT run it" in chat.SYSTEM_PROMPT
 
 
 def test_prompt_names_the_gate_message_the_model_would_hit():
@@ -42,7 +42,6 @@ def test_prompt_forbids_claiming_an_ingest_that_did_not_happen():
 def test_prompt_keeps_the_guidance_that_was_never_false():
     prompt = chat.SYSTEM_PROMPT
     assert "pass the decompose result plan JSON verbatim" in prompt
-    assert "ingestion dispatches stories" in prompt
     assert "call decompose with their goal" in prompt
 
 
@@ -55,7 +54,7 @@ def test_prompt_no_longer_instructs_an_impossible_ingest():
 def test_the_rewritten_literal_keeps_its_trailing_space():
     """The prompt is a concatenation of adjacent literals; a lost edge space
     would run the sentences together (...MCP session.You can surface...)."""
-    assert "or from an operator's MCP session. " in chat.SYSTEM_PROMPT
+    assert "offer to propose ingest_plan. " in chat.SYSTEM_PROMPT
 
 
 def test_exactly_the_origin_gated_tools_are_marked_ui_only():

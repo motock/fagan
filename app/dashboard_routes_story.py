@@ -12,8 +12,9 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import Header, HTTPException
 
+from app.auth import refuse_chat_origin
 from app.dashboard_models import StoryPatchBody, StoryStatusBody
 from app.dashboard_refusal import raise_if_forbidden
 
@@ -107,12 +108,19 @@ def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
+def approve_merge_route(
+    plan_name: str,
+    story_key: str,
+    x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin"),
+) -> dict[str, Any]:
     """Delegates to _service.approve_merge(plan_name, story_key).
 
     A retriable refusal (the plan stayed busy past the lock wait) is a
     conflict with the current state, not a missing story, so it answers 409.
+    The chat model may propose a merge approval but never send one: the chat
+    origin is refused here, so only the person's own Run click gets through.
     """
+    refuse_chat_origin(x_pipeline_origin)
     result = _service.approve_merge(plan_name, story_key)
     raise_if_forbidden(result)
     if not result.get("ok"):

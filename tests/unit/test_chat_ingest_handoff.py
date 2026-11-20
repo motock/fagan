@@ -27,10 +27,11 @@ import app.chat as chat_module
 CHAT_REFUSED_TOOLS = {"ingest_plan", "set_workspace"}
 
 STAGE_SENTENCE = "When satisfied, call save_plan to stage the plan."
-NO_INGEST_SENTENCE = "Do not call ingest_plan yourself"
-GATE_MESSAGE = "origin not permitted"
+# cpa-02: the ingest sentence now proposes ingest_plan instead of forbidding a direct call.
+NO_INGEST_SENTENCE = "Calling one of these does NOT run it: the user sees a Run button and decides."
+GATE_MESSAGE = "All actions are subject to server-side gates"
 NO_FALSE_CLAIM_SENTENCE = "Never tell the user a plan is ingested when it is not"
-HANDOFF_TAIL = "or from an operator's MCP session."
+HANDOFF_TAIL = "offer to propose ingest_plan."
 
 INGEST_DESCRIPTION = (
     "Ingest a plan's epics and stories. UI-ONLY: this endpoint refuses calls "
@@ -52,12 +53,12 @@ def test_prompt_stages_the_plan_instead_of_ingesting_it():
     assert STAGE_SENTENCE in chat_module.SYSTEM_PROMPT
 
 
-def test_prompt_tells_the_model_not_to_ingest():
+def test_prompt_tells_the_model_calling_an_action_does_not_run_it():
     assert NO_INGEST_SENTENCE in chat_module.SYSTEM_PROMPT
 
 
-def test_prompt_names_the_gate_message_the_model_would_hit():
-    # The model must recognize the exact 403 detail it would otherwise hit.
+def test_prompt_names_the_server_side_gates_the_actions_are_subject_to():
+    # The model must know a refused action is a gate, not something to route around.
     assert GATE_MESSAGE in chat_module.SYSTEM_PROMPT
 
 
@@ -68,21 +69,19 @@ def test_prompt_forbids_claiming_an_ingest_that_did_not_happen():
 def test_prompt_keeps_the_guidance_that_was_never_false():
     prompt = chat_module.SYSTEM_PROMPT
     assert "pass the decompose result plan JSON verbatim" in prompt
-    assert "ingestion dispatches stories" in prompt
     assert "call decompose with their goal" in prompt
 
 
 def test_prompt_points_at_the_dashboard_ingest_control_and_the_mcp_handoff():
     prompt = chat_module.SYSTEM_PROMPT
     assert "the plan is staged" in prompt
-    assert "dashboard UI's ingest control" in prompt
     assert HANDOFF_TAIL in prompt
 
 
 def test_the_rewritten_literal_keeps_its_trailing_space():
     """The prompt is a concatenation of adjacent literals; a lost edge space
     would run the sentences together (...MCP session.You can surface...)."""
-    assert "operator's MCP session. " in chat_module.SYSTEM_PROMPT
+    assert "offer to propose ingest_plan. " in chat_module.SYSTEM_PROMPT
 
 
 def test_the_rewritten_literal_keeps_its_neighbours_byte_identical():
@@ -192,9 +191,9 @@ def test_prompt_no_longer_instructs_an_impossible_ingest():
     assert "Always confirm with the user before calling ingest_plan" not in prompt
 
 
-def test_only_the_do_not_call_ingest_phrasing_survives():
+def test_no_direct_call_ingest_phrasing_survives():
     prompt = chat_module.SYSTEM_PROMPT
-    assert prompt.count("call ingest_plan") == 1
+    assert prompt.count("call ingest_plan") == 0
     assert "ingest_plan then" not in prompt
 
 

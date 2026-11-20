@@ -116,6 +116,12 @@
    },
    "ChatResponse": {
     "properties": {
+     "proposed_actions": {
+      "default": [],
+      "items": {},
+      "title": "Proposed Actions",
+      "type": "array"
+     },
      "reply": {
       "title": "Reply",
       "type": "string"
@@ -2145,7 +2151,7 @@
   },
   "/api/plans/{plan_name}/stories/{story_key}/approve_merge": {
    "post": {
-    "description": "Delegates to _service.approve_merge(plan_name, story_key).\n\nA retriable refusal (the plan stayed busy past the lock wait) is a\nconflict with the current state, not a missing story, so it answers 409.",
+    "description": "Delegates to _service.approve_merge(plan_name, story_key).\n\nA retriable refusal (the plan stayed busy past the lock wait) is a\nconflict with the current state, not a missing story, so it answers 409.\nThe chat model may propose a merge approval but never send one: the chat\norigin is refused here, so only the person's own Run click gets through.",
     "operationId": "approve_merge_route_api_plans__plan_name__stories__story_key__approve_merge_post",
     "parameters": [
      {
@@ -2164,6 +2170,22 @@
       "schema": {
        "title": "Story Key",
        "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "X-Pipeline-Origin",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Pipeline-Origin"
       }
      }
     ],

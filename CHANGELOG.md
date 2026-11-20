@@ -20,6 +20,7 @@ in practice.
 ### Security
 
 - Dashboard: `/api/chat/stream` no longer accepts a `k-`-prefixed `X-Pipeline-Api-Key` in place of the shared secret; the unvalidated pass-through let an unauthenticated caller invoke the chat model.
+- Review: the local-model reviewer's `bash` tool now runs without the pipeline's forge, notification and provider credentials in its environment, and its `view_file` tool refuses paths outside the story worktree.
 
 ## [0.10.0] - 2026-11-17
 

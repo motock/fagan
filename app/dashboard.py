@@ -689,7 +689,8 @@ def _degraded_liveness_report() -> dict[str, Any]:
 
 def dashboard_index():
     """Serve the index page; the key injection lives in ``dashboard_ui``."""
-    return dashboard_ui.index_response(STATIC_DIR, get_or_create_api_key)
+    read_key = None if isinstance(_identity, OidcProvider) else get_or_create_api_key
+    return dashboard_ui.index_response(STATIC_DIR, read_key)
 
 
 # Mount static files for the dashboard UI.

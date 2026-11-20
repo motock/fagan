@@ -92,8 +92,8 @@ repository root, with mode `0600`. An operator reads it from that file (for
 example `cat .dashboard_api_key`) and hands it to the UI out of band. The
 dashboard's own bundled UI receives it as `window.__PIPELINE_API_KEY__`,
 injected into the served `index.html`; that injection happens only when the
-bundled UI is served, so a replacement UI has to obtain the secret from the
-operator instead.
+bundled UI is served in shared-secret mode (never under OIDC), so a
+replacement UI has to obtain the secret from the operator instead.
 
 Never commit or log the key. A request with a missing or wrong key is refused
 with `401`.

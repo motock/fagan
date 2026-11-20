@@ -10,6 +10,8 @@
 # Env (all optional):
 #   DASHBOARD_HOST   default 127.0.0.1
 #   DASHBOARD_PORT   default 8000
+#   PIPELINE_PYTHON  interpreter to run the dashboard with, ahead of `.venv`
+#                    and a `python3` on PATH; refused if not executable.
 #   DASHBOARD_RELOAD if set to 1, also pass --reload to uvicorn (dev only;
 #                    the script always starts uvicorn in its own session
 #                    via `os.setsid()`, so `stop` kills the whole process
@@ -32,10 +34,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Prefer the project venv (what scripts/install.sh creates); fall back to a
-# python on PATH so the script also works in CI runners and any env without
-# a local .venv (uvicorn still has to be importable by whichever python wins).
-if   [ -x "$ROOT/.venv/bin/python3" ]; then PYBIN="$ROOT/.venv/bin/python3"
+# Interpreter choice, in order: an explicit PIPELINE_PYTHON (refused if it is
+# not usable, never silently replaced); then the project venv (what
+# scripts/install.sh creates); then a python on PATH so the script also works
+# in CI runners and any env without a local .venv (uvicorn still has to be
+# importable by whichever python wins).
+if [ -n "${PIPELINE_PYTHON:-}" ]; then
+  if [ -x "$PIPELINE_PYTHON" ] || command -v "$PIPELINE_PYTHON" >/dev/null 2>&1; then
+    PYBIN="$PIPELINE_PYTHON"
+  else
+    echo "ERROR: PIPELINE_PYTHON is set but is not an executable python" >&2
+    exit 1
+  fi
+elif [ -x "$ROOT/.venv/bin/python3" ]; then PYBIN="$ROOT/.venv/bin/python3"
 elif [ -x "$ROOT/.venv/bin/python"  ]; then PYBIN="$ROOT/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1;  then PYBIN=python3
 elif command -v python  >/dev/null 2>&1;  then PYBIN=python

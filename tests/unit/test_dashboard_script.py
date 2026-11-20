@@ -15,6 +15,7 @@ import fcntl
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -41,7 +42,13 @@ def _free_port() -> int:
 
 
 def _run_script(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess:
-    """Run scripts/dashboard.sh with `args` under `env` (no shell inheritance)."""
+    """Run scripts/dashboard.sh with `args` under `env` (no shell inheritance).
+
+    PIPELINE_PYTHON defaults to the interpreter running pytest, so the script
+    never falls back to a python on PATH that lacks fastapi/uvicorn (e.g. in a
+    git worktree with no .venv). A caller-set PIPELINE_PYTHON is left alone.
+    """
+    env = {**env, "PIPELINE_PYTHON": env.get("PIPELINE_PYTHON", sys.executable)}
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         check=False, env=env,

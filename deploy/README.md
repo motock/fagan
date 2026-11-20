@@ -81,7 +81,7 @@ public hostname through with the default `$host` form gets a 403.
 | `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` | `pipeline` | Author and committer name for the commits the server makes. |
 | `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` | `pipeline@localhost` | Author and committer email for the commits the server makes. |
 | `PIPELINE_MCP_TRANSPORT` | `streamable-http` | HTTP MCP transport. The entrypoint accepts only this value; the stdio server is the other image. |
-| `PIPELINE_IDENTITY_PROVIDER` | `oidc` | Bearer-token verification. `pipeline/remote_transport.py` refuses to open a socket without an OIDC provider, so this must be `oidc`. |
+| `PIPELINE_IDENTITY_PROVIDER` | `oidc` | Bearer-token verification. `pipeline/remote_transport.py` refuses to open a socket without an OIDC provider, so this must be `oidc`. The entrypoint also refuses `shared-secret` unless `DASHBOARD_HOST` is loopback (`127.0.0.1`, `localhost`, `::1`) or `PIPELINE_DASHBOARD_UI=off`: the index page would otherwise serve the API key to any caller. |
 | `PIPELINE_POLICY_ENFORCE` | `1` | Tool-policy enforcement. The transport also refuses to start with this off. |
 | `PIPELINE_OIDC_ISSUER` | unset — required | Issuer URL of the identity provider. |
 | `PIPELINE_OIDC_AUDIENCE` | unset — required | Expected `aud` claim. |

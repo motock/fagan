@@ -108,12 +108,17 @@ def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Delegates to _service.approve_merge(plan_name, story_key)."""
+    """Delegates to _service.approve_merge(plan_name, story_key).
+
+    A retriable refusal (the plan stayed busy past the lock wait) is a
+    conflict with the current state, not a missing story, so it answers 409.
+    """
     result = _service.approve_merge(plan_name, story_key)
     raise_if_forbidden(result)
     if not result.get("ok"):
+        status_code = 409 if result.get("retriable") is True else 404
         raise HTTPException(
-            status_code=404,
+            status_code=status_code,
             detail=result.get("error", "Unknown error during approve_merge"),
         )
     return result

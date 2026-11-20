@@ -25,6 +25,7 @@ from app.dashboard_helpers import (
     _collapse_duplicate_notifications,
     _parse_progress,
     _plan_summary,
+    _read_archived_plans,
     _store,
     _story_last_activity,
 )
@@ -140,6 +141,7 @@ def get_plan(plan_name: str) -> dict[str, Any]:
     summary = _plan_summary(
         plan_name,
         {**manifest, "stories": {k: v for k, v in stories.items() if isinstance(v, dict)}},
+        _read_archived_plans(),
     )
     return {
         **summary,

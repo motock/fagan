@@ -36,7 +36,7 @@ from .ci import (
     gate_record,
     settings_for_plan,
 )
-from .concurrency import _plan_lock
+from .concurrency import _plan_lock, command_lock_wait_seconds
 from .merge_diff_evidence import render_diff_evidence
 from .merge_local_checks import render_local_checks_line
 from .overlord_class_mode import class_mode, matrix_tier
@@ -668,7 +668,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     if refusal is not None:
         return refusal
 
-    with _plan_lock(plan_name) as acquired:
+    with _plan_lock(plan_name, wait_seconds=command_lock_wait_seconds()) as acquired:
         if not acquired:
             return {
                 "ok": False,

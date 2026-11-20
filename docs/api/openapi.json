@@ -2123,7 +2123,7 @@
   },
   "/api/plans/{plan_name}/stories/{story_key}/approve_merge": {
    "post": {
-    "description": "Delegates to _service.approve_merge(plan_name, story_key).",
+    "description": "Delegates to _service.approve_merge(plan_name, story_key).\n\nA retriable refusal (the plan stayed busy past the lock wait) is a\nconflict with the current state, not a missing story, so it answers 409.",
     "operationId": "approve_merge_route_api_plans__plan_name__stories__story_key__approve_merge_post",
     "parameters": [
      {

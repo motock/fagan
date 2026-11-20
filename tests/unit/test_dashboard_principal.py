@@ -13,8 +13,8 @@ tests pin three things:
 * the denial paths (401/403) are byte-for-byte unchanged and never set a
   principal at all — ``hasattr(request.state, "principal")`` stays ``False``,
   so a careless ``request.state.principal = None`` before the gate fails here;
-* the chat-stream ``k-`` pass-through is explicitly *not* an identity: the
-  request proceeds with ``request.state.principal is None``.
+* a chat-stream ``k-`` value is refused like any wrong key, so it never
+  reaches the route and never sets a principal.
 
 Attaching the principal is not enforcement: nothing reads
 ``request.state.principal`` yet (ADR 0009 authorizes the seam now; the
@@ -178,17 +178,17 @@ def test_disallowed_host_returns_403_and_sets_no_principal(key_file):
 
 
 # --------------------------------------------------------------------------- #
-# Chat-stream pass-through: not authenticated by this gate, so no identity
+# Chat stream: a k- value is refused, so no identity is ever attached
 # --------------------------------------------------------------------------- #
 
-def test_chat_stream_passthrough_key_is_not_an_identity(key_file):
+def test_chat_stream_k_prefixed_key_is_refused(key_file):
     request = _request(_CHAT_STREAM_PATH, api_key="k-abc")
 
     response = _run_middleware(request)
 
-    assert response.status_code == 200
-    assert response.body == b"reached-the-route"
-    assert request.state.principal is None
+    assert response.status_code == 401
+    assert response.body == b'{"detail":"unauthorized"}'
+    assert hasattr(request.state, "principal") is False
 
 
 # --------------------------------------------------------------------------- #

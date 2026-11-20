@@ -566,8 +566,8 @@ UI-only, while propose is also chat-reachable by design (the chat tool
 | `GET /api/worktree/patch/{patch_id}` | `ui` only | Return the full stored record for human review — `diff_text`, `paths`, `added_lines`, `status`, timestamps and the `confirmation_token` (re-derived via `worktree_patch.confirmation_token_for`). Read-only; responds `Cache-Control: no-store` because the body carries a live credential. Unknown/expired ids are `404 "no such patch"`. |
 | `POST /api/worktree/patch/{patch_id}/apply` | `ui` only | Apply the SERVER-STORED record. The body is `ApplyPatchRequest` — exactly one field, `confirmation_token: str` — so a forged `unified_diff` in the body is inert: the diff applied is always the stored record, never anything the caller sends. Engine refusals map to `HTTPException(result["status_code"], result["error"])` (wrong token `403`, active story `409`, already applied `409`); a failed apply leaves the record pending and retryable. |
 
-Neither new route is registered as a chat tool, and the `k-` API-key
-pass-through stays route-exact on `/api/chat/stream` — a `k-`-prefixed key
+Neither new route is registered as a chat tool, and a `k-`-prefixed key is not a
+credential anywhere: a `k-`-prefixed key
 on any of these routes is `401` like anywhere else.
 
 Refused review/apply requests are logged by `app.dashboard` with identifiers only -- route, truncated `patch_id`, an origin class (`absent`/`chat`/`ui`/`other`), and for engine refusals the plan, story, status code and error string. An origin refusal or a wrong token logs at `WARNING`; not-found and other refusals at `INFO`. Tokens, request bodies, diff content and raw header values are never logged.
@@ -3490,10 +3490,6 @@ rather than to the local operator, so every action it dispatches is decided
 against that principal's grants; `PIPELINE_POLICY_ENFORCE` remains the kill
 switch for all of them.
 
-A caller arriving through the dashboard's chat-stream `k-` pass-through carries
-no identity. Such a caller is refused these actions — that is intended, not a
-bug: without an identity there is nothing to authorize against.
-
 ### OIDC identity verification
 
 By default the dashboard authenticates `/api/` requests with the shared secret
@@ -3593,10 +3589,9 @@ request. The rule that follows is fixed, not configurable:
 
 `PIPELINE_IDENTITY_PROVIDER=oidc` therefore authenticates both a token-bearing
 client — such as the remote MCP transport — and the bundled browser UI; it is a
-drop-in replacement for the shared secret in either case. The chat-stream `k-`
-pass-through that exists in shared-secret mode still does not exist under OIDC:
-that stream authenticates by the API key, so `/api/chat/stream` needs a bearer
-token or a session cookie like any other `/api/` route.
+drop-in replacement for the shared secret in either case. `/api/chat/stream` has no special case in either mode: it needs the shared
+secret in shared-secret mode, and a bearer token or a session cookie under OIDC,
+like any other `/api/` route.
 
 Under OIDC the chat's internal tool calls carry the caller's own credential: the
 bearer token if one was presented, otherwise the session cookie, with the same-origin

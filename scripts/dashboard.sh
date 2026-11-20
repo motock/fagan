@@ -10,6 +10,8 @@
 # Env (all optional):
 #   DASHBOARD_HOST   default 127.0.0.1
 #   DASHBOARD_PORT   default 8000
+#   PIPELINE_PYTHON  interpreter to run the dashboard with, ahead of `.venv`
+#                    and a `python3` on PATH; refused if not executable.
 #   DASHBOARD_RELOAD if set to 1, also pass --reload to uvicorn (dev only;
 #                    the script always starts uvicorn in its own session
 #                    via `os.setsid()`, so `stop` kills the whole process

@@ -170,7 +170,8 @@ class TestSystemPromptPassthroughGuidance:
     def test_existing_plan_authoring_sentences_survive(self):
         prefix = chat_module._SYSTEM_PROMPT_PREFIX
         assert "To help the user author a plan, call decompose with their goal" in prefix
-        assert "Do not call ingest_plan yourself" in prefix
+        # cpa-02: ingest_plan is proposed for the person to run, not forbidden.
+        assert "offer to propose ingest_plan." in prefix
 
     def test_system_prompt_still_ends_with_final_sentence(self):
         assert chat_module.SYSTEM_PROMPT.endswith(chat_module._FINAL_SENTENCE)

@@ -22,7 +22,7 @@ import app.dashboard as dashboard_module
 import app.dashboard_routes_story as routes_story
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER, get_or_create_api_key
 from app.chat import SYSTEM_PROMPT, TOOLS, ChatResponse, ChatService, _execute_tool
-from app.chat_actions import ACTION_TOOLS, propose
+from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
 
 REPLY = "Understood."
 NOT_RUN_NOTE = "This action has NOT run. It is shown to the user, who must press Run to carry it out."
@@ -211,7 +211,7 @@ def test_should_answer_a_missing_arg_error_without_proposing():
     driver = _ScriptedDriver(_call("dispatch_story", {"plan_name": "demo"}), REPLY)
     out = _service(driver, _ForbiddenHttp()).execute_turn("dispatch it")
 
-    assert out["proposed_actions"] == []
+    assert "proposed_actions" not in out
     result = out["tool_calls"][0]["result"]
     assert "error" in result
     assert "Expected parameters for dispatch_story: plan_name, story_key" in result["error"]
@@ -224,7 +224,7 @@ def test_should_answer_an_unknown_arg_error_without_proposing():
     )
     out = _service(driver, _ForbiddenHttp()).execute_turn("dispatch it")
 
-    assert out["proposed_actions"] == []
+    assert "proposed_actions" not in out
     assert "error" in out["tool_calls"][0]["result"]
 
 
@@ -240,7 +240,7 @@ def test_should_still_execute_read_tools_and_save_plan_directly():
     )
     out = _service(driver, http).execute_turn("list and save")
 
-    assert out["proposed_actions"] == []
+    assert "proposed_actions" not in out
     assert ("GET", "/api/plans", None) in http.requests
     assert ("POST", "/api/plans/demo/save", {"plan_json": '{"epics":[]}'}) in http.requests
 
@@ -265,14 +265,26 @@ def test_should_not_call_the_action_execute_callable_from_execute_tool(monkeypat
     assert calls == []
 
 
-def test_approve_plan_execute_refuses_to_run():
-    result = TOOLS["approve_plan"]["execute"](_ForbiddenHttp(), "http://test", plan_name="demo")
+@pytest.mark.parametrize("name", sorted(PROPOSAL_ONLY_TOOLS))
+def test_should_keep_proposal_only_tools_out_of_the_executable_registry(name):
+    # No code in the chat can send these: the person's Run button is the only way.
+    assert name not in TOOLS
 
-    assert result == {"error": "approve_plan must be confirmed by the user"}
+
+@pytest.mark.parametrize("name", sorted(PROPOSAL_ONLY_TOOLS))
+def test_should_refuse_a_proposal_only_tool_in__execute_tool_without_a_request(name):
+    http = _RecordingHttp()
+
+    args = {key: "demo" for key in PROPOSAL_ONLY_TOOLS[name]["params"]}
+
+    result = _execute_tool(name, args, http, "http://test")
+
+    assert result == {"error": f"{name} must be confirmed by the user"}
+    assert http.requests == []
 
 
 # --------------------------------------------------------------------------- #
-# 6. approve_merge: registered for proposal, refused from the chat origin
+# 6. approve_merge: proposal only, and refused from the chat origin
 # --------------------------------------------------------------------------- #
 APPROVE_MERGE_PATH = "/api/plans/demo/stories/s1/approve_merge"
 
@@ -316,13 +328,6 @@ def test_should_allow_approve_merge_without_the_chat_origin(approve_spy):
     assert approve_spy.calls == [("demo", "s1")]
 
 
-def test_approve_merge_tool_posts_to_the_approve_merge_route_when_executed_directly():
-    http = _RecordingHttp()
-    TOOLS["approve_merge"]["execute"](http, "http://test", plan_name="demo", story_key="s1")
-
-    assert http.requests == [("POST", "/api/plans/demo/stories/s1/approve_merge", None)]
-
-
 # --------------------------------------------------------------------------- #
 # 7. System prompt
 # --------------------------------------------------------------------------- #
@@ -338,3 +343,11 @@ def test_should_list_approve_merge_and_approve_plan_in_the_system_prompt():
 def test_prompt_says_calling_an_action_does_not_run_it():
     assert "Calling one of these does NOT run it" in SYSTEM_PROMPT
     assert "never say an action has run unless a later message from the user confirms it" in SYSTEM_PROMPT
+
+
+def test_should_keep_proposed_actions_empty_when_none():
+    # A turn with no proposal leaves the key out of the turn record, and the
+    # response model fills it as an empty list, so /api/chat always answers it.
+    response = ChatResponse(reply="hi", tool_calls=[], turns=1)
+
+    assert response.proposed_actions == []

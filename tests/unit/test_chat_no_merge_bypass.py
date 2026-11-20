@@ -216,12 +216,14 @@ class TestSurvivingToolsIntact:
 # =========================================================================== #
 class TestSystemPromptDropsApproveMerge:
     def test_approve_merge_not_in_control_actions_sentence(self) -> None:
-        # The control-actions sentence enumerates example actions in
-        # parentheses.  approve_merge must no longer appear there.
-        assert "approve_merge" not in SYSTEM_PROMPT, (
-            "approve_merge must be dropped from the SYSTEM_PROMPT "
-            "control-actions sentence"
-        )
+        # cpa-02: the person chose that the chat may PROPOSE approve_merge (it runs
+        # only when they press Run, and the route refuses the chat origin). It must
+        # still never be listed among the control actions, and the prompt must say
+        # it is proposed only.
+        clause_start = SYSTEM_PROMPT.index("control actions")
+        clause = SYSTEM_PROMPT[clause_start:SYSTEM_PROMPT.index(")", clause_start)]
+        assert "approve_merge" not in clause
+        assert "approve_merge (Approve a story's merge. Proposed only" in SYSTEM_PROMPT
 
     def test_control_actions_sentence_still_lists_other_examples(self) -> None:
         # The sentence must still name the other example actions (membership,

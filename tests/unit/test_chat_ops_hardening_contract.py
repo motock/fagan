@@ -172,13 +172,12 @@ class TestExecuteToolDeniesRemovedBypassTools:
 # =========================================================================== #
 class TestSystemPromptDoesNotAdvertiseBypassTools:
     def test_approve_merge_not_in_system_prompt(self) -> None:
-        # approve_merge is the merge-bypass / human-confirmation override.
-        # The model must never be told it exists.
-        assert "approve_merge" not in SYSTEM_PROMPT, (
-            "approve_merge must NOT be advertised in SYSTEM_PROMPT; telling "
-            "an attacker-controlled LLM the merge-bypass tool exists defeats "
-            "the human-confirmation step"
-        )
+        # cpa-02: approve_merge is no longer a bypass: the chat can only propose
+        # it, the person's Run button sends it, and the route refuses the chat
+        # origin. The prompt may name it only together with that confirmation.
+        assert "approve_merge" not in TOOLS
+        assert "Calling one of these does NOT run it: the user sees a Run button and decides." in SYSTEM_PROMPT
+        assert "approve_merge (Approve a story's merge. Proposed only" in SYSTEM_PROMPT
 
     def test_set_story_status_not_in_system_prompt(self) -> None:
         assert "set_story_status" not in SYSTEM_PROMPT, (

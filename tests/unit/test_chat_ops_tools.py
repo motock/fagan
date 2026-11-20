@@ -463,19 +463,22 @@ class TestEndToEndViaLoop:
             "dispatch_story", {"plan_name": "demo", "story_key": "s4"}
         )
         assert out["reply"] == "done"
-        assert len(transport.requests) == 1
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/dispatch"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("dispatch_story", {"plan_name": "demo", "story_key": "s4"})
+        ]
 
     def test_interrupt_story_called_through_loop(self) -> None:
         out, transport = self._run(
             "interrupt_story", {"plan_name": "demo", "story_key": "s4"}
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/interrupt"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("interrupt_story", {"plan_name": "demo", "story_key": "s4"})
+        ]
 
     def test_patch_story_called_through_loop_with_fields_body(self) -> None:
         out, transport = self._run(
@@ -483,20 +486,22 @@ class TestEndToEndViaLoop:
             {"plan_name": "demo", "story_key": "s4", "fields": {"status": "blocked"}},
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/patch"
-        body = json.loads(req.content.decode())
-        assert body == {"status": "blocked"}
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("patch_story", {"plan_name": "demo", "story_key": "s4", "fields": {"status": "blocked"}})
+        ]
 
     def test_review_story_called_through_loop(self) -> None:
         out, transport = self._run(
             "review_story", {"plan_name": "demo", "story_key": "s4"}
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/review"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("review_story", {"plan_name": "demo", "story_key": "s4"})
+        ]
 
     # --- plan-level write actions ---
     def test_advance_pipeline_called_through_loop(self) -> None:
@@ -504,18 +509,22 @@ class TestEndToEndViaLoop:
             "advance_pipeline", {"plan_name": "demo"}
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/advance"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("advance_pipeline", {"plan_name": "demo"})
+        ]
 
     def test_pause_plan_called_through_loop(self) -> None:
         out, transport = self._run(
             "pause_plan", {"plan_name": "demo"}
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/pause"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("pause_plan", {"plan_name": "demo"})
+        ]
 
     # --- story-level read actions ---
     def test_get_story_journal_called_through_loop(self) -> None:
@@ -557,22 +566,26 @@ class TestEndToEndViaLoop:
             },
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/checkpoint"
-        body = json.loads(req.content.decode())
-        assert body == {
-            "step": "implement",
-            "summary": "wrote it",
-            "next_hint": "test it",
-        }
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("checkpoint", {
+                "plan_name": "demo",
+                "story_key": "s4",
+                "step": "implement",
+                "summary": "wrote it",
+                "next_hint": "test it",
+            })
+        ]
 
     def test_advance_all_plans_called_through_loop(self) -> None:
         out, transport = self._run("advance_all_plans", {})
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/advance_all"
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("advance_all_plans", {})
+        ]
 
 
 # =========================================================================== #

@@ -408,19 +408,17 @@ class TestEndToEndDecidedBy:
             payload={"ok": True, "record": {"story_key": "S1"}},
         )
         assert out["reply"] == "done"
-        assert len(transport.requests) == 1
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/decisions"
-        body = json.loads(req.content.decode())
-        assert body["decided_by"] == "chat"
-        assert body == {
-            "story_key": "S1",
-            "question": "which lib?",
-            "answer": "use foo",
-            "context": "because bar",
-            "decided_by": "chat",
-        }
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("answer_decision", {
+                "plan_name": "demo",
+                "story_key": "S1",
+                "question": "which lib?",
+                "answer": "use foo",
+                "context": "because bar",
+            })
+        ]
 
     def test_decided_by_chat_through_loop_without_context(self) -> None:
         out, transport = self._run(
@@ -434,24 +432,19 @@ class TestEndToEndDecidedBy:
             payload={"ok": True, "record": {}},
         )
         assert out["reply"] == "done"
-        assert len(transport.requests) == 1
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/decisions"
-        body = json.loads(req.content.decode())
-        # context still defaults to empty string.
-        assert body["context"] == ""
-        # decided_by still stamped without context (independent).
-        assert body["decided_by"] == "chat"
-        assert body == {
-            "story_key": "S1",
-            "question": "q",
-            "answer": "a",
-            "context": "",
-            "decided_by": "chat",
-        }
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("answer_decision", {
+                "plan_name": "demo",
+                "story_key": "S1",
+                "question": "q",
+                "answer": "a",
+            })
+        ]
 
-    def test_exactly_one_request_through_loop(self) -> None:
+    def test_no_request_through_loop(self) -> None:
+        # cpa-02: answer_decision is proposed through the loop; the person's Run posts it.
         _, transport = self._run(
             "answer_decision",
             {
@@ -462,7 +455,7 @@ class TestEndToEndDecidedBy:
             },
             payload={"ok": True, "record": {}},
         )
-        assert len(transport.requests) == 1
+        assert transport.requests == []
 
 
 # =========================================================================== #

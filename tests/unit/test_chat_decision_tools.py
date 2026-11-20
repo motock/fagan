@@ -520,17 +520,17 @@ class TestEndToEndViaLoop:
             payload={"ok": True, "record": {"story_key": "S1"}},
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/decisions"
-        body = json.loads(req.content.decode())
-        assert body == {
-            "story_key": "S1",
-            "question": "which lib?",
-            "answer": "use foo",
-            "context": "because bar",
-            "decided_by": "chat",
-        }
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("answer_decision", {
+                "plan_name": "demo",
+                "story_key": "S1",
+                "question": "which lib?",
+                "answer": "use foo",
+                "context": "because bar",
+            })
+        ]
 
     def test_answer_decision_called_through_loop_without_context(self) -> None:
         out, transport = self._run(
@@ -544,11 +544,16 @@ class TestEndToEndViaLoop:
             payload={"ok": True, "record": {}},
         )
         assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/decisions"
-        body = json.loads(req.content.decode())
-        assert body["context"] == ""
+        # cpa-02: the chat proposes this action for the person to run; it never posts it.
+        assert transport.requests == []
+        assert [(p["name"], p["args"]) for p in out["proposed_actions"]] == [
+            ("answer_decision", {
+                "plan_name": "demo",
+                "story_key": "S1",
+                "question": "q",
+                "answer": "a",
+            })
+        ]
 
 
 # =========================================================================== #

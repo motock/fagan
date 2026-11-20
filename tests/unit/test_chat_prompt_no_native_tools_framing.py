@@ -197,7 +197,7 @@ class TestPureAppendContract:
             "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags.",
             "If no tool calls are needed, simply answer in natural language.",
             "You can read plan and story status, journals, logs, and checklists.",
-            "You can propose any action the user can take: ingest_plan, approve_plan, approve_merge, dispatch, interrupt, patch, review, mark done, checkpoint, advance, pause, resume and answer_decision.",
+            "You can propose control actions (dispatch, interrupt, patch, review, mark done, checkpoint, advance, pause, resume, answer_decision) and the plan actions ingest_plan, approve_plan and approve_merge.",
             "Calling one of these does NOT run it: the user sees a Run button and decides.",
             "All actions are subject to server-side gates; if one is refused, surface the refusal and do NOT attempt to bypass it.",
             "To help the user author a plan, call decompose with their goal to get a first draft.",

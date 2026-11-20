@@ -325,8 +325,10 @@ def test_system_prompt_tells_the_model_chat_cannot_ingest():
     agrees with it: the chat origin can never ingest, and the model is told
     the exact 403 detail it would otherwise hit."""
     prompt = chat_module.SYSTEM_PROMPT
-    assert "Do not call ingest_plan yourself" in prompt
-    assert "origin not permitted" in prompt
+    # cpa-02: the chat proposes ingest_plan and the person runs it; the route's
+    # chat-origin refusal stays, and the model is told not to route around a gate.
+    assert "Calling one of these does NOT run it" in prompt
+    assert "do NOT attempt to bypass it" in prompt
 
 
 # --------------------------------------------------------------------------

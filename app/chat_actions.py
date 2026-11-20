@@ -27,6 +27,20 @@ ACTION_TOOLS: frozenset[str] = frozenset({
     "answer_decision",
 })
 
+# Actions the chat may only ever propose. They are deliberately NOT in the chat's
+# ``TOOLS`` registry: no code in the chat can send them, so the console's Run
+# button, acting as the person, is the only way they happen.
+PROPOSAL_ONLY_TOOLS: dict[str, dict] = {
+    "approve_merge": {
+        "description": "Approve a story's merge. Proposed only: the user must press Run",
+        "params": {"plan_name": "str", "story_key": "str"},
+    },
+    "approve_plan": {
+        "description": "Approve a plan. Proposed only: the user reviews and approves it on the plan page",
+        "params": {"plan_name": "str"},
+    },
+}
+
 _NOT_RUN_NOTE = (
     "This action has NOT run. It is shown to the user, who must press Run to carry it out."
 )

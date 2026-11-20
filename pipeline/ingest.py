@@ -43,6 +43,7 @@ from .ingest_manifest import (
     validate_story_descriptions,
 )
 from .ingest_plan_fields import _TEAM_RE, _team_error, _test_scope_error  # noqa: F401
+from .org_context_hook import merge_org_sources, plugin_org_sources
 from .ownership import resolve_ownership
 from .plan_approval import approval_enabled, on_ingest
 from .plan_approval_notice import notify_approval_event, pending_notice_due
@@ -448,6 +449,17 @@ def _story_key_conflict_error(
 # Org sources are read here, with the repo and plan levels, because plan context
 # resolution (``_merged_context``) is the single place the three levels merge.
 def _load_org_sources() -> tuple[list[dict], str | None]:
+    """Return the file sources then the org context provider's, or an error."""
+    file_sources, error = _load_org_file_sources()
+    if error is not None:
+        return [], error
+    provider_sources, error = plugin_org_sources(current_namespace())
+    if error is not None:
+        return [], error
+    return merge_org_sources(file_sources, provider_sources)
+
+
+def _load_org_file_sources() -> tuple[list[dict], str | None]:
     """Read the org context file named by ``PIPELINE_CONTEXT_CONFIG``.
 
     Unset means no org sources. When set, a relative path, unreadable file,

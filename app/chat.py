@@ -346,25 +346,36 @@ TOOLS: dict[str, dict] = {
     "read_file": {
         "description": "Read a file by relative path.",
         "params": {"path": "str"},
-        "execute": lambda http_client, api_base_url, path, **kwargs: (
-            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/file"), params={"path": path}).json()
+        "execute": lambda http_client, api_base_url, path, repo_url=None, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/file"), params=_repo_read_params({"path": path}, repo_url)).json()
         ),
     },
     "list_directory": {
         "description": "List the immediate contents of a directory by relative path (non-recursive).",
         "params": {"path": "str"},
-        "execute": lambda http_client, api_base_url, path='', **kwargs: (
-            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/files"), params={"path": path}).json()
+        "execute": lambda http_client, api_base_url, path='', repo_url=None, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/files"), params=_repo_read_params({"path": path}, repo_url)).json()
         ),
     },
     "search_code": {
         "description": "Search for a text pattern (grep-style) and return matching lines with file and line number.",
         "params": {"pattern": "str"},
-        "execute": lambda http_client, api_base_url, pattern, **kwargs: (
-            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/search"), params={"pattern": pattern}).json()
+        "execute": lambda http_client, api_base_url, pattern, repo_url=None, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/search"), params=_repo_read_params({"pattern": pattern}, repo_url)).json()
         ),
     },
 }
+
+# Read tools that serve the repository the turn names. ``repo_url`` is not a
+# declared param: the server sets it per turn, so the model never picks one.
+_REPO_READ_TOOLS = ("read_file", "list_directory", "search_code")
+
+
+def _repo_read_params(params: dict, repo_url: str | None) -> dict:
+    """Return a read tool's query params, with repo_url only when the turn has one."""
+    if not repo_url:
+        return params
+    return {**params, "repo_url": repo_url}
 
 
 def _available_tools_sentence() -> str:
@@ -526,10 +537,11 @@ def _args_for_repo_url(name: str, args: dict, repo_url: str | None) -> dict:
     The model never chooses the repository when the request names one: a
     model-sent repo_url is replaced, and save_plan's repo_root and workspace
     are dropped. With no repo_url, decompose still drops a model-sent
-    repo_url so its body stays {"request": goal}. Every other call is returned
-    unchanged.
+    repo_url so its body stays {"request": goal}. The read tools follow
+    decompose: the turn's repo_url replaces a model-sent one, and with none a
+    model-sent one is dropped. Every other call is returned unchanged.
     """
-    if name == "decompose":
+    if name == "decompose" or name in _REPO_READ_TOOLS:
         args = {key: value for key, value in args.items() if key != "repo_url"}
         if repo_url:
             args["repo_url"] = repo_url
@@ -729,7 +741,8 @@ class ChatService:
             if repo_url:
                 system_prompt += (
                     f"\nThe active repository is {repo_url}. Plans you draft and save target that repository; "
-                    "the server records it on the plan, so do not add repo_root or repo_url to plan JSON yourself."
+                    "the server records it on the plan, so do not add repo_root or repo_url to plan JSON yourself. "
+                    "File, directory and search tools read that repository's checkout; you do not need set_workspace."
                 )
             if plan_name:
                 system_prompt += _selected_plan_sentence(plan_name)

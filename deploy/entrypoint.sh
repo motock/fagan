@@ -82,6 +82,18 @@ if [ "$PIPELINE_IDENTITY_PROVIDER" = "oidc" ]; then
         || die "PIPELINE_OIDC_CLIENT_SECRET_FILE is not readable; mount the secret file"
 fi
 
+# The dashboard index hands the shared-secret API key to whoever asks for `/`,
+# so a shared-secret dashboard must not listen beyond loopback while it serves
+# the UI. Any other provider value is judged by the dashboard itself, which
+# refuses to start on an unknown one.
+if [ "$PIPELINE_IDENTITY_PROVIDER" = "shared-secret" ] \
+    && [ "${PIPELINE_DASHBOARD_UI:-on}" != "off" ]; then
+    case "$DASHBOARD_HOST" in
+        127.0.0.1|localhost|::1) ;;
+        *) die "a shared-secret dashboard on a non-loopback DASHBOARD_HOST serves its API key to any caller; set PIPELINE_IDENTITY_PROVIDER=oidc, DASHBOARD_HOST=127.0.0.1 or PIPELINE_DASHBOARD_UI=off" ;;
+    esac
+fi
+
 [ "$PIPELINE_MCP_TRANSPORT" = "streamable-http" ] \
     || die "PIPELINE_MCP_TRANSPORT must be streamable-http in this image"
 

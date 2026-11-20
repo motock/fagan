@@ -31,6 +31,7 @@ in practice.
 - Review: the local-model reviewer's `bash` tool now runs without the pipeline's forge, notification and provider credentials in its environment, and its `view_file` tool refuses paths outside the story worktree.
 - Dashboard: under OIDC the index page no longer embeds the shared-secret API key.
 - Container: the entrypoint refuses `PIPELINE_IDENTITY_PROVIDER=shared-secret` on a non-loopback `DASHBOARD_HOST` unless the UI is off.
+- Dashboard: every response now carries `Content-Security-Policy: frame-ancestors 'none'` (plus `base-uri`, `object-src`, `form-action`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`; the dashboard can no longer be framed.
 
 ## [0.10.0] - 2026-11-17
 

@@ -817,6 +817,36 @@ Rules:
   exactly as it did before the key existed. `owner`, when present, must be a
   non-empty string; every other `match` key is rejected at load.
 
+**The `webhook` type.** A general outbound channel that POSTs a signed JSON
+notice to your own automation (n8n, a Teams workflow, PagerDuty, a home
+server). Settings (a closed set; unknown keys are refused, and there are no
+`*_env` variants): `type`, `url_ref` (required), `secret_ref` (required) and
+`timeout` (optional, 1 to 30 seconds, default 10). `url_ref` and `secret_ref`
+are credential references resolved at send time; the URL is a credential.
+
+The resolved URL must be `https`, carry no userinfo or fragment, and name a
+host that is neither an IP literal nor `localhost`; the host is resolved and
+refused if ANY address is private, loopback, link-local, multicast, reserved
+or unspecified. A refused URL is rejected, not retried. Redirects are never
+followed. Status mapping: 2xx delivered; 408, 429 and 5xx retried (honouring
+`Retry-After`); other 4xx rejected.
+
+The body is compact JSON with sorted keys: `version` (1), `event`, `plan`,
+`story_key`, `subject`, `body`, `link` and `sent_at` (UTC ISO-8601). Headers:
+`X-Fagan-Timestamp` (unix seconds), `X-Fagan-Signature`
+(`sha256=` plus the hex HMAC-SHA256 of `timestamp + "." + body` keyed by the
+secret) and `User-Agent: fagan-notify/1`. Verify on the receiving side:
+
+```python
+import hashlib, hmac
+def verify(secret: bytes, headers, raw_body: bytes) -> bool:
+    msg = headers["X-Fagan-Timestamp"].encode() + b"." + raw_body
+    expected = "sha256=" + hmac.new(secret, msg, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, headers["X-Fagan-Signature"])
+```
+
+Also reject a timestamp older than a few minutes to stop replays.
+
 Each instance has its own queue, `<plan>.outbox.<instance>.jsonl`, drained
 on the scheduler tick after the legacy e-mail outbox. The two drains run in
 the same bounded worker, each isolated from the other's failure.

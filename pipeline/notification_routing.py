@@ -204,7 +204,7 @@ _REGISTERED_CHANNEL_PLUGINS: set[Callable] = set()
 def _register_channel_types() -> None:
     # Channel types register on import; config load must not depend on who
     # imported what first (the spool side never imports these modules).
-    from . import notification_email, notification_slack  # noqa: F401
+    from . import notification_email, notification_slack, notification_webhook  # noqa: F401
     from .notification_channels import register_channel_type
 
     # Operator-selected channel plugins: PIPELINE_CHANNEL_PLUGINS lists

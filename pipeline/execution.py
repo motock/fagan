@@ -127,6 +127,7 @@ from app.credentials import (
     is_default_namespace,
     resolve_for_injection,
 )
+from pipeline import tenant_exec
 from pipeline.actor import current_namespace
 from pipeline.sandbox import (
     build_docker_command,
@@ -412,11 +413,20 @@ def spawn_harness(
     if env is not None:
         env = _strip_agent_secrets(env)
     mode = resolve_execution_mode(role)
+    wrapped = tenant_exec.is_configured()
+    if wrapped and mode == "ssh":
+        raise ValueError(
+            "PIPELINE_COMMAND_WRAP_PLUGIN cannot be combined with ssh execution"
+        )
     if mode == "ssh":
         return _spawn_ssh(cmd, cwd=cwd, log_path=log_path, append=append, env=env)
     if role == "dispatch":
         _clear_stale_done_markers(Path(cwd))
     sandbox = resolve_sandbox()
+    if wrapped and sandbox == "docker":
+        raise ValueError(
+            "PIPELINE_COMMAND_WRAP_PLUGIN cannot be combined with PIPELINE_SANDBOX=docker"
+        )
     if sandbox == "docker":
         if not docker_binary_available():
             raise RuntimeError(
@@ -434,6 +444,9 @@ def spawn_harness(
             }
         )
         cmd = build_docker_command(str(cwd), cmd, allowlisted_env)
+    cmd = tenant_exec.wrap(
+        cmd, cwd=str(cwd), kind="review" if role == "review" else "agent"
+    )
     # Local dispatch always goes through the public spawn_local entrypoint
     # (looked up as the bare module-level global on every call, so patching
     # execution.spawn_local intercepts it). A supplied line_filter rides the

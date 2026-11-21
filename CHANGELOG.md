@@ -50,6 +50,7 @@ in practice.
 - Container: the entrypoint refuses `PIPELINE_IDENTITY_PROVIDER=shared-secret` on a non-loopback `DASHBOARD_HOST` unless the UI is off.
 - Dashboard: every response now carries `Content-Security-Policy: frame-ancestors 'none'` (plus `base-uri`, `object-src`, `form-action`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`; the dashboard can no longer be framed.
 - Worktree patches: the apply-side deny list (the git and Claude config directories, the agent instruction file, the MCP config, agent logs) now matches case-insensitively.
+- Agent harness and review spawns pass their argv through the optional `PIPELINE_COMMAND_WRAP_PLUGIN` seam (`wrap(argv, cwd, kind, namespace) -> list[str]`), which fails closed: a plugin failure or malformed answer refuses the command, and it cannot be combined with ssh execution or `PIPELINE_SANDBOX=docker` (tcw-01; see ADR 0016).
 
 ## [0.10.0] - 2026-11-17
 

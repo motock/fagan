@@ -29,5 +29,6 @@ supersedes the old one and mark the old one Superseded - do not edit history.
 | [0013](0013-plan-commands-and-lock-scope.md) | Operator commands wait a bounded time and compare-and-set the manifest revision, under a (namespace, plan) lock | Proposed |
 | [0014](0014-autonomous-decision-record-and-authority.md) | Autonomous decisions are recorded, bounded by layered authority and reviewed by humans | Proposed |
 | [0015](0015-tenant-settings-in-the-store.md) | Tenant settings are versioned Store records resolved per team and repository, not environment variables | Proposed |
+| [0016](0016-repository-code-runs-through-one-wrap-seam.md) | Repository code runs through one command-wrap seam | Proposed |
 
 See [`template.md`](template.md) when adding one.

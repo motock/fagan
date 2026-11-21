@@ -49,9 +49,13 @@ _RESULT_NAME = "result.json"
 _KILL_GRACE_SECONDS = 10
 
 
-def _child_argv(plan_name: str, result_path: str) -> list[str]:
-    """Return the command line for one advance child (replaced in tests)."""
-    return [sys.executable, "-m", "pipeline.advance_one", plan_name, result_path]
+def _child_argv(plan_name: str, result_path: str, *namespace: str) -> list[str]:
+    """Return the command line for one advance child (replaced in tests).
+
+    *namespace* is empty for the default namespace, so the default command line
+    is unchanged; a named namespace is appended for the child to validate.
+    """
+    return [sys.executable, "-m", "pipeline.advance_one", plan_name, result_path, *namespace]
 
 
 def _source_root() -> Path:
@@ -100,8 +104,15 @@ def _terminate(proc: subprocess.Popen, plan_name: str, timeout_s: float) -> dict
     return {"ok": False, "error": "advance timed out", "timed_out": True}
 
 
-def advance_plan_subprocess(plan_name: str, timeout_s: float) -> dict[str, Any]:
+def advance_plan_subprocess(
+    plan_name: str, timeout_s: float, *, namespace: str | None = None
+) -> dict[str, Any]:
     """Advance *plan_name* in a child process and return its result payload.
+
+    *namespace*, when given, is the namespace the plan must be found in; the
+    child refuses it (and advances nothing) if the plan does not belong there.
+    ``None`` leaves the child's command line exactly as the default namespace
+    always had it.
 
     Returns the child's result dict unchanged on success; otherwise
     ``{"ok": False, "error": ...}``, with ``"timed_out": True`` when the
@@ -113,9 +124,10 @@ def advance_plan_subprocess(plan_name: str, timeout_s: float) -> dict[str, Any]:
     tmpdir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
     os.chmod(tmpdir, 0o700)
     result_path = str(Path(tmpdir) / _RESULT_NAME)
+    extra = () if namespace is None else (namespace,)
     try:
         proc = subprocess.Popen(
-            _child_argv(plan_name, result_path),
+            _child_argv(plan_name, result_path, *extra),
             cwd=str(_source_root()),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

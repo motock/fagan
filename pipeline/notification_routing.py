@@ -26,6 +26,7 @@ from typing import Any
 
 from app.plugin_loader import load_plugin_list
 from pipeline import paths
+from pipeline.notification_audience import AUDIENCES, AudienceMembers
 from pipeline.notification_channels import (
     ChannelConfigError,
     channel_type,
@@ -45,6 +46,7 @@ _ENV_KEY_SUFFIX = "_env"
 # variables. A literal, not the store constant: importing the store here would
 # grow the default-namespace ratchet.
 _ENV_NAMESPACE = "default"
+_MAX_PRINCIPAL_LEN = 255
 
 
 class NotificationConfigError(ValueError):
@@ -55,7 +57,7 @@ class NotificationConfigError(ValueError):
 class _Route:
     name: str
     plan_glob: str
-    deliver: tuple[tuple[frozenset[str], tuple[str, ...]], ...]
+    deliver: tuple[tuple[frozenset[str], tuple[str, ...], tuple[str, ...]], ...]
     owner_glob: str | None = None
 
 
@@ -63,8 +65,15 @@ class _Route:
 class NotificationConfig:
     instances: dict[str, Any] = field(default_factory=dict)
     routes: tuple[_Route, ...] = ()
+    principals: dict[str, str] = field(default_factory=dict)
 
-    def resolve(self, plan: str, event: str | None, owner: str = "") -> list[str]:
+    def resolve(
+        self,
+        plan: str,
+        event: str | None,
+        owner: str = "",
+        audience_members: AudienceMembers | None = None,
+    ) -> list[str]:
         """Return the instance names an event of ``plan`` is delivered to.
 
         The FIRST route whose ``match.plan`` glob (``fnmatch.fnmatchcase``)
@@ -77,6 +86,12 @@ class NotificationConfig:
         An empty ``owner`` never matches an ``owner`` glob, so a plan whose
         manifest names no owner is never delivered to an owner-scoped route.
         Routes without ``owner`` match every owner, exactly as before.
+
+        A deliver entry with ``audience`` reaches people: the instances whose
+        ``principal`` is in the union of ``audience_members(name)`` over the
+        listed audiences. With ``to`` as well, only the ``to`` instances in
+        that union are delivered (an instance with no principal never is).
+        ``audience_members=None`` means every audience is empty.
         """
         for route in self.routes:
             if not fnmatch.fnmatchcase(plan, route.plan_glob):
@@ -86,9 +101,19 @@ class NotificationConfig:
             ):
                 continue
             result: list[str] = []
-            for events, targets in route.deliver:
-                if "*" in events or (event is not None and event in events):
-                    result.extend(t for t in targets if t not in result)
+            for events, targets, audiences in route.deliver:
+                if "*" not in events and (event is None or event not in events):
+                    continue
+                if audiences:
+                    members: set[str] = set()
+                    if audience_members is not None:
+                        for name in audiences:
+                            members |= audience_members(name)
+                    pool = targets or tuple(self.principals)
+                    chosen = [t for t in pool if self.principals.get(t) in members]
+                else:
+                    chosen = list(targets)
+                result.extend(t for t in chosen if t not in result)
             return result
         return []
 
@@ -125,9 +150,20 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return seen
 
 
-def _build_instances(raw: Any, env: Mapping[str, str]) -> dict[str, Any]:
+def _valid_principal(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= _MAX_PRINCIPAL_LEN
+        and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+    )
+
+
+def _build_instances(
+    raw: Any, env: Mapping[str, str]
+) -> tuple[dict[str, Any], dict[str, str]]:
     raw = _require_object(raw, "instances")
     instances: dict[str, Any] = {}
+    principals: dict[str, str] = {}
     for name, settings in raw.items():
         path = f"instances.{name}"
         try:
@@ -144,10 +180,20 @@ def _build_instances(raw: Any, env: Mapping[str, str]) -> dict[str, Any]:
             raise _fail(f"{path}.type", f"unknown channel type {type_name!r}") from None
         try:
             reject_inline_secrets(name, settings)
+            if "principal" in settings:
+                if not _valid_principal(settings["principal"]):
+                    # The value is a person's subject; name only the key path.
+                    raise _fail(
+                        f"{path}.principal",
+                        f"must be a non-empty string of at most {_MAX_PRINCIPAL_LEN} "
+                        "characters with no control characters",
+                    )
+                principals[name] = settings["principal"]
+                settings = {k: v for k, v in settings.items() if k != "principal"}
             instances[name] = cls.from_settings(name, settings, env)
         except ChannelConfigError as exc:
             raise _fail(path, str(exc)) from exc
-    return instances
+    return instances, principals
 
 
 def _build_route(raw: Any, index: int, instances: Mapping[str, Any]) -> _Route:
@@ -179,11 +225,21 @@ def _build_route(raw: Any, index: int, instances: Mapping[str, Any]) -> _Route:
         epath = f"{path}.deliver[{j}]"
         entry = _require_object(entry, epath)
         events = _require_str_list(entry.get("events"), f"{epath}.events")
-        targets = _require_str_list(entry.get("to"), f"{epath}.to")
+        if "to" not in entry and "audience" not in entry:
+            raise _fail(epath, "must carry 'to', 'audience', or both")
+        targets: list[str] = []
+        if "to" in entry:
+            targets = _require_str_list(entry["to"], f"{epath}.to")
         for k, target in enumerate(targets):
             if target not in instances:
                 raise _fail(f"{epath}.to[{k}]", f"unknown instance {target!r}")
-        deliver.append((frozenset(events), tuple(targets)))
+        audiences: list[str] = []
+        if "audience" in entry:
+            audiences = _require_str_list(entry["audience"], f"{epath}.audience")
+        for k, aud in enumerate(audiences):
+            if aud not in AUDIENCES:
+                raise _fail(f"{epath}.audience[{k}]", "unknown audience")
+        deliver.append((frozenset(events), tuple(targets), tuple(audiences)))
     return _Route(
         name=name, plan_glob=plan_glob, deliver=tuple(deliver), owner_glob=owner_glob
     )
@@ -250,12 +306,12 @@ def load_notification_config(
     data = _require_object(data, "config")
     if data.get("version") != 1 or isinstance(data.get("version"), bool):
         raise _fail("version", "must be 1")
-    instances = _build_instances(data.get("instances"), env)
+    instances, principals = _build_instances(data.get("instances"), env)
     routes_raw = data.get("routes")
     if not isinstance(routes_raw, list):
         raise _fail("routes", "must be a list")
     routes = tuple(_build_route(r, i, instances) for i, r in enumerate(routes_raw))
-    return NotificationConfig(instances=instances, routes=routes)
+    return NotificationConfig(instances=instances, routes=routes, principals=principals)
 
 
 def safe_load_notification_config(
@@ -309,12 +365,12 @@ def parse_layer_routes(value: Any, namespace: str) -> NotificationConfig:
         _refuse_env_names_outside_default(raw_instances)
     # Instance settings are validated for shape only; the env argument is
     # never read at build time, so an empty mapping is correct for both cases.
-    instances = _build_instances(raw_instances, {})
+    instances, principals = _build_instances(raw_instances, {})
     routes_raw = value.get("routes", [])
     if not isinstance(routes_raw, list):
         raise _fail("notification_routes.routes", "must be a list")
     routes = tuple(_build_route(r, i, instances) for i, r in enumerate(routes_raw))
-    return NotificationConfig(instances=instances, routes=routes)
+    return NotificationConfig(instances=instances, routes=routes, principals=principals)
 
 
 def namespace_notification_config(
@@ -353,4 +409,5 @@ def namespace_notification_config(
     return NotificationConfig(
         instances={**deployment.instances, **layer.instances},
         routes=deployment.routes + layer.routes,
+        principals={**deployment.principals, **layer.principals},
     )

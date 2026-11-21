@@ -734,6 +734,21 @@ tick, so an edit takes effect on the next event or tick. It is limited to
 `{name, match: {plan: <glob>, owner: <glob>}, deliver: [{events: [...], to: [instances]}]}`.
 `events` holds event names or `"*"`; `match.owner` is optional.
 
+**Audiences and principals.** An instance may carry an optional `principal`
+(any channel type): the subject of the person who owns it (non-empty, at most
+255 characters, no control characters). It is not a channel setting and is
+never sent to the channel type. A deliver entry may carry `audience`, a list
+drawn from `plan_owner` and `plan_approvers`, instead of or as well as `to`
+(an entry needs at least one). With `audience` only, every instance whose
+principal is in the audience receives the event. With both, only the `to`
+instances whose principal is in the audience do (the intersection), so a
+person's own instances get just the events they chose, for plans where they
+are in the audience; an instance in `to` with no principal is never delivered
+by such an entry. Without a plugin `plan_owner` is the plan's owner and
+`plan_approvers` is empty. `PIPELINE_AUDIENCE_PLUGIN` supplies the members
+(see Plugins); a plugin that fails or returns anything but a set of strings
+resolves that audience to nobody. Unknown audience names are refused at load.
+
 **Team, org and team/repo routes.** A `notification_routes` value set on a
 team, org or team/repo settings layer is applied at spool time for that plan:
 the plan's resolved value is merged after the file's routes, so a file route
@@ -2509,6 +2524,7 @@ who is authenticated or allowed without saying so.
 | View scope | `PIPELINE_VIEW_SCOPE_PLUGIN` | `factory()` returning an object with `visible(principal) -> frozenset[str] \| ALL` | Which namespaces plan views (the dashboard plan list) show. Unset: the namespaces the resolver reports. An empty or malformed answer, or an exception, denies the view. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Repo access hook | `PIPELINE_REPO_ACCESS_PLUGIN` | `factory()` returning an object with `check(namespace, repo, action, risk) -> AccessDecision` | Consulted before a dispatch and before a merge (scheduler and `approve_merge`). Unset: no hook, nothing changes. A refusal, an exception or a malformed answer refuses: a dispatch or scheduler merge parks the story with `access refused: <reason>`; `approve_merge` returns the error and leaves the story as it was. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Admission hook | `PIPELINE_ADMISSION_PLUGIN` | `factory()` returning an object with `admit(kind, namespace, context) -> AdmissionDecision` | `kind` is `dispatch`, `spend` or `notification`; `context` carries counts only. Unset: everything is admitted. A refused dispatch is deferred to a later tick (not parked); a refused spend pauses the spend poll; a refused notification is dropped and counted. A hook failure fails closed for dispatch and spend and open for notifications. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Audience | `PIPELINE_AUDIENCE_PLUGIN` | `factory()` returning an object with `members(namespace, plan, audience, owner) -> frozenset[str]` | Subjects in the `plan_owner` or `plan_approvers` audience of a plan, matched against notification instance `principal` settings. Unset: `plan_owner` is the plan's owner and `plan_approvers` is empty. A failing plugin or a non-set return resolves that audience to nobody and logs the exception type. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Reference hook | `PIPELINE_REFERENCE_PLUGIN` | `factory()` returning an object with `allow(from_namespace, to_namespace) -> bool` | Decides `blocked_by` entries of the form `ref:<namespace>:<plan>:<story_key>`. **Unset refuses every such reference**; only an answer of exactly `True` allows one. Plain `<plan>:<story_key>` entries are unaffected. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Secret providers | `PIPELINE_SECRET_PROVIDER_PLUGINS` | comma list of `module:attr`; each object has `name` and `get(name) -> str \| None` | Extra providers for `secret://<provider>/<name>` references, beside the built-in `env` and `file`. See "Credentials". |
 

@@ -31,6 +31,7 @@ NOT_RUN_NOTE = "This action has NOT run. It is shown to the user, who must press
 VALID_ARGS: dict[str, dict] = {
     "ingest_plan": {"plan_name": "demo"},
     "approve_merge": {"plan_name": "demo", "story_key": "s1"},
+    "choose_park_option": {"plan_name": "demo", "story_key": "s1", "option_id": "o1"},
     "approve_plan": {"plan_name": "demo"},
     "dispatch_story": {"plan_name": "demo", "story_key": "s1"},
     "interrupt_story": {"plan_name": "demo", "story_key": "s1"},

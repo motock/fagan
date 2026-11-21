@@ -21,8 +21,10 @@ SUBPROCESS_NAMES = ("run", "Popen", "check_output", "check_call")
 
 ALLOWED: dict[tuple[str, str], str] = {
     ("app/backend_claude.py", "complete"): "fixed claude CLI argv; wrapped only when a cwd is given",
+    ("app/ollama_prompt_utils.py", "_bounded_bash_run"): "shell=True branch runs only when no wrap plugin is configured; with a plugin the command goes through tenant_exec.wrap",
     ("pipeline/advance_pool.py", "advance_plan_subprocess"): "sys.executable -m pipeline.advance_one; plan name is validated",
     ("pipeline/advance_workers.py", "_spawn"): "sys.executable -m pipeline.advance_worker with inherited pipe fds",
+    ("pipeline/build_detect.py", "_lint_acceptance_fixtures"): "ruff from PATH run over a temporary copy of the story's fixtures; a linter executes no repository code",
     ("pipeline/ci_rollup.py", "_owner_and_name"): "fixed gh repo view argv; no repository-supplied command word",
     ("pipeline/ci_rollup.py", "_graphql_payload"): "fixed gh api argv; owner and name are data fields, query is a constant",
     ("pipeline/execution.py", "_spawn_fd_redirect"): "agent harness argv from build_agent_command, not repo content",
@@ -35,6 +37,9 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("pipeline/rebase.py", "_run"): "git runner seam; every caller passes a literal git argv",
     ("pipeline/repo_clone.py", "_run"): "git runner seam; argvs are built from a literal git head",
     ("pipeline/repo_clone.py", "_try_output"): "git runner seam; argvs are built from a literal git head",
+    ("pipeline/setup/claude_setup.py", "_default_runner"): "operator setup wizard probing the operator's own host; never given a tenant repository command",
+    ("pipeline/setup/detect.py", "_default_runner"): "operator setup wizard probing the operator's own host; never given a tenant repository command",
+    ("pipeline/setup/services.py", "_default_runner"): "operator setup wizard probing the operator's own host; never given a tenant repository command",
     ("pipeline/story_worktree_status.py", "_git"): "literal git argv prefix with read-only subcommands",
     ("pipeline/supervise.py", "_spawn"): "child argv from operator CLI flags or the built-in child list",
     ("pipeline/triage_lint_evidence.py", "branch_changed_paths"): "module constant git diff argv",
@@ -118,6 +123,28 @@ def test_scanner_passes_call_wrapped_by_tenant_exec():
     )
 
     assert scan_source(source, "x.py") == set()
+
+
+def test_scanner_passes_wrap_through_importlib_bound_local_names():
+    source = (
+        "import importlib\n"
+        "def run(path):\n"
+        "    subprocess = importlib.import_module('subprocess')\n"
+        "    tenant_exec = importlib.import_module('pipeline.tenant_exec')\n"
+        "    subprocess.run(tenant_exec.wrap(['pytest', '-q'], cwd=path, kind='test'))\n"
+    )
+
+    assert scan_source(source, "x.py") == set()
+
+
+def test_scanner_flags_wrap_on_an_unrelated_object():
+    source = (
+        "import subprocess\n"
+        "def run(helper, path):\n"
+        "    subprocess.run(helper.wrap(['pytest', '-q'], cwd=path))\n"
+    )
+
+    assert scan_source(source, "x.py") == {("x.py", "run")}
 
 
 def test_scanner_flags_bare_name_argv():

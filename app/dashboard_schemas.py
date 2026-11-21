@@ -218,3 +218,28 @@ class StoryDiffResponse(BaseModel):
     path: str | None = None
     diff: str | None = None
     binary: bool | None = None
+
+
+class ParkOptionsResponse(BaseModel):
+    """Response of ``GET /api/plans/{plan_name}/stories/{story_key}/park-options``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    ok: bool
+    options: list[dict] = []
+    preparing: bool | None = None
+    recommended: str | None = None
+    stale: bool | None = None
+    park_class: str | None = None
+
+
+class ChooseParkOptionResponse(BaseModel):
+    """Success body of ``POST .../park-options/{option_id}/choose``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    ok: bool
+    story_key: str
+    option_id: str
+    action: str
+    new_status: str | None = None

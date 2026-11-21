@@ -518,8 +518,8 @@ def run_triage_sweep(plan_name: str) -> dict:
                     s.pop("_patch_acceptance_recorded", None)
             if (fresh := bound_records.get_manifest(_store, plan_name)) is None:
                 raise FileNotFoundError("plan manifest not found")
-            _store.records().put_manifest(
-                "default", plan_name, _merge_sweep_changes(fresh, initial, manifest)
+            bound_records.put_manifest(
+                _store, plan_name, _merge_sweep_changes(fresh, initial, manifest)
             )
         if digest := sweep_digest(digest_rows):
             _notify_user(plan_name, digest, event="triage_sweep_summary")

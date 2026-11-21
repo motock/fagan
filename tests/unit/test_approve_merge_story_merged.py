@@ -87,7 +87,7 @@ def test_should_emit_story_merged_before_the_plan_completion_check(
     _stub_approve_merge_boundaries(monkeypatch)
     seen_at_completion = []
 
-    def _completion(plan_name, manifest):
+    def _completion(plan_name, manifest, **_kwargs):
         seen_at_completion.append(len(_merged(notices)))
         return False
 

@@ -903,7 +903,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         from .plan_completion import notify_if_plan_completed
 
         try:
-            notify_if_plan_completed(plan_name, manifest)
+            notify_if_plan_completed(plan_name, manifest, just_merged=key)
         except Exception:
             logging.getLogger("pipeline").exception(
                 "notify_if_plan_completed failed for %s", plan_name

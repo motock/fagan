@@ -792,7 +792,11 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         from .plan_completion import notify_if_plan_completed
 
         try:
-            notify_if_plan_completed(plan_name, manifest)
+            notify_if_plan_completed(
+                plan_name,
+                manifest,
+                **({"just_merged": story_key} if merged_outside_pipeline else {}),
+            )
         except Exception:
             logging.getLogger(__name__).exception(
                 "notify_if_plan_completed failed for %s", plan_name

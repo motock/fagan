@@ -19,6 +19,7 @@ The summary is also stored as the plan's report record, the
 is logged and does not block the notification.
 """
 
+import datetime
 import logging
 
 from . import server as _server
@@ -71,8 +72,46 @@ def _with_journals(plan_name: str, manifest: dict) -> dict:
     return {**manifest, "stories": stories}
 
 
-def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
+def _with_just_merged(
+    plan_name: str, manifest: dict, history: list[dict], just_merged: str | None
+) -> list[dict]:
+    """``history`` plus an in-memory ``story_merged`` record for ``just_merged``.
+
+    A durable bus consumer writes history rows asynchronously, so the merge the
+    caller just announced may not be readable yet. The record is only handed to
+    the summary, never stored; nothing is added when history already has it.
+    """
+    if not just_merged:
+        return history
+    if any(
+        isinstance(r, dict)
+        and r.get("event") == "story_merged"
+        and r.get("story_key") == just_merged
+        for r in history
+    ):
+        return history
+    record = {
+        "ts": datetime.datetime.now(datetime.UTC).isoformat(),
+        "plan": plan_name,
+        "message": f"{just_merged} merged",
+        "story_key": just_merged,
+        "severity": "info",
+        "event": "story_merged",
+        "dedup_key": None,
+    }
+    story = (manifest.get("stories") or {}).get(just_merged)
+    if isinstance(story, dict) and story.get("correlation_id"):
+        record["correlation_id"] = story["correlation_id"]
+    return [*history, record]
+
+
+def notify_if_plan_completed(
+    plan_name: str, manifest: dict, *, just_merged: str | None = None
+) -> bool:
     """Emit one ``plan_completed`` notification if every story is done.
+
+    ``just_merged`` names a story whose ``story_merged`` the caller has just
+    recorded; the summary counts it even if the history read has not caught up.
 
     Returns ``True`` if the notification was emitted on this call, ``False``
     otherwise (plan not complete, already notified, or any failure).
@@ -93,7 +132,12 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
         ):
             return False
 
-        history = records.get_notification_history(_NAMESPACE, plan_name)[0]
+        history = _with_just_merged(
+            plan_name,
+            manifest,
+            records.get_notification_history(_NAMESPACE, plan_name)[0],
+            just_merged,
+        )
         summary = format_plan_summary(
             plan_name, _with_journals(plan_name, manifest), history
         )

@@ -168,27 +168,24 @@ def build_runtime(bus, serial_fn):
         never records its own timestamp: a request that the pool rejects leaves
         ``last_advanced`` unchanged, and the next sweep must retry it rather
         than wait out another window.
-        """
-        from . import plan_activity, server
 
-        bound = _stale_seconds()
-        queued: list[str] = []
-        for plan_name in list(server._store.list_manifests()):
-            manifest = server._store.get_manifest_or_none(plan_name)
-            if plan_activity.is_inert(manifest):
-                continue
-            last_advanced = queue.last_advanced(plan_name)
-            if last_advanced is not None and _now() - last_advanced <= bound:
-                continue
-            queue.request(plan_name, "sweep")
-            queued.append(plan_name)
-        workers = pool.stats()
+        The body lives in ``advance_sweep.sweep_namespaces``, which also covers
+        every in-scope namespace other than the default.
+        """
+        from .advance_sweep import sweep_namespaces
+
+        result = sweep_namespaces(queue, pool, _stale_seconds(), _now())
+        queued = result["queued"]
         logger.info(
             "advance sweep queued %d plan(s)",
             len(queued),
-            extra={"queued": len(queued), "workers": workers},
+            extra={
+                "queued": len(queued),
+                "workers": result.get("workers"),
+                "namespaces_queued": len(result.get("namespaces", {})),
+            },
         )
-        return {"ok": True, "queued": queued, "workers": workers}
+        return result
 
     def stop() -> None:
         """Unregister the wake hook, then drain and stop the workers.

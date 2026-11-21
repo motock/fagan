@@ -25,6 +25,7 @@ ACTION_TOOLS: frozenset[str] = frozenset({
     "pause_plan",
     "resume_plan",
     "answer_decision",
+    "choose_park_option",
 })
 
 # Actions the chat may only ever propose. They are deliberately NOT in the chat's
@@ -34,6 +35,10 @@ PROPOSAL_ONLY_TOOLS: dict[str, dict] = {
     "approve_merge": {
         "description": "Approve a story's merge. Proposed only: the user must press Run",
         "params": {"plan_name": "str", "story_key": "str"},
+    },
+    "choose_park_option": {
+        "description": "Choose one of the overlord's prepared options for a parked story. Proposed only: the user must press Run",
+        "params": {"plan_name": "str", "story_key": "str", "option_id": "str"},
     },
     "approve_plan": {
         "description": "Approve a plan. Proposed only: the user reviews and approves it on the plan page",

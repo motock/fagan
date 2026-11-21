@@ -31,7 +31,6 @@ from pipeline.service import PipelineService
 from pipeline.settings_registry import PROJECT_KEY_RE, SITE_RE
 from pipeline.settings_store import effective_setting
 from pipeline.store_namespaces import namespaces_with_plans
-from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger("pipeline.jira_intake")
 
@@ -83,7 +82,7 @@ def run_jira_intake(now: float) -> dict[str, int]:
         return {}
     counts = {"planned": 0, "existing": 0, "failed": 0}
     records = _store.records()
-    for namespace in sorted(set(namespaces_with_plans(records)) | {DEFAULT_NAMESPACE}):
+    for namespace in sorted({current_namespace(), *namespaces_with_plans(records)}):
         try:
             with bind_namespace(namespace):
                 _run_namespace(namespace, now, counts)

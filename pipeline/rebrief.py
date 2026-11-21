@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from app import backend, role_registry
+from pipeline import tenant_exec
 
 DIAGNOSIS_HEADER = "=== PRIOR-ATTEMPT DIAGNOSIS (read this FIRST) ==="
 
@@ -322,15 +323,17 @@ def _rerun_failing_tests(worktree, story: dict[str, Any]) -> list[str]:
         if "pytest" in str(part) or "py.test" in str(part):
             break
     try:
+        rerun_cwd = last_test_check.get("cwd") or str(worktree)
+        argv = [*prefix, "-vv", "--tb=long", "--no-header", "-p", "no:cacheprovider", *nodes]
         result = subprocess.run(
-            [*prefix, "-vv", "--tb=long", "--no-header", "-p", "no:cacheprovider", *nodes],
-            cwd=last_test_check.get("cwd") or str(worktree),
+            tenant_exec.wrap(argv, cwd=str(rerun_cwd), kind="test"),
+            cwd=rerun_cwd,
             check=False,
             capture_output=True,
             text=True,
             timeout=_RERUN_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, tenant_exec.CommandWrapError):
         return []
 
     if result.returncode == 0:

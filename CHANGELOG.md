@@ -50,6 +50,7 @@ in practice.
 
 ### Security
 
+- Lint and suite baseline probes, the acceptance-oracle gate, the failing-test re-run, pytest collection for the guard-liveness check and the local reviewer's `bash` tool run their commands through the command-wrap seam (`tenant_exec.wrap`), so a configured wrap plugin sees every one of them; a refused command makes its probe report `*_probe_failed` (detail `CommandWrapError`), the oracle gate report `errors`, the re-run return no facts, the collection return no data, and the reviewer shell return exit code 126 without running the command. With no plugin configured, nothing changes (tcw-05).
 - Dashboard: `/api/chat/stream` no longer accepts a `k-`-prefixed `X-Pipeline-Api-Key` in place of the shared secret; the unvalidated pass-through let an unauthenticated caller invoke the chat model.
 - Review: the local-model reviewer's `bash` tool now runs without the pipeline's forge, notification and provider credentials in its environment, and its `view_file` tool refuses paths outside the story worktree.
 - Dashboard: under OIDC the index page no longer embeds the shared-secret API key.

@@ -13,12 +13,19 @@ import os
 import subprocess
 from pathlib import Path
 
-from .build_detect import detect_lint_command, detect_test_command
-
 # Import oracle gate at module level
+from . import tenant_exec
+from .build_detect import detect_lint_command, detect_test_command
 from .oracle_gate import validate_acceptance_fixtures
 
 __all__ = ["ci_finding", "classify_repo_health", "format_findings", "lint_baseline_finding", "oracle_finding", "suite_baseline_finding"]
+
+
+def _probe_detail(exc: Exception) -> str:
+    """Describe a probe failure; a refused command reports its class name only."""
+    if isinstance(exc, tenant_exec.CommandWrapError):
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {exc}"
 
 
 def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | None:
@@ -47,7 +54,7 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
             return None
         cwd, cmd = detected
         result = subprocess.run(
-            cmd,
+            tenant_exec.wrap(cmd, cwd=str(cwd), kind="lint"),
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -64,10 +71,10 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
             "detail": detail,
             "command": " ".join(cmd),
         }
-    except (OSError, subprocess.SubprocessError) as exc:  # includes TimeoutExpired
+    except (OSError, subprocess.SubprocessError, tenant_exec.CommandWrapError) as exc:  # includes TimeoutExpired
         return {
             "kind": "lint_probe_failed",
-            "detail": f"{type(exc).__name__}: {exc}",
+            "detail": _probe_detail(exc),
             "command": "",
         }
 
@@ -87,7 +94,7 @@ def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict |
     try:
         test_dir, test_cmd = detect_test_command(Path(checkout))
         result = subprocess.run(
-            test_cmd,
+            tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
             cwd=test_dir,
             capture_output=True,
             text=True,
@@ -103,10 +110,10 @@ def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict |
             "detail": detail,
             "command": " ".join(test_cmd),
         }
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, tenant_exec.CommandWrapError) as exc:
         return {
             "kind": "suite_probe_failed",
-            "detail": f"{type(exc).__name__}: {exc}",
+            "detail": _probe_detail(exc),
             "command": "",
         }
 

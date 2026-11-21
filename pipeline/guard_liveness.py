@@ -337,6 +337,7 @@ def collect_test_files(repo_root: Path, timeout: float = 120.0) -> list[str] | N
     # runner tests patch subprocess.run globally -- a late lookup honours
     # both contracts.
     subprocess = importlib.import_module("subprocess")
+    tenant_exec = importlib.import_module("pipeline.tenant_exec")
     cmd = [
         sys.executable,
         "-m",
@@ -348,13 +349,16 @@ def collect_test_files(repo_root: Path, timeout: float = 120.0) -> list[str] | N
     ]
     try:
         proc = subprocess.run(
-            cmd,
+            tenant_exec.wrap(cmd, cwd=str(repo_root), kind="validate"),
             cwd=str(repo_root),
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
         )
+    except tenant_exec.CommandWrapError:
+        logger.warning("pytest collection failed for %s: command refused", repo_root)
+        return None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("pytest collection failed for %s: %s", repo_root, exc)
         return None

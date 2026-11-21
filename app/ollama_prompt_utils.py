@@ -357,12 +357,22 @@ def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
     is always released. The child gets the same secret-stripped environment a
     dispatched agent gets.
     """
+    from pipeline import tenant_exec
     from pipeline.execution import _strip_agent_secrets
 
+    env = _strip_agent_secrets(dict(os.environ))
+    if not tenant_exec.is_configured():
+        return subprocess.run(
+            cmd, check=False, shell=True, cwd=cwd,
+            capture_output=True, text=True, timeout=_BASH_TIMEOUT_S, env=env,
+        )
+    try:
+        argv = tenant_exec.wrap(["/bin/sh", "-c", cmd], cwd=str(cwd), kind="review")
+    except tenant_exec.CommandWrapError:
+        return subprocess.CompletedProcess(args="", returncode=126, stdout="", stderr="command refused")
     return subprocess.run(
-        cmd, check=False, shell=True, cwd=cwd,
-        capture_output=True, text=True, timeout=_BASH_TIMEOUT_S,
-        env=_strip_agent_secrets(dict(os.environ)),
+        argv, check=False, cwd=cwd,
+        capture_output=True, text=True, timeout=_BASH_TIMEOUT_S, env=env,
     )
 
 

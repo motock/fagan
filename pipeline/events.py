@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pipeline.store_records import validate_namespace
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,8 @@ EVENT_TYPES = frozenset(
 
 def make_event(type: str, plan: str, story_key=None, payload=None,
                correlation_id=None, *, event_id=None, schema_version=None,
-               idempotency_key=None, traceparent=None) -> dict:
+               idempotency_key=None, traceparent=None,
+               namespace: str | None = None) -> dict:
     """Create a new event dictionary.
 
     Parameters
@@ -81,6 +84,13 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         the active span is stamped automatically. Either way nothing is
         stamped when no span is active, and a supplied or resolved value must
         pass :func:`pipeline.trace_context.parse_traceparent`.
+    namespace:
+        Optional namespace the event belongs to, stamped as a TOP-LEVEL
+        ``"namespace"`` key and validated with
+        :func:`pipeline.store_records.validate_namespace`. Plan names are
+        unique only inside a namespace, so a consumer that acts on a plan
+        needs this to act on the right one. When ``None`` (the default) the
+        key is absent and the legacy shape is unchanged.
 
     Returns
     -------
@@ -88,8 +98,8 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         A mapping with keys ``type``, ``plan``, ``story_key``, ``payload`` and
         ``ts`` (timestamp in ISO‑8601 UTC format), plus each of
         ``correlation_id``, ``event_id``, ``schema_version``,
-        ``idempotency_key`` and ``traceparent`` only when it is supplied or
-        active. ``traceparent`` is optional and additive: ``schema_version``
+        ``idempotency_key``, ``traceparent`` and ``namespace`` only when it is
+        supplied or active. ``traceparent`` is optional and additive: ``schema_version``
         is unchanged by it, and its absence means no trace context was active.
         Each call builds a fresh dict, so optional fields never leak between
         calls.
@@ -123,6 +133,9 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
             "idempotency_key must be a non-empty str of at most 128 characters"
         )
 
+    if namespace is not None:
+        validate_namespace(namespace)
+
     if payload is None:
         payload = {}
 
@@ -152,6 +165,8 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         event["schema_version"] = schema_version
     if idempotency_key is not None:
         event["idempotency_key"] = idempotency_key
+    if namespace is not None:
+        event["namespace"] = namespace
     return event
 
 # ---------------------------------------------------------------------------

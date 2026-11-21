@@ -33,6 +33,7 @@ from pipeline.scheduler_daemon_health import (
     notify_if_checkout_stale,
     run_with_watchdog,
 )
+from pipeline.scheduler_scan_namespaces import scan_all_namespaces
 from pipeline.tick_checks import run_tick_checks
 from pipeline.watchers import scan_all_plans
 
@@ -847,7 +848,7 @@ def run_daemon() -> int:
     start_consumers(bus)
 
     def scan_fn():
-        scan_all_plans(bus)
+        scan_all_namespaces(lambda: scan_all_plans(bus), bus)
 
     # Clamp the scheduler process's per-call model budget BEFORE the lazy
     # import below: once advance_all_plans is in scope the first tick's

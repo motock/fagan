@@ -546,7 +546,9 @@ def _merge_decision(
     recorded in the plan's own decisions log and the plan's role_config
     override applies. With ``plan_name`` the autonomy and auto_merge values
     come from the plan's settings (pipeline.autonomy_settings); without it,
-    from the environment as before.
+    from the environment as before. When ``plan_name`` is omitted it falls back
+    to the plan bound by ``merge_adjudication_plan``, so the gate reads the
+    plan's settings whichever way it is called.
     """
     from .autonomy_settings import (
         effective_auto_merge,
@@ -556,6 +558,7 @@ def _merge_decision(
     from .config import PIPELINE_AUTO_MERGE
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
+    plan_name = plan_name or _adjudication_plan_name.get()
     context = settings_for_plan(plan_name) if plan_name else None
     autonomy = effective_autonomy(PIPELINE_AUTONOMY, context)
     auto_merge = effective_auto_merge(PIPELINE_AUTO_MERGE, context)

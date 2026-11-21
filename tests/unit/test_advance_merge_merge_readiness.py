@@ -474,5 +474,6 @@ def test_unreadable_store_resolves_gate_on_and_the_180s_budget(
 
     advance_merge._adjudicate_merges(PLAN, _summary())
 
-    assert set(forge.ci_gate_seen) == {True}, forge.ci_gate_seen
-    assert sum(harness.clock.sleeps) == pytest.approx(180.0), harness.clock.sleeps
+    assert _load(plan_dir)["parked_reason"] == "dry-run"
+    assert forge.ci_gate_seen == []
+    assert harness.merged == []

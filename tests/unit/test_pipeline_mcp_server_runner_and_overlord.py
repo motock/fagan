@@ -3,6 +3,7 @@
 Split out of test_pipeline_mcp_server.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._pipeline_mcp_server_test_helpers.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,17 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     agents_dir,
     plan_dir,
 )
+
+
+@pytest.fixture
+def _suite_pytest_on_path(monkeypatch):
+    """Put the running suite's own bin dir first on PATH.
+
+    The pipeline container's PATH has no pytest; the suite's venv does. A
+    laptop with the venv activated resolves bare ``pytest`` the same way, so
+    the detected test command runs against the interpreter running the suite.
+    """
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
 
 # ---------- Fixtures ----------
 
@@ -130,6 +142,7 @@ def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp
     ]
 
 
+@pytest.mark.usefixtures("_suite_pytest_on_path")
 def test_detect_test_command_override_does_not_exclude_tests_unit(tmp_path):
     # Regression guard for the real bug: this repo's own reorg moved every
     # real test file under tests/unit/, so a blanket `--ignore=tests` (which

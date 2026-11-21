@@ -13,11 +13,25 @@ no edit ever landed, a whole-file rewrite clobbered existing code, the agent
 looped on nudges/parking, context kept getting trimmed, and tests are failing
 with a traceback nobody captured.
 """
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from pipeline import rebrief
+
+
+@pytest.fixture
+def _suite_pytest_on_path(monkeypatch):
+    """Put the running suite's own bin dir first on PATH.
+
+    The pipeline container's PATH has no pytest; the suite's venv does. A
+    laptop with the venv activated resolves bare ``pytest`` the same way, so
+    the rerun's fallback command runs against the interpreter running the suite.
+    """
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
 
 
 def _git(repo, *args):
@@ -176,6 +190,7 @@ def test_context_trimming_pressure_is_reported(repo):
 # Scenario: tests are failing and nobody captured the traceback
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("_suite_pytest_on_path")
 def test_previously_failing_tests_are_rerun_with_a_real_traceback(repo):
     (repo / "test_target.py").write_text(
         "def test_boom():\n    x = {'a': 1},\n    assert x['a'] == 1\n"
@@ -196,6 +211,7 @@ def test_previously_failing_tests_are_rerun_with_a_real_traceback(repo):
     assert "TypeError" in facts
 
 
+@pytest.mark.usefixtures("_suite_pytest_on_path")
 def test_rerun_reports_when_the_failing_tests_now_pass(repo):
     (repo / "test_target.py").write_text("def test_ok():\n    assert True\n")
     story = {

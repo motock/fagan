@@ -20,11 +20,26 @@ command via subprocess, asserting on the collection outcome (returncode and
 stdout/stderr content).
 """
 
+import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from pipeline.build_detect import detect_test_command
+
+
+@pytest.fixture(autouse=True)
+def _suite_pytest_on_path(monkeypatch):
+    """Put the running suite's own bin dir first on PATH.
+
+    The pipeline container's PATH has no pytest; the suite's venv does. A
+    laptop with the venv activated resolves bare ``pytest`` the same way, so
+    the gate's fallback command runs against the interpreter running the suite.
+    """
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -160,6 +160,7 @@ def test_matching_fingerprint_is_ok_and_message_names_plan_dir(tmp_path, monkeyp
 def test_fingerprint_is_read_from_resolved_plan_dir(tmp_path, monkeypatch):
     """The fingerprint is read from the RESOLVED plan dir (explicit arg wins),
     not from pipeline.paths.PLAN_DIR."""
+    monkeypatch.delenv("WORKTREE_ROOT", raising=False)
     other_plan_dir = tmp_path / "elsewhere"
     other_plan_dir.mkdir()
     monkeypatch.setattr(paths, "PLAN_DIR", other_plan_dir)

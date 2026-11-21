@@ -36,6 +36,7 @@ from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
 from .dispatch_lease import claim_dispatch_lease
+from .park_options import run_park_options_sweep
 from .rebrief import (
     collect_failure_evidence,
     compose_rebriefed_instructions,
@@ -212,6 +213,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
         run_triage_sweep(plan_name)
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
         logging.getLogger("pipeline").warning("triage sweep raised; tick continues")
+    run_park_options_sweep(plan_name)  # never raises (see pipeline/park_options.py)
     try:
         run_wedge_scan(plan_name)
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)

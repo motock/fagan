@@ -19,6 +19,7 @@ from app.plugin_loader import (
     require_methods,
 )
 
+from .actor import current_namespace
 from .authorization import DEFAULT_TEAM
 from .ingest_plan_fields import _TEAM_RE
 
@@ -27,7 +28,6 @@ logger = logging.getLogger("pipeline.settings_team")
 SETTINGS_TEAM_PLUGIN_ENV = "PIPELINE_SETTINGS_TEAM_PLUGIN"
 SEAM = "settings_team"
 PROVIDER_METHODS = ("team_for_namespace",)
-DEFAULT_NAMESPACE = "default"
 
 # Built providers, keyed by spec. Answers are never cached: they depend on the
 # namespace each call names.
@@ -72,7 +72,7 @@ def settings_team(manifest: dict) -> str:
     if spec is None:
         return manifest_team
     provider = _provider(spec)
-    namespace = manifest.get("namespace") or DEFAULT_NAMESPACE
+    namespace = manifest.get("namespace") or current_namespace()
     try:
         answer = provider.team_for_namespace(namespace)
     except Exception as exc:  # noqa: BLE001 - any failure must fail to the default team

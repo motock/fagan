@@ -18,6 +18,7 @@ import pytest
 from app.plugin_loader import ALLOWLIST_ENV, PluginError
 from pipeline import persistence, server, settings_store, settings_team
 from pipeline import test_scope_dispatch as tsd
+from pipeline.actor import bind_namespace
 from pipeline.authorization import DEFAULT_TEAM
 from pipeline.ci import context_from_manifest
 from pipeline.settings_team import SETTINGS_TEAM_PLUGIN_ENV
@@ -133,6 +134,15 @@ def test_should_pass_default_namespace_to_plugin_when_manifest_has_none(
     _install(tmp_path, monkeypatch, MAPPING)
 
     assert team_of({"team": "local"}) == "default"
+
+
+def test_should_ask_plugin_for_bound_namespace_when_manifest_has_none(
+    tmp_path, monkeypatch
+):
+    _install(tmp_path, monkeypatch, MAPPING)
+
+    with bind_namespace("acme/alpha"):
+        assert team_of({"team": "local"}) == "alpha"
 
 
 def test_should_fall_back_to_manifest_team_when_plugin_has_no_opinion(

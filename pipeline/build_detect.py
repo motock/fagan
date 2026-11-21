@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import tenant_exec
 from .branch_names import story_branch
 from .ecosystem_detect import (  # noqa: F401 - re-exported
     _apply_pytest_collection_overrides,
@@ -80,12 +81,18 @@ def _provision_worktree_venv(worktree: Path) -> None:
     if req is None:
         return
     subprocess.run(
-        ["python3", "-m", "venv", str(worktree / ".venv")],
+        tenant_exec.wrap(
+            ["python3", "-m", "venv", str(worktree / ".venv")],
+            cwd=str(worktree), kind="setup",
+        ),
         cwd=worktree, check=True, capture_output=True, text=True, timeout=120,
     )
     venv_python = worktree / ".venv" / "bin" / "python3"
     subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "--quiet", "-r", req],
+        tenant_exec.wrap(
+            [str(venv_python), "-m", "pip", "install", "--quiet", "-r", req],
+            cwd=str(worktree), kind="setup",
+        ),
         cwd=worktree, check=True, capture_output=True, text=True, timeout=300,
     )
     # An overlay repository pins the core it runs against in .core-pin; the
@@ -94,8 +101,11 @@ def _provision_worktree_venv(worktree: Path) -> None:
     core_req = worktree / ".core-pin" / "requirements.txt"
     if core_req.exists():
         subprocess.run(
-            [str(venv_python), "-m", "pip", "install", "--quiet", "-r",
-             str(core_req)],
+            tenant_exec.wrap(
+                [str(venv_python), "-m", "pip", "install", "--quiet", "-r",
+                 str(core_req)],
+                cwd=str(worktree), kind="setup",
+            ),
             cwd=worktree, check=True, capture_output=True, text=True,
             timeout=300,
         )
@@ -420,7 +430,7 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
                 str(tmp_path),
             ]
             result = subprocess.run(
-                cmd,
+                tenant_exec.wrap(cmd, cwd=str(repo_root or tmp_path), kind="validate"),
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -678,7 +688,8 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
     lint_dir, cmd = lint
     try:
         result = subprocess.run(
-            cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
+            tenant_exec.wrap(cmd, cwd=str(lint_dir), kind="lint"),
+            check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

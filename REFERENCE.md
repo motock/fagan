@@ -2513,6 +2513,20 @@ namespace's requests to a second instance whose instance scope names only that
 namespace. A route file sits in front of every built-in route, so treat it as
 security-sensitive configuration.
 
+### Plan advancement modes
+
+The scheduler reaches the plan-advance code in one of two modes, chosen by three variables:
+
+- `PIPELINE_ADVANCE_WORKERS` (default `1`): how many plans advance at once. It sizes the pool in both modes.
+- `PIPELINE_ADVANCE_MODE` (default `pool`; `queue` is the other value): `pool` is the reconcile pass that advances each plan in turn. `queue` turns on event-driven advancement: an `agent_done` event enqueues the plan instead of advancing it, and the reconcile pass only enqueues plans that have gone stale.
+- `PIPELINE_ADVANCE_STALE_SECONDS` (default `60`): queue mode only. A plan whose last finished advance is older than this is re-queued on the next sweep.
+
+In queue mode, the queue coalesces repeat requests for the same namespace and plan, so a burst of events costs one advance. It rotates between namespaces, so a busy namespace cannot starve the others, and it re-queues stale plans so timer-driven work (dead-agent reaping, lease expiry, CI polling, deferred reviews) keeps running when no event arrives.
+
+Both modes cover every namespace the scheduler scope admits (see "Scheduling" above), not only `default`. A plan name is unique only inside its namespace, so the same plan name can be advanced once per namespace.
+
+An unsupported `PIPELINE_ADVANCE_MODE` value logs a warning that names the variable and the accepted values, never the rejected value, and falls back to `pool`.
+
 ## Plugins (operator-supplied adapters)
 
 Each architectural seam has a built-in default. An operator can replace it by

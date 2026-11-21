@@ -18,6 +18,11 @@ Definitions, from a paired ruling and the human's ``human_action``:
   story without parking it.
 - ``false_park_rate`` is false parks over paired decisions. Unpaired rulings
   count toward ``shadow_count`` only.
+
+A person's park option choice (``park_option_chosen``) is not a ruling, so it
+never enters the pairing or the verdict. It is reported beside the verdict as
+``park_option_choices`` (every choice in the class) and
+``park_option_agreements`` (choices of the overlord's recommended option).
 """
 
 from __future__ import annotations
@@ -65,6 +70,7 @@ _NOT_GOVERNED = "not governed"
 _RULING_QUESTION = "failure triage"
 _ADJUDICATION_QUESTION = "high-risk merge adjudication"
 _RESOLUTION_QUESTION = "human resolution"
+_CHOICE_KIND = "park_option_chosen"
 _UNKNOWN_CLASS = "unknown"
 
 #: The ruling that lets a high-risk merge go ahead.
@@ -168,6 +174,30 @@ def _tier_label(decision_class: str) -> str:
     return _NOT_GOVERNED if tier is None else tier
 
 
+def _count_choices(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Count park option choices per park class.
+
+    A choice with no usable ``park_class`` is skipped: it cannot be placed in a
+    class, and nothing else in the record is needed to count it.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    for record in records:
+        if record.get("kind") != _CHOICE_KIND:
+            continue
+        name = record.get("park_class")
+        if not isinstance(name, str) or not name:
+            continue
+        count = counts.setdefault(name, _choice_tally())
+        count["park_option_choices"] += 1
+        if record.get("chose_recommended") is True:
+            count["park_option_agreements"] += 1
+    return counts
+
+
+def _choice_tally() -> dict[str, int]:
+    return {"park_option_choices": 0, "park_option_agreements": 0}
+
+
 def _verdict(tally: dict[str, int], limits: dict[str, Any], tier: str) -> dict[str, Any]:
     paired = tally["paired_count"]
     false_park = tally["false_park"]
@@ -207,8 +237,11 @@ def readiness(
         limits = thresholds()
     records = list(decisions)
     resolutions = _latest_resolutions(records)
+    choices = _count_choices(records)
     tallies: dict[str, dict[str, int]] = {name: _tally() for name in ALLOWED_ACTIONS}
     tallies.setdefault(HIGH_RISK_MERGE_CLASS, _tally())
+    for name in choices:
+        tallies.setdefault(name, _tally())
     for ruling in records:
         question = ruling.get("question")
         if question == _ADJUDICATION_QUESTION:
@@ -224,9 +257,12 @@ def readiness(
             continue
         tally["paired_count"] += 1
         _score(tally, ruling.get("action"), resolution.get("human_action"))
-    return {
-        name: _verdict(tally, limits, _tier_label(name)) for name, tally in tallies.items()
-    }
+    report = {}
+    for name, tally in tallies.items():
+        verdict = _verdict(tally, limits, _tier_label(name))
+        verdict.update(choices.get(name, _choice_tally()))
+        report[name] = verdict
+    return report
 
 
 def _paired_resolution(
@@ -278,7 +314,10 @@ def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
         f"thresholds: min paired {limits['min_paired']}, "
         f"max false-park {limits['max_false_park_percent']}%"
     )
-    header = f"{'plan':<24}{'class':<28}{'shadow':>7}{'paired':>8}{'agree':>7}{'f-proc':>7}{'f-park':>7}{'rate':>7}  eligible  tier"
+    header = (
+        f"{'plan':<24}{'class':<28}{'shadow':>7}{'paired':>8}{'agree':>7}{'f-proc':>7}{'f-park':>7}{'rate':>7}"
+        f"{'choices':>9}{'chose-rec':>10}  eligible  tier"
+    )
     print(header)
     for plan, classes in report.items():
         for name, cls in classes.items():
@@ -286,7 +325,8 @@ def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
             eligible = "yes" if cls["eligible"] else "no"
             print(
                 f"{plan:<24}{name:<28}{cls['shadow_count']:>7}{cls['paired_count']:>8}"
-                f"{cls['agree']:>7}{cls['false_proceed']:>7}{cls['false_park']:>7}{rate:>7}  "
+                f"{cls['agree']:>7}{cls['false_proceed']:>7}{cls['false_park']:>7}{rate:>7}"
+                f"{cls['park_option_choices']:>9}{cls['park_option_agreements']:>10}  "
                 f"{eligible:<8}  {cls['tier']}"
             )
 

@@ -78,6 +78,14 @@ def _close_fd(fd: int | None) -> None:
         pass
 
 
+def _log_fields(plan: str, namespace: str | None, **fields: object) -> dict:
+    """Return the log ``extra`` for one plan, with ``namespace`` only when set."""
+    extra: dict = {"plan": plan, **fields}
+    if namespace is not None:
+        extra["namespace"] = namespace
+    return extra
+
+
 class _ReadTimeout(Exception):
     """The worker produced no complete result line within the deadline."""
 
@@ -98,11 +106,18 @@ class _Child:
 
     # -- protocol ---------------------------------------------------------
 
-    def send(self, plan_name: str) -> None:
-        """Write one ``{"plan": ...}`` request line to the child."""
+    def send(self, plan_name: str, namespace: str | None = None) -> None:
+        """Write one request line to the child.
+
+        The line is ``{"plan": ...}`` for the default namespace (``namespace``
+        is ``None``) and carries ``"namespace"`` otherwise.
+        """
         if self._in_write is None:
             raise OSError("advance worker input is closed")
-        payload = json.dumps({"plan": plan_name}) + "\n"
+        request: dict[str, str] = {"plan": plan_name}
+        if namespace is not None:
+            request["namespace"] = namespace
+        payload = json.dumps(request) + "\n"
         os.write(self._in_write, payload.encode("utf-8"))
 
     def read_line(self, timeout_s: float) -> str | None:
@@ -280,26 +295,34 @@ class AdvanceWorkerPool:
         """Serve plans from the queue until the pool stops."""
         child: _Child | None = None
         while not self._stopping.is_set():
-            plan = self._queue.take(_TAKE_TIMEOUT_S)
-            if plan is None:
+            entry = self._queue.take_entry(_TAKE_TIMEOUT_S)
+            if entry is None:
                 continue
+            namespace, plan = entry
             try:
-                child = self._advance(child, plan)
+                child = self._advance(child, plan, namespace)
             except Exception as exc:  # noqa: BLE001 - a slot must never die
                 logger.warning(
                     "advance worker slot failed",
-                    extra={"plan": plan, "error": type(exc).__name__},
+                    extra=_log_fields(plan, namespace, error=type(exc).__name__),
                 )
                 if child is not None:
                     self._drop(child)
                 child = None
             finally:
-                self._queue.finish(plan)
+                # The default namespace keeps the one-argument call, so a queue
+                # that predates namespaces sees exactly the calls it always did.
+                if namespace is None:
+                    self._queue.finish(plan)
+                else:
+                    self._queue.finish(plan, namespace=namespace)
         if child is not None:
             self._drop(child)
 
-    def _advance(self, child: _Child | None, plan: str) -> _Child | None:
-        """Advance *plan* on *child*; return the child to reuse or ``None``."""
+    def _advance(
+        self, child: _Child | None, plan: str, namespace: str | None = None
+    ) -> _Child | None:
+        """Advance *plan* in *namespace* on *child*; return the child to reuse or ``None``."""
         from pipeline.parsers import _validate_key
 
         try:
@@ -309,27 +332,27 @@ class AdvanceWorkerPool:
             return child
 
         if child is not None and child.poll() is not None:
-            self._recycle(child, plan)
+            self._recycle(child, plan, namespace)
             child = None
         if child is None:
             child = self._spawn()
 
         timeout_s = self._plan_timeout_s()
         try:
-            child.send(plan)
+            child.send(plan, namespace=namespace)
             line = child.read_line(timeout_s)
         except _ReadTimeout:
-            return self._on_timeout(child, plan, timeout_s)
+            return self._on_timeout(child, plan, timeout_s, namespace)
         except OSError as exc:
             logger.warning(
                 "advance worker write failed",
-                extra={"plan": plan, "error": type(exc).__name__},
+                extra=_log_fields(plan, namespace, error=type(exc).__name__),
             )
-            self._recycle(child, plan)
+            self._recycle(child, plan, namespace)
             return None
 
         if line is None:
-            self._recycle(child, plan)
+            self._recycle(child, plan, namespace)
             return None
         try:
             payload = json.loads(line)
@@ -338,9 +361,9 @@ class AdvanceWorkerPool:
         if not isinstance(payload, dict):
             logger.warning(
                 "advance worker returned an unparsable result",
-                extra={"plan": plan},
+                extra=_log_fields(plan, namespace),
             )
-            self._recycle(child, plan)
+            self._recycle(child, plan, namespace)
             return None
 
         with self._lock:
@@ -373,11 +396,13 @@ class AdvanceWorkerPool:
         logger.info("advance worker spawned", extra={"pid": proc.pid})
         return child
 
-    def _on_timeout(self, child: _Child, plan: str, timeout_s: float) -> None:
+    def _on_timeout(
+        self, child: _Child, plan: str, timeout_s: float, namespace: str | None = None
+    ) -> None:
         """Terminate an over-deadline child, count it, and drop it."""
         logger.warning(
             "advance worker timed out",
-            extra={"plan": plan, "timeout_s": timeout_s},
+            extra=_log_fields(plan, namespace, timeout_s=timeout_s),
         )
         with self._lock:
             self._timeouts += 1
@@ -385,7 +410,7 @@ class AdvanceWorkerPool:
         child.terminate()
         child.close()
 
-    def _recycle(self, child: _Child, plan: str) -> None:
+    def _recycle(self, child: _Child, plan: str, namespace: str | None = None) -> None:
         """Reap a child that died or recycled itself, and drop it.
 
         Exit code 0 is the worker's own recycle signal; anything else is a
@@ -398,12 +423,12 @@ class AdvanceWorkerPool:
         if exit_code == 0:
             logger.info(
                 "advance worker recycled",
-                extra={"plan": plan, "exit_code": exit_code},
+                extra=_log_fields(plan, namespace, exit_code=exit_code),
             )
         else:
             logger.warning(
                 "advance worker exited unexpectedly",
-                extra={"plan": plan, "exit_code": exit_code},
+                extra=_log_fields(plan, namespace, exit_code=exit_code),
             )
         child.close()
 

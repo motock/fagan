@@ -71,7 +71,13 @@ from . import persistence
 from .actor import current_namespace
 from .live_ref import LiveRef as _ServerRef
 from .notification_channels import as_sender
-from .notification_routing import safe_load_notification_config
+from .notification_routing import (
+    NotificationConfigError,
+    namespace_notification_config,
+    parse_layer_routes,
+    safe_load_notification_config,
+)
+from .store_namespaces import namespaces_with_plans
 from .store_records import LEGACY_OUTBOX_CHANNEL
 
 logger = logging.getLogger(__name__)
@@ -154,38 +160,66 @@ def _spool_legacy(plan: str, evt_name: str | None, record: dict[str, Any]) -> No
     _enqueue(plan, LEGACY_OUTBOX_CHANNEL, record)
 
 
-def _plan_owner(plan: str) -> str:
-    """Return the plan manifest's ``owner``, or ``""`` when it is unknown.
+def _read_manifest(plan: str) -> dict[str, Any] | None:
+    """Return the plan manifest, or ``None`` when it cannot be read.
 
-    Read once per spool call so a route can be owner-scoped. Any failure to
-    read the manifest (missing file, bad JSON, unreadable) means "no owner":
-    the plan then matches only routes without an ``owner`` glob, which is the
-    deny-by-default direction. Only the error type is logged -- a manifest can
-    hold paths, so nothing from the failure or the manifest leaks into the log.
+    Read once per spool call so a route can be owner-scoped and the plan's
+    team layers consulted. Any failure to read the manifest (missing file, bad
+    JSON, unreadable) means "unknown": the plan then matches only routes
+    without an ``owner`` glob and no layer routes, which is the deny-by-default
+    direction. Only the error type is logged -- a manifest can hold paths, so
+    nothing from the failure or the manifest leaks into the log.
     """
     try:
         # Read through the process's SHARED store: a second store connection
         # (``store.build_store()``) would contend for the write lock the caller
         # may be holding while it enqueues its outbox entry.
         manifest = _store.records().get_manifest(current_namespace(), plan)
-    except Exception as exc:  # noqa: BLE001 - an unreadable manifest means "no owner"
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest means "unknown"
         logger.warning(
             "Could not read plan owner for notification routing: error_type=%s",
             type(exc).__name__,
         )
-        return ""
-    owner = manifest.get("owner") if isinstance(manifest, dict) else None
-    return owner if isinstance(owner, str) else ""
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def _layer_routes_for(manifest: dict[str, Any] | None):
+    """Return a ``read_layer_routes`` callable for the plan's settings context.
+
+    An unreadable manifest yields no layer routes (deny by default). The
+    namespace is the one the manifest was read from.
+    """
+
+    def read(namespace: str) -> Any:
+        if manifest is None:
+            return None
+        # Lazy: pipeline.ci imports the settings resolver (import cycle).
+        from .ci import context_from_manifest
+        from .settings_store import effective_setting
+
+        context = context_from_manifest(manifest)
+        org = manifest.get("org")
+        return effective_setting(
+            "notification_routes",
+            namespace=namespace,
+            team=context.team,
+            repo=context.repo,
+            org=org if isinstance(org, str) else "",
+        )["value"]
+
+    return read
 
 
 def _spool_instances(plan: str, evt_name: str | None, record: dict[str, Any]) -> None:
     """Append ``record`` to the queue of each instance the config routes it to.
 
-    A config file's routes are the allowlist for these queues (the legacy
+    A config file's routes, merged with the plan's resolved team/org/repo
+    ``notification_routes``, are the allowlist for these queues (the legacy
     ``PIPELINE_NOTIFY_OUTBOX_EVENTS`` is not consulted), and the file's
-    presence is the opt-in.  No file means nothing here.  One instance's write
-    failure is logged (type only) and never stops the others or the legacy
-    write.
+    presence (or a layer value) is the opt-in.  Neither means nothing here.
+    One instance's write failure is logged (type only) and never stops the
+    others or the legacy write.
     """
     if "PYTEST_CURRENT_TEST" in os.environ:
         _default_plans = (Path.home() / ".claude" / "plans").resolve()
@@ -195,10 +229,18 @@ def _spool_instances(plan: str, evt_name: str | None, record: dict[str, Any]) ->
             )
             return
     try:
-        config = safe_load_notification_config()
+        manifest = _read_manifest(plan)
+        try:
+            config = namespace_notification_config(
+                _layer_routes_for(manifest), current_namespace()
+            )
+        except NotificationConfigError as exc:
+            logger.error("notification config invalid; delivering nothing: error=%s", exc)
+            return
         if config is None:
             return
-        owner = _plan_owner(plan)
+        owner = manifest.get("owner") if manifest else None
+        owner = owner if isinstance(owner, str) else ""
         for name in config.resolve(plan, evt_name, owner):
             try:
                 _enqueue(plan, name, record)
@@ -521,24 +563,63 @@ def drain_outbox(plan_name: str, sender) -> int:
     return total
 
 
-def drain_channel_outboxes(plan_name: str = ALL_PLANS) -> dict[str, int]:
-    """Drain every configured instance's queue through that instance.
+def _layer_instances(namespace: str) -> dict[str, Any]:
+    """Return the instances ``namespace``'s layer ``notification_routes`` define.
 
-    Returns delivered counts keyed by instance name.  A queue belonging to an
-    instance no longer in the config is left untouched (not drained, not
-    acknowledged, not deleted).  No config file means no instances, so nothing
-    happens.  Never raises.
+    An instance name two layers define with different settings is dropped and
+    logged (namespace and name only): sending through the wrong team's
+    credential is worse than not sending. An invalid layer value is logged by
+    type and skipped; the namespace's other layers still apply.
     """
+    found: dict[str, tuple[Any, Any]] = {}
+    conflicts: set[str] = set()
+    for settings_record in _store.records().list_settings(namespace):
+        values = settings_record.get("values")
+        value = values.get("notification_routes") if isinstance(values, dict) else None
+        if value is None or value == {}:
+            continue
+        try:
+            parsed = parse_layer_routes(value, namespace)
+        except Exception as exc:  # noqa: BLE001 - one bad layer must not stop the rest
+            logger.error(
+                "Invalid layer notification routes; skipping layer: namespace=%s error_type=%s",
+                namespace,
+                type(exc).__name__,
+            )
+            continue
+        raw_instances = value.get("instances") or {}
+        for name, channel in parsed.instances.items():
+            if name not in found:
+                found[name] = (channel, raw_instances.get(name))
+            elif found[name][1] != raw_instances.get(name):
+                conflicts.add(name)
+    for name in sorted(conflicts):
+        logger.warning(
+            "Layer instance defined with differing settings; not delivering: "
+            "namespace=%s instance=%s",
+            namespace,
+            name,
+        )
+    return {name: pair[0] for name, pair in found.items() if name not in conflicts}
+
+
+def _drain_namespace(plan_name: str, namespace: str) -> dict[str, int]:
+    """Drain ``namespace``'s instance queues, under that namespace."""
+    from .actor import bind_namespace
+
     delivered: dict[str, int] = {}
-    try:
-        config = safe_load_notification_config()
-        if config is None:
+    with bind_namespace(namespace):
+        deployment = safe_load_notification_config()
+        # A deployment instance is never shadowed by a layer instance.
+        instances = {**_layer_instances(namespace)}
+        instances.update(deployment.instances if deployment is not None else {})
+        if deployment is None and not instances:
             return delivered
         if plan_name == ALL_PLANS:
             plans_by_channel = _queues_by_channel()
         else:
-            plans_by_channel = {name: [plan_name] for name in config.instances}
-        for name, channel in config.instances.items():
+            plans_by_channel = {name: [plan_name] for name in instances}
+        for name, channel in instances.items():
             count = 0
             try:
                 sender = as_sender(channel)
@@ -551,9 +632,40 @@ def drain_channel_outboxes(plan_name: str = ALL_PLANS) -> dict[str, int]:
                     type(exc).__name__,
                 )
             delivered[name] = count
+    return delivered
+
+
+def drain_channel_outboxes(plan_name: str = ALL_PLANS) -> dict[str, int]:
+    """Drain every namespace's instance queues through their instances.
+
+    The caller's namespace and every namespace holding a plan are drained,
+    each under its own binding with the deployment
+    instances plus the instances its layers' ``notification_routes`` define.
+    Returns delivered counts keyed by instance name, summed when a name appears
+    in several namespaces.  A queue belonging to an instance no longer in the
+    config is left untouched (not drained, not acknowledged, not deleted).  No
+    config file and no layer instances means nothing happens.  One namespace's
+    failure is logged (type only) and never stops another.  Never raises.
+    """
+    delivered: dict[str, int] = {}
+    try:
+        # The caller's own namespace is always drained, plans or not, as before.
+        namespaces = sorted({current_namespace(), *namespaces_with_plans(_store.records())})
     except Exception as exc:  # noqa: BLE001 - the drain never raises into the tick
         logger.error(
             "Failed to drain channel outboxes: error_type=%s", type(exc).__name__
         )
         return {}
+    for namespace in namespaces:
+        try:
+            counts = _drain_namespace(plan_name, namespace)
+        except Exception as exc:  # noqa: BLE001 - one namespace must not block another
+            logger.error(
+                "Failed to drain namespace channel outboxes: namespace=%s error_type=%s",
+                namespace,
+                type(exc).__name__,
+            )
+            continue
+        for name, count in counts.items():
+            delivered[name] = delivered.get(name, 0) + count
     return delivered

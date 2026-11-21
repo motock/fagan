@@ -6,7 +6,8 @@ resolved through ``app.credentials`` at send time; neither value, nor the
 message body, ever reaches a log record. The URL is validated after
 resolution and before any socket opens: https only, no userinfo or fragment,
 no IP-literal or ``localhost`` host, and every resolved address must be
-publicly routable. Redirects are never followed.
+publicly routable. The connection is pinned to the validated address (the
+shared ``app.outbound_guard``) and redirects are never followed.
 """
 
 from __future__ import annotations
@@ -17,17 +18,22 @@ import ipaddress
 import json
 import logging
 import math
-import socket
-import ssl
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
+
 from app.credentials import CredentialRef, resolve
+from app.outbound_guard import (
+    OutboundRefused,
+    is_internal_target,
+    pinned_client,
+    require_https_url,
+    resolve_public_address,
+)
 from pipeline.notification_channels import (
     ChannelConfigError,
     DeliveryResult,
@@ -46,21 +52,9 @@ _MAX_TIMEOUT = 30
 _DEFAULT_TIMEOUT = 10
 
 
-class _RedirectBlocked(Exception):
-    """A 30x response was received; it is never followed."""
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise _RedirectBlocked
-
-
-def _build_opener() -> urllib.request.OpenerDirector:
-    """The HTTP boundary: verifying TLS context, redirects raise."""
-    return urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
-        _NoRedirectHandler(),
-    )
+def _client(url: str, address: str, timeout: float) -> httpx.Client:
+    """The HTTP boundary: connects to the validated ``address``, no redirects."""
+    return pinned_client(url, address, timeout)
 
 
 def _reveal(ref_name: str) -> str:
@@ -69,50 +63,21 @@ def _reveal(ref_name: str) -> str:
     return _secret_text(resolve(CredentialRef("notification", ref_name))).strip()
 
 
-def _is_public_address(text: str) -> bool:
+def _validated_address(url: str) -> str | None:
+    """Apply the URL rules and return the address to pin; None refuses."""
     try:
-        addr = ipaddress.ip_address(text.split("%", 1)[0])
-    except ValueError:
-        return False
-    return not (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_reserved
-        or addr.is_unspecified
-    )
-
-
-def _url_is_allowed(url: str) -> bool:
-    """Apply the URL rules; any doubt refuses."""
-    if not url or any(c.isspace() or ord(c) < 32 for c in url):
-        return False
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname
-        parts.port  # noqa: B018 - raises ValueError on a malformed port
-    except ValueError:
-        return False
-    if parts.scheme != "https" or not host:
-        return False
-    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
-        return False
-    if parts.fragment or "#" in url:
-        return False
-    if host.lower().rstrip(".") == "localhost":
-        return False
+        require_https_url(url)
+        host = (urlsplit(url).hostname or "").casefold().rstrip(".")
+    except (OutboundRefused, ValueError):
+        return None
+    if host == "localhost" or is_internal_target(url):
+        return None
     try:
         ipaddress.ip_address(host)
-        return False  # IP literal
+        return None  # IP literal
     except ValueError:
         pass
-    try:
-        infos = socket.getaddrinfo(host, parts.port or 443, proto=socket.IPPROTO_TCP)
-    except OSError:
-        return False
-    addresses = [info[4][0] for info in infos]
-    return bool(addresses) and all(_is_public_address(a) for a in addresses)
+    return resolve_public_address(url)
 
 
 def _retry_after(headers: Any) -> float | None:
@@ -235,39 +200,32 @@ class WebhookChannelType:
         if not url or not secret:
             log.error("webhook channel credential unset: channel=%s", self.name)
             return DeliveryResult(DeliveryStatus.REJECTED, reason="credential_unavailable")
-        if not _url_is_allowed(url):
+        address = _validated_address(url)
+        if address is None:
             log.error("webhook channel refused url: channel=%s", self.name)
             return DeliveryResult(DeliveryStatus.REJECTED, reason="url_refused")
 
         timestamp = str(int(time.time()))
-        request = urllib.request.Request(
-            url,
-            data=body.encode(),
-            headers={
-                "Content-Type": "application/json",
-                "X-Fagan-Timestamp": timestamp,
-                "X-Fagan-Signature": sign(secret, timestamp, body),
-                "User-Agent": "fagan-notify/1",
-            },
-            method="POST",
-        )
+        headers = {
+            "Content-Type": "application/json",
+            "X-Fagan-Timestamp": timestamp,
+            "X-Fagan-Signature": sign(secret, timestamp, body),
+            "User-Agent": "fagan-notify/1",
+        }
         try:
-            with _build_opener().open(request, timeout=self._timeout) as response:
-                status = response.status
-        except urllib.error.HTTPError as exc:
-            return self._http_status(exc.code, exc.headers, exc)
-        except _RedirectBlocked as exc:
-            return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="redirect"))
-        except Exception as exc:  # noqa: BLE001 - timeout/DNS/connection: retry later
+            with _client(url, address, self._timeout) as client:
+                response = client.post(url, content=body.encode(), headers=headers)
+        except Exception as exc:  # noqa: BLE001 - timeout/connection: retry later
             return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY))
-        return self._http_status(status, None, None)
+        return self._http_status(response.status_code, response.headers)
 
-    def _http_status(self, status: int, headers: Any, exc: Exception | None) -> DeliveryResult:
+    def _http_status(self, status: int, headers: Any) -> DeliveryResult:
         if 200 <= status < 300:
             log.info("webhook channel sent: channel=%s", self.name)
             return DeliveryResult(DeliveryStatus.DELIVERED)
-        if exc is None:
-            exc = RuntimeError()
+        exc = RuntimeError()
+        if 300 <= status < 400:
+            return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="redirect"))
         if status in (408, 429):
             return self._failed(
                 exc, DeliveryResult(DeliveryStatus.RETRY, retry_after_seconds=_retry_after(headers))

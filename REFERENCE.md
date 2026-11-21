@@ -824,12 +824,15 @@ server). Settings (a closed set; unknown keys are refused, and there are no
 `timeout` (optional, 1 to 30 seconds, default 10). `url_ref` and `secret_ref`
 are credential references resolved at send time; the URL is a credential.
 
-The resolved URL must be `https`, carry no userinfo or fragment, and name a
-host that is neither an IP literal nor `localhost`; the host is resolved and
-refused if ANY address is private, loopback, link-local, multicast, reserved
-or unspecified. A refused URL is rejected, not retried. Redirects are never
-followed. Status mapping: 2xx delivered; 408, 429 and 5xx retried (honouring
-`Retry-After`); other 4xx rejected.
+The resolved URL is checked by the same outbound guard as model endpoints and
+OIDC: it must be `https`, carry no userinfo or fragment, and name a host that
+is neither an IP literal nor `localhost`. Only globally routable addresses are
+allowed (a host resolving to any private, loopback, link-local, shared
+`100.64.0.0/10` or tunnelled-IPv4 address is refused), and the connection is
+pinned to the validated address, so a name that re-resolves inward at connect
+time is never reached. A refused URL is rejected (`url_refused`), not retried.
+Redirects are never followed: a 3xx is rejected. Status mapping: 2xx delivered;
+408, 429 and 5xx retried (honouring `Retry-After`); other 4xx rejected.
 
 The body is compact JSON with sorted keys: `version` (1), `event`, `plan`,
 `story_key`, `subject`, `body`, `link` and `sent_at` (UTC ISO-8601). Headers:

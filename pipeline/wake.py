@@ -18,12 +18,13 @@ the marker, so concurrent passes never deliver one wake twice.
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import UTC, datetime
 
+from app.credentials import is_default_namespace
 from pipeline.actor import current_namespace
 from pipeline.namespace_names import is_segmented_namespace
-from pipeline.store_records import DEFAULT_NAMESPACE
 
 from .host_state import build_host_state
 from .parsers import _validate_key
@@ -39,6 +40,14 @@ WAKE_DIR_NAME = ".wake"
 #: (``pipeline.namespace_names.SEGMENT``) nor a plan name
 #: (``pipeline.parsers._KEY_RE``) can contain ``@``, so the split is unambiguous.
 _SEPARATOR = "@"
+
+#: The only shape a marker file name may take: an optional ``<org>@<team>@``
+#: prefix, then a plan name. The plan part may not start with ``.`` (that is
+#: the temp and claimed-file namespace) and may not contain ``..``. No ``/``,
+#: ``\\``, NUL or other character is allowed, so the name is a bare file name.
+_MARKER_NAME = re.compile(
+    r"(?!.*\.\.)(?:[a-z0-9-]+@[a-z0-9-]+@)?[A-Za-z0-9_-][A-Za-z0-9._-]*"
+)
 
 
 def _wake_dir():
@@ -78,6 +87,22 @@ def _split_marker(marker: str) -> tuple[str, str] | None:
     return f"{org}{_SEPARATOR}{team}{_SEPARATOR}", plan_name
 
 
+def _is_safe_marker_destination(marker: str, destination: str, wake_dir) -> bool:
+    """True when *marker* is a bare name that lands directly inside *wake_dir*.
+
+    The marker is built from the bound namespace and the plan name, so it is
+    re-checked here, in the function that writes it, rather than trusted from
+    the validators above it.
+    """
+    if _MARKER_NAME.fullmatch(marker) is None:
+        return False
+    if os.path.basename(marker) != marker:
+        return False
+    return os.path.dirname(os.path.normpath(destination)) == os.path.normpath(
+        str(wake_dir)
+    )
+
+
 def request_wake(plan_name: str, reason: str) -> None:
     """Record that *plan_name* should be reconciled on the next scan.
 
@@ -102,7 +127,7 @@ def request_wake(plan_name: str, reason: str) -> None:
         )
         return
     namespace = current_namespace()
-    if namespace == DEFAULT_NAMESPACE:
+    if is_default_namespace(namespace):
         marker = plan_name
     else:
         prefix = _scope_prefix(namespace)
@@ -115,6 +140,13 @@ def request_wake(plan_name: str, reason: str) -> None:
         marker = f"{prefix}{plan_name}"
     try:
         wake_dir = _wake_dir()
+        destination = os.path.join(str(wake_dir), marker)
+        if not _is_safe_marker_destination(marker, destination, wake_dir):
+            logger.warning(
+                "wake request rejected: unsafe marker name",
+                extra={"reason": reason},
+            )
+            return
         wake_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({"reason": reason, "ts": datetime.now(UTC).isoformat()})
         fd, tmp_name = tempfile.mkstemp(
@@ -123,7 +155,7 @@ def request_wake(plan_name: str, reason: str) -> None:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
-            os.replace(tmp_name, wake_dir / marker)
+            os.replace(tmp_name, destination)
         except BaseException:
             try:
                 os.unlink(tmp_name)
@@ -157,7 +189,7 @@ def claim_wakes() -> list[str]:
     fragment. A missing wake directory simply means nothing is pending.
     """
     namespace = current_namespace()
-    if namespace == DEFAULT_NAMESPACE:
+    if is_default_namespace(namespace):
         prefix = None
     else:
         prefix = _scope_prefix(namespace)

@@ -319,3 +319,51 @@ def test_both_scope_variables_scan_only_the_default_and_warn_once(
     assert scans == []
     warnings = [r for r in caplog.records if r.name == _SCAN_LOGGER and r.levelno == logging.WARNING]
     assert len(warnings) == 1
+
+
+# --------------------------------------------------------------------------- #
+# request_wake: the final marker name is validated before any file is written.
+# A bound namespace or plan name that would yield a path-like marker is refused.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["..@x@", "a..@x@", ".hid@x@", "a/b@x@"],
+)
+def test_request_wake_refuses_a_path_like_namespaced_marker(host_root, monkeypatch, prefix):
+    monkeypatch.setattr(wake, "_scope_prefix", lambda namespace: prefix)
+
+    with bind_namespace("acme/web"):
+        wake.request_wake("alpha", "approved")
+
+    assert not (host_root / ".wake").exists() or _remaining(host_root) == []
+
+
+@pytest.mark.parametrize("plan_name", ["..", ".hidden", "a/b", "a..b"])
+def test_request_wake_refuses_a_path_like_plan_name_past_key_validation(
+    host_root, monkeypatch, plan_name
+):
+    monkeypatch.setattr(wake, "_validate_key", lambda name: None)
+
+    with bind_namespace("acme/web"):
+        wake.request_wake(plan_name, "approved")
+
+    assert not (host_root / ".wake").exists() or _remaining(host_root) == []
+
+
+def test_request_wake_refusal_logs_without_the_marker_name(host_root, monkeypatch, caplog):
+    monkeypatch.setattr(wake, "_scope_prefix", lambda namespace: ".hid@x@")
+
+    with caplog.at_level(logging.WARNING, logger="pipeline.wake"), bind_namespace("acme/web"):
+        wake.request_wake("alpha", "approved")
+
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "hid@x@" not in messages
+    assert "alpha" not in messages
+
+
+def test_request_wake_still_writes_a_valid_dotted_default_plan(host_root):
+    wake.request_wake("v1.2.3", "approved")
+
+    assert (host_root / ".wake" / "v1.2.3").is_file()

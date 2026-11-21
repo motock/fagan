@@ -19,6 +19,8 @@ import stat
 import time
 from datetime import UTC, datetime
 
+from app.credentials import is_default_namespace
+
 from . import (
     audit_anchor,
     ci_rollup,
@@ -33,7 +35,6 @@ from .events import make_event
 from .forge import CIStatusUnreadable
 from .live_ref import LiveRef
 from .persistence import _notify_user
-from .store_records import DEFAULT_NAMESPACE
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def _event_namespace() -> str | None:
     only the default namespace publishes exactly the events it always did.
     """
     namespace = current_namespace()
-    return None if namespace == DEFAULT_NAMESPACE else namespace
+    return None if is_default_namespace(namespace) else namespace
 
 
 def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:

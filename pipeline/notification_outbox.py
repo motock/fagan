@@ -70,6 +70,7 @@ from typing import Any
 from . import persistence
 from .actor import current_namespace
 from .live_ref import LiveRef as _ServerRef
+from .notification_audience import members_for
 from .notification_channels import as_sender
 from .notification_routing import (
     NotificationConfigError,
@@ -241,7 +242,8 @@ def _spool_instances(plan: str, evt_name: str | None, record: dict[str, Any]) ->
             return
         owner = manifest.get("owner") if manifest else None
         owner = owner if isinstance(owner, str) else ""
-        for name in config.resolve(plan, evt_name, owner):
+        members = members_for(current_namespace(), plan, owner)
+        for name in config.resolve(plan, evt_name, owner, members):
             try:
                 _enqueue(plan, name, record)
             except Exception as exc:  # noqa: BLE001 - isolate one instance's failure

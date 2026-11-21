@@ -13,6 +13,7 @@ import importlib
 from typing import Any
 
 from fastapi import Header, HTTPException
+from fastapi.responses import JSONResponse
 
 from app.auth import refuse_chat_origin
 from app.dashboard_models import StoryPatchBody, StoryStatusBody
@@ -141,4 +142,57 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
             status_code=404,
             detail=result.get("error", "Unknown error when marking story as done"),
         )
+    return result
+
+
+def _parked_story_or_404(plan_name: str, story_key: str) -> dict[str, Any]:
+    """The story dict, or a 404; a malformed key is indistinguishable from a missing one."""
+    from pipeline import parsers
+
+    try:
+        parsers._validate_key(plan_name)
+        parsers._validate_key(story_key)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="not found") from None
+    manifest = _service.get_manifest_or_none(plan_name)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    story = (manifest.get("stories") or {}).get(story_key)
+    if not isinstance(story, dict):
+        raise HTTPException(status_code=404, detail=f"No story '{story_key}' in plan '{plan_name}'")
+    return story
+
+
+def get_park_options_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """The options prepared for a parked story, or ``preparing: true`` while none exist."""
+    from pipeline.park_option_choice import latest_options_record
+    from pipeline.park_options import _digest
+
+    story = _parked_story_or_404(plan_name, story_key)
+    record = latest_options_record(plan_name, story_key)
+    if record is None:
+        return {"ok": True, "options": [], "preparing": True}
+    return {
+        "ok": True,
+        "options": record.get("options") or [],
+        "recommended": record.get("recommended"),
+        "stale": record.get("parked_reason_digest") != _digest(story.get("parked_reason")),
+        "park_class": record.get("park_class"),
+    }
+
+
+def choose_park_option_route(plan_name: str, story_key: str, option_id: str) -> Any:
+    """Carry out the chosen option. Refusals are 409; the caller must hold ``decision:answer``."""
+    from pipeline.authorization import authorize
+    from pipeline.park_option_choice import choose_park_option
+
+    _parked_story_or_404(plan_name, story_key)
+    if authorize("decision:answer", plan_name=plan_name) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"not authorized: decision:answer on plan {plan_name!r}",
+        )
+    result = choose_park_option(plan_name, story_key, option_id)
+    if not result.get("ok"):
+        return JSONResponse(status_code=409, content={"ok": False, "error": result["error"]})
     return result

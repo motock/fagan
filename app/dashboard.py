@@ -83,7 +83,9 @@ from app.dashboard_routes_plan import (
 )
 from app.dashboard_routes_story import (
     approve_merge_route,
+    choose_park_option_route,
     dispatch_story_route,
+    get_park_options_route,
     interrupt_story_route,
     mark_story_done_route,
     patch_story_route,
@@ -961,6 +963,8 @@ app.post("/api/plans/{plan_name}/stories/{story_key}/patch")(patch_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/review")(review_story_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")(approve_merge_route)
 app.post("/api/plans/{plan_name}/stories/{story_key}/done")(mark_story_done_route)
+app.get("/api/plans/{plan_name}/stories/{story_key}/park-options", responses={200: {"model": dashboard_schemas.ParkOptionsResponse}})(get_park_options_route)
+app.post("/api/plans/{plan_name}/stories/{story_key}/park-options/{option_id}/choose", responses={200: {"model": dashboard_schemas.ChooseParkOptionResponse}})(choose_park_option_route)
 app.post("/api/plans/{plan_name}/save", responses={200: {"model": dashboard_schemas.SavePlanResponse}})(save_plan)
 app.post("/api/decompose", responses={200: {"model": dashboard_schemas.DecomposeResponse}})(decompose_route)
 app.post("/api/plans/{plan_name}/ingest", responses={200: {"model": dashboard_schemas.IngestPlanResponse}})(ingest_plan)

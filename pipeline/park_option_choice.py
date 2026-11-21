@@ -96,6 +96,7 @@ def choose_park_option(plan_name: str, story_key: str, option_id: str) -> dict:
             "action": action,
             "recommended": recommended,
             "chose_recommended": option_id == recommended,
+            "park_class": record.get("park_class"),
             "actor": actor,
             "decided_at": datetime.now(UTC).isoformat(),
         },

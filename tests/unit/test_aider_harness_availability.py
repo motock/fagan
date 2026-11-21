@@ -29,10 +29,23 @@ import pytest
 from app import backend as b
 from app import harness
 from app.harness import HarnessRequest, get_harness
+from pipeline.execution import _AGENT_SECRET_ENV
 from tests.unit._backend_helpers import _FakePopenResult
 
 ENV_VAR = "PIPELINE_AGENT_HARNESS"
 FAKE_AIDER = "/tmp/fake-aider/aider"
+
+
+@pytest.fixture(autouse=True)
+def _no_agent_secrets_in_host_env(monkeypatch):
+    """Run every test on a host environment without agent secrets.
+
+    The merge contract is asserted against os.environ. The scheduler exports
+    secrets such as GH_TOKEN into the gate's environment; removing them from
+    the child env is spawn_harness's job, not the test's.
+    """
+    for name in _AGENT_SECRET_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _dispatch(driver, tmp_path):
@@ -99,6 +112,24 @@ def test_dispatch_spawns_aider_when_available(tmp_path, monkeypatch):
     # provider keys supplied by a future caller are covered too).
     command = get_harness("aider").build_agent_command(_aider_request(tmp_path))
     assert captured["env"] == {**os.environ, **command.env}
+
+
+def test_should_not_pass_gh_token_to_the_aider_child(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV_VAR, "aider")
+    monkeypatch.setattr(shutil, "which", lambda name: FAKE_AIDER)
+    monkeypatch.setenv("GH_TOKEN", "test-token-not-real")
+    captured = {}
+
+    def fake_popen(cmd, cwd, env, stdout, stderr):
+        captured["env"] = env
+        return _FakePopenResult(306)
+
+    monkeypatch.setattr(b.subprocess, "Popen", fake_popen)
+
+    _dispatch(b.ClaudeCliDriver(), tmp_path)
+
+    assert "GH_TOKEN" not in captured["env"]
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_dispatch_fails_closed_when_unavailable(tmp_path, monkeypatch):

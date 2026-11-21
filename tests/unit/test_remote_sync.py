@@ -18,6 +18,7 @@ no conditionals, one behavioral outcome per test.
 """
 
 import inspect
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -256,8 +257,26 @@ def test_ssh_run_uses_batch_mode_ssh():
     assert "BatchMode=yes" in source
 
 
-def test_ssh_run_raises_called_process_error_for_unreachable_host():
-    with pytest.raises(subprocess.CalledProcessError):
+def test_ssh_run_raises_called_process_error_for_unreachable_host(tmp_path, monkeypatch):
+    # A stub ssh that fails the way ssh does for a connection error (exit 255),
+    # so the test neither needs an ssh binary nor depends on DNS.
+    stub = tmp_path / "ssh"
+    stub.write_text("#!/bin/sh\nexit 255\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        remote_sync._ssh_run("remote-sync-no-such-host.invalid", "true")
+
+    assert excinfo.value.returncode == 255
+
+
+def test_should_propagate_file_not_found_when_ssh_is_missing(tmp_path, monkeypatch):
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    with pytest.raises(FileNotFoundError):
         remote_sync._ssh_run("remote-sync-no-such-host.invalid", "true")
 
 

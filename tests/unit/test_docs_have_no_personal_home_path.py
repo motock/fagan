@@ -18,9 +18,25 @@ SCAN_SUFFIXES = (".md", ".json")
 REPO_ROOT_KEY = '"repo_root"'
 
 # Built by concatenation so this guard file never contains the literal it bans.
-HOME = str(Path.home())
 LITERAL = "/Users/" + "jesse" + "carroll"
-FORBIDDEN = (HOME, LITERAL)
+PERSONAL_HOME_PREFIXES = ("/Users/", "/home/")
+
+
+def _forbidden_tokens(home: str) -> tuple[str, ...]:
+    """Tokens a scanned line must not contain.
+
+    The machine's own home is banned only when it is a personal home. A service
+    account home such as /var/lib/pipeline is the documented state volume, so
+    the deploy docs legitimately name it.
+    """
+    is_personal = any(
+        home.startswith(prefix) and len(home) > len(prefix)
+        for prefix in PERSONAL_HOME_PREFIXES
+    )
+    return (home, LITERAL) if is_personal else (LITERAL,)
+
+
+FORBIDDEN = _forbidden_tokens(str(Path.home()))
 
 
 def _iter_scanned_files() -> list[Path]:
@@ -51,6 +67,27 @@ def test_no_personal_home_path_in_archived_docs() -> None:
         "personal home path leaked into archived docs (use ~ instead):\n"
         + "\n".join(offenders)
     )
+
+
+def test_should_forbid_a_macos_personal_home() -> None:
+    assert "/Users/someone" in _forbidden_tokens("/Users/someone")
+
+
+def test_should_forbid_a_linux_personal_home() -> None:
+    assert "/home/someone" in _forbidden_tokens("/home/someone")
+
+
+def test_should_not_forbid_a_service_account_home() -> None:
+    assert "/var/lib/pipeline" not in _forbidden_tokens("/var/lib/pipeline")
+
+
+def test_should_not_forbid_a_bare_home_root() -> None:
+    assert "/home/" not in _forbidden_tokens("/home/")
+    assert "/" not in _forbidden_tokens("/")
+
+
+def test_should_always_forbid_the_maintainer_literal() -> None:
+    assert LITERAL in _forbidden_tokens("/var/lib/pipeline")
 
 
 def _plan_json_files() -> list[Path]:

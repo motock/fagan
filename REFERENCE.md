@@ -2028,6 +2028,15 @@ the scope gate will park the story.
 
 ---
 
+## Park options
+
+When failure triage is enabled (`PIPELINE_AUTO_TRIAGE`), each scheduler tick prepares options for at most one parked story that has none for its current `parked_reason`. The overlord is asked for exactly `park_option_count` options, one marked recommended. Nothing is executed; a person chooses.
+
+- **Menu:** the actions the story's park class allows (`ALLOWED_ACTIONS` in `pipeline/triage_park_classes.py`) except `park_for_human`, plus `retry` (clear the retry counters and re-dispatch, as `python -m pipeline.unpark` does). Options outside the menu are dropped; a repeated action/title pair is kept once.
+- **Fallback:** if fewer than two valid options survive or the overlord call fails, the options are `retry` plus the first other menu action, `retry` is recommended, and the rationale is "overlord unavailable; default options". A missing or invalid `RECOMMENDED` recommends the first option.
+- **Setting:** `park_option_count`, an int from 2 to 5 (safe value 3), settable on the org, team and team/repo layers. It has no environment variable.
+- **Record:** appended to the plan's decisions as `{"kind": "park_options", "story_key", "park_class", "parked_reason_digest", "options": [{"id", "action", "title", "rationale", "diagnosis"}], "recommended", "decided_by": "overlord", "decided_at"}`. Titles are cut at 120 characters and rationales at 500; `diagnosis` is set only for `rebrief`. The record holds no prompt, evidence or brief.
+
 ## Triage action: `amend_scope`
 
 When an agent reports a scope conflict (`scope_conflict` recorded on the

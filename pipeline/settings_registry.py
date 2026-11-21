@@ -130,13 +130,18 @@ class SettingKey:
     legacy_env: str
     tighter: Callable[[Any, Any], Any] | None = None
     choices: tuple[str, ...] = ()
+    # Inclusive (low, high) limits for an int key; None keeps the positive-int rule.
+    bounds: tuple[int, int] | None = None
 
     def accepts(self, value: Any) -> bool:
         if self.type == "bool":
             return isinstance(value, bool)
         if self.type == "int":
             # Timeouts and worker counts are positive; 0 and negatives are invalid.
-            return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+            if not isinstance(value, int) or isinstance(value, bool):
+                return False
+            low, high = self.bounds or (1, value)
+            return low <= value <= high
         if self.type == "routing":
             return _accepts_role_routing(value)
         if self.type == "notification_routes":
@@ -266,6 +271,15 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             legacy_env="",
             tighter=_shadow_is_tighter,
             choices=("shadow", "execute"),
+        ),
+        SettingKey(
+            name="park_option_count",
+            type="int",
+            kind="pref",
+            safe_value=3,
+            allowed_layers=LAYERS[1:],
+            legacy_env="",
+            bounds=(2, 5),
         ),
     )
 }

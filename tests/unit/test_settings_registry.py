@@ -21,6 +21,7 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "autonomy",
         "auto_merge",
         "triage_mode",
+        "park_option_count",
     }
 
 
@@ -83,6 +84,7 @@ def test_legacy_env_names_are_the_plan_names():
         "autonomy": "",
         "auto_merge": "",
         "triage_mode": "",
+        "park_option_count": "",
     }
 
 

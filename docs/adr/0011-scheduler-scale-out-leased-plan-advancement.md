@@ -105,6 +105,8 @@ S1 is specified in `docs/plans/SCHEDULER_EVENT_DRIVEN_PLAN.json` and runs behind
 - Wake signals for detached-job results, `blocked_by` completions and operator actions.
 - Per-repository batched CI status, pulled forward from S3: the per-PR status poll meets GitHub's rate limit at roughly 50-80 open pull requests.
 
+S1's queue, its reconcile sweep and its wake markers, and the S0 worker pool, are namespace-aware as of nq-06: a plan is keyed by `(namespace, plan)`, every in-scope namespace is swept and advanced, and the default namespace behaves exactly as before. S2 (store-backed leases) is still not started.
+
 ## Consequences
 
 - **S0 buys tens of plans, not hundreds.** A child process costs about 1 s of

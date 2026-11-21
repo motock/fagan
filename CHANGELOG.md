@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Documents plan advancement modes (`PIPELINE_ADVANCE_WORKERS`, `PIPELINE_ADVANCE_MODE`, `PIPELINE_ADVANCE_STALE_SECONDS`) in REFERENCE.md, and adds a regression test showing that two namespaces holding a plan with the same name (`demo`) are each advanced exactly once through the queue sweep and the worker pool, with the child request carrying its own namespace and a request for a namespace that does not hold the plan refused (nq-06).
+
 - With `PIPELINE_ADVANCE_WORKERS` above 1, the scheduler advances each plan in a non-default namespace in a child process bound to that namespace (the same pool the default namespace uses), a child timeout or failure is recorded against that plan only, and the namespace walk starts at a different namespace on each pass; a deployment whose only namespace is the default, or that leaves the worker pool off, sees no change (nq-05).
 
 - The queue-mode advance sweep (`PIPELINE_ADVANCE_MODE=queue`) requests stale plans in every in-scope namespace, not only the default: each other namespace is listed once through the store's record view and its requests carry the namespace, the same plan name may be queued once per namespace, and `PIPELINE_SCHEDULER_NAMESPACES_ONLY` / `_SKIP` apply as they do to the scheduler tick (an invalid scope refuses the pass). A deployment whose only namespace is the default sees the same sweep result, events and logs (nq-04).

@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
+from contextlib import nullcontext
 
 from app.plugin_loader import (
     PluginError,
@@ -10,7 +11,7 @@ from app.plugin_loader import (
     plugin_spec,
 )
 
-from . import manifest_source, telemetry
+from . import actor, manifest_source, telemetry
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus, JsonlEventBus
 from .events_nats import NatsEventBus
@@ -46,15 +47,17 @@ EVENT_BUS_INVALID = "invalid"
 _hook_lock = threading.Lock()
 #: Set by :func:`set_wake_hook` when advancement is queue-driven (ADR 0011 S1).
 #: ``None`` means "advance synchronously, as this process always has".
-_wake_hook: Callable[[str], object] | None = None
+_wake_hook: Callable[..., object] | None = None
 
 
-def set_wake_hook(hook: Callable[[str], object] | None) -> None:
+def set_wake_hook(hook: Callable[..., object] | None) -> None:
     """Install *hook* as the sink for advance requests, or ``None`` to clear it.
 
     With a hook installed, :func:`wake_handler` hands the plan name to it and
     returns immediately instead of advancing the plan on the delivering
     thread. With no hook the handler advances synchronously, exactly as before.
+    An event that names a namespace reaches the hook as ``namespace=`` keyword;
+    an event without one reaches it with the plan name alone.
 
     The hook's return value is ignored: whether it accepted the request is the
     hook's own business (the queue coalesces a plan that is already pending).
@@ -64,10 +67,29 @@ def set_wake_hook(hook: Callable[[str], object] | None) -> None:
         _wake_hook = hook
 
 
-def _current_wake_hook() -> Callable[[str], object] | None:
+def _current_wake_hook() -> Callable[..., object] | None:
     """Return the installed wake hook, if any."""
     with _hook_lock:
         return _wake_hook
+
+
+def _namespace_is_malformed(event: dict) -> bool:
+    """Return True when *event* carries a ``namespace`` that is not a non-empty str.
+
+    Such an event names no namespace the handler can bind, so it is refused
+    rather than guessed at.
+    """
+    if "namespace" not in event:
+        return False
+    namespace = event["namespace"]
+    return not isinstance(namespace, str) or not namespace
+
+
+def _wake_hook_call(hook: Callable[..., object], plan_name: str, event: dict) -> object:
+    """Call *hook* with *plan_name*, adding ``namespace=`` only when the event has one."""
+    if "namespace" not in event:
+        return hook(plan_name)
+    return hook(plan_name, namespace=event["namespace"])
 
 
 def wake_handler(event: dict) -> dict:
@@ -92,6 +114,21 @@ def wake_handler(event: dict) -> dict:
         * Otherwise: ``{"ok": True, "woke": <plan>, "result": <advance_pipeline return>}``
     """
 
+    if _namespace_is_malformed(event):
+        return {"ok": False, "skipped": "namespace_malformed"}
+    # An event naming a namespace is decided, and advanced, inside that
+    # namespace's binding; the default namespace needs no binding at all.
+    binding = (
+        actor.bind_namespace(event["namespace"])
+        if "namespace" in event
+        else nullcontext()
+    )
+    with binding:
+        return _wake(event)
+
+
+def _wake(event: dict) -> dict:
+    """Decide and deliver one ``agent_done`` wake; see :func:`wake_handler`."""
     plan_name = event["plan"]
     story_key = event["story_key"]
     event_type = event["type"]
@@ -125,7 +162,7 @@ def wake_handler(event: dict) -> dict:
     # or the ones behind it. Read under the lock, call outside it.
     hook = _current_wake_hook()
     if hook is not None:
-        hook(plan_name)
+        _wake_hook_call(hook, plan_name, event)
         return {"ok": True, "queued": plan_name}
 
     # Resolved at call time (not at module load) so tests patching
@@ -154,8 +191,11 @@ def reconcile_handler(event: dict) -> None:
     hook = _current_wake_hook()
     if hook is None:
         return
+    if _namespace_is_malformed(event):
+        logger.warning("reconcile event has a malformed namespace", extra={"plan": plan_name})
+        return
     try:
-        hook(plan_name)
+        _wake_hook_call(hook, plan_name, event)
     except Exception as exc:  # noqa: BLE001 - a broken queue must not break the bus
         logger.warning(
             "reconcile wake failed: %s", type(exc).__name__, extra={"plan": plan_name}

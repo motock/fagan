@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Advance workers and the wake hook carry a plan's namespace: the worker request line adds `"namespace"` only for a named namespace, `wake_handler` and `reconcile_handler` pass `namespace=` to the wake hook and decide the precondition from that namespace's manifest, and a non-string namespace on an event is refused as `namespace_malformed`; a deployment with only the default namespace sees no change (nq-02).
+
 - The advance queue keys every entry by `(namespace, plan)` and rotates fairly between namespaces, so a plan name shared by two namespaces queues and coalesces independently and one busy namespace cannot starve the others; the default namespace stays `None` and existing `take()` callers see no change (nq-01).
 
 - A plan's settings team comes from its tenancy namespace through the optional `PIPELINE_SETTINGS_TEAM_PLUGIN` seam (`team_for_namespace(namespace) -> str | None`), not the free-text manifest `team` label, so a plan labelled `local` in the `default` namespace reads its team's test scope, autonomy and merge gates (stn-01). Unset, the team is the manifest `team` as before.

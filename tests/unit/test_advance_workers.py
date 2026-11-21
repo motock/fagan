@@ -306,7 +306,11 @@ def test_invalid_plan_name_is_rejected_without_advancing(worker_script: Path) ->
             with self._lock:
                 return self._plans.pop(0) if self._plans else None
 
-        def finish(self, plan_name: str) -> None:
+        def take_entry(self, timeout_s: float | None) -> tuple[None, str] | None:
+            with self._lock:
+                return (None, self._plans.pop(0)) if self._plans else None
+
+        def finish(self, plan_name: str, *, namespace: str | None = None) -> None:
             with self._lock:
                 self.finished.append(plan_name)
 

@@ -31,6 +31,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from . import tenant_exec
 from .build_detect import _scope_test_cmd_to_acceptance, detect_test_command
 
 _ORACLE_ERROR_MARKERS = (
@@ -107,7 +108,8 @@ def validate_acceptance_fixtures(story: dict[str, Any], checkout: Path) -> dict:
         scoped = _scope_test_cmd_to_acceptance(test_cmd, abs_paths, test_dir)
         cmd = scoped if scoped is not None else test_cmd
         result = subprocess.run(
-            cmd, cwd=test_dir, capture_output=True, text=True, check=False
+            tenant_exec.wrap(cmd, cwd=str(test_dir), kind="test"),
+            cwd=test_dir, capture_output=True, text=True, check=False,
         )
         classified = classify_oracle_outcome(
             result.returncode, result.stdout + result.stderr

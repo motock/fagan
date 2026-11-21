@@ -20,6 +20,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from pipeline import advance_pool
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.namespace_guard import audit_refusal, resolve_child_namespace
 from pipeline.scheduler_scope import SchedulerScope, SchedulerScopeError, load_scope
@@ -37,11 +38,13 @@ def _record_view(server: Any) -> Any | None:
 def _advance_namespace(server: Any, records: Any, namespace: str) -> tuple[dict, list[str]]:
     """Advance every plan stored in *namespace*; return results and refusal reasons.
 
-    Must run with *namespace* bound: ``advance_pipeline`` reads and writes
-    through the bound namespace.
+    Must run with *namespace* bound on the in-process path: ``advance_pipeline``
+    reads and writes through the bound namespace. The pooled path passes
+    *namespace* to a child process instead, which binds it itself.
     """
     plans: dict[str, dict] = {}
     refusals: list[str] = []
+    pooled = advance_pool.pooled_advance_enabled()
     for plan_name in records.list_plans(namespace):
         try:
             manifest = records.get_manifest(namespace, plan_name) or {}
@@ -50,16 +53,36 @@ def _advance_namespace(server: Any, records: Any, namespace: str) -> tuple[dict,
                 refusals.append(reason)
                 plans[plan_name] = {"ok": False, "error": reason}
                 continue
-            plans[plan_name] = server.advance_pipeline(plan_name)
+            if pooled:
+                plans[plan_name] = advance_pool.advance_plan_subprocess(
+                    plan_name, advance_pool._plan_timeout_seconds(), namespace=namespace
+                )
+            else:
+                plans[plan_name] = server.advance_pipeline(plan_name)
         except Exception as exc:  # noqa: BLE001 - reported by class name, one plan only
             plans[plan_name] = {"ok": False, "error": f"advance raised {type(exc).__name__}"}
     return plans, refusals
 
 
+#: Cursor rotated by one namespace per pass, so no namespace is always walked
+#: first (and therefore never always the one a deadline cuts off).
+_namespace_rotation = 0
+
+
+def _rotated(namespaces: list[str]) -> list[str]:
+    """Return *namespaces* starting at the rotation cursor, which then advances by one."""
+    global _namespace_rotation
+    if not namespaces:
+        return []
+    start = _namespace_rotation % len(namespaces)
+    _namespace_rotation += 1
+    return namespaces[start:] + namespaces[:start]
+
+
 def _advance_others(server: Any, records: Any, others: list[str]) -> dict[str, dict]:
     """Advance each namespace in *others* under its own binding; return per-namespace results."""
     namespaces: dict[str, dict] = {}
-    for namespace in others:
+    for namespace in _rotated(others):
         with bind_namespace(namespace):
             plans, refusals = _advance_namespace(server, records, namespace)
         for reason in refusals:

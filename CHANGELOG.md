@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- With `PIPELINE_ADVANCE_WORKERS` above 1, the scheduler advances each plan in a non-default namespace in a child process bound to that namespace (the same pool the default namespace uses), a child timeout or failure is recorded against that plan only, and the namespace walk starts at a different namespace on each pass; a deployment whose only namespace is the default, or that leaves the worker pool off, sees no change (nq-05).
+
 - The queue-mode advance sweep (`PIPELINE_ADVANCE_MODE=queue`) requests stale plans in every in-scope namespace, not only the default: each other namespace is listed once through the store's record view and its requests carry the namespace, the same plan name may be queued once per namespace, and `PIPELINE_SCHEDULER_NAMESPACES_ONLY` / `_SKIP` apply as they do to the scheduler tick (an invalid scope refuses the pass). A deployment whose only namespace is the default sees the same sweep result, events and logs (nq-04).
 
 - Scheduler events and wake markers carry their namespace: `make_event` takes an optional `namespace` stamped as a top-level key (absent when not given), wake markers are `<org>@<team>@<plan>` outside the default namespace and `<plan>` inside it, and each tick scans the default namespace then every other in-scope namespace under its own binding; a deployment with only the default namespace sees the same events, marker names and logs (nq-03).

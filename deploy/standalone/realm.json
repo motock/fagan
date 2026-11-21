@@ -28,7 +28,7 @@
         "${env.PIPELINE_PUBLIC_URL}"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "${env.PIPELINE_PUBLIC_URL}/auth/callback",
+        "post.logout.redirect.uris": "${env.PIPELINE_PUBLIC_URL}/auth/callback##${env.PIPELINE_PUBLIC_URL}/",
         "pkce.code.challenge.method": "S256"
       },
       "protocolMappers": [

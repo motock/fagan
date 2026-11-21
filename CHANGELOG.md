@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Signing out of the dashboard in a browser (`GET /auth/logout`) also ends the identity-provider session, redirecting to the provider's end-session endpoint with `client_id` and the site root as `post_logout_redirect_uri` (no ID token in the URL); the standalone realm allows that redirect, and a realm imported earlier needs it added by hand (see `docs/DEPLOY_STANDALONE.md`).
+
 - Workspace path containment and clone-URL credential redaction were hardened so CodeQL recognises them: the containment check compares normalized, realpath-resolved strings, and credential redaction is a linear-time scan with no length limit on the userinfo, so a long `https://` run no longer backtracks.
 
 - Dashboard chat's file, directory and search tools read the repository the turn names (its managed clone) instead of the process-wide active workspace the console cannot set, so "summarize this code base" works. The `GET /api/workspace/file|files|search` routes take an optional `repo_url`; without it they behave as before.

@@ -1054,6 +1054,10 @@ the proxy's in-network address. The public issuer stays the value in
 `PIPELINE_OIDC_ISSUER`; do not point that at `proxy`, or the `iss` check and the
 browser redirect will both fail.
 
+### Signing out
+
+Sign out also ends the identity-provider session. A realm imported earlier needs `<public URL>/` added to the dashboard client's "Valid post logout redirect URIs" in the Keycloak admin console, or sign-out shows an invalid-redirect error.
+
 ### A realm edit does not take effect
 
 `start --import-realm` imports `realm.json` **only when the realm does not

@@ -22,7 +22,6 @@ from typing import Any
 from app import role_registry
 
 from . import bound_records
-from .authorization import DEFAULT_TEAM
 
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
@@ -60,6 +59,7 @@ from .persistence import _plan_role_config
 from .persona import _persona_default_model
 from .repo_clone import parse_repo_url
 from .settings_store import effective_setting
+from .settings_team import settings_team
 from .worktree_cleanup import remove_finished_worktree
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def context_from_manifest(manifest: dict[str, Any]) -> SettingsContext:
     """Build the merge settings context from a plan manifest."""
     return SettingsContext(
         namespace=manifest.get("namespace") or DEFAULT_NAMESPACE,
-        team=manifest.get("team") or DEFAULT_TEAM,
+        team=settings_team(manifest),
         repo=_repo_identity(manifest),
     )
 
@@ -668,13 +668,12 @@ def _get_effective_config_impl(
         "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
     }
 
-    from .authorization import DEFAULT_TEAM
     from .persistence import _plan_manifest
     from .settings_store import effective_settings
     from .test_scope_dispatch import effective_test_scope
 
     manifest = _plan_manifest(plan_name) if plan_name else None
-    team = (manifest or {}).get("team") or DEFAULT_TEAM
+    team = settings_team(manifest or {})
     namespace = (manifest or {}).get("namespace") or DEFAULT_NAMESPACE
     # No repo here: the view shows the deployment, org and team layers only.
     settings = effective_settings(namespace, team, "")

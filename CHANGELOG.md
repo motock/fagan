@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- A plan's settings team comes from its tenancy namespace through the optional `PIPELINE_SETTINGS_TEAM_PLUGIN` seam (`team_for_namespace(namespace) -> str | None`), not the free-text manifest `team` label, so a plan labelled `local` in the `default` namespace reads its team's test scope, autonomy and merge gates (stn-01). Unset, the team is the manifest `team` as before.
+
 - The plan completion summary counts the story whose merge completes the plan: `notify_if_plan_completed` takes `just_merged`, which the three merge paths pass, so a `story_merged` row the event bus has not persisted yet no longer reads as `stories_merged=0` (fcr-01).
 - `approve_merge` now records a `story_merged` notification when it merges a story, as `advance_merge` already did, so plan completion summaries and the console's recent activity count every merged story.
 - Signing out of the dashboard in a browser (`GET /auth/logout`) also ends the identity-provider session, redirecting to the provider's end-session endpoint with `client_id` and the site root as `post_logout_redirect_uri` (no ID token in the URL); the standalone realm allows that redirect, and a realm imported earlier needs it added by hand (see `docs/DEPLOY_STANDALONE.md`).

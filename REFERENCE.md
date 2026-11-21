@@ -720,6 +720,14 @@ tick, so an edit takes effect on the next event or tick. It is limited to
 `{name, match: {plan: <glob>, owner: <glob>}, deliver: [{events: [...], to: [instances]}]}`.
 `events` holds event names or `"*"`; `match.owner` is optional.
 
+**Team, org and team/repo routes.** A `notification_routes` value set on a
+team, org or team/repo settings layer is applied at spool time for that plan:
+the plan's resolved value is merged after the file's routes, so a file route
+that matches still wins. The drain covers every namespace, each under its own
+binding, using the file's instances plus the instances that namespace's layer
+values define; an instance name that two layers define with different settings
+is not delivered through and is logged by namespace and name only.
+
 Worked example: team A gets plan completions by e-mail and parked/failed
 stories in Slack; team B gets everything by e-mail and nothing in Slack.
 

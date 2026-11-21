@@ -166,7 +166,8 @@ def _build_message(settings: EmailSettings, rendered: RenderedNotification) -> E
     message["From"] = settings.from_addr
     message["To"] = ", ".join(settings.to_addrs)
     message["Subject"] = rendered.subject
-    message.set_content(rendered.body)
+    body = f"{rendered.body}\nOpen: {rendered.link}" if rendered.link else rendered.body
+    message.set_content(body)
     return message
 
 

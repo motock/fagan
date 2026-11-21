@@ -75,6 +75,13 @@ def _escape(text: str) -> str:
     return "".join(_ESCAPES.get(c, c) for c in text)
 
 
+def _with_link(rendered: Any) -> str:
+    """Return the body plus an ``Open:`` line when a story link exists."""
+    if not rendered.link:
+        return rendered.body
+    return f"{rendered.body}\nOpen: {rendered.link}"
+
+
 def _slack_text(subject: str, body: str) -> str:
     """Escape ``& < >`` and cap at ``MAX_TEXT_CHARS`` with a visible marker."""
     text = _escape(f"{subject}\n{body}")
@@ -195,7 +202,7 @@ class SlackChannelType:
             rendered = render_notification(record)
             if not isinstance(rendered.body, str):
                 raise TypeError("body must be a string")
-            payload = json.dumps({"text": _slack_text(rendered.subject, rendered.body)}).encode()
+            payload = json.dumps({"text": _slack_text(rendered.subject, _with_link(rendered))}).encode()
         except Exception as exc:  # noqa: BLE001 - untrusted spooled record
             log.error(
                 "slack channel rejected record: channel=%s error_type=%s",

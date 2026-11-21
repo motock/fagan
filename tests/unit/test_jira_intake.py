@@ -20,6 +20,8 @@ from pipeline.jira_client import JiraClient
 from pipeline.workspace import ALLOWED_REPO_ROOTS_ENV
 
 ENABLE_ENV = "PIPELINE_JIRA_ENABLED"
+APPROVAL_ENV = "PIPELINE_PLAN_APPROVAL"
+SITES_ENV = "PIPELINE_JIRA_SITES"
 SITE = "https://acme.atlassian.net"
 EMAIL = "svc-jira@example.com"
 ACCOUNT_ID = "5b10ac8d82e05b22cc7d4ef5"
@@ -109,7 +111,11 @@ class FakeJira:
         return httpx.Response(204)
 
     def writes(self) -> list[httpx.Request]:
-        return [r for r in self.requests if r.method in ("PUT", "POST") and "/search/" not in r.url.path]
+        return [
+            r
+            for r in self.requests
+            if r.method in ("PUT", "POST") and "/search/" not in r.url.path
+        ]
 
     def comments(self) -> list[str]:
         out = []
@@ -134,6 +140,8 @@ def intake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "PLAN_DIR", plans)
     monkeypatch.setattr(persistence, "PLAN_DIR", plans)
     monkeypatch.setenv(ENABLE_ENV, "1")
+    monkeypatch.setenv(APPROVAL_ENV, "1")
+    monkeypatch.setenv(SITES_ENV, SITE)
     monkeypatch.setenv("JIRA_API_TOKEN", TOKEN)
     monkeypatch.setenv("PIPELINE_DASHBOARD_PUBLIC_URL", LINK_ORIGIN)
     root = tmp_path / "repos"
@@ -163,7 +171,11 @@ def intake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(service, "_ingest_plan_impl", _fake_ingest)
     monkeypatch.setattr(service.wake, "after", lambda name, reason, result: result)
 
-    return {"records": server._store.records(), "decompose": decompose_calls, "ingested": ingested}
+    return {
+        "records": server._store.records(),
+        "decompose": decompose_calls,
+        "ingested": ingested,
+    }
 
 
 def _seed_team(records, team, board=None):
@@ -261,7 +273,12 @@ def test_issue_text_is_flattened_from_adf_into_the_request(intake_env, monkeypat
     _seed_team(intake_env["records"], "alpha")
     adf = {
         "type": "doc",
-        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Users log in."}]}],
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "Users log in."}],
+            }
+        ],
     }
     _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-7", "Login", adf)]}))
 
@@ -343,7 +360,9 @@ def test_decompose_failure_adds_the_failed_label_and_a_comment_without_exception
     assert "remove the label fagan-intake-failed to retry" in comment
     assert "SECRET-MARKER-42" not in comment
     assert "SECRET-MARKER-42" not in caplog.text
-    planned_failures = [r for r in caplog.records if r.getMessage() == "jira story could not be planned"]
+    planned_failures = [
+        r for r in caplog.records if r.getMessage() == "jira story could not be planned"
+    ]
     assert [r.error_type for r in planned_failures] == ["RuntimeError"]
 
 
@@ -354,7 +373,9 @@ def test_failed_decompose_result_is_treated_as_an_intake_failure(
     _seed_team(intake_env["records"], "alpha")
     fake = FakeJira({"ABC": [_issue("ABC-10")]})
     _use_fake(monkeypatch, fake)
-    monkeypatch.setattr(service, "_run_decompose_detailed", lambda r, repo_root=None: ("", "boom"))
+    monkeypatch.setattr(
+        service, "_run_decompose_detailed", lambda r, repo_root=None: ("", "boom")
+    )
 
     assert jira_intake.run_jira_intake(1000.0)["failed"] == 1
     assert intake_env["ingested"] == []
@@ -427,3 +448,185 @@ def test_jql_selects_assignee_and_excludes_both_labels(intake_env, monkeypatch):
         f'project = "ABC" AND issuetype = Story AND assignee = "{ACCOUNT_ID}" '
         "AND labels not in (fagan-planned, fagan-intake-failed) ORDER BY created ASC"
     )
+
+
+# ---------------------------------------------------------------------------
+# REWORK 1 (a): fail closed on the plan-approval gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [None, "0", "off", "false"])
+def test_approval_gate_off_runs_no_search_decompose_or_ingest(
+    intake_env, monkeypatch, caplog, value
+):
+    if value is None:
+        monkeypatch.delenv(APPROVAL_ENV, raising=False)
+    else:
+        monkeypatch.setenv(APPROVAL_ENV, value)
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+    caplog.set_level(logging.WARNING)
+
+    assert jira_intake.run_jira_intake(1000.0) == {}
+
+    assert fake.requests == []
+    assert intake_env["decompose"] == []
+    assert intake_env["ingested"] == []
+    skipped = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "jira intake skipped: plan approval gate is off"
+    ]
+    assert len(skipped) == 1
+    assert skipped[0].levelno == logging.WARNING
+    assert "Jira ABC-1" not in caplog.text
+
+
+def test_approval_gate_on_runs_intake(intake_env, monkeypatch):
+    monkeypatch.setenv(APPROVAL_ENV, "on")
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-2")]}))
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 1
+    assert intake_env["ingested"] == ["jira-abc-2"]
+
+
+def test_unrecognised_approval_value_fails_closed(intake_env, monkeypatch):
+    monkeypatch.setenv(APPROVAL_ENV, "yes-please")
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-3")]})
+    _use_fake(monkeypatch, fake)
+
+    assert jira_intake.run_jira_intake(1000.0) == {}
+    assert fake.requests == []
+    assert intake_env["ingested"] == []
+
+
+# ---------------------------------------------------------------------------
+# REWORK 1 (b): deny-by-default site allowlist and token-name rule
+# ---------------------------------------------------------------------------
+
+
+def test_site_not_in_allowlist_is_skipped_without_a_request(
+    intake_env, monkeypatch, caplog
+):
+    monkeypatch.setenv(SITES_ENV, "https://other.atlassian.net")
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+    caplog.set_level(logging.WARNING)
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 0
+
+    assert fake.requests == []
+    skipped = [r for r in caplog.records if r.getMessage() == "jira team skipped"]
+    assert [(r.team, r.reason) for r in skipped] == [("alpha", "site_not_allowed")]
+    assert SITE not in caplog.text
+
+
+def test_unset_site_allowlist_runs_nothing(intake_env, monkeypatch):
+    monkeypatch.delenv(SITES_ENV, raising=False)
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 0
+    assert fake.requests == []
+
+
+def test_empty_site_allowlist_runs_nothing(intake_env, monkeypatch):
+    monkeypatch.setenv(SITES_ENV, " , ")
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 0
+    assert fake.requests == []
+
+
+def test_malformed_allowlist_entry_is_ignored_and_the_listed_site_runs(
+    intake_env, monkeypatch
+):
+    monkeypatch.setenv(SITES_ENV, f"not a url, http://evil.example, {SITE}")
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-4")]}))
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 1
+
+
+def test_listed_site_with_a_non_jira_token_name_is_skipped(
+    intake_env, monkeypatch, caplog
+):
+    _seed_org(
+        intake_env["records"], site={**_site(), "token_ref": "secret://env/GH_TOKEN"}
+    )
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+    caplog.set_level(logging.WARNING)
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 0
+
+    assert fake.requests == []
+    skipped = [r for r in caplog.records if r.getMessage() == "jira team skipped"]
+    assert [(r.team, r.reason) for r in skipped] == [("alpha", "token_ref_not_allowed")]
+    assert "GH_TOKEN" not in caplog.text
+
+
+def test_listed_site_with_a_jira_token_name_runs(intake_env, monkeypatch):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-5")]}))
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 1
+
+
+# ---------------------------------------------------------------------------
+# REWORK 1 (c): project_key is re-validated before it reaches the JQL
+# ---------------------------------------------------------------------------
+
+
+def test_stored_project_key_with_jql_breakout_is_refused_without_a_search(
+    intake_env, monkeypatch, caplog
+):
+    _seed_org(intake_env["records"])
+    _seed_team(
+        intake_env["records"],
+        "alpha",
+        board=_board(project_key='ABC" OR project = "X'),
+    )
+    fake = FakeJira({"ABC": [_issue("ABC-1")]})
+    _use_fake(monkeypatch, fake)
+    caplog.set_level(logging.WARNING)
+
+    assert jira_intake.run_jira_intake(1000.0)["planned"] == 0
+
+    assert fake.requests == []
+    skipped = [r for r in caplog.records if r.getMessage() == "jira team skipped"]
+    assert [(r.team, r.reason) for r in skipped] == [("alpha", "invalid_board")]
+    assert "OR project" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# REWORK 1 (d): the per-run cap is the search's maxResults
+# ---------------------------------------------------------------------------
+
+
+def test_search_asks_for_no_more_issues_than_the_per_run_cap(intake_env, monkeypatch):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": []})
+    _use_fake(monkeypatch, fake)
+
+    jira_intake.run_jira_intake(1000.0)
+
+    body = json.loads(fake.requests[0].content)
+    assert body["maxResults"] == jira_intake.MAX_ISSUES_PER_RUN == 5

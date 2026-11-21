@@ -1,12 +1,15 @@
 """Plan the Jira stories assigned to the Fagan service account.
 
 Called once per scheduler tick. Off unless ``PIPELINE_JIRA_ENABLED`` is exactly
-``1``, read on every call. For each team whose ``jira_board`` is enabled, the
-team's ``jira_site`` is resolved through the settings layers, the assigned
-stories are searched, and each new one is decomposed, saved and ingested as the
-plan ``jira-<issue key>``. The plan still needs a person's approval before
-anything runs (ADR 0007). Jira text is untrusted: it reaches the decomposer
-only and is never logged.
+``1``, read on every call. Intake also requires the plan-approval gate
+(``PIPELINE_PLAN_APPROVAL``) to be on and refuses to run otherwise: an ingested
+plan would run on the next tick without a person's approval, and Jira text is
+attacker-controllable. For each team whose ``jira_board`` is enabled, the
+team's ``jira_site`` is resolved through the settings layers, the site and the
+token name must be allowed by the operator (``PIPELINE_JIRA_SITES``), the
+assigned stories are searched, and each new one is decomposed, saved and
+ingested as the plan ``jira-<issue key>``. Jira text is untrusted: it reaches
+the decomposer only and is never logged.
 """
 
 from __future__ import annotations
@@ -22,7 +25,10 @@ from pipeline import notification_links
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.jira_client import JiraClient, JiraError, adf_to_text
 from pipeline.live_ref import LiveRef
+from pipeline.plan_approval import approval_enabled
+from pipeline.secret_refs import SecretRefError, parse_ref
 from pipeline.service import PipelineService
+from pipeline.settings_registry import PROJECT_KEY_RE, SITE_RE
 from pipeline.settings_store import effective_setting
 from pipeline.store_namespaces import namespaces_with_plans
 from pipeline.store_records import DEFAULT_NAMESPACE
@@ -31,6 +37,8 @@ logger = logging.getLogger("pipeline.jira_intake")
 
 ENABLE_ENV = "PIPELINE_JIRA_ENABLED"
 ENABLED_VALUE = "1"
+SITES_ENV = "PIPELINE_JIRA_SITES"
+TOKEN_NAME_PREFIX = "jira"
 PLANNED_LABEL = "fagan-planned"
 FAILED_LABEL = "fagan-intake-failed"
 PLAN_PREFIX = "jira-"
@@ -70,6 +78,9 @@ def run_jira_intake(now: float) -> dict[str, int]:
     """
     if os.environ.get(ENABLE_ENV) != ENABLED_VALUE:
         return {}
+    if not _approval_gate_on():
+        logger.warning("jira intake skipped: plan approval gate is off")
+        return {}
     counts = {"planned": 0, "existing": 0, "failed": 0}
     records = _store.records()
     for namespace in sorted(set(namespaces_with_plans(records)) | {DEFAULT_NAMESPACE}):
@@ -82,6 +93,20 @@ def run_jira_intake(now: float) -> dict[str, int]:
                 extra={"namespace": namespace, "error_type": type(exc).__name__},
             )
     return counts
+
+
+def _approval_gate_on() -> bool:
+    """Fail closed: an unrecognised approval setting counts as off."""
+    try:
+        return approval_enabled()
+    except ValueError:
+        return False
+
+
+def _allowed_sites() -> frozenset[str]:
+    """The operator's exact site allowlist, read per call. Malformed entries are ignored."""
+    entries = [entry.strip() for entry in os.environ.get(SITES_ENV, "").split(",")]
+    return frozenset(entry for entry in entries if SITE_RE.fullmatch(entry))
 
 
 def _run_namespace(namespace: str, now: float, counts: dict[str, int]) -> None:
@@ -118,7 +143,8 @@ def _single_org(settings: list[dict]) -> str | None:
     orgs = [
         record["scope_id"]
         for record in settings
-        if record.get("scope") == "org" and (record.get("values") or {}).get("jira_site")
+        if record.get("scope") == "org"
+        and (record.get("values") or {}).get("jira_site")
     ]
     if len(orgs) > 1:
         return None
@@ -140,15 +166,32 @@ def _run_team(
         return
     _LAST_RUN[slot] = now
 
+    project_key = board.get("project_key")
+    if (
+        not isinstance(project_key, str)
+        or PROJECT_KEY_RE.fullmatch(project_key) is None
+    ):
+        _skip_team(namespace, team, "invalid_board")
+        return
     site = effective_setting(
         "jira_site", namespace=namespace, team=team, repo="", org=org_id
     )["value"]
     if not isinstance(site, dict) or not site:
         logger.info("jira intake skipped: no jira_site", extra={"team": team})
         return
+    if not _site_allowed(site):
+        _skip_team(namespace, team, "site_not_allowed")
+        return
+    if not _token_name_allowed(site):
+        _skip_team(namespace, team, "token_ref_not_allowed")
+        return
     client = _make_client(site)
     try:
-        issues = client.search(_jql(board["project_key"], site["account_id"]), _FIELDS)
+        issues = client.search(
+            _jql(project_key, site["account_id"]),
+            _FIELDS,
+            max_results=MAX_ISSUES_PER_RUN,
+        )
     except JiraError as exc:
         _stop_team(team, exc)
         return
@@ -164,8 +207,31 @@ def _run_team(
             )
 
 
+def _site_allowed(site: dict[str, Any]) -> bool:
+    return isinstance(site.get("site"), str) and site["site"] in _allowed_sites()
+
+
+def _token_name_allowed(site: dict[str, Any]) -> bool:
+    """Only a credential whose name starts with ``jira`` may authenticate Jira."""
+    try:
+        name = parse_ref(site.get("token_ref")).name
+    except SecretRefError:
+        return False
+    return name.lower().startswith(TOKEN_NAME_PREFIX)
+
+
+def _skip_team(namespace: str, team: str, reason: str) -> None:
+    """Identifiers and the reason only: never the site, token reference or Jira text."""
+    logger.warning(
+        "jira team skipped",
+        extra={"namespace": namespace, "team": team, "reason": reason},
+    )
+
+
 def _make_client(site: dict[str, Any]) -> JiraClient:
-    return JiraClient(site["site"], site["email"], site["token_ref"], site["account_id"])
+    return JiraClient(
+        site["site"], site["email"], site["token_ref"], site["account_id"]
+    )
 
 
 def _jql(project_key: str, account_id: str) -> str:
@@ -176,7 +242,9 @@ def _jql(project_key: str, account_id: str) -> str:
 
 
 def _stop_team(team: str, exc: JiraError) -> None:
-    logger.warning("jira team run stopped", extra={"team": team, "error_kind": exc.kind})
+    logger.warning(
+        "jira team run stopped", extra={"team": team, "error_kind": exc.kind}
+    )
 
 
 def _intake_issue(
@@ -243,4 +311,3 @@ def _plan_link(plan_name: str) -> str | None:
     if origin is None or path is None:
         return None
     return f"{origin}{path}?plan={quote(plan_name, safe='')}"
-

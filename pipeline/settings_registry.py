@@ -20,6 +20,7 @@ from app.plugin_loader import (
     plugin_env_name,
     require_allowlist,
 )
+from pipeline.jira_settings import accepts_jira_board, accepts_jira_site
 from pipeline.test_scope import TEST_SCOPE_VALUES
 
 LAYERS = ("deployment", "org", "team", "team_repo")
@@ -146,6 +147,10 @@ class SettingKey:
             return _accepts_role_routing(value)
         if self.type == "notification_routes":
             return _accepts_notification_routes(value)
+        if self.type == "jira_site":
+            return accepts_jira_site(value)
+        if self.type == "jira_board":
+            return accepts_jira_board(value)
         return isinstance(value, str) and value in self.choices
 
 
@@ -280,6 +285,25 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=LAYERS[1:],
             legacy_env="",
             bounds=(2, 5),
+        ),
+        SettingKey(
+            # The Jira Cloud site and its service account. Org layer only: the
+            # token reference is a tenant credential, not a team preference.
+            name="jira_site",
+            type="jira_site",
+            kind="pref",
+            safe_value={},
+            allowed_layers=("org",),
+            legacy_env="",
+        ),
+        SettingKey(
+            # The board a team's plans are read from. Team layer only.
+            name="jira_board",
+            type="jira_board",
+            kind="pref",
+            safe_value={},
+            allowed_layers=("team",),
+            legacy_env="",
         ),
     )
 }

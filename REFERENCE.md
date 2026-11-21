@@ -4321,6 +4321,38 @@ through the `decompose` tool.
 
 ---
 
+## Jira Cloud integration
+
+`pipeline/jira_client.py` is the Jira Cloud REST client. It searches, reads,
+creates sub-tasks, labels, comments and transitions issues. Nothing calls it
+yet; two settings describe the site and the board it reads.
+
+| Setting | Layer | Value |
+|---|---|---|
+| `jira_site` | org only | `{"site": "https://<name>.atlassian.net", "email": "<service account email>", "token_ref": "secret://<provider>/<name>", "account_id": "<service account Jira accountId>"}` |
+| `jira_board` | team only | `{"enabled": bool, "project_key": "<KEY>", "repo_url": "<https git URL>", "poll_seconds": int 60 to 3600 (default 300), "status": {"in_progress": str, "in_review": str, "done": str, "parent_review": str}}` |
+
+Both default to `{}`, which leaves the integration off. Each `status` value is a
+Jira status name of 1 to 60 characters. A transition matches a status name
+case-insensitively.
+
+Security rules:
+
+- Jira Cloud only. `site` must be `https://<name>.atlassian.net`, where `<name>`
+  is lowercase letters, digits and dashes. Any other value is refused by the
+  setting.
+- `token_ref` is a `secret://provider/name` reference, never a token. The token
+  resolves at request time through the credential seam. It is not stored, logged
+  or put in an error. A raw token in this field is refused.
+- `project_key` must match `^[A-Z][A-Z0-9_]{1,9}$`. `repo_url` must be a plain
+  `https://` URL with no credentials, query or fragment.
+- Requests time out after 10 seconds. Redirects are never followed.
+- Jira text (summaries, descriptions, comments) is untrusted. It reaches only the
+  decomposer, and the resulting plan still needs a person's plan approval before
+  anything runs (ADR 0007).
+
+---
+
 ## Development & testing
 
 ```bash

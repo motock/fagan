@@ -22,6 +22,8 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "auto_merge",
         "triage_mode",
         "park_option_count",
+        "jira_site",
+        "jira_board",
     }
 
 
@@ -85,6 +87,8 @@ def test_legacy_env_names_are_the_plan_names():
         "auto_merge": "",
         "triage_mode": "",
         "park_option_count": "",
+        "jira_site": "",
+        "jira_board": "",
     }
 
 

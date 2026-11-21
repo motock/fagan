@@ -301,14 +301,32 @@ def _end_session_url(config: core.OidcLoginConfig) -> str | None:
         return None
 
 
+def _post_logout_url(config: core.OidcLoginConfig, end_session_url: str) -> str:
+    """The end-session URL with the client and the site root to return to.
+
+    The return target is the origin of the configured redirect URI, never
+    anything from the request, and no ID token travels in the URL.
+    """
+    origin = urllib.parse.urlsplit(config.redirect_uri)
+    return _with_query(
+        end_session_url,
+        {
+            "client_id": config.client_id,
+            "post_logout_redirect_uri": f"{origin.scheme}://{origin.netloc}/",
+        },
+    )
+
+
 def _end_session(
     config: core.OidcLoginConfig, request: Request, *, as_json: bool
 ) -> Response:
     """End this browser's session, clear its cookie, and answer the caller.
 
-    Logout is local by design: the dashboard's sessions are its own, so ending
-    one here is immediate, while revoking it at the identity provider only bites
-    at the next authorization. The deletion is what makes the call effective:
+    The local session is ended first, so it is gone whether or not the provider
+    can be reached. A browser (``GET``) is then sent to the provider's
+    end-session endpoint so its SSO session ends too, else the next login would
+    complete silently; with no endpoint it goes to ``/``. The deletion is what
+    makes the call effective:
     replaying the cookie afterwards resolves to no session. It sits outside the
     middleware's ``/api/`` same-origin check, but a cross-site request cannot
     reach it either - ``SameSite=Strict`` withholds the cookie. ``as_json`` adds
@@ -321,11 +339,13 @@ def _end_session(
         "OIDC logout completed",
         extra={"principal_subject": session.principal.subject if session else None},
     )
-    response: Response = (
-        JSONResponse({"end_session_url": _end_session_url(config)})
-        if as_json
-        else RedirectResponse("/", status_code=302)
-    )
+    end_session_url = _end_session_url(config)
+    response: Response
+    if as_json:
+        response = JSONResponse({"end_session_url": end_session_url})
+    else:
+        target = _post_logout_url(config, end_session_url) if end_session_url else "/"
+        response = RedirectResponse(target, status_code=302)
     response.delete_cookie(
         core.SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict"
     )

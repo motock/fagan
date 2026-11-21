@@ -11,6 +11,7 @@ in practice.
 
 ### Changed
 
+- The plan completion summary counts the story whose merge completes the plan: `notify_if_plan_completed` takes `just_merged`, which the three merge paths pass, so a `story_merged` row the event bus has not persisted yet no longer reads as `stories_merged=0` (fcr-01).
 - `approve_merge` now records a `story_merged` notification when it merges a story, as `advance_merge` already did, so plan completion summaries and the console's recent activity count every merged story.
 - Signing out of the dashboard in a browser (`GET /auth/logout`) also ends the identity-provider session, redirecting to the provider's end-session endpoint with `client_id` and the site root as `post_logout_redirect_uri` (no ID token in the URL); the standalone realm allows that redirect, and a realm imported earlier needs it added by hand (see `docs/DEPLOY_STANDALONE.md`).
 - Workspace path containment and clone-URL credential redaction were hardened so CodeQL recognises them: the containment check compares normalized, realpath-resolved strings, and credential redaction is a linear-time scan with no length limit on the userinfo, so a long `https://` run no longer backtracks.

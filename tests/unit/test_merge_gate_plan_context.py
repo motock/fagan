@@ -17,14 +17,18 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline import autonomy_settings
+from pipeline import advance_merge, autonomy_settings, settings_store
 from pipeline import ci as ci_mod
 from pipeline import config as config_mod
 from pipeline import merge as merge_mod
 from pipeline import overlord as overlord_mod
 from pipeline import persistence as persistence_mod
 from pipeline import server as server_mod
-from pipeline.ci import SettingsContext
+from pipeline.ci import SettingsContext, settings_for_plan
+from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
+    _write_manifest,
+    plan_dir,
+)
 
 APPROVED = {"review_verdict": "APPROVE", "risk": "low"}
 HIGH_RISK_APPROVED = {"key": "JCC-02", "review_verdict": "APPROVE", "risk": "high"}
@@ -185,3 +189,25 @@ def test_should_keep_environment_values_when_no_plan_is_bound_or_passed(monkeypa
         "reason": "risk <= threshold low",
     }
     assert attempts == []
+
+
+# --- the readiness budget and CI gate survive an unreadable Store ----------------
+
+MANIFEST_PLAN = "merge-gate-plan-context"
+
+
+def test_should_resolve_the_ci_gate_on_and_the_180s_budget_when_the_store_is_unreadable(
+    plan_dir,  # noqa: F811 - pytest fixture, shadows the import above
+    monkeypatch,
+):
+    class _UnreadableStore:
+        def records(self):
+            raise OSError("settings store unreadable")
+
+    monkeypatch.setattr(settings_store, "_store", _UnreadableStore())
+    _write_manifest(plan_dir, MANIFEST_PLAN, {})
+
+    settings = settings_for_plan(MANIFEST_PLAN)
+
+    assert advance_merge._merge_readiness_timeout(settings) == 180.0
+    assert bool(settings.value("merge_ci_gate")) is True

@@ -4324,8 +4324,36 @@ through the `decompose` tool.
 ## Jira Cloud integration
 
 `pipeline/jira_client.py` is the Jira Cloud REST client. It searches, reads,
-creates sub-tasks, labels, comments and transitions issues. Nothing calls it
-yet; two settings describe the site and the board it reads.
+creates sub-tasks, labels, comments and transitions issues. Two settings describe
+the site and the board it reads.
+
+**Intake is off by default.** Set `PIPELINE_JIRA_ENABLED=1` (read on every
+call; any other value, including `true`, leaves it off) to let the scheduler
+plan Jira stories. With it unset, no setting is read and no request is made.
+
+Each scheduler tick, `pipeline/jira_intake.py` runs for every namespace. For each
+team whose `jira_board` is enabled, and whose org has a `jira_site`, it searches
+for up to 5 issues of the board's project that are assigned to the service
+account and carry neither label below. Each issue is planned as the plan
+`jira-<issue key lowercased>` (for example `jira-abc-123`), with the team set to
+the team and the repo set to `repo_url`, and the Jira summary and description as
+the request. The team's `poll_seconds` bounds how often a team is searched.
+
+| Outcome | Jira change |
+|---|---|
+| Planned (decompose, save and ingest succeed) | Label `fagan-planned`; status moves to `status.in_progress`; comment "Fagan planned this story into N stories. It is waiting for team lead approval.", with a link to the plan when `PIPELINE_DASHBOARD_PUBLIC_URL` is set |
+| Plan already exists | Label `fagan-planned` only; nothing is planned again |
+| Decompose, save or ingest fails | Label `fagan-intake-failed`; comment "Fagan could not plan this story. A team member can fix the story and remove the label fagan-intake-failed to retry." The exception text is never written to Jira |
+
+Labels and retries:
+
+- Removing the label `fagan-intake-failed` from an issue makes the next run
+  plan it again. There is no other retry switch.
+- A planned story still needs a person's plan approval before anything runs
+  (ADR 0007).
+- A Jira `auth` error stops that team's run for the tick and logs one warning;
+  another team still runs. `rate_limited` and `unavailable` also end the team's
+  run for that tick.
 
 | Setting | Layer | Value |
 |---|---|---|

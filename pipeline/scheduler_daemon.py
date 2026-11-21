@@ -610,6 +610,18 @@ class SchedulerDaemon:
         except Exception:
             logger.exception("notification outbox drain failed during tick")
 
+        # Jira intake: its own try/except so a failure never affects the tick.
+        # Logs the exception type only; Jira text and tokens never reach a log.
+        try:
+            from pipeline import jira_intake
+
+            jira_intake.run_jira_intake(time.time())
+        except Exception as exc:  # noqa: BLE001 - a Jira failure never breaks the tick
+            logger.warning(
+                "jira intake failed during tick",
+                extra={"error_type": type(exc).__name__},
+            )
+
         # SRR-2: the abandoned-worker ledger is the streak's missing half.
         # Prune workers whose blocked call has returned (dead = the lock it
         # held was released by normal completion), then treat a survivor that

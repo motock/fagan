@@ -24,6 +24,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from pipeline.actor import current_namespace
+
 logger = logging.getLogger(__name__)
 
 _TYPE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -42,7 +44,7 @@ _REFERENCE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}\Z")
 # not hammered on every scheduler tick.
 _BREAKER_BASE_S = 60
 _BREAKER_MAX_S = 3600
-_BREAKERS: dict[str, tuple[int, float]] = {}
+_BREAKERS: dict[tuple[str, str], tuple[int, float]] = {}
 
 
 def reset_breakers() -> None:
@@ -162,10 +164,13 @@ def as_sender(
 
     A channel that answered RETRY (or raised) is skipped until its backoff
     window elapses, so a rate-limiting provider is not retried on every tick.
+    The backoff is keyed by namespace as well as name: two namespaces may
+    define same-named instances and must not throttle each other.
     """
+    breaker_key = (current_namespace(), channel.name)
 
     def sender(record: dict) -> bool:
-        count, blocked_until = _BREAKERS.get(channel.name, (0, 0.0))
+        count, blocked_until = _BREAKERS.get(breaker_key, (0, 0.0))
         if clock() < blocked_until:
             return False
         try:
@@ -178,7 +183,7 @@ def as_sender(
             )
             count += 1
             delay = min(_BREAKER_BASE_S * 2 ** (count - 1), _BREAKER_MAX_S)
-            _BREAKERS[channel.name] = (count, clock() + delay)
+            _BREAKERS[breaker_key] = (count, clock() + delay)
             logger.warning(
                 "channel backing off: channel=%s failures=%d seconds=%d",
                 channel.name,
@@ -187,7 +192,7 @@ def as_sender(
             )
             return False
         if result.status is DeliveryStatus.DELIVERED:
-            _BREAKERS.pop(channel.name, None)
+            _BREAKERS.pop(breaker_key, None)
             return True
         if result.status is DeliveryStatus.REJECTED:
             logger.error(
@@ -195,7 +200,7 @@ def as_sender(
                 channel.name,
                 result.reason,
             )
-            _BREAKERS.pop(channel.name, None)
+            _BREAKERS.pop(breaker_key, None)
             return True
         count += 1
         delay = min(
@@ -205,7 +210,7 @@ def as_sender(
             ),
             _BREAKER_MAX_S,
         )
-        _BREAKERS[channel.name] = (count, clock() + delay)
+        _BREAKERS[breaker_key] = (count, clock() + delay)
         logger.warning(
             "channel backing off: channel=%s failures=%d seconds=%d",
             channel.name,

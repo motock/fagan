@@ -832,7 +832,7 @@ allowed (a host resolving to any private, loopback, link-local, shared
 pinned to the validated address, so a name that re-resolves inward at connect
 time is never reached. A refused URL is rejected (`url_refused`), not retried.
 Redirects are never followed: a 3xx is rejected. Status mapping: 2xx delivered;
-408, 429 and 5xx retried (honouring `Retry-After`); other 4xx rejected.
+408, 429 and 5xx retried (honouring `Retry-After`); other 4xx rejected. A webhook's backoff after 429/5xx applies only to that team's channel.
 
 The body is compact JSON with sorted keys: `version` (1), `event`, `plan`,
 `story_key`, `subject`, `body`, `link` and `sent_at` (UTC ISO-8601). Headers:

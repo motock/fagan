@@ -3638,9 +3638,13 @@ session, so these local deadlines and re-authentication are what bound it.
 `POST /auth/logout` deletes the server-side session and clears the cookie, so
 replaying the old cookie afterwards is a `401`; when discovery advertises an
 `end_session_endpoint` the JSON response carries it as `end_session_url` for the
-UI to follow. `GET /auth/logout` does the same and redirects to `/`. Logout is
-local and succeeds even when the provider is unreachable — the end-session URL
-is then simply `null`.
+UI to follow. `GET /auth/logout` ends the local session the same way and then
+redirects to the provider's end-session endpoint with `client_id` and
+`post_logout_redirect_uri` (the site root, derived from the configured redirect
+URI, never from the request) so the provider's own SSO session ends too; no ID
+token is sent. It redirects to `/` instead when no end-session endpoint is
+discovered. Logout succeeds even when the provider is unreachable — the POST
+end-session URL is then simply `null` and the GET redirects to `/`.
 
 **Telling the UI that login exists, and where to come back to.** A browser that
 is not logged in cannot read `/api/health` or any other `/api/` route to find out

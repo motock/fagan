@@ -220,7 +220,7 @@ def test_advance_merge_path_calls_notify_if_plan_completed(
         ppc, "notify_if_plan_completed",
         lambda plan_name, manifest, **_kwargs: calls.append((plan_name, manifest)),
     )
-    _write_manifest(plan_dir, "notify-advance",{"P1": _pr_open_story()})
+    _write_manifest(plan_dir, "notify-advance", {"P1": _pr_open_story()})
 
     result = p.advance_pipeline("notify-advance")
 
@@ -283,7 +283,7 @@ def test_approve_merge_calls_notify_if_plan_completed(
         ppc, "notify_if_plan_completed",
         lambda plan_name, manifest, **_kwargs: calls.append((plan_name, manifest)),
     )
-    _write_manifest(plan_dir, "notify-approve",{
+    _write_manifest(plan_dir, "notify-approve", {
         "S1": _story(status="parked", review_verdict="APPROVE", review_verdict_sha="stub-head", worktree="/nonexistent-plannotify03-approve-worktree"),
     })
 

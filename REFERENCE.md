@@ -4400,6 +4400,33 @@ Security rules:
   decomposer, and the resulting plan still needs a person's plan approval before
   anything runs (ADR 0007).
 
+### Mirroring a plan's progress to Jira (`pipeline/jira_sync.py`)
+
+Off unless `PIPELINE_JIRA_ENABLED` is exactly `1`, read on every event. Only a
+plan named `jira-<issue key lowercased>` is mirrored, and only when its team's
+`jira_board` is enabled and its `jira_site` (resolved with the plan manifest's
+`org`, when it names one) passes the same allowlist and token-name rules as
+intake. Otherwise nothing is sent.
+
+What is copied to Jira: each story's `summary` and `description`, and nothing
+else. The story's `agent_instructions`, `files` and acceptance fixtures never
+leave Fagan. Each story becomes one sub-task of the planned issue, labelled
+`fagan` and `fagan-story-<story key>`. A story whose sub-task already exists is
+not created again, so a re-delivered approval creates nothing.
+
+| Fagan event | Sub-task change | Parent change |
+|---|---|---|
+| `plan_approved` notification | Created when missing | None |
+| `agent_dispatched` | `status.in_progress` | None |
+| `pr_open` | `status.in_review` | None |
+| `story_done` | `status.done` | When every story is done: `status.parent_review`, and comment "All Fagan stories are done. Ready for review." |
+| `parked` | Comment "Parked: needs a decision in Fagan.", with the story's dashboard link when `PIPELINE_DASHBOARD_PUBLIC_URL` is set | None |
+
+The parked comment never carries the parked reason. A status with no transition
+from the issue's current state is logged once per plan and status at INFO, and
+the rest of the sync continues. Failures are logged by exception type with the
+plan and story key, and never raise into the event bus.
+
 ---
 
 ## Development & testing

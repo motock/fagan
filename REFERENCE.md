@@ -589,6 +589,20 @@ notification has been emitted, so a failed emission is retried by a later
 tick instead of being lost; once the marker exists the plan stays all-done
 but no second notification is ever emitted. The same summary is also written to `<plan>.report.md` in `PLAN_DIR` as a durable per-plan report (best effort: a write failure is logged and never blocks the notification).
 
+**Story links.** A story-level notification (`story_parked`, `dispatch_failed`,
+`tests_failed`, `agent_gave_up`, `story_stalled`, `merge_conflict_rework`)
+carries a direct link, and the Slack and e-mail channels append it as a final
+`Open: <link>` line. The link is `{origin}{path}?plan=<plan>&story=<story key>`
+(both URL-quoted), built in `pipeline/notification_links.py`. The origin is
+`PIPELINE_DASHBOARD_PUBLIC_URL` (a bare `https` origin, as for the approval
+review link); `PIPELINE_STORY_LINK_PATH` (default `/`) is the path, validated
+like `PIPELINE_APPROVAL_LINK_PATH`: a plain absolute path with no scheme,
+query, `..` or empty segment. Both are read on every call. When the origin is
+unset, or either value is invalid, the link is omitted (an invalid value logs
+one warning naming the variable, never the value) and the notification is sent
+without the `Open:` line. Plan-level events carry no story link; plan-approval
+notices keep their review link inside the message.
+
 **Outbox sink.** `pipeline.notification_outbox.outbox_sink` enqueues selected
 notifications on a per-plan `<plan>.outbox.jsonl` queue in `PLAN_DIR`
 (one JSON line per queued record). It is **not** a bus subscriber: the

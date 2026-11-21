@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .notification_links import story_link
+
 # Subject labels for the structured event carried at
 # record["payload"]["event"] (NOTIFYLC-1).  The subject is DERIVED from the
 # record, never configured: there is deliberately no subject knob.  An event
@@ -64,6 +66,7 @@ class RenderedNotification:
     event: str | None
     plan: str | None
     story_key: str | None
+    link: str | None = None
 
 
 def render_notification(record: dict) -> RenderedNotification:
@@ -103,10 +106,14 @@ def render_notification(record: dict) -> RenderedNotification:
         else:
             subject = f"[pipeline] {label}: {record.get('plan')}"
     body = payload.get("message", "") or record.get("message", "")
+    link = None
+    if event in STORY_LEVEL_EVENTS and story_key:
+        link = story_link(str(record.get("plan")), str(story_key))
     return RenderedNotification(
         subject=subject,
         body=body,
         event=event,
         plan=record.get("plan"),
         story_key=story_key,
+        link=link,
     )

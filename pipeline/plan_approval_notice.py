@@ -29,11 +29,15 @@ all import this one, and a direct server import would form a cycle.
 from __future__ import annotations
 
 import logging
-import os
-import re
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 from . import plan_review
+from .notification_links import (  # noqa: F401  (re-exported for callers and tests)
+    LINK_PATH_ENV,
+    PUBLIC_URL_ENV,
+    _link_path,
+    _origin,
+)
 from .service import _ServerRef
 
 logger = logging.getLogger(__name__)
@@ -46,17 +50,6 @@ APPROVAL_EVENTS = (
     "plan_changes_requested",
 )
 
-PUBLIC_URL_ENV = "PIPELINE_DASHBOARD_PUBLIC_URL"
-LINK_PATH_ENV = "PIPELINE_APPROVAL_LINK_PATH"
-
-# Core ships no review page, so the default points at the dashboard root; an
-# operator who supplies a review UI through the dashboard extension mount
-# sets LINK_PATH_ENV to that UI's path.
-_DEFAULT_LINK_PATH = "/"
-
-# A link path is a plain path segment sequence: no scheme, no query, no
-# traversal (``..``) and no empty segment (``//``).
-_LINK_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]*$")
 _HEX_PREFIX_CHARS = 12
 _RISKS = ("high", "medium", "low", "unset")
 
@@ -98,44 +91,6 @@ def _warning_count(manifest: dict) -> int:
         if isinstance(story_warnings, list):
             total += len(story_warnings)
     return total
-
-
-def _origin() -> str | None:
-    """Return the validated dashboard origin, or ``None`` when unusable."""
-    raw = os.environ.get(PUBLIC_URL_ENV, "")
-    if not raw.strip():
-        return None
-    parts = urlsplit(raw.strip())
-    if (
-        parts.scheme != "https"
-        or not parts.hostname
-        or "@" in parts.netloc
-        or parts.query
-        or parts.fragment
-        or parts.path not in ("", "/")
-    ):
-        logger.warning(
-            "Ignoring %s: it must be a bare https origin (no path, credentials, "
-            "query or fragment); omitting the approval review link",
-            PUBLIC_URL_ENV,
-        )
-        return None
-    return f"{parts.scheme}://{parts.netloc}"
-
-
-def _link_path() -> str | None:
-    """Return the validated review-UI path, or ``None`` when unusable."""
-    raw = os.environ.get(LINK_PATH_ENV, "")
-    if not raw:
-        return _DEFAULT_LINK_PATH
-    if not _LINK_PATH_RE.match(raw) or ".." in raw or "//" in raw:
-        logger.warning(
-            "Ignoring %s: it must be a plain absolute path with no traversal "
-            "or empty segment; omitting the approval review link",
-            LINK_PATH_ENV,
-        )
-        return None
-    return raw
 
 
 def _review_link(plan_name: str) -> str | None:

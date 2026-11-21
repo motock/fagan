@@ -165,3 +165,31 @@ def test_get_reports_options_then_stale_after_the_reason_changes(plan, client):
 
 def test_get_is_404_for_an_unknown_plan(client):
     assert client.get("/api/plans/nope-plan/stories/s1/park-options").status_code == 404
+
+
+def test_post_is_403_for_an_unknown_plan_when_unauthorized(client, monkeypatch):
+    monkeypatch.setattr("pipeline.authorization.authorize", lambda *a, **k: {"ok": False, "error": "nope"})
+    response = client.post("/api/plans/no-such-plan/stories/s1/park-options/o1/choose")
+    assert response.status_code == 403
+
+
+def test_amend_scope_writes_to_the_bound_namespace_not_default(plan, monkeypatch):
+    from pipeline.actor import bind_namespace
+    from pipeline.store_memory import InMemoryRecordStore
+    from pipeline.store_records import DEFAULT_NAMESPACE
+
+    store = InMemoryRecordStore()
+    story = {"status": "parked", "parked_reason": REASON}
+    store.put_manifest("acme/team", PLAN, {"stories": {"s1": story}})
+    monkeypatch.setattr(p._store, "records", lambda: store)
+    p._store.append_decision(PLAN, _options())
+
+    def fake(plan_name, story_key, story, ruling, manifest):
+        story["status"] = "interrupted"
+        return "amend_scope"
+
+    monkeypatch.setattr(poc, "execute_ruling", fake)
+    with bind_namespace("acme/team"):
+        assert poc.choose_park_option(PLAN, "s1", "o1")["ok"] is True
+    assert store.get_manifest("acme/team", PLAN)["stories"]["s1"]["status"] == "interrupted"
+    assert store.get_manifest(DEFAULT_NAMESPACE, PLAN) is None

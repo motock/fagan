@@ -77,7 +77,7 @@ def choose_park_option(plan_name: str, story_key: str, option_id: str) -> dict:
             for s in manifest["stories"].values():
                 if isinstance(s, dict):
                     s.pop("_patch_acceptance_recorded", None)
-            _store.records().put_manifest("default", plan_name, manifest)
+            bound_records.put_manifest(_store, plan_name, manifest)
             new_status = story.get("status")
     triage_outcomes.record_human_resolution(
         plan_name,

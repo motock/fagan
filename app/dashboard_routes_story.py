@@ -186,12 +186,12 @@ def choose_park_option_route(plan_name: str, story_key: str, option_id: str) -> 
     from pipeline.authorization import authorize
     from pipeline.park_option_choice import choose_park_option
 
-    _parked_story_or_404(plan_name, story_key)
     if authorize("decision:answer", plan_name=plan_name) is not None:
         raise HTTPException(
             status_code=403,
             detail=f"not authorized: decision:answer on plan {plan_name!r}",
         )
+    _parked_story_or_404(plan_name, story_key)
     result = choose_park_option(plan_name, story_key, option_id)
     if not result.get("ok"):
         return JSONResponse(status_code=409, content={"ok": False, "error": result["error"]})

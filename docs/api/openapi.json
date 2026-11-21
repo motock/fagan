@@ -144,6 +144,47 @@
     "title": "ChatResponse",
     "type": "object"
    },
+   "ChooseParkOptionResponse": {
+    "additionalProperties": true,
+    "description": "Success body of ``POST .../park-options/{option_id}/choose``.",
+    "properties": {
+     "action": {
+      "title": "Action",
+      "type": "string"
+     },
+     "new_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "New Status"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "option_id": {
+      "title": "Option Id",
+      "type": "string"
+     },
+     "story_key": {
+      "title": "Story Key",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ok",
+     "story_key",
+     "option_id",
+     "action"
+    ],
+    "title": "ChooseParkOptionResponse",
+    "type": "object"
+   },
    "DecisionRequest": {
     "properties": {
      "answer": {
@@ -318,6 +359,74 @@
      "live"
     ],
     "title": "Live",
+    "type": "object"
+   },
+   "ParkOptionsResponse": {
+    "additionalProperties": true,
+    "description": "Response of ``GET /api/plans/{plan_name}/stories/{story_key}/park-options``.",
+    "properties": {
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "options": {
+      "default": [],
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Options",
+      "type": "array"
+     },
+     "park_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Park Class"
+     },
+     "preparing": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preparing"
+     },
+     "recommended": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommended"
+     },
+     "stale": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stale"
+     }
+    },
+    "required": [
+     "ok"
+    ],
+    "title": "ParkOptionsResponse",
     "type": "object"
    },
    "PatchApplyResponse": {
@@ -2749,6 +2858,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "$ref": "#/components/schemas/ParkOptionsResponse",
          "additionalProperties": true,
          "title": "Response Get Park Options Route Api Plans  Plan Name  Stories  Story Key  Park Options Get",
          "type": "object"
@@ -2809,6 +2919,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "$ref": "#/components/schemas/ChooseParkOptionResponse",
          "title": "Response Choose Park Option Route Api Plans  Plan Name  Stories  Story Key  Park Options  Option Id  Choose Post"
         }
        }

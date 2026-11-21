@@ -41,13 +41,14 @@ WAKE_DIR_NAME = ".wake"
 #: (``pipeline.parsers._KEY_RE``) can contain ``@``, so the split is unambiguous.
 _SEPARATOR = "@"
 
-#: The only shape a marker file name may take: an optional ``<org>@<team>@``
-#: prefix, then a plan name. The plan part may not start with ``.`` (that is
-#: the temp and claimed-file namespace) and may not contain ``..``. No ``/``,
-#: ``\\``, NUL or other character is allowed, so the name is a bare file name.
-_MARKER_NAME = re.compile(
-    r"(?!.*\.\.)(?:[a-z0-9-]+@[a-z0-9-]+@)?[A-Za-z0-9_-][A-Za-z0-9._-]*"
-)
+#: The character set a marker file name may use: a namespace segment, the
+#: ``@`` separator, or a plan name. No ``/``, ``\\``, NUL or other character is
+#: allowed, so the name is a bare file name. A plain bounded character class with
+#: no lookahead or nested repeats, so the match is linear. ``..``, a leading ``.``
+#: and a ``@.`` (a plan part starting with ``.``) are refused by plain string
+#: checks in :func:`request_wake`, because the temp and claimed-file namespace is
+#: the ``.``-prefixed one.
+_MARKER_NAME = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9._@-]{0,254}")
 
 
 def _wake_dir():
@@ -87,22 +88,6 @@ def _split_marker(marker: str) -> tuple[str, str] | None:
     return f"{org}{_SEPARATOR}{team}{_SEPARATOR}", plan_name
 
 
-def _is_safe_marker_destination(marker: str, destination: str, wake_dir) -> bool:
-    """True when *marker* is a bare name that lands directly inside *wake_dir*.
-
-    The marker is built from the bound namespace and the plan name, so it is
-    re-checked here, in the function that writes it, rather than trusted from
-    the validators above it.
-    """
-    if _MARKER_NAME.fullmatch(marker) is None:
-        return False
-    if os.path.basename(marker) != marker:
-        return False
-    return os.path.dirname(os.path.normpath(destination)) == os.path.normpath(
-        str(wake_dir)
-    )
-
-
 def request_wake(plan_name: str, reason: str) -> None:
     """Record that *plan_name* should be reconciled on the next scan.
 
@@ -140,8 +125,20 @@ def request_wake(plan_name: str, reason: str) -> None:
         marker = f"{prefix}{plan_name}"
     try:
         wake_dir = _wake_dir()
-        destination = os.path.join(str(wake_dir), marker)
-        if not _is_safe_marker_destination(marker, destination, wake_dir):
+        base = os.path.normpath(str(wake_dir))
+        destination = os.path.normpath(os.path.join(base, marker))
+        # The marker is built from the bound namespace and the plan name, so it
+        # is checked here, in the function that writes it: a bare name, no
+        # ``..``, no leading ``.`` (also after ``@``), and a destination that
+        # stays inside the wake directory.
+        if (
+            _MARKER_NAME.fullmatch(marker) is None
+            or ".." in marker
+            or marker.startswith(".")
+            or "@." in marker
+            or os.path.basename(marker) != marker
+            or not destination.startswith(base + os.sep)
+        ):
             logger.warning(
                 "wake request rejected: unsafe marker name",
                 extra={"reason": reason},
@@ -149,9 +146,9 @@ def request_wake(plan_name: str, reason: str) -> None:
             return
         wake_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({"reason": reason, "ts": datetime.now(UTC).isoformat()})
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{marker}.", suffix=".tmp", dir=str(wake_dir)
-        )
+        # The temp name carries no marker text: claim_wakes skips every
+        # ``.``-prefixed name, so a crash leaves a file no scan mistakes for a wake.
+        fd, tmp_name = tempfile.mkstemp(prefix=".wake.", suffix=".tmp", dir=base)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)

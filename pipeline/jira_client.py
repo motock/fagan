@@ -25,8 +25,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.credentials import CredentialError, CredentialRef, resolve_for_injection
-from pipeline.jira_settings import ACCOUNT_ID_RE, EMAIL_RE, PROJECT_KEY_RE, SITE_RE
 from pipeline.secret_refs import parse_ref
+from pipeline.settings_registry import ACCOUNT_ID_RE, EMAIL_RE, PROJECT_KEY_RE, SITE_RE
 
 _LOGGER = logging.getLogger("pipeline.jira_client")
 

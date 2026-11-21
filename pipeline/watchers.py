@@ -19,6 +19,8 @@ import stat
 import time
 from datetime import UTC, datetime
 
+from app.credentials import is_default_namespace
+
 from . import (
     audit_anchor,
     ci_rollup,
@@ -27,6 +29,7 @@ from . import (
     security_audit,
     wake,
 )
+from .actor import current_namespace
 from .ci import CANCELLED, FAIL, PASS, PENDING, _aggregate_ci_states
 from .events import make_event
 from .forge import CIStatusUnreadable
@@ -35,6 +38,17 @@ from .persistence import _notify_user
 from .telemetry import CAPACITY_IN_USE_STATUS, update_manifest_snapshot
 
 logger = logging.getLogger(__name__)
+
+
+def _event_namespace() -> str | None:
+    """Return the namespace to stamp on a scan event, or None for the default.
+
+    The default namespace leaves the event shape unchanged, so a deployment with
+    only the default namespace publishes exactly the events it always did.
+    """
+    namespace = current_namespace()
+    return None if is_default_namespace(namespace) else namespace
+
 
 def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
     """Scan ``manifest`` for agent completion markers.
@@ -143,7 +157,13 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
             logger.exception("Failed to rename %s", marker_path)
             continue
 
-        event = make_event("agent_done", plan, story_key=story_key, payload=payload)
+        event = make_event(
+            "agent_done",
+            plan,
+            story_key=story_key,
+            payload=payload,
+            namespace=_event_namespace(),
+        )
         bus.publish(event)
         events.append(event)
 
@@ -606,6 +626,7 @@ def scan_all_plans(bus):
                     "reconcile",
                     plan_name,
                     payload={"reason": "job_result", "stories": ready},
+                    namespace=_event_namespace(),
                 )
                 bus.publish(event)
                 events.append(event)
@@ -645,7 +666,12 @@ def scan_all_plans(bus):
     # pass. Wrapped: a broken wake must not stop the sweep or change its result.
     try:
         for woken_plan in wake.claim_wakes():
-            event = make_event("reconcile", woken_plan, payload={"reason": "requested"})
+            event = make_event(
+                "reconcile",
+                woken_plan,
+                payload={"reason": "requested"},
+                namespace=_event_namespace(),
+            )
             bus.publish(event)
             events.append(event)
             logger.info("woke plan: operator requested", extra={"plan": woken_plan})
@@ -659,7 +685,10 @@ def scan_all_plans(bus):
         else:
             for dependent_plan, blockers in wakes.items():
                 event = make_event(
-                    "reconcile", dependent_plan, payload={"reason": "blocked_by_done"}
+                    "reconcile",
+                    dependent_plan,
+                    payload={"reason": "blocked_by_done"},
+                    namespace=_event_namespace(),
                 )
                 bus.publish(event)
                 events.append(event)

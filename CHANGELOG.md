@@ -11,6 +11,8 @@ in practice.
 
 ### Changed
 
+- Scheduler events and wake markers carry their namespace: `make_event` takes an optional `namespace` stamped as a top-level key (absent when not given), wake markers are `<org>@<team>@<plan>` outside the default namespace and `<plan>` inside it, and each tick scans the default namespace then every other in-scope namespace under its own binding; a deployment with only the default namespace sees the same events, marker names and logs (nq-03).
+
 - Advance workers and the wake hook carry a plan's namespace: the worker request line adds `"namespace"` only for a named namespace, `wake_handler` and `reconcile_handler` pass `namespace=` to the wake hook and decide the precondition from that namespace's manifest, and a non-string namespace on an event is refused as `namespace_malformed`; a deployment with only the default namespace sees no change (nq-02).
 
 - The advance queue keys every entry by `(namespace, plan)` and rotates fairly between namespaces, so a plan name shared by two namespaces queues and coalesces independently and one busy namespace cannot starve the others; the default namespace stays `None` and existing `take()` callers see no change (nq-01).

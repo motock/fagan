@@ -19,7 +19,7 @@ from app.harness import (
     get_harness,
     resolve_harness_name,
 )
-from pipeline import claude_log_translate, execution, usage_record
+from pipeline import claude_log_translate, execution, tenant_exec, usage_record
 from pipeline.actor import current_namespace
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
@@ -226,8 +226,11 @@ class ClaudeCliDriver:
         recording = cell_dir is not None or usage_record.is_recording()
         if recording:
             cmd += ["--output-format", "json"]
+        # A completion with no working directory reads no repository, so only
+        # a call that runs inside one goes through the command-wrap seam.
+        argv = cmd if cwd is None else tenant_exec.wrap(cmd, cwd=str(cwd), kind="review")
         proc = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see backend.py test suite)
-            cmd, cwd=cwd, capture_output=True, text=True,
+            argv, cwd=cwd, capture_output=True, text=True,
             env=_first_party_claude_env(),
         )
         if cell_dir is None and not recording:

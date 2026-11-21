@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import logging
 import json
-from . import bound_records
+from . import bound_records, tenant_exec
 from .overlord import _invoke_overlord, _load_policy
 from .overlord_context import overlord_context
 from .overlord_class_mode import class_mode
@@ -680,7 +680,7 @@ def _current_suite_state(worktree: str, story: dict | None = None) -> str:
         label, pass_verb, fail_verb = ("scoped test targets", "PASS", "FAIL") if scoped else ("full test suite", "PASSES", "FAILS")
         with _heavy_lock() if _is_heavy(test_cmd) else nullcontext():
             r = globals()["subprocess.run"](
-                test_cmd,
+                tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
                 cwd=test_dir,
                 capture_output=True,
                 text=True,

@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import tenant_exec
 from .build_detect import (
     _acceptance_rel_paths,
     _scope_test_cmd_to_acceptance,
@@ -204,7 +205,8 @@ def _run_baseline_test_snapshot_uncached(worktree_path: Path) -> dict | None:
         return None
     try:
         r = subprocess.run(
-            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+            tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
+            check=False, cwd=test_dir, capture_output=True, text=True,
             env=_baseline_test_env(), timeout=_BASELINE_TEST_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
@@ -306,7 +308,8 @@ def baseline_snapshot_for(story: dict, full_snapshot):
             return None
         try:
             r = subprocess.run(
-                scoped_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+                tenant_exec.wrap(scoped_cmd, cwd=str(test_dir), kind="test"),
+                check=False, cwd=test_dir, capture_output=True, text=True,
                 env=_baseline_test_env(), timeout=_BASELINE_TEST_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired:

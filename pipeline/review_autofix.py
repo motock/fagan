@@ -9,6 +9,7 @@ REVIEWER_AUTO_FIX_MAX_LINES = _ServerRef("REVIEWER_AUTO_FIX_MAX_LINES")
 detect_test_command = _ServerRef("detect_test_command")
 os = _ServerRef("os")
 subprocess = _ServerRef("subprocess")
+tenant_exec = _ServerRef("tenant_exec")
 
 
 def _verify_reviewer_auto_fix(
@@ -111,7 +112,7 @@ def _verify_reviewer_auto_fix(
         and k != "REPO_ROOT"
     }
     test_result = subprocess.run(
-        test_cmd,
+        tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
         check=False,
         cwd=test_dir,
         capture_output=True,

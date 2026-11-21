@@ -17,7 +17,7 @@ from typing import Any
 
 from pipeline.dispatch import _find_dead_new_functions
 
-from . import bound_records
+from . import bound_records, tenant_exec
 from .build_detect import (
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -648,7 +648,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if _is_heavy(test_cmd):  # noqa: F821
             with _heavy_lock():
                 test_result = subprocess.run(
-                    test_cmd,
+                    tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
                     check=False,
                     cwd=test_dir,
                     capture_output=True,
@@ -657,7 +657,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         else:
             test_result = subprocess.run(
-                test_cmd,
+                tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
                 check=False,
                 cwd=test_dir,
                 capture_output=True,

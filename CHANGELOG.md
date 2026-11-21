@@ -54,6 +54,8 @@ in practice.
 - Worktree patches: the apply-side deny list (the git and Claude config directories, the agent instruction file, the MCP config, agent logs) now matches case-insensitively.
 - Agent harness and review spawns pass their argv through the optional `PIPELINE_COMMAND_WRAP_PLUGIN` seam (`wrap(argv, cwd, kind, namespace) -> list[str]`), which fails closed: a plugin failure or malformed answer refuses the command, and it cannot be combined with ssh execution or `PIPELINE_SANDBOX=docker` (tcw-01; see ADR 0016).
 
+- Grading and merge re-check commands (the acceptance and build re-verify, the check-story-status test run, and the detached grader's argv) also pass through the `PIPELINE_COMMAND_WRAP_PLUGIN` seam, so an operator's wrap covers every repository test and build run, not only agent and review spawns (tcw-02).
+
 ## [0.10.0] - 2026-11-17
 
 ### Added

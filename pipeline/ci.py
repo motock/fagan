@@ -21,7 +21,7 @@ from typing import Any
 
 from app import role_registry
 
-from . import bound_records
+from . import bound_records, tenant_exec
 
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
@@ -488,11 +488,11 @@ def _reverify_acceptance(
     if _is_heavy(test_cmd):
         with _heavy_lock():
             r = subprocess.run(
-                test_cmd, check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
+                tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"), check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
             )
     else:
         r = subprocess.run(
-            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
+            tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"), check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
         )
 
     # Keep the manifest's diagnostic last_test_check field in sync with this
@@ -543,11 +543,11 @@ def _reverify_build(worktree: str, *, settings: SettingsContext) -> dict[str, st
     if _is_heavy(build_cmd):
         with _heavy_lock():
             r = subprocess.run(
-                build_cmd, check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
+                tenant_exec.wrap(build_cmd, cwd=str(build_dir), kind="build"), check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
             )
     else:
         r = subprocess.run(
-            build_cmd, check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
+            tenant_exec.wrap(build_cmd, cwd=str(build_dir), kind="build"), check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
         )
 
     if r.returncode == 0:

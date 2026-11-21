@@ -358,7 +358,17 @@ class EmailChannelType:
         error propagates to the caller's broad handler (RETRY).
         """
         if self._password_ref is not None:
-            return _secret_text(resolve(CredentialRef("notification", self._password_ref)))
+            # Imported here: ``pipeline.actor`` pulls in the identity layer, which
+            # must not load just to validate a channel.
+            from pipeline.actor import current_namespace
+
+            return _secret_text(
+                resolve(
+                    CredentialRef(
+                        "notification", self._password_ref, namespace=current_namespace()
+                    )
+                )
+            )
         if self._password_env is not None:
             return os.environ.get(self._password_env, "")
         return ""

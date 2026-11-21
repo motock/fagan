@@ -60,7 +60,13 @@ def _client(url: str, address: str, timeout: float) -> httpx.Client:
 def _reveal(ref_name: str) -> str:
     # Slack's ``_secret_text`` is the reviewed reveal point for notification
     # credentials; reuse it rather than widening the reveal allowlist.
-    return _secret_text(resolve(CredentialRef("notification", ref_name))).strip()
+    # Imported here: ``pipeline.actor`` pulls in the identity layer, which must
+    # not load just to validate a channel.
+    from pipeline.actor import current_namespace
+
+    return _secret_text(
+        resolve(CredentialRef("notification", ref_name, namespace=current_namespace()))
+    ).strip()
 
 
 def _validated_address(url: str) -> str | None:

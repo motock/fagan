@@ -846,6 +846,18 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             },
         )
 
+        _notify_user(
+            plan_name,
+            f"{story_key} merged",
+            story_key=story_key,
+            event="story_merged",
+            **(
+                {"correlation_id": story["correlation_id"]}
+                if story.get("correlation_id")
+                else {}
+            ),
+        )
+
         from .plan_completion import notify_if_plan_completed
 
         try:

@@ -239,11 +239,12 @@ def test_no_other_merge_notification_gained_event_kwarg():
     every ``event=`` keyword argument in the module must use the stamped
     name (so any future "rebase auto-resolved" site stamped identically is
     fine, but no differently-named event may appear), and at least the two
-    known call sites must be stamped."""
+    known call sites must be stamped. The allowed set is
+    {"rebase_auto_resolved", "story_merged"}."""
     src = Path(merge.__file__).read_text()
     matches = re.findall(r"\bevent\s*=\s*([\'\"])(.*?)\1", src)
     names = {name for _, name in matches}
-    assert names == {EVENT_NAME}, (
+    assert names == {EVENT_NAME, "story_merged"}, (
         f"every event= kwarg in pipeline/merge.py must be "
         f"{EVENT_NAME!r}; found {sorted(names)!r}"
     )

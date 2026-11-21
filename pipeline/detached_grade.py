@@ -14,7 +14,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import bound_records
+from . import bound_records, tenant_exec
 from .build_detect import failed_node_ids
 from .host_state import build_host_state
 from .settings_resolve import SAFE_DEFAULT_SOURCE
@@ -317,7 +317,7 @@ def start_detached_grade(
             sys.executable,
             "-c",
             GRADE_WRAPPER,
-            json.dumps(cmd),
+            json.dumps(tenant_exec.wrap(cmd, cwd=str(cwd), kind="test")),
             str(result_path),
             str(log_path),
         ],

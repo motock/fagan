@@ -52,7 +52,7 @@ from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
-from . import bound_records, config_provenance
+from . import bound_records, config_provenance, tenant_exec
 from . import ci as _ci_module
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,

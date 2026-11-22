@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- A `role_routing` value may name an undeclared Ollama cloud model. On a remote Ollama endpoint a plain name is accepted, and a `:cloud` tag is accepted on any endpoint; the settings value check now applies the same rule as role resolution, so such a value can be saved (it was refused with `invalid_value` before).
+
 - `PIPELINE_INTAKE_PLUGINS` lists operator-supplied intake callables that the scheduler runs once per tick, after Jira intake, to create plans from the operator's own sources. It needs `PIPELINE_PLUGIN_MODULES` and does nothing while plan approval is off.
 
 - The overlord prepares park options for a parked story. With failure triage on (`PIPELINE_AUTO_TRIAGE`), each scheduler tick prepares options for at most one parked story that has none for its current `parked_reason`: `park_option_count` options (2 to 5, default 3, settable on the org, team and team/repo layers) drawn from the park class's menu plus `retry`, one recommended. Nothing runs until a person chooses. `GET /api/plans/{plan}/stories/{story}/park-options` lists them and `POST /api/plans/{plan}/stories/{story}/park-options/{option_id}/choose` carries the choice out: `retry` clears the retry counters and sets the story `interrupted`, and any other action runs through the triage executor under the plan lock. A stale or unknown choice is refused with a 409 and an error of `not_parked`, `no_options`, `options_stale` or `unknown_option`, and nothing changes.

@@ -4215,10 +4215,11 @@ A **ceiling** key may only be tightened by a lower layer, unless the layer above
 secrets are refused, and a `*_env` name is refused outside the `default`
 namespace. A layer route may name only that layer's own instances, and the
 deployment routes are matched first. `role_routing` values are validated
-against the live model registry when written. Both keys are validated and
+against the live model registry when written, and the value check applies the
+same rule as role resolution. Both keys are validated and
 stored, but nothing reads them at runtime yet: notification routing and role
 resolution still come from the deployment file and the registry.
-A `role_routing` model for the `ollama` provider that the registry does not declare is accepted at resolution only when it is a cloud model: a plain name on a remote Ollama endpoint, or a `:cloud` tag on any endpoint.
+A `role_routing` model for the `ollama` provider that the registry does not declare is accepted both when written and at resolution, and only when it is a cloud model: a plain name on a remote Ollama endpoint, or a `:cloud` tag on any endpoint. The value check and resolution share one rule (`is_allowed_undeclared_cloud_model` in `app/role_registry.py`), so a value that is saved always resolves.
 
 `PIPELINE_SETTINGS_KEYS_PLUGIN=module:attr` lets an operator register extra
 keys alongside the core keys. They are validated on first read, and an invalid

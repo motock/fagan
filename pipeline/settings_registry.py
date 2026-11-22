@@ -66,13 +66,20 @@ def _test_scope_tighter(a: str, b: str) -> str:
 
 def _accepts_role_routing(value: Any) -> bool:
     """True when *value* pins each role to a provider and model declared in the
-    live model registry (``PIPELINE_MODEL_REGISTRY_PATH`` or the repo default).
+    live model registry (``PIPELINE_MODEL_REGISTRY_PATH`` or the repo default),
+    or to an undeclared Ollama cloud model that resolution would accept
+    (``is_allowed_undeclared_cloud_model``). The value check and role
+    resolution apply the same rule.
 
     Every deny path returns False: a malformed value, an undeclared provider or
-    model, or a registry that cannot be read.
+    model that is not an allowed cloud model, or a registry that cannot be read.
     """
     # Imported here: app.* must not load at module import (see test_preflight).
-    from app.role_registry import RoleRegistryError, load_registry
+    from app.role_registry import (
+        RoleRegistryError,
+        is_allowed_undeclared_cloud_model,
+        load_registry,
+    )
 
     if not isinstance(value, dict):
         return False
@@ -93,7 +100,9 @@ def _accepts_role_routing(value: Any) -> bool:
         provider_cfg = providers.get(provider)
         if not isinstance(provider_cfg, dict):
             return False
-        if model not in provider_cfg.get("models", {}):
+        if model in provider_cfg.get("models", {}):
+            continue
+        if not is_allowed_undeclared_cloud_model(provider, model):
             return False
     return True
 

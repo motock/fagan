@@ -50,6 +50,8 @@ in practice.
 
 ### Changed
 
+- A `role_routing` setting may route a role to the `ollama` provider with a cloud model the registry does not declare under `providers.ollama.models`. A plain name such as `kimi-k3` is accepted when the Ollama endpoint is remote, and a `:cloud` tag such as `kimi-k3:cloud` is accepted on any endpoint; local models are still refused. Other undeclared names keep failing with `RoleRegistryError`.
+
 - With `PIPELINE_CHECKPOINT_MODE=file`, a dispatched agent records a checkpoint by committing its work and dropping `.agent_checkpoint` in its worktree (the prompt asks for that file instead of the checkpoint tool), and the local agent's checkpoint tool does the same without store access; with the mode unset the prompt and tool call are unchanged (hrc-04).
 
 - Documents plan advancement modes (`PIPELINE_ADVANCE_WORKERS`, `PIPELINE_ADVANCE_MODE`, `PIPELINE_ADVANCE_STALE_SECONDS`) in REFERENCE.md, and adds a regression test showing that two namespaces holding a plan with the same name (`demo`) are each advanced exactly once through the queue sweep and the worker pool, with the child request carrying its own namespace and a request for a namespace that does not hold the plan refused (nq-06).

@@ -23,10 +23,12 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.cloud_served import endpoint_from_env, is_cloud_served
 from pipeline.strength_class import strength_class
 
 _REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
@@ -43,6 +45,13 @@ _DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "model_registr
 # in-place rewrite), and reset_registry_cache() drops the memo entirely
 # (tests/unit/conftest.py's autouse fixture calls it around every test).
 _MASTER_REGISTRY_CACHE: dict[tuple, dict] = {}
+
+# Shape of a model name a team may route to an undeclared Ollama cloud model.
+# Checked before the name is echoed into an error message: a name that fails
+# it is caller-supplied text and is never repeated back.
+_PLAIN_MODEL_NAME = re.compile(
+    r"[a-z0-9][a-z0-9._-]{0,63}(:[a-z0-9][a-z0-9._-]{0,31})?"
+)
 
 
 class RoleRegistryError(ValueError):
@@ -163,6 +172,16 @@ def _fallback_value(model_fallback: str | Callable[[], str | None] | None) -> st
     return model_fallback() if callable(model_fallback) else model_fallback
 
 
+def _is_allowed_undeclared_cloud_model(provider: str, model_name: str) -> bool:
+    """True when a layer-routed model the registry does not declare may
+    still resolve: an ollama model whose name is well-formed and is cloud-
+    served on the configured endpoint (a plain name needs a remote endpoint,
+    a ``:cloud`` tag is accepted anywhere). Anything else is denied."""
+    if provider != "ollama" or not _PLAIN_MODEL_NAME.fullmatch(model_name):
+        return False
+    return is_cloud_served("ollama", model_name, endpoint=endpoint_from_env())
+
+
 def resolve_role(
     role: str,
     *,
@@ -194,7 +213,11 @@ def resolve_role(
 
     Both plan- and registry-supplied model values are *friendly names*,
     resolved against providers.<resolved provider>.models — never a raw
-    tag — so a typo is caught here, not deep inside a driver. The
+    tag — so a typo is caught here, not deep inside a driver. The one
+    exception: a model named by `layer_routing` (and not by plan_role_config)
+    for the ollama provider may be an undeclared cloud model, resolved to
+    itself, when it is a well-formed name cloud-served on the configured
+    endpoint (see _is_allowed_undeclared_cloud_model). The
     registry's (provider, model) pairing for a role is only used when the
     registry's own provider for that role is the one that actually won;
     if a higher-priority source (plan role_config) overrides the provider,
@@ -227,15 +250,24 @@ def resolve_role(
 
     if model_name:
         provider_models = reg.get("providers", {}).get(provider, {}).get("models", {})
-        if model_name not in provider_models:
+        from_layer = bool(layer_model) and not plan_cfg.get("model")
+        if model_name in provider_models:
+            entry = provider_models[model_name]
+            model = entry["tag"]
+            entry_class = entry.get("class")
+        elif from_layer and _is_allowed_undeclared_cloud_model(provider, model_name):
+            model = model_name
+            entry_class = None
+        else:
+            echoed = (
+                f" {model_name!r}" if _PLAIN_MODEL_NAME.fullmatch(model_name) else ""
+            )
             raise RoleRegistryError(
                 f"role {role!r} resolved to provider {provider!r} with "
-                f"model {model_name!r}, which is not declared under "
-                f"providers.{provider}.models"
+                f"model{echoed}, which is not declared under "
+                f"providers.{provider}.models and is neither declared nor "
+                f"an allowed cloud model"
             )
-        entry = provider_models[model_name]
-        model = entry["tag"]
-        entry_class = entry.get("class")
     else:
         model = _fallback_value(model_fallback)
         entry_class = None

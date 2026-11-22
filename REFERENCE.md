@@ -4218,6 +4218,7 @@ deployment routes are matched first. `role_routing` values are validated
 against the live model registry when written. Both keys are validated and
 stored, but nothing reads them at runtime yet: notification routing and role
 resolution still come from the deployment file and the registry.
+A `role_routing` model for the `ollama` provider that the registry does not declare is accepted at resolution only when it is a cloud model: a plain name on a remote Ollama endpoint, or a `:cloud` tag on any endpoint.
 
 `PIPELINE_SETTINGS_KEYS_PLUGIN=module:attr` lets an operator register extra
 keys alongside the core keys. They are validated on first read, and an invalid

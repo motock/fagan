@@ -15,7 +15,7 @@ from .forge import get_forge
 from .policy_settings import policy_settings
 from .service import _ServerRef
 from .settings_store import read_layers
-from .test_scope import resolve_test_scope
+from .test_scope import deployment_host_tests_skipped, resolve_test_scope
 
 _notify_user = _ServerRef("_notify_user")
 TEST_SCOPE_ENV = "PIPELINE_TEST_SCOPE"
@@ -60,13 +60,17 @@ def _context(manifest):
     return context_from_manifest(manifest)
 
 
-def _test_scope_resolution(manifest, *, plan_value, story_value=None):
+def _tenant_layers(manifest):
     context = _context(manifest)
     # A plan with no repo_url has no repository record to read: its repo_root
     # path is not a settings repo key, so the team_repo layer is skipped.
     repo = context.repo if manifest.get("repo_url") else ""
+    return read_layers(context.namespace, team=context.team, repo=repo)
+
+
+def _test_scope_resolution(manifest, *, plan_value, story_value=None, layers=None):
     return resolve_test_scope(
-        settings=read_layers(context.namespace, team=context.team, repo=repo),
+        settings=_tenant_layers(manifest) if layers is None else layers,
         plan_value=plan_value,
         story_value=story_value,
     )
@@ -75,10 +79,12 @@ def _test_scope_resolution(manifest, *, plan_value, story_value=None):
 def stamp_test_scope(plan_name, story_key, manifest, story):
     context = _context(manifest)
     settings = policy_settings(context.namespace, context.team)
+    layers = _tenant_layers(manifest)
     result = _test_scope_resolution(
         manifest,
         plan_value=manifest.get("test_scope"),
         story_value=story.get("test_scope"),
+        layers=layers,
     )
     if result["test_scope"] == "scoped":
         reason = ci_unavailable_reason(manifest)
@@ -97,6 +103,9 @@ def stamp_test_scope(plan_name, story_key, manifest, story):
                 event="test_scope_degraded",
                 dedup_key=f"test_scope_degraded:{plan_name}:{reason}",
             )
+    # Only a story CI gates keeps no host tests; a degraded story is full above.
+    if result["test_scope"] == "scoped" and deployment_host_tests_skipped(layers):
+        result["host_tests"] = "skipped"
     result["resolved_at"] = datetime.now(UTC).isoformat()
     story["test_scope_resolution"] = result
     if result["lock_rejections"]:

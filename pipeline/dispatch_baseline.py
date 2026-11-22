@@ -15,7 +15,7 @@ from .build_detect import (
     detect_test_command,
     failed_node_ids,
 )
-from .test_scope_run import is_scoped
+from .test_scope_run import host_tests_skipped, is_scoped
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +293,8 @@ def baseline_snapshot_for(story: dict, full_snapshot):
     """
     if not is_scoped(story):
         return full_snapshot
+    if host_tests_skipped(story):
+        return lambda _worktree_path: None
 
     def snapshot(worktree_path: Path) -> dict | None:
         acceptance_paths = _acceptance_rel_paths(story)

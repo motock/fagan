@@ -20,6 +20,7 @@ _POLICY_LAYERS = ("deployment", "org", "team", "team_repo")
 _DEFAULT_SOURCE = "default"
 DEPLOYMENT_LAYER = "deployment"
 TENANT_TEST_POLICY_LOCK_KEY = "tenant_test_policy_locked"
+HOST_TESTS_SKIPPED_KEY = "host_tests_skipped"
 # Keys whose deployment value is final while the lock is held; a tenant layer
 # is not consulted for them.
 LOCKED_KEYS = ("reverify_full_suite",)
@@ -82,6 +83,15 @@ def _result(test_scope, source, lock_rejections, invalid_layers):
 def deployment_lock_held(settings) -> bool:
     """True when the deployment layer sets the tenant test-policy lock to exactly True."""
     return _tenant_layer(settings, DEPLOYMENT_LAYER).get(TENANT_TEST_POLICY_LOCK_KEY) is True
+
+
+def deployment_host_tests_skipped(settings) -> bool:
+    """True when the deployment layer sets ``host_tests_skipped`` to exactly True.
+
+    Only meaningful for a story that resolved ``scoped``: CI gates its merge,
+    so the pipeline host runs no test command for it.
+    """
+    return _tenant_layer(settings, DEPLOYMENT_LAYER).get(HOST_TESTS_SKIPPED_KEY) is True
 
 
 def locked_deployment_value(settings, key):

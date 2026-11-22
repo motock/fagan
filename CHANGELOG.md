@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- The deployment-only `host_tests_skipped` lock: when the deployment layer sets it to `true`, a story that resolved `scoped` (CI gates its merge) runs no test command on the pipeline host, and the pre-dispatch baseline is skipped. A story degraded to `full` still runs its tests.
+
 - A `role_routing` value may name an undeclared Ollama cloud model. On a remote Ollama endpoint a plain name is accepted, and a `:cloud` tag is accepted on any endpoint; the settings value check now applies the same rule as role resolution, so such a value can be saved (it was refused with `invalid_value` before).
 
 - `PIPELINE_INTAKE_PLUGINS` lists operator-supplied intake callables that the scheduler runs once per tick, after Jira intake, to create plans from the operator's own sources. It needs `PIPELINE_PLUGIN_MODULES` and does nothing while plan approval is off.

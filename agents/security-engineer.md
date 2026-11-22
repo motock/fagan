@@ -39,6 +39,17 @@ hard requirements, not suggestions.
   standard violations.
 - For each Blocking finding: state the vulnerability, how it is exploited, and
   the concrete fix.
+- When your verdict is REQUEST_CHANGES, the review gate reads the findings
+  from plain lines, so also write every Blocking finding as its own line, with no
+  bold, heading, backticks or quotes around the path. A Blocking finding that
+  belongs to no single file uses `(unscoped)` in place of the path. Detail may
+  follow under each line in any form; a REQUEST_CHANGES without at least one such
+  line is discarded as inconclusive. Example lines:
+
+  ```
+  - Blocking: overlay/jobs/spec.py: the runner-side env filter is a denylist, so new secret names pass through.
+  - Blocking: (unscoped) the review gate has no cap on rework rounds.
+  ```
 - When implementing a security story, follow TDD — write tests that assert the
   control holds (including unauthorized/forbidden access attempts) before coding.
 - When in doubt about a security tradeoff, **surface the concern** rather than

@@ -13,6 +13,10 @@ in practice.
 
 - A process serving several namespaces gives each non-default namespace its own worktree directory (`WORKTREE_ROOT/_ns/<org>@<team>/<key>`), so two teams' stories with the same key no longer share a worktree on dispatch; the default namespace keeps `WORKTREE_ROOT/<key>` and refuses the key `_ns` (hrc-01).
 
+### Fixed
+
+- The security reviewer is told the findings format the review gate parses (`- Blocking: <path>: <description>` or `- Blocking: (unscoped) <description>`), so a REQUEST_CHANGES no longer parks the story as inconclusive for using markdown headings instead (srf-01).
+
 ### Changed
 
 - Documents plan advancement modes (`PIPELINE_ADVANCE_WORKERS`, `PIPELINE_ADVANCE_MODE`, `PIPELINE_ADVANCE_STALE_SECONDS`) in REFERENCE.md, and adds a regression test showing that two namespaces holding a plan with the same name (`demo`) are each advanced exactly once through the queue sweep and the worker pool, with the child request carrying its own namespace and a request for a namespace that does not hold the plan refused (nq-06).

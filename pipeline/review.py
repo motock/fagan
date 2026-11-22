@@ -591,6 +591,22 @@ def _run_reviewer(
     )
 
 
+# Findings contract for the security reviewer (srf-01). The review gate treats a
+# REQUEST_CHANGES longer than UNFOCUSED_REQUEST_CHANGES_MIN_CHARS with no line of
+# these forms as inconclusive, so the prompt must spell them out. The parser in
+# pipeline/parsers.py is the authority; keep this text in step with it.
+SECURITY_FINDINGS_CONTRACT = (
+    "When your verdict is REQUEST_CHANGES, every Blocking finding must also appear "
+    "as its own line of exactly this form, as plain text with no bold, heading, "
+    "backticks or quotes around the path:\n"
+    "- Blocking: <relative/file/path>: <one-line description>\n"
+    "A Blocking finding that belongs to no single file is written as:\n"
+    "- Blocking: (unscoped) <one-line description>\n"
+    "Further detail (how it is exploited, the fix) may follow under each line in any "
+    "form. A REQUEST_CHANGES without at least one such line is discarded as inconclusive."
+)
+
+
 def _run_security_reviewer(
     worktree: str, branch: str, since_sha: str | None = None,
     plan_role_config: dict | None = None,
@@ -640,8 +656,9 @@ def _run_security_reviewer(
     prompt = (
         f"{lead}"
         f"Check for OWASP issues, secrets, injection, auth/authz bypasses, "
-        f"and Secure-by-Design violations. End with your VERDICT line: "
-        f"APPROVE or REQUEST_CHANGES."
+        f"and Secure-by-Design violations.\n\n"
+        f"{SECURITY_FINDINGS_CONTRACT}\n\n"
+        f"End with your VERDICT line: APPROVE or REQUEST_CHANGES."
     )
     if context_block:
         prompt = f"{prompt}\n\n{context_block}"

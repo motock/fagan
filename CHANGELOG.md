@@ -39,6 +39,8 @@ in practice.
 
 - A new `own_lint_failure` park class covers a story whose suite passes but whose lint gate is red only on files the story added or declared. Its allowed actions are `rebrief` and `park_for_human`; a lint failure in any other file keeps the `unknown` class.
 
+- A new `review_inconclusive` park class covers a story whose work is pushed and green but whose review never reached a verdict (`review inconclusive after <n> attempts`). Its allowed actions are `resume_review` and `park_for_human`; a reason without a readable attempt count keeps the `unknown` class. The class is not governed by the authority matrix until an operator governs it.
+
 - An identity provider loaded through `PIPELINE_IDENTITY_PLUGIN` can serve the remote MCP transport only when its class sets `network_grade = True` (exactly `True`). Any other provider makes the transport refuse to start, and the dashboard browser login stays OIDC-only. The plugin requires `PIPELINE_PLUGIN_MODULES`.
 
 ### Security

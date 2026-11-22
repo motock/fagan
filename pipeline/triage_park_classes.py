@@ -43,6 +43,7 @@ ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "no_commit_after_rework": frozenset({"rebrief", "amend_scope", "escalate_model", "park_for_human"}),
     "ci_red_after_rework": frozenset({"rebrief", "escalate_model", "park_for_human"}),
     "transient_bookkeeping": frozenset({"retry_transient", "park_for_human"}),
+    "review_inconclusive": frozenset({"resume_review", "park_for_human"}),
     "high_risk_hold": frozenset({"park_for_human"}),
     "brief_conflicts_existing_test": frozenset({"amend_scope", "approve_test_edit", "rebrief", "park_for_human"}),
     "env_tool_missing": frozenset({"repo_issue", "park_for_human"}),
@@ -63,6 +64,8 @@ _FAILED_RE = re.compile(r"^\s*FAILED\s+(\S+)", re.MULTILINE)
 _NO_COMMIT_RE = re.compile(r"no new commit after (\d+) rework redispatches")
 _TRANSIENT_MARKERS = ("branch head unavailable", "plan lock contended", "unchanged_since_last_review")
 _HIGH_RISK_MARKER = "high risk held for human review"
+_INCONCLUSIVE_PREFIX = "review inconclusive after "
+_INCONCLUSIVE_RE = re.compile(r"review inconclusive after (\d+) attempts")
 _BRIEF_CONFLICT_PREFIX = "plan conflict: pre-existing tests "
 _BRIEF_CONFLICT_SUFFIX = " contradict the brief"
 _MISSING_TOOL_RE = re.compile(r"FileNotFoundError[^\n]*?No such file or directory: '([A-Za-z0-9_.+-]+)'")
@@ -136,6 +139,8 @@ def _classify(view: dict) -> ParkClass:
         return ParkClass("no_commit_after_rework", {"n": int(no_commit.group(1))})
     if any(marker in reason for marker in _TRANSIENT_MARKERS):
         return ParkClass("transient_bookkeeping", {})
+    if reason.startswith(_INCONCLUSIVE_PREFIX):
+        return _review_inconclusive_park(reason)
     if _HIGH_RISK_MARKER in reason:
         return ParkClass("high_risk_hold", {})
     if _failed_after_push(view):
@@ -209,6 +214,14 @@ def _missing_tool_facts(test_output: str) -> dict | None:
     """A test run that died because a bare tool binary is not on PATH."""
     match = _MISSING_TOOL_RE.search(test_output)
     return {"tool": match.group(1)} if match else None
+
+
+def _review_inconclusive_park(reason: str) -> ParkClass:
+    """A review that never reached a verdict; an unreadable count fails closed to ``unknown``."""
+    match = _INCONCLUSIVE_RE.match(reason)
+    if match is None:
+        return ParkClass("unknown", {})
+    return ParkClass("review_inconclusive", {"attempts": int(match.group(1))})
 
 
 def _rebase_facts(reason: str) -> dict:

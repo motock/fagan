@@ -519,8 +519,18 @@ def run_tool_impl(origin, fn, args) -> str:
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     if fn == "checkpoint":
         try:
-            res = origin["p"]._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
-                                     args.get("summary", ""), args.get("next_hint", ""))
+            from pipeline import checkpoint_drop, git_ops
+
+            if checkpoint_drop.is_file_mode():
+                # File mode: no store access, so commit the work and drop the
+                # checkpoint file for the control plane to journal.
+                sha = git_ops._commit_wip(origin["CWD"], args["story_key"], args["step"])
+                checkpoint_drop.write(origin["CWD"], args["step"], args.get("summary", ""),
+                                      args.get("next_hint", ""), commit=sha)
+                res = {"step": args["step"], "commit": sha}
+            else:
+                res = origin["p"]._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
+                                         args.get("summary", ""), args.get("next_hint", ""))
             return f"checkpoint recorded: {json.dumps(res)[:200]}"
         except Exception as e:  # noqa: BLE001 (checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised)
             return f"ERROR checkpointing: {e}"

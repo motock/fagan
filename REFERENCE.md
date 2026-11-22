@@ -2679,7 +2679,10 @@ The purposes resolved through the seam in this release:
   arbitrary orchestrator variable.
 - `model` — `anthropic_api_key`, `claude_oauth_token`, `ollama_api_key` and `openai_api_key`.
 - `forge` — `github_token`, injected into a dispatched agent as `GH_TOKEN` in a
-  non-default namespace.
+  non-default namespace. The pipeline's own `git push`, `gh pr create`, merge
+  and CI-status commands for that namespace use the same token, passed in the
+  child environment only. The process's own forge token is never used for a
+  team namespace, and a team without a token gets none, so its remote calls fail.
 - `notification` — the reference a notification channel instance configures: `password_ref` (e-mail), `webhook_url_ref` (Slack), or `url_ref` and `secret_ref` (the signed `webhook` type; see "Notification routing"). The lookup carries the namespace the notice is being delivered for, so a credentials plugin can tell which team a notice belongs to.
 - `secret` — a `secret://<provider>/<name>` reference. `env` reads an
   environment variable and only in the `default` namespace; `file` reads a file

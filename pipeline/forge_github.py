@@ -30,6 +30,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from . import forge_auth
 from .ci_failing_tests import extract_failing_tests, format_failing_tests
 from .forge import (
     CANCELLED,
@@ -105,7 +106,9 @@ class GitHubForge(Forge):
     def _run(self, argv: list[str], cwd: str | None = None, **kw: Any):
         """The single place this adapter spawns a process."""
         check = kw.pop("check", False)
-        return subprocess.run(argv, check=check, cwd=cwd, **kw)
+        return subprocess.run(
+            argv, check=check, cwd=cwd, **forge_auth.env_kw(kw.pop("env", None)), **kw
+        )
 
     # -- PR verbs ---------------------------------------------------------
     def open_pr(self, worktree: str, branch: str, title: str, body: str) -> str:
@@ -390,11 +393,13 @@ class GitHubForge(Forge):
                         ".check_runs[] | {name, status, conclusion}",
                     ],
                     check=False, capture_output=True, cwd=cwd, text=True,
+                    **forge_auth.env_kw(),
                 )
             else:
                 proc = subprocess.run(
                     ["gh", "pr", "checks", branch, "--json", "name,bucket"],
                     check=False, capture_output=True, cwd=cwd, text=True,
+                    **forge_auth.env_kw(),
                 )
         except OSError as e:
             raise CIStatusUnreadable(f"gh unavailable: {e}") from e
@@ -529,6 +534,7 @@ class GitHubForge(Forge):
                     "--jq", _FAILING_CHECK_RUN_IDS_JQ,
                 ],
                 check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+                **forge_auth.env_kw(),
             )
             if listing.returncode != 0:
                 return ""
@@ -538,6 +544,7 @@ class GitHubForge(Forge):
                 job = subprocess.run(
                     ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs"],
                     check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+                    **forge_auth.env_kw(),
                 )
                 if job.returncode == 0 and job.stdout.strip():
                     logs.append(job.stdout)
@@ -561,6 +568,7 @@ class GitHubForge(Forge):
                     "--json", "databaseId", "--jq", ".[0].databaseId",
                 ],
                 check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+                **forge_auth.env_kw(),
             )
             if run_list.returncode != 0:
                 _LOGGER.debug("CI run lookup failed; no failing-test ids")
@@ -582,6 +590,7 @@ class GitHubForge(Forge):
                 view = subprocess.run(
                     ["gh", "run", "view", run_id, flag],
                     check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+                    **forge_auth.env_kw(),
                 )
                 if view.returncode == 0 and view.stdout.strip():
                     return _log_excerpt(view.stdout)
@@ -613,7 +622,7 @@ class GitHubForge(Forge):
                     ".workflow_runs[0].id",
                 ],
                 check=False, capture_output=True,
-                text=True, cwd=cwd,
+                text=True, cwd=cwd, **forge_auth.env_kw(),
             )
         except OSError:
             return False
@@ -626,7 +635,7 @@ class GitHubForge(Forge):
             rerun = subprocess.run(
                 ["gh", "run", "rerun", run_id, "--failed"],
                 check=False, capture_output=True,
-                text=True, cwd=cwd,
+                text=True, cwd=cwd, **forge_auth.env_kw(),
             )
         except OSError:
             return False

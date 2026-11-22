@@ -129,6 +129,8 @@ in practice.
 
 ### Fixed
 
+- The pipeline's own `git push`, `gh pr create`, merge and CI-status commands for a team namespace now carry that team's GitHub token. Before, they ran with the process environment, so a team's story could reach review APPROVE and never open its pull request. A team with no token gets none, and the process token is never used for a team. The default namespace is unchanged.
+
 - A story can be dispatched again after a review sends it back (`changes_requested`, `interrupted`) even when a finished (`done` or `merged`) story in another plan holds the same key. Its own worktree directory no longer counts as the other plan's, so the re-dispatch is no longer refused with `story key collides with another plan`. A todo story, or a neighbour still in progress, still refuses.
 
 - A failed story's `failure_reason` names why its latest attempt failed. A red test run reads `tests failed (exit <code>)` (or the not-found text for exit 127), a passing grade clears a reason left by an earlier attempt, and an empty branch whose agent could not authenticate to its model provider says so.

@@ -19,6 +19,7 @@ import subprocess
 from logging import getLogger
 from typing import Any
 
+from . import forge_auth
 from .branch_names import story_branch
 from .forge import get_forge
 
@@ -299,7 +300,8 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     subprocess.run(["git", "branch", "-D", branch],
                     check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "push", "origin", "--delete", branch],
-                    check=False, cwd=repo_root, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True,
+                    **forge_auth.env_kw())
 
     return result
 

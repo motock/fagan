@@ -4048,6 +4048,103 @@ duplicate-header rule above.
 because `mcp` (`2.3.0`) already requires `uvicorn>=0.31.1`; it is not a new
 install, and `requirements.txt` gains nothing.
 
+### Dispatch, retries and watchdogs
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_DISPATCH_WATCHDOG_SECONDS` | `3600` | Absolute ceiling, in seconds, on how long a dispatched agent process may stay alive before `check_story_status` treats it as hung. |
+| `PIPELINE_DISPATCH_STALE_ACTIVITY_SECONDS` | `1800` | Seconds without agent-log activity after which a running dispatch counts as stale (`pipeline/story_status.py`). |
+| `PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS` | `90` | How long after launch an empty `agent.log` is read as "still starting" rather than "dead". |
+| `PIPELINE_INFRA_FAILURE_FALLBACK_THRESHOLD` | `3` | Consecutive infrastructure failures of one story before it switches to the plan's opted-in local model or, with `PIPELINE_BACKEND_DISPATCH=auto`, escalates to Claude. Infrastructure failures never count toward the step-cap streak. |
+| `PIPELINE_REWORK_MAX_ATTEMPTS_NO_COMMIT` | `2` | Rework budget for a story whose rework round made no commit. It is lower than `PIPELINE_REWORK_MAX_ATTEMPTS`, so a story that makes no progress parks sooner. |
+| `PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS` | `300` | Seconds a tick may wait to take back a plan lock it released mid-tick. A timeout aborts the tick rather than continuing unlocked. Fractions are accepted. |
+| `PIPELINE_AUTO_ESCALATE` | unset (on only when `PIPELINE_BACKEND_DISPATCH=auto`) | `1`, `true`, `yes` or `on` turns automatic escalation to Claude on; `0`, `false`, `no` or `off` turns it off. Any other value is ignored. |
+| `PIPELINE_MAX_CONCURRENT_GRADES` | `1` | Detached grades allowed in flight per scheduler tick. A value that is not a positive integer warns once and uses `1`. |
+| `PIPELINE_SANDBOX_IMAGE` | unset | Container image for sandboxed runs. Unset, the sandbox refuses to build a `docker run` command (fail closed). |
+
+### Repository clones and credentials
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_REPOS_ROOT` | unset | Directory under which managed clones are placed. Required to compute a managed repository path; without it a `repo_url` is refused. The standalone deployment documents its value in `deploy/README.md`. |
+| `PIPELINE_REPO_URL_ALLOW_FILE` | unset (`file://` URLs refused) | `1` accepts `file://` repository URLs that name no host or `localhost`. |
+| `PIPELINE_GIT_TOKEN_FILE` | unset | Path to the git forge token file. The file must be non-empty, owned by the pipeline user and not readable by group or others. The git askpass helper reads it at clone time. Delivery of the secret: [DEPLOY_STANDALONE.md](docs/DEPLOY_STANDALONE.md). |
+| `PIPELINE_ANTHROPIC_API_KEY` | unset | The operator's Anthropic API key for the `claude` backend, read through the credentials seam (`app/credentials.py`). It is never passed to agent processes; the Claude CLI receives it as `ANTHROPIC_API_KEY`. A value with embedded whitespace, a secret-file path or an unexpanded `${...}` template is refused. Delivery of the secret: [DEPLOY_STANDALONE.md](docs/DEPLOY_STANDALONE.md). |
+
+### Local providers (Ollama, LM Studio, MLX)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_LOCAL_ENDPOINT_OLLAMA` | unset | Ollama endpoint the pipeline reads first when it classifies models (`app/cloud_served.py`). Falls back to `PIPELINE_LOCAL_ENDPOINT`. |
+| `PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS` | `3` | Attempts per local chat call before its error is raised (`app/backend_ollama.py`). The minimum is 1. |
+| `PIPELINE_LOCAL_CHAT_RETRY_BACKOFF` | `2` | Seconds multiplied by the attempt number to wait between attempts of a local chat call. The wait never exceeds the remaining role-call budget. |
+| `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` | `512` (`2048` for `mlx`) | Free-memory floor, in MB, below which the resource check refuses a local model. `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_<PROVIDER>` overrides it for one provider. Cloud-served and hosted models skip the floor. |
+| `PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION` | `0.60` | A local model whose weights exceed this fraction of total RAM is refused by the resource check, because it would thrash rather than serve. |
+| `PIPELINE_LOCAL_REVIEW_PROACTIVE_TRIM_THRESHOLD` | `0.85` | Fraction of `num_ctx` at which a local review transcript is trimmed before the next turn, instead of growing until the context overflows. |
+| `PIPELINE_LOCAL_THINK` | unset (per-model tuning) | `true` or `false`, or one of `low`, `medium`, `high`, `max`, sets the reasoning depth for local calls. Any other value is ignored and the per-model tuning table applies. |
+| `PIPELINE_CLOUD_NUM_CTX` | `131072` | Context window, in tokens, for cloud-served Ollama models (tags ending `:cloud`). On-device models keep their tuned value. |
+| `PIPELINE_CLOUD_MAX_STEPS` | `120` | Step cap for dispatches to cloud-served Ollama models. On-device runs keep their own cap. |
+
+### Dashboard chat, sign-in and tenant paths
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_BACKEND_CHAT` | `claude` | Backend for the dashboard chat role (`app/chat.py`). It takes the same values as the other `PIPELINE_BACKEND_<ROLE>` variables. |
+| `PIPELINE_CHAT_MAX_TURNS` | `10` | Maximum model turns the chat driver takes per exchange. Zero or a negative value is refused. |
+| `PIPELINE_DASHBOARD_ALLOWED_HOSTS` | unset (no extra hosts) | Comma-separated hostnames the dashboard accepts in the `Host` header, in addition to the built-in loopback hosts (`127.0.0.1`, `localhost`, `::1`). An invalid entry is ignored with a warning. |
+| `PIPELINE_TENANT_DATA_EXEMPT_PATHS` | unset (none exempt) | Comma-separated extension paths under `/api/ext/` that run without a bound namespace; requests to them still authenticate. At most 16 entries; each must be unique and well-formed, or the whole value is refused. |
+| `PIPELINE_OIDC_CLIENT_ID` | unset | OIDC client ID for dashboard sign-in. Sign-in switches on only when `PIPELINE_OIDC_CLIENT_ID`, `PIPELINE_OIDC_CLIENT_SECRET_FILE` and `PIPELINE_OIDC_REDIRECT_URI` are all set. See the "OIDC identity verification" section. |
+| `PIPELINE_OIDC_CLIENT_SECRET_FILE` | unset | Path to a file holding the OIDC client secret. The secret is read from the file, never from the environment. |
+| `PIPELINE_OIDC_REDIRECT_URI` | unset | Callback URL registered with the identity provider. Required, together with the other two sign-in variables, to switch sign-in on. |
+| `PIPELINE_OIDC_INTERNAL_BASE_URL` | unset | Optional in-network origin the server uses for discovery and the token exchange. The browser still uses the public issuer. Set it when the identity provider is reachable from the browser but not from the server. |
+
+### Scheduler daemon
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_SCHEDULER_DAEMON` | `1` | Only `1` makes the supervisor start the scheduler daemon as a child process; any other value skips it. |
+| `PIPELINE_SCHEDULER_INTERVAL_S` | `60` | Seconds between scheduler ticks. Must be a positive integer, or the daemon exits with an error. |
+| `PIPELINE_SCHEDULER_HEARTBEAT_SECONDS` | `30` | Interval at which the watchdog wait on a scan or reconcile pass slices its sleep and refreshes the scheduler health file. |
+| `PIPELINE_SCHEDULER_HEALTH_PATH` | unset (host state's scheduler health file) | Where the scheduler writes its liveness snapshot. |
+| `PIPELINE_SCHEDULER_ROLE_CALL_TIMEOUT_SECONDS` | `180` | Per-call model budget, in seconds, inside the scheduler process. It is separate from `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` (default `600`). |
+| `PIPELINE_SCAN_JOIN_TIMEOUT_SECONDS` | `900` | Watchdog bound, in seconds, on one scan pass, so a hung pass costs one skipped tick. Malformed, zero, negative or non-finite values use the default. |
+| `PIPELINE_RECONCILE_JOIN_TIMEOUT_SECONDS` | `900` | Watchdog bound, in seconds, on one reconcile pass. Malformed, zero, negative or non-finite values use the default. |
+| `PIPELINE_SCHEDULER_PLIST_PATH` | `~/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist` | The launchd plist the configuration report reads. Use it to point the report at a non-default install. |
+| `PIPELINE_CLAUDE_JSON_PATH` | `~/.claude.json` | Claude Code's user config file. The configuration report reads it to locate the MCP server environment. |
+
+### Review
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_REVIEWER_AUTO_FIX` | `0` | `1` lets a reviewer's `APPROVE_WITH_FIX` verdict count as an approval on a low-risk story. The pipeline re-checks the diff size and runs the full test suite before it honours the verdict, and downgrades to `REQUEST_CHANGES` if either fails. |
+| `PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES` | `1` | Most files an `APPROVE_WITH_FIX` may change and still be honoured. |
+| `PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES` | `40` | Most changed lines an `APPROVE_WITH_FIX` may have and still be honoured. |
+| `PIPELINE_REVIEWER_INLINE_DIFF_MAX_CHARS` | `40000` | Largest diff, in characters, that the harness embeds in the review prompt. A larger diff falls back to the reviewer reading the diff itself. |
+| `PIPELINE_REVIEW_DEFER_PARK_AFTER` | `30` | Consecutive rate-limited review deferrals a story tolerates before it parks for a human. |
+
+### Triage
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS` | `86400` | Seconds a merge-gate hold may last before the triage sweep treats it as stale. A negative or non-numeric value uses the default. |
+| `PIPELINE_TRIAGE_SUITE_PROBE` | unset (off) | `1`, `true`, `yes` or `on` runs a full test-suite baseline during triage. The suite takes minutes, so the probe is opt-in. |
+
+### Usage gate request budgets
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_DAILY_REQUEST_THRESHOLD` | `3000` | Requests in a day that count as 100% of the daily budget in the usage gate's session percentage. The setup wizard requires at least 1. |
+| `PIPELINE_WEEKLY_REQUEST_THRESHOLD` | `15000` | Requests in a week that count as 100% of the weekly budget in the usage gate's week percentage. The setup wizard requires at least 1. |
+
+### Loading the env file
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_ENV_FILE` | `<repo root>/.pipeline.env` | Env file to load instead of the default. A named file that does not exist loads nothing; there is no fallback to the default file. |
+| `PIPELINE_SKIP_ENV_FILE` | unset | `1` skips loading any env file at startup. |
+
+**Internal variables (set by the pipeline, not by operators).** `PIPELINE_CORRELATION_ID` is set by the dispatcher in the environment of a dispatched agent, carrying the story's correlation ID when it has one, and restored afterward (`pipeline/dispatch.py`). `PIPELINE_TRANSPORT_NUM_CTX` and `PIPELINE_TRANSPORT_TEMPERATURE` are written by the Ollama driver into the environment of the local-agent transport it launches (`app/backend_ollama.py`). Do not set any of these by hand.
+
 ---
 
 ## Periodic security-audit reminder

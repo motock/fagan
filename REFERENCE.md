@@ -2247,8 +2247,6 @@ so a typo is caught immediately rather than silently falling back to
 some other model. Both sections are optional and can be partial; an
 unconfigured role falls through to today's existing behavior unchanged.
 
-`openai` is the direct OpenAI provider: it calls OpenAI's Responses API at the fixed host `https://api.openai.com`, lists its models under `providers.openai.models`, and takes its key from the per-namespace credential `openai_api_key` (the default namespace falls back to `OPENAI_API_KEY`); see [DEPLOY_STANDALONE.md "OpenAI (direct)"](docs/DEPLOY_STANDALONE.md#openai-direct).
-
 The shipped `model_registry.json` deliberately ships **no `roles` block** —
 this project decouples from any single provider, so the operator chooses.
 Keep a personal `roles` block out of the repo in the gitignored
@@ -2272,6 +2270,8 @@ same for provider and model independently:
    silent.
 4. The role's existing hardcoded/persona-frontmatter default — for
    dispatch/review this is the `claude` backend.
+
+`openai` is the direct OpenAI provider: it calls OpenAI's Responses API at the fixed host `https://api.openai.com`, lists its models under `providers.openai.models`, and takes its key from the per-namespace credential `openai_api_key` (the default namespace falls back to `OPENAI_API_KEY`); see [DEPLOY_STANDALONE.md "OpenAI (direct)"](docs/DEPLOY_STANDALONE.md#openai-direct).
 
 Use `get_effective_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before

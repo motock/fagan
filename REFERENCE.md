@@ -95,7 +95,10 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   control plane claims the drop in its worktree scan, before the done-marker
   scan, and journals it for each `in_progress` story. A drop that is not a
   regular file, is over the size limit, is not a JSON object or has a bad field
-  is deleted and logged with a reason code only. The mode variable is read as
+  is deleted and logged with a reason code only (a directory of that name is
+  removed with its contents; a link is unlinked, never followed). A stale
+  `.agent_checkpoint.claimed` left by an earlier scan is cleared before the
+  next claim. The mode variable is read as
   stripped and lowercased; any value other than `file` (including unset) keeps
   the `checkpoint_story` tool path. The drop is never committed.
 

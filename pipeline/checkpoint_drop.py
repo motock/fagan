@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import stat
 from datetime import UTC, datetime
 
@@ -73,17 +74,29 @@ def claim(worktree) -> dict | None:
     drop = os.path.join(directory, DROP_NAME)
     claimed = os.path.join(directory, _CLAIMED_NAME)
     try:
-        os.lstat(drop)
+        info = os.lstat(drop)
     except FileNotFoundError:
         return None
+    # Non-regular entries are deleted in place, never renamed: a directory
+    # renamed to the claimed name would wedge every later claim.
+    if not stat.S_ISREG(info.st_mode):
+        _clear(drop)
+        return _refuse("not_regular")
+    if info.st_size > _MAX_BYTES:
+        _clear(drop)
+        return _refuse("too_large")
+    _clear_stale_claim(claimed)
     try:
         os.replace(drop, claimed)
     except FileNotFoundError:
         return None
+    except OSError:
+        _clear(drop)
+        return _refuse("claim_failed")
     try:
         return _read_claimed(claimed)
     finally:
-        _remove(claimed)
+        _clear(claimed)
 
 
 def _read_claimed(path: str) -> dict | None:
@@ -129,14 +142,32 @@ def _refuse(reason: str) -> None:
     logger.warning("agent checkpoint drop refused", extra={"reason": reason})
 
 
-def _remove(path: str) -> None:
+def _clear_stale_claim(claimed: str) -> None:
+    # A regular file left at the claimed name is replaced atomically by
+    # os.replace, so only a non-regular leftover (a directory, a link) needs
+    # removing before the claim.
+    with contextlib.suppress(FileNotFoundError):
+        if not stat.S_ISREG(os.lstat(claimed).st_mode):
+            _clear(claimed)
+
+
+def _clear(path: str) -> None:
+    """Delete whatever sits at ``path`` without following links. Directories
+    are removed whole; a symlink is unlinked, never followed."""
     try:
-        os.unlink(path)
-    except IsADirectoryError:
-        with contextlib.suppress(OSError):
-            os.rmdir(path)
+        info = os.lstat(path)
     except FileNotFoundError:
-        pass
+        return
+    try:
+        if stat.S_ISDIR(info.st_mode):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except OSError as exc:
+        logger.warning(
+            "agent checkpoint drop could not be removed: %s",
+            type(exc).__name__,
+        )
 
 
 def ingest(plan_name, story_key, story) -> dict | None:

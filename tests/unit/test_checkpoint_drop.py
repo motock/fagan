@@ -152,8 +152,49 @@ def test_directory_drop_is_refused_and_left_alone_as_a_name(worktree: Path, capl
     assert checkpoint_drop.claim(worktree) is None
 
     assert not os.path.lexists(worktree / DROP)
+    assert not os.path.lexists(worktree / (DROP + ".claimed"))
     assert _reason_records(caplog)[0].reason == "not_regular"
     assert MARKER not in caplog.text
+
+
+def test_non_empty_directory_drop_does_not_block_the_next_valid_drop(worktree: Path):
+    (worktree / DROP).mkdir()
+    (worktree / DROP / "inner.txt").write_text(MARKER)
+    assert checkpoint_drop.claim(worktree) is None
+
+    checkpoint_drop.write(worktree, step="after", summary="s")
+
+    record = checkpoint_drop.claim(worktree)
+    assert record is not None
+    assert record["step"] == "after"
+
+
+def test_stale_non_empty_claimed_directory_does_not_block_a_valid_drop(worktree: Path):
+    (worktree / (DROP + ".claimed")).mkdir()
+    (worktree / (DROP + ".claimed") / "inner.txt").write_text(MARKER)
+    _put(worktree, _valid(step="fresh"))
+
+    record = checkpoint_drop.claim(worktree)
+
+    assert record is not None
+    assert record["step"] == "fresh"
+    assert not os.path.lexists(worktree / DROP)
+    assert not os.path.lexists(worktree / (DROP + ".claimed"))
+
+
+def test_symlink_at_claimed_name_is_removed_and_its_target_is_untouched(
+    worktree: Path, tmp_path: Path
+):
+    outside = tmp_path / "outside.txt"
+    outside.write_text(MARKER)
+    (worktree / (DROP + ".claimed")).symlink_to(outside)
+    _put(worktree, _valid(step="fresh"))
+
+    record = checkpoint_drop.claim(worktree)
+
+    assert record is not None
+    assert outside.read_text() == MARKER
+    assert not os.path.lexists(worktree / (DROP + ".claimed"))
 
 
 # ---------- commit field ----------

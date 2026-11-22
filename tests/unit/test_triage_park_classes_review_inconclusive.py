@@ -5,6 +5,8 @@ parked by ``pipeline/review_orchestrator.py`` with a reason that starts with
 ``review inconclusive after <n> attempts``. Written FIRST (TDD).
 """
 
+from pathlib import Path
+
 from pipeline.triage_park_classes import (
     ALLOWED_ACTIONS,
     ParkClass,
@@ -96,3 +98,38 @@ def test_review_inconclusive_rejects_escalate_model_amend_scope_and_mark_done():
     assert not check_ruling_allowed(park, "escalate_model")
     assert not check_ruling_allowed(park, "amend_scope")
     assert not check_ruling_allowed(park, "mark_done")
+
+
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _doc(name: str) -> str:
+    return (_ROOT / name).read_text(encoding="utf-8")
+
+
+def _policy_row(name: str) -> str:
+    rows = [line for line in _doc("overlord-policy.md").splitlines() if line.startswith(f"| `{name}` |")]
+    assert len(rows) == 1, f"expected exactly one overlord-policy.md row for {name}, got {len(rows)}"
+    return rows[0]
+
+
+def test_policy_table_row_names_signal_and_allowed_actions():
+    row = _policy_row("review_inconclusive")
+    assert "review inconclusive after" in row
+    assert "`resume_review` \\| `park_for_human`" in row
+
+
+def test_policy_resume_review_section_names_the_new_class():
+    section = _doc("overlord-policy.md").split("### resume_review", 1)[1].split("###", 1)[0]
+    assert "`review_inconclusive`" in section
+
+
+def test_reference_triage_mode_row_lists_the_new_class():
+    row = next(line for line in _doc("REFERENCE.md").splitlines() if line.startswith("| `PIPELINE_TRIAGE_MODE`"))
+    assert "`review_inconclusive`" in row
+
+
+def test_every_park_class_is_documented_in_policy_table():
+    policy = _doc("overlord-policy.md")
+    undocumented = [name for name in ALLOWED_ACTIONS if f"`{name}`" not in policy]
+    assert undocumented == []

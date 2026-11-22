@@ -183,6 +183,7 @@ never from `parked_reason` text alone.
 | `no_commit_after_rework` | `no new commit after N rework redispatches` | `rebrief` \| `amend_scope` \| `escalate_model` \| `park_for_human` |
 | `ci_red_after_rework` | CI red after rework (`ci_rework` set, or PR checks failed) | `rebrief` \| `escalate_model` \| `park_for_human` |
 | `transient_bookkeeping` | `branch head unavailable`, `plan lock contended`, `unchanged_since_last_review` | `retry_transient` \| `park_for_human` |
+| `review_inconclusive` | `review inconclusive after <n> attempts` (the reason starts with that text and the count is readable; otherwise `unknown`) | `resume_review` \| `park_for_human` |
 | `high_risk_hold` | `high risk held for human review` | `park_for_human` only |
 | `brief_conflicts_existing_test` | `parked_reason` starts `plan conflict: pre-existing tests` and names the tests that contradict the brief | `amend_scope` \| `approve_test_edit` \| `rebrief` \| `park_for_human` |
 | `env_tool_missing` | the test run died on `FileNotFoundError ... No such file or directory: '<tool>'` for a bare tool binary | `repo_issue` \| `park_for_human` |
@@ -207,7 +208,7 @@ repository, so it is not affected by `repo_root`.
 
 ### resume_review
 
-`resume_review` (park class `agent_failed_after_push` only) returns a failed story whose pushed
+`resume_review` (park classes `agent_failed_after_push` and `review_inconclusive`) returns a failed story whose pushed
 branch head no review has seen to `tests_passed`, so `review_story` reviews that head, after
 clearing the review records that would skip or misreport it. It parks the story for a human
 instead when no commit is recorded beyond the base, when a verdict already covers the head or

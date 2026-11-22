@@ -145,6 +145,10 @@ def context_from_manifest(manifest: dict[str, Any]) -> SettingsContext:
     )
 
 
+# Stands in for a plan with no stored manifest: the default namespace.
+_UNKNOWN_PLAN_MANIFEST = {"namespace": DEFAULT_NAMESPACE}
+
+
 def settings_for_plan(plan_name: str) -> SettingsContext:
     """Merge settings context for ``plan_name``, from its stored manifest.
 
@@ -152,12 +156,12 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
     its deployment or safe value.
     """
     if not plan_name:
-        return context_from_manifest({"namespace": DEFAULT_NAMESPACE})
+        return context_from_manifest(_UNKNOWN_PLAN_MANIFEST)
     from .server import _store
 
     manifest = bound_records.get_manifest(_store, plan_name)
     if not manifest:
-        return context_from_manifest({"namespace": DEFAULT_NAMESPACE})
+        return context_from_manifest(_UNKNOWN_PLAN_MANIFEST)
     return context_from_manifest(manifest)
 
 

@@ -2221,7 +2221,7 @@ its default model instead of the pin.
 Every pipeline role — **overlord**, **planner** (the guided-decomposition
 checklist role), **dispatch** (the implementer), **review**, and
 **decompose** (`decompose_plan`) — is independently configurable to a
-provider (`claude` / `ollama` / `mlx` / `lmstudio` / `litellm`) and a model.
+provider (`claude` / `ollama` / `mlx` / `lmstudio` / `litellm` / `openai`) and a model.
 `model_registry.json` (repo root, or `PIPELINE_MODEL_REGISTRY_PATH`) is the
 single editable place to see and change what's available, instead of
 scattered env vars:
@@ -2270,6 +2270,8 @@ same for provider and model independently:
    silent.
 4. The role's existing hardcoded/persona-frontmatter default — for
    dispatch/review this is the `claude` backend.
+
+`openai` is the direct OpenAI provider: it calls OpenAI's Responses API at the fixed host `https://api.openai.com`, lists its models under `providers.openai.models`, and takes its key from the per-namespace credential `openai_api_key` (the default namespace falls back to `OPENAI_API_KEY`); see [DEPLOY_STANDALONE.md "OpenAI (direct)"](docs/DEPLOY_STANDALONE.md#openai-direct).
 
 Use `get_effective_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before
@@ -2670,12 +2672,10 @@ The purposes resolved through the seam in this release:
 - `env` — the `name` is an environment variable name. The default provider reads
   only a declared allowlist of `env` names, so the seam cannot be used to read an
   arbitrary orchestrator variable.
-- `model` — `anthropic_api_key`, `claude_oauth_token` and `ollama_api_key`.
+- `model` — `anthropic_api_key`, `claude_oauth_token`, `ollama_api_key` and `openai_api_key`.
 - `forge` — `github_token`, injected into a dispatched agent as `GH_TOKEN` in a
   non-default namespace.
-- `notification` — the `password_ref` or `webhook_url_ref` configured on a
-  notification channel instance (see "Slack channel type" and the notification
-  routing example).
+- `notification` — the reference a notification channel instance configures: `password_ref` (e-mail), `webhook_url_ref` (Slack), or `url_ref` and `secret_ref` (the signed `webhook` type; see "Notification routing"). The lookup carries the namespace the notice is being delivered for, so a credentials plugin can tell which team a notice belongs to.
 - `secret` — a `secret://<provider>/<name>` reference. `env` reads an
   environment variable and only in the `default` namespace; `file` reads a file
   under `PIPELINE_SECRET_FILE_ROOT` that must resolve inside that root (symlink

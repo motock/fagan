@@ -402,8 +402,17 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
   log. Opt in to e-mail (`PIPELINE_NOTIFY_EMAIL_ENABLED=1`) and the scheduler
   sends plan completions, parked stories, and dispatch, test and agent
   failures through an outbox that keeps undelivered messages for the next
-  attempt. See
-  [Notifications](REFERENCE.md#notifications-plan_completed-and-the-outbound-e-mail-channel).
+  attempt. A JSON routing file adds named channels of three types: e-mail,
+  [Slack](REFERENCE.md#slack-channel-type), and a signed general `webhook`
+  that POSTs to your own automation. Routes can be set on the team, org or
+  team/repo settings layer, and deliver chosen events to a channel or to the
+  plan's `plan_owner` and `plan_approvers` audiences. See
+  [Notifications](REFERENCE.md#notifications-plan_completed-and-the-outbound-e-mail-channel)
+  and [Notification routing](REFERENCE.md#notification-routing).
+- **Jira Cloud intake.** With `PIPELINE_JIRA_ENABLED=1` and plan approval on,
+  a Jira story assigned to the service account becomes a plan, and each of
+  the plan's stories is mirrored as a Jira sub-task that follows its progress.
+  See [Jira Cloud integration](REFERENCE.md#jira-cloud-integration).
 - **Review from the dashboard.** Each story's modal shows a read-only diff of
   its worktree against its fork point (also the `get_story_diff` tool), a
   stuck story can take a proposed patch through
@@ -424,12 +433,18 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
   `approve_merge` or by hand.
 - **Where agents run.** Opt-in [Docker sandboxing](docs/specs/DOCKER_SANDBOX.md),
   [remote dispatch or review over SSH](docs/specs/REMOTE_EXECUTION.md), and
-  [LiteLLM routing](docs/specs/LITELLM_PROVIDER.md) to hosted vendors.
+  [LiteLLM routing](docs/specs/LITELLM_PROVIDER.md) to hosted vendors, and the
+  [direct OpenAI provider](docs/DEPLOY_STANDALONE.md#openai-direct) for
+  OpenAI's Responses API.
 - **Stuck-story handling.** The scheduler flags an in-progress story whose
   agent has gone quiet (30 minutes by default), and with
   `PIPELINE_AUTO_TRIAGE=1` the overlord rules on a failed or parked story:
   escalate the model, split the story, patch a broken acceptance fixture, or
-  hold it for you. `pause_plan` stops one plan without touching the others.
+  hold it for you. With a parked story, the overlord also prepares options
+  and a person chooses one (`choose_park_option`, from the dashboard or
+  chat); nothing runs until then. See
+  [Park options](REFERENCE.md#park-options). `pause_plan` stops one plan
+  without touching the others.
 
 ---
 

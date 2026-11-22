@@ -158,10 +158,9 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         bound_records.put_manifest(_store, plan_name, manifest)
         # Branch and worktree derive from key and namespace: a key another plan
         # still holds would adopt its worktree and push its branch. Refuse first.
-        collisions = cross_plan.key_conflicts(
-            [story_key],
-            cross_plan.neighbour_manifests(_store, plan_name),
-            worktree_path.parent, resuming=() if story.get("status") == "todo" else (story_key,),
+        collisions = cross_plan.dispatch_collisions(
+            story_key, story.get("status"),
+            cross_plan.neighbour_manifests(_store, plan_name), worktree_path.parent,
         )
         if collisions:
             other = collisions[0]

@@ -15,6 +15,7 @@ __all__ = [
     "ACTIVE_STATUSES",
     "blocked_by_gaps",
     "clear_manifest_cache",
+    "dispatch_collisions",
     "file_overlaps",
     "in_flight_stories",
     "key_conflicts",
@@ -225,6 +226,18 @@ def blocked_by_gaps(story: dict, manifests: dict[str, dict]) -> list[str]:
         if not isinstance(target, dict) or target.get("status") not in _SATISFIED_STATUSES:
             gaps.append(ref)
     return gaps
+
+
+def dispatch_collisions(story_key: str, status, manifests: dict[str, dict], worktree_root) -> list[dict]:
+    """Return the other-plan stories that refuse a dispatch of *story_key*.
+
+    A story that is not ``todo`` has run before, so its own worktree directory
+    may already exist and is not another plan's: it is passed as resuming. A
+    ``todo`` story has never run, so an existing directory still refuses.
+    """
+    if status == "todo":
+        return key_conflicts([story_key], manifests, worktree_root)
+    return key_conflicts([story_key], manifests, worktree_root, resuming=(story_key,))
 
 
 def key_conflicts(keys, manifests: dict[str, dict], worktree_root, *, resuming=()) -> list[dict]:

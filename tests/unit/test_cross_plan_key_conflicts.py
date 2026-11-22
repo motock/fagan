@@ -160,3 +160,31 @@ def test_empty_resuming_is_identical_to_default(tmp_path, worktrees):
     assert key_conflicts(keys, m, worktrees, resuming=()) == key_conflicts(
         keys, m, worktrees
     )
+
+
+def test_dispatch_collisions_todo_story_refuses_existing_done_neighbour_directory(
+    tmp_path, worktrees,
+):
+    (worktrees / "K-1").mkdir()
+    m = _manifests(tmp_path, {"other": {"K-1": {"status": "done"}}})
+    assert cross_plan.dispatch_collisions("K-1", "todo", m, worktrees) == [
+        {"key": "K-1", "plan": "other", "other_key": "K-1", "status": "done"}
+    ]
+
+
+@pytest.mark.parametrize("status", ["changes_requested", "interrupted"])
+def test_dispatch_collisions_resumed_story_allows_done_neighbour_with_directory(
+    tmp_path, worktrees, status,
+):
+    (worktrees / "K-1").mkdir()
+    m = _manifests(tmp_path, {"other": {"K-1": {"status": "done"}}})
+    assert cross_plan.dispatch_collisions("K-1", status, m, worktrees) == []
+
+
+def test_dispatch_collisions_resumed_story_still_refuses_in_progress_neighbour(
+    tmp_path, worktrees,
+):
+    m = _manifests(tmp_path, {"other": {"K-1": {"status": "in_progress"}}})
+    assert cross_plan.dispatch_collisions("K-1", "interrupted", m, worktrees) == [
+        {"key": "K-1", "plan": "other", "other_key": "K-1", "status": "in_progress"}
+    ]

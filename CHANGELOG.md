@@ -109,6 +109,8 @@ in practice.
 
 - The park-option readiness report counts the choices a person made per park class, as `park_option_choices` and `park_option_agreements`, beside each class's verdict. Choices never enter the paired counts or the false-park rates.
 
+- The readiness report counts a `park_for_human` ruling that a person answered with input as agreement, not a false park. Changing the brief (`rebrief`), widening the scope (`amend_scope`), approving a test edit (`approve_test_edit`), adding files, or an unblock with a note now agrees and is tallied as `park_needed_input` beside each class's verdict. A false park is now only a park the person answered with nothing supplied (`retry`, `resume_review` or `other` with no input). The unblock with a non-blank `note` records `brief_changed` on its resolution; the note's text is not recorded.
+
 ### Fixed
 
 - `GET /api/usage` reports each role's provider and model from the team's `role_routing` setting. The per-role backend rows resolved from the model registry file only, so a deployment that keeps its routing in settings showed every role with an empty provider and model.

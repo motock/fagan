@@ -274,11 +274,12 @@ def clear_story_fields(
     return {key: result[key] for key in ("plan", "story", "cleared", "status")}
 
 
-def _record_resolution(result: dict, principal: str) -> None:
+def _record_resolution(result: dict, principal: str, *, brief_changed: bool = False) -> None:
     """Record the operator's resolution beside the latest ruling, fail-open.
 
     The unblock has already been saved and announced by the time this runs, so
-    a failed record write is a warning, never a failed unpark.
+    a failed record write is a warning, never a failed unpark. ``brief_changed``
+    is passed through to the record; the brief's text never is.
     """
     try:
         triage_outcomes.record_human_resolution(
@@ -288,6 +289,7 @@ def _record_resolution(result: dict, principal: str) -> None:
             files_added=result["files_added"],
             new_status=result["new_status"],
             principal=principal,
+            brief_changed=brief_changed,
         )
     except Exception:  # noqa: BLE001 - the unblock already happened; a record must not undo it
         logging.getLogger("pipeline").warning(

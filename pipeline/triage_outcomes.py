@@ -98,6 +98,7 @@ def record_human_resolution(
     new_status: str,
     principal: str,
     note: str = "",
+    brief_changed: bool = False,
 ) -> dict[str, Any]:
     """Append a ``human resolution`` record for one story and return it.
 
@@ -106,6 +107,10 @@ def record_human_resolution(
     are ``None`` when the story has no ruling on record. For a
     ``high-risk merge adjudication`` the ruling action is its ``ruling``
     (``proceed`` or ``park``) and the park class is ``high_risk_merge``.
+
+    ``brief_changed=True`` records that the human changed the story's brief
+    (``agent_instructions``). The key is omitted otherwise; the brief's text
+    is never written.
 
     Raises:
         ValueError: ``human_action`` is not in :data:`HUMAN_ACTIONS`. Raised
@@ -139,6 +144,8 @@ def record_human_resolution(
     }
     if note:
         record["note"] = note
+    if brief_changed:
+        record["brief_changed"] = True
     # The file store keeps the one legacy writer, which existing callers patch
     # by name; any store with a record view owns the record instead.
     if decision_log.store_owns_records():

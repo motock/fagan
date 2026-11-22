@@ -95,7 +95,7 @@ def test_false_park_rate_above_ten_percent_is_not_eligible() -> None:
     records = _paired_park_agree(17)
     for index in range(3):
         ruling = _ruling(f"F{index}", action=tr.PARK_ACTION)
-        records += [ruling, _human(ruling, "rebrief")]
+        records += [ruling, _human(ruling, "retry")]
 
     cls = _cls(tr.readiness(records))
 
@@ -137,7 +137,7 @@ def test_park_ruling_with_park_human_action_is_agreement() -> None:
 
 def test_park_ruling_resolved_without_parking_is_false_park() -> None:
     ruling = _ruling("FP", action=tr.PARK_ACTION)
-    cls = _cls(tr.readiness([ruling, _human(ruling, "amend_scope")]))
+    cls = _cls(tr.readiness([ruling, _human(ruling, "retry")]))
 
     assert cls["false_park"] == 1
     assert cls["agree"] == 0

@@ -347,6 +347,11 @@ def verify_audit() -> dict[str, Any]:
 UNBLOCK_NOTE_MAX_CHARS = 8000
 
 
+def _has_note(note: str | None) -> bool:
+    """True when ``note`` carries text: a blank note changes no brief."""
+    return note is not None and note.strip() != ""
+
+
 def _unblock_refusal(reason: str) -> dict[str, Any]:
     """A refusal that names the problem class, never the refused value."""
     return {"ok": False, "error": reason}
@@ -438,7 +443,7 @@ def unpark_story(
         story["files"] = [*declared, *files_added]
     if status is not None:
         story["status"] = status
-    if note:
+    if _has_note(note):
         story["agent_instructions"] = (
             f"{story.get('agent_instructions') or ''}\n\n{note}".lstrip("\n")
         )
@@ -546,7 +551,9 @@ def unblock_story(
         severity="warning",
         event="story_unparked_manually",
     )
-    unpark_module._record_resolution(result, principal=actor_id())
+    unpark_module._record_resolution(
+        result, principal=actor_id(), brief_changed=_has_note(note)
+    )
     return {"ok": True, **result, "approval_reset": approval_reset}
 
 

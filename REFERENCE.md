@@ -2527,6 +2527,27 @@ Both modes cover every namespace the scheduler scope admits (see "Scheduling" ab
 
 An unsupported `PIPELINE_ADVANCE_MODE` value logs a warning that names the variable and the accepted values, never the rejected value, and falls back to `pool`.
 
+## File-dropped checkpoints (PIPELINE_CHECKPOINT_MODE)
+
+Set `PIPELINE_CHECKPOINT_MODE=file` for an agent that has no store credentials
+(for example one running in the tenant sandbox). The agent writes
+`.agent_checkpoint` in its worktree as one JSON object instead of calling
+`checkpoint_story`: `step` (string, 1–120 characters, required), `summary`
+(string, at most 4000 characters), `next_hint` (string, at most 2000
+characters) and `commit` (a 40- or 64-character lowercase hex SHA, otherwise
+dropped). Unknown keys are ignored. The file is at most 16384 bytes.
+
+The control plane claims the drop in its worktree scan, before the done-marker
+scan, and journals it for each `in_progress` story. A drop that is not a
+regular file, is over the size limit, is not a JSON object or has a bad field
+is deleted and logged with a reason code only (a directory of that name is
+removed with its contents; a link is unlinked, never followed). A stale
+`.agent_checkpoint.claimed` left by an earlier scan is cleared before the
+next claim. The drop is never committed.
+
+The mode variable is read as stripped and lowercased; any value other than
+`file` (including unset) keeps the `checkpoint_story` tool path.
+
 ## Plugins (operator-supplied adapters)
 
 Each architectural seam has a built-in default. An operator can replace it by

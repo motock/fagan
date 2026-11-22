@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 from .branch_names import story_branch
+from .checkpoint_drop import DROP_NAME
 
 # Scratchpad files are the dispatched agent's own running notes. They must
 # never be tracked by a checkpoint commit: .gitignore keeps a NEW one out, but
@@ -87,6 +88,9 @@ def _commit_wip(worktree: str, story_key: str, step: str,
     # Unstage agent.log unconditionally.
     subprocess.run(["git", "reset", "-q", "--", "agent.log"], check=False, cwd=worktree,
                     capture_output=True, text=True)
+    # Unstage a file-dropped checkpoint (and its claimed copy) the same way.
+    subprocess.run(["git", "reset", "-q", "--", DROP_NAME, DROP_NAME + ".claimed"],
+                    check=False, cwd=worktree, capture_output=True, text=True)
 
     if guard_against_deletion:
         # Detect staged deletions and restore them from HEAD before committing.

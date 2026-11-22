@@ -17,7 +17,7 @@ credentials and query strings removed) because a reason can embed a URL.
 import os
 
 from pipeline import server as p
-from pipeline.dispatch_gate_notice import sanitise_gate_reason
+from pipeline.advance import sanitise_gate_reason
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _hermetic_ollama_seams,
     _isolate_usage_state,
@@ -130,7 +130,7 @@ def _gate_notes(notes):
 
 
 def test_gate_down_with_a_ready_story_records_it_and_notifies_once(
-    plan_dir, monkeypatch,
+    plan_dir, monkeypatch,  # noqa: F811
 ):
     _, notes = _stub_tick(
         monkeypatch,
@@ -158,7 +158,7 @@ def test_gate_down_with_a_ready_story_records_it_and_notifies_once(
     )
 
 
-def test_two_ticks_with_the_same_reason_notify_once(plan_dir, monkeypatch):
+def test_two_ticks_with_the_same_reason_notify_once(plan_dir, monkeypatch):  # noqa: F811
     _, notes = _stub_tick(
         monkeypatch,
         blanket_down_reason=_DOWN_REASON,
@@ -179,7 +179,7 @@ def test_two_ticks_with_the_same_reason_notify_once(plan_dir, monkeypatch):
 
 
 def test_gate_up_emits_neither_summary_entry_nor_notification(
-    plan_dir, monkeypatch,
+    plan_dir, monkeypatch,  # noqa: F811
 ):
     dispatched, notes = _stub_tick(monkeypatch)
     _write_manifest(plan_dir, "gate_up", {
@@ -194,7 +194,7 @@ def test_gate_up_emits_neither_summary_entry_nor_notification(
     assert _gate_notes(notes) == []
 
 
-def test_gate_down_with_no_ready_story_emits_nothing(plan_dir, monkeypatch):
+def test_gate_down_with_no_ready_story_emits_nothing(plan_dir, monkeypatch):  # noqa: F811
     _, notes = _stub_tick(
         monkeypatch,
         blanket_down_reason=_DOWN_REASON,
@@ -213,7 +213,7 @@ def test_gate_down_with_no_ready_story_emits_nothing(plan_dir, monkeypatch):
 
 
 def test_each_distinct_gate_reason_is_notified_with_its_own_stories(
-    plan_dir, monkeypatch,
+    plan_dir, monkeypatch,  # noqa: F811
 ):
     other_reason = "Claude usage exhausted"
     _, notes = _stub_tick(
@@ -239,7 +239,7 @@ def test_each_distinct_gate_reason_is_notified_with_its_own_stories(
     ])
 
 
-def test_notice_never_carries_url_credentials(plan_dir, monkeypatch):
+def test_notice_never_carries_url_credentials(plan_dir, monkeypatch):  # noqa: F811
     leaky = "Ollama at http://user:secret@host/path?token=abc is down"
     _, notes = _stub_tick(
         monkeypatch,

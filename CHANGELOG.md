@@ -117,6 +117,8 @@ in practice.
 
 - `unblock_story` says what the review will do with the story it leaves at `tests_passed`: a kept `last_reviewed_sha` means no re-review until the branch moves.
 
+- The overlord no longer rules on a high-risk merge while its PR checks are still pending. The merge stays held with no ruling recorded, and the hold is re-adjudicated once CI finishes; a cached pending CI snapshot is read again rather than trusted.
+
 ### Fixed
 
 - `GET /api/usage` reports each role's provider and model from the team's `role_routing` setting. The per-role backend rows resolved from the model registry file only, so a deployment that keeps its routing in settings showed every role with an empty provider and model.

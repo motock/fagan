@@ -156,3 +156,77 @@ def test_layer_routing_naming_an_undeclared_model_is_refused():
     bad = {"review": {"provider": "ollama", "model": "sonnet"}}
     with pytest.raises(RoleRegistryError, match="not declared under"):
         resolve_role("review", registry=ROLE_REGISTRY, layer_routing=bad)
+
+
+# --- undeclared Ollama cloud models (the value check matches resolution) ----
+
+HOSTED_ENDPOINT = "https://ollama.com"
+LOCAL_ENDPOINT = "http://localhost:11434"
+ENDPOINT_ENVS = ("PIPELINE_LOCAL_ENDPOINT_OLLAMA", "PIPELINE_LOCAL_ENDPOINT")
+
+
+def _pin(provider, model):
+    return {"review": {"provider": provider, "model": model}}
+
+
+@pytest.fixture
+def hosted_endpoint(live_registry, monkeypatch):
+    for name in ENDPOINT_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT_OLLAMA", HOSTED_ENDPOINT)
+
+
+@pytest.fixture
+def local_endpoint(live_registry, monkeypatch):
+    for name in ENDPOINT_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT_OLLAMA", LOCAL_ENDPOINT)
+
+
+@pytest.fixture
+def no_endpoint(live_registry, monkeypatch):
+    for name in ENDPOINT_ENVS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("model", ["glm-5.3", "gemma4:31b", "a" * 64])
+def test_accepts_an_undeclared_ollama_model_on_a_hosted_endpoint(hosted_endpoint, model):
+    assert REGISTRY[KEY].accepts(_pin("ollama", model))
+
+
+@pytest.mark.parametrize("endpoint_fixture", ["no_endpoint", "local_endpoint"])
+def test_refuses_a_plain_undeclared_ollama_model_without_a_remote_endpoint(
+    request, endpoint_fixture
+):
+    request.getfixturevalue(endpoint_fixture)
+    assert not REGISTRY[KEY].accepts(_pin("ollama", "glm-5.3"))
+
+
+@pytest.mark.parametrize("endpoint_fixture", ["no_endpoint", "local_endpoint", "hosted_endpoint"])
+def test_accepts_a_cloud_tagged_undeclared_model_on_any_endpoint(request, endpoint_fixture):
+    request.getfixturevalue(endpoint_fixture)
+    assert REGISTRY[KEY].accepts(_pin("ollama", "glm-5.3:cloud"))
+
+
+@pytest.mark.parametrize(
+    "pin",
+    [
+        {"provider": "claude", "model": "glm-5.3"},
+        {"provider": "ollama", "model": ""},
+        {"provider": "ollama", "model": "GLM-5.3"},
+        {"provider": "ollama", "model": "glm 5.3"},
+        {"provider": "ollama", "model": "library/glm"},
+        {"provider": "ollama", "model": "a" * 65},
+        {"provider": "ollama", "model": 3},
+    ],
+)
+def test_refuses_an_undeclared_model_the_name_rule_or_provider_rejects(hosted_endpoint, pin):
+    assert not REGISTRY[KEY].accepts({"review": pin})
+
+
+def test_stored_undeclared_cloud_model_resolves_for_its_team(hosted_endpoint):
+    result = resolve(KEY, {"team": {KEY: _pin("ollama", "glm-5.3")}})
+    assert (result["source"], result["invalid_layers"]) == ("team", [])
+
+    resolution = resolve_role("review", registry=ROLE_REGISTRY, layer_routing=result["value"])
+    assert (resolution.provider, resolution.model) == ("ollama", "glm-5.3")

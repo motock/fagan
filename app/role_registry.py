@@ -172,7 +172,7 @@ def _fallback_value(model_fallback: str | Callable[[], str | None] | None) -> st
     return model_fallback() if callable(model_fallback) else model_fallback
 
 
-def _is_allowed_undeclared_cloud_model(provider: str, model_name: str) -> bool:
+def is_allowed_undeclared_cloud_model(provider: str, model_name: str) -> bool:
     """True when a layer-routed model the registry does not declare may
     still resolve: an ollama model whose name is well-formed and is cloud-
     served on the configured endpoint (a plain name needs a remote endpoint,
@@ -217,7 +217,7 @@ def resolve_role(
     exception: a model named by `layer_routing` (and not by plan_role_config)
     for the ollama provider may be an undeclared cloud model, resolved to
     itself, when it is a well-formed name cloud-served on the configured
-    endpoint (see _is_allowed_undeclared_cloud_model). The
+    endpoint (see is_allowed_undeclared_cloud_model). The
     registry's (provider, model) pairing for a role is only used when the
     registry's own provider for that role is the one that actually won;
     if a higher-priority source (plan role_config) overrides the provider,
@@ -255,7 +255,7 @@ def resolve_role(
             entry = provider_models[model_name]
             model = entry["tag"]
             entry_class = entry.get("class")
-        elif from_layer and _is_allowed_undeclared_cloud_model(provider, model_name):
+        elif from_layer and is_allowed_undeclared_cloud_model(provider, model_name):
             model = model_name
             entry_class = None
         else:

@@ -277,6 +277,16 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             tighter=_test_scope_tighter,
             choices=TEST_SCOPE_VALUES,
         ),
+        # Deployment-only: when True, the deployment layer's test_scope is final
+        # for every tenant (see pipeline.test_scope.resolve_test_scope).
+        SettingKey(
+            name="tenant_test_policy_locked",
+            type="bool",
+            kind="lock",
+            safe_value=False,
+            allowed_layers=("deployment",),
+            legacy_env="",
+        ),
         SettingKey(
             name="merge_ci_timeout_s",
             type="int",

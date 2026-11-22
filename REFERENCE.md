@@ -4043,6 +4043,7 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `merge_ci_gate` | ceiling, boolean | `on` | `set_setting` |
 | `merge_build_gate` | ceiling, boolean | `on` | `set_setting` |
 | `test_scope` | ceiling, `full` \| `scoped` | `full` | `set_setting` |
+| `tenant_test_policy_locked` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
 | `merge_ci_timeout_s` | pref, integer seconds | `900` | `set_setting` |
 | `merge_readiness_timeout_s` | pref, integer seconds | `180` | `set_setting` |
 | `rework_on_ci_fail` | pref, boolean | `off` | `set_setting` |
@@ -4053,6 +4054,8 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `triage_mode` | ceiling, `shadow` \| `execute` (shadow is tighter) | `shadow` | `set_setting` |
 | `notification_routes` | pref, channel instances and routes | `{}` | `set_setting` (not the `deployment` layer) |
 | `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
+
+`tenant_test_policy_locked` is a deployment-only lock. When the deployment layer sets it to `true`, the deployment layer's `test_scope` is final for every team, plan, story and env request (a request for `full` against a `scoped` deployment resolves to `scoped` and is listed as a lock rejection), and the deployment's `reverify_full_suite` value replaces the org, team and team-repo values. Any other value leaves these keys as described above.
 
 `autonomy`, `auto_merge` and `triage_mode` keep their environment variables
 (`PIPELINE_AUTONOMY`, `PIPELINE_AUTO_MERGE`, `PIPELINE_TRIAGE_MODE`). Until the

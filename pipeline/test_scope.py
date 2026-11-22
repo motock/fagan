@@ -18,6 +18,11 @@ TEST_SCOPE_KEY = "test_scope"
 _REQUEST_LAYERS = ("plan", "story", "env")
 _POLICY_LAYERS = ("deployment", "org", "team", "team_repo")
 _DEFAULT_SOURCE = "default"
+DEPLOYMENT_LAYER = "deployment"
+TENANT_TEST_POLICY_LOCK_KEY = "tenant_test_policy_locked"
+# Keys whose deployment value is final while the lock is held; a tenant layer
+# is not consulted for them.
+LOCKED_KEYS = ("reverify_full_suite",)
 
 
 def _read_layer(layer, value, invalid_layers):
@@ -74,6 +79,38 @@ def _result(test_scope, source, lock_rejections, invalid_layers):
     }
 
 
+def deployment_lock_held(settings) -> bool:
+    """True when the deployment layer sets the tenant test-policy lock to exactly True."""
+    return _tenant_layer(settings, DEPLOYMENT_LAYER).get(TENANT_TEST_POLICY_LOCK_KEY) is True
+
+
+def locked_deployment_value(settings, key):
+    """The deployment layer's value for *key* under the lock, else the key's safe value."""
+    # Imported here: settings_registry imports this module (see resolve_test_scope).
+    from pipeline.settings_registry import REGISTRY
+
+    setting = REGISTRY[key]
+    value = _tenant_layer(settings, DEPLOYMENT_LAYER).get(key)
+    return value if setting.accepts(value) else setting.safe_value
+
+
+def _locked_result(layers, requested, invalid_layers):
+    """The deployment layer's scope, with every other offered value listed as refused."""
+    test_scope = layers.get(DEPLOYMENT_LAYER, {}).get(TEST_SCOPE_KEY, TEST_SCOPE_FULL)
+    offered = [
+        (name, layers.get(name, {}).get(TEST_SCOPE_KEY))
+        for name in _POLICY_LAYERS
+        if name != DEPLOYMENT_LAYER
+    ]
+    offered += [(name, requested[name]) for name in _REQUEST_LAYERS]
+    lock_rejections = [
+        {"layer": name, "requested": value, "by": DEPLOYMENT_LAYER}
+        for name, value in offered
+        if value is not None and value != test_scope and name not in invalid_layers
+    ]
+    return _result(test_scope, DEPLOYMENT_LAYER, lock_rejections, invalid_layers)
+
+
 def resolve_test_scope(*, settings, plan_value=None, story_value=None, env_value=None):
     # settings_registry imports TEST_SCOPE_VALUES from this module, so the
     # resolver modules are imported here, after this module has loaded.
@@ -110,6 +147,8 @@ def resolve_test_scope(*, settings, plan_value=None, story_value=None, env_value
         )
 
     layers = _policy_layers(settings, invalid_layers)
+    if deployment_lock_held(settings):
+        return _locked_result(layers, requested, invalid_layers)
     request_layer, request_scope = request or (REQUEST_LAYER, None)
     resolved = resolve(
         TEST_SCOPE_KEY,

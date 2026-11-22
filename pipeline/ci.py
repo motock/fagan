@@ -58,8 +58,13 @@ from .live_ref import LiveRef as _ServerRef
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
 from .repo_clone import parse_repo_url
-from .settings_store import effective_setting
+from .settings_store import effective_setting, read_layers
 from .settings_team import settings_team
+from .test_scope import (
+    LOCKED_KEYS,
+    deployment_lock_held,
+    locked_deployment_value,
+)
 from .worktree_cleanup import remove_finished_worktree
 
 logger = logging.getLogger(__name__)
@@ -107,6 +112,10 @@ class SettingsContext:
         return self._resolved[key]
 
     def value(self, key: str) -> Any:
+        if key in LOCKED_KEYS:
+            layers = read_layers(self.namespace, team=self.team, repo=self.repo)
+            if deployment_lock_held(layers):
+                return locked_deployment_value(layers, key)
         return self.resolve(key)["value"]
 
 

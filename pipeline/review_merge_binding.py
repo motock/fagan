@@ -46,6 +46,8 @@ re-bind could bless it.
 import logging
 import subprocess
 
+from pipeline import forge_auth
+
 logger = logging.getLogger(__name__)
 
 #: The instruction appended to every denial: an approval bound to a different
@@ -425,6 +427,7 @@ def _git(args: list, cwd: str | None) -> subprocess.CompletedProcess | None:
             cwd=cwd,
             capture_output=True,
             text=True,
+            **forge_auth.env_kw(),
         )
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning("git %s failed: %s", args[0], e)

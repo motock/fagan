@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import bound_records
+from . import bound_records, forge_auth
 from .audit import record_audit
 from .branch_guard import BranchGuardError, refusal
 from .module_ref import _ModuleRef
@@ -53,6 +53,7 @@ def _remote_tip(repo_root: Path, default_branch: str) -> str | None:
             capture_output=True,
             text=True,
             timeout=_PROBE_TIMEOUT_S,
+            **forge_auth.env_kw(),
         )
     except (subprocess.SubprocessError, OSError):
         return None
@@ -169,6 +170,7 @@ def _create_fresh_worktree(
                         check=True,
                         capture_output=True,
                         text=True,
+                        **forge_auth.env_kw(),
                     )
                 else:
                     # The fetch is deliberately best-effort (see

@@ -129,6 +129,8 @@ in practice.
 
 ### Fixed
 
+- A team namespace's remaining pipeline git and gh network commands now carry that team's GitHub token: the merge and rebase pushes, the default-branch fetches at dispatch, worktree creation and review, the ls-remote and fetch probes behind the branch guard and the rebase checks, and the CI rollup queries. Before, a private team repository failed at the first fetch or push. A team namespace's commands also never fall back to the operator's own `gh` login or git config, so a team without a token fails at the remote instead of acting as the operator. A new guard test fails any new unauthenticated git or gh network site under `pipeline/` or `app/`.
+
 - The pipeline's own `git push`, `gh pr create`, merge and CI-status commands for a team namespace now carry that team's GitHub token. Before, they ran with the process environment, so a team's story could reach review APPROVE and never open its pull request. A team with no token gets none, and the process token is never used for a team. The default namespace is unchanged.
 
 - A story can be dispatched again after a review sends it back (`changes_requested`, `interrupted`) even when a finished (`done` or `merged`) story in another plan holds the same key. Its own worktree directory no longer counts as the other plan's, so the re-dispatch is no longer refused with `story key collides with another plan`. A todo story, or a neighbour still in progress, still refuses.

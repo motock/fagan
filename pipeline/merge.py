@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import bound_records
+from . import bound_records, forge_auth
 from .actor import actor_id
 from .audit import record_audit
 from .branch_names import story_branch
@@ -777,6 +777,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         cwd=worktree,
                         capture_output=True,
                         text=True,
+                        **forge_auth.env_kw(),
                     )
                     if push.returncode != 0:
                         return {

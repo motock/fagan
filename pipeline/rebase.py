@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import forge_auth
 from .parsers import (
     _git_show_stage,
     _is_pure_additive_import_diff,
@@ -151,7 +152,7 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         # Catch OSError so this helper honors its never-raises contract and
         # reports a non-conflict failure instead of crashing the tick.
         try:
-            return subprocess.run(argv, check=False, cwd=cwd, capture_output=True, text=True, env=env)
+            return subprocess.run(argv, check=False, cwd=cwd, capture_output=True, text=True, **forge_auth.env_kw(env))
         except OSError as e:
             return subprocess.CompletedProcess(argv, 127, "", str(e))
 
@@ -276,6 +277,7 @@ def _sync_branch_remote(worktree: str, branch: str) -> dict[str, Any]:
         r = subprocess.run(
             ["git", "push", "--force-with-lease", "origin", branch],
             cwd=worktree, check=False, capture_output=True, text=True,
+            **forge_auth.env_kw(),
         )
     except OSError as e:
         return {"ok": False, "error": str(e)}

@@ -3,6 +3,8 @@
 import subprocess
 from pathlib import Path
 
+from . import forge_auth
+
 _LS_REMOTE_TIMEOUT_SECONDS = 30
 
 
@@ -35,6 +37,7 @@ def remote_branch_exists(repo_root: Path | str, branch: str) -> bool:
             text=True,
             timeout=_LS_REMOTE_TIMEOUT_SECONDS,
             check=False,
+            **forge_auth.env_kw(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BranchGuardError(

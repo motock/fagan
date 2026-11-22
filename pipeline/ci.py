@@ -22,6 +22,7 @@ from typing import Any
 from app import role_registry
 
 from . import bound_records, tenant_exec
+from .actor import current_namespace
 
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
@@ -133,12 +134,19 @@ def _repo_identity(manifest: dict[str, Any]) -> str:
 
 
 def context_from_manifest(manifest: dict[str, Any]) -> SettingsContext:
-    """Build the merge settings context from a plan manifest."""
+    """Build the merge settings context from a plan manifest.
+
+    The namespace is the manifest's own, else the namespace bound for the call.
+    """
     return SettingsContext(
-        namespace=manifest.get("namespace") or DEFAULT_NAMESPACE,
+        namespace=manifest.get("namespace") or current_namespace(),
         team=settings_team(manifest),
         repo=_repo_identity(manifest),
     )
+
+
+# Stands in for a plan with no stored manifest: the default namespace.
+_UNKNOWN_PLAN_MANIFEST = {"namespace": DEFAULT_NAMESPACE}
 
 
 def settings_for_plan(plan_name: str) -> SettingsContext:
@@ -148,10 +156,12 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
     its deployment or safe value.
     """
     if not plan_name:
-        return context_from_manifest({})
+        return context_from_manifest(_UNKNOWN_PLAN_MANIFEST)
     from .server import _store
 
-    manifest = bound_records.get_manifest(_store, plan_name) or {}
+    manifest = bound_records.get_manifest(_store, plan_name)
+    if not manifest:
+        return context_from_manifest(_UNKNOWN_PLAN_MANIFEST)
     return context_from_manifest(manifest)
 
 

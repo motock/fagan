@@ -135,6 +135,8 @@ in practice.
 
 - Deployment-layer settings now apply to teams in every namespace. Before, a team outside the default namespace never saw them, so deployment locks and ceilings (for example `tenant_test_policy_locked`, `test_scope`, `merge_ci_gate`) were not applied to it. Operators of a multi-namespace deployment should review their deployment settings, because they take effect for all teams on upgrade.
 
+- A team's own routing and merge settings now apply to that team's plans. A plan in a team namespace read its settings in the default namespace, so the team's `role_routing` and merge gates were ignored and its stories ran on the deployment default. Plans in the default namespace are unchanged.
+
 - A review that would certainly skip is no longer respawned on every tick. Once a commit's unchanged-since-review skip has been announced, the advance starts no `review_job` for it and lists the story under `skipped`, instead of spawning a process that skipped again each minute. `unblock_story` returns `review_hint: "unchanged_since_last_review"` when it sends a story to `tests_passed` and keeps its `last_reviewed_sha`, so the operator sees that no review will run.
 
 ### Security

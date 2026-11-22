@@ -42,7 +42,7 @@
 - `files` (optional): repo-relative POSIX paths of the PRODUCTION files (docs included) the story may change; test files are never listed and always allowed. Absent means undeclared; empty means no production file may change. Entries must be non-empty `str` with no `/` prefix, no `\`, no `..`; duplicates rejected.
 - `blocked_by` (optional): cross-plan prerequisites, `"<plan>:<story_key>"` strings (the key may contain colons). Absent or `null` is valid; a non-list or a malformed entry is rejected at `ingest_plan`, naming the story summary and the offending entry. The referenced plan/story need not exist yet; re-ingest refreshes it.
 - `test_scope` (optional, story-level): `full` or `scoped`, a request below the plan-level `test_scope` (plan beats story beats `PIPELINE_TEST_SCOPE`); an org/team policy can refuse `scoped`. `ingest_plan` rejects any other value; re-ingest refreshes it and removes it when absent.
-- `key` (optional): an explicit story key that must be unique across plans. `ingest_plan` rejects a key matching (case-insensitively) another plan's story that is not done/merged or whose worktree still exists, since the branch (`agent/<key>`) and worktree path are keyed by the story key alone. Omitting `key` mints a UUID, which never collides.
+- `key` (optional): an explicit story key that must be unique across plans. `ingest_plan` rejects a key matching (case-insensitively) another plan's story that is not done/merged or whose worktree still exists, since the branch (`agent/<key>`) and worktree path are keyed by the story key alone. Omitting `key` mints a UUID, which never collides. Choose a prefix no other plan has used, finished plans included: check `list_plans` before picking one. A finished story's key may be reused, but nothing is gained by it and every log, branch and worktree name then refers to two different stories.
 - `role_config` (optional, plan-level — a sibling of `epics`): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" and `model_registry.json` for the available providers/models.
 - `test_scope` (optional, plan-level): `full` (default) or `scoped`. `scoped` asks the pipeline host to run only the story's acceptance paths and its own changed test files, leaving the full suite to remote CI; an org/team policy from `PIPELINE_SETTINGS_PLUGIN` can refuse it. `ingest_plan` rejects any other value; an absent value on re-ingest keeps the prior one.
 - `preflight_override` (optional, plan-level): a non-empty reason string admitting non-Claude stories whose brief lacks a real `Preflight:` line; every use is notified as event `preflight_override`. `ingest_plan` rejects non-Claude stories with no such line and no override.
@@ -59,6 +59,14 @@ Sparse stories leave the agent to guess. Populate: what to build, the approach, 
 ### Opting a story out of the test-author phase: `[no-new-tests]`
 
 For local-family dispatch the test-author phase is always-on: it writes a NEW failing suite before the weak executor touches code. A behavior-preserving refactor has no new test to write, and forcing the phase to invent one produced an unsatisfiable structural-assertion oracle that parked mid-write (Mode 51). Place the literal token `[no-new-tests]` anywhere in `agent_instructions` to skip the phase; the story then falls open to monolithic dispatch against the existing suite. It is the exact bracketed string — "no new tests" in prose does NOT opt out — and use it only when the existing suite genuinely covers the change. It applies wherever it appears EXCEPT when its own sentence negotiates that use (e.g. "[no-new-tests] must NOT be used here"): that is a *mention*, not an invocation, so an author explaining the opt-out cannot trigger it.
+
+## Name every gate command, and say which ones the pipeline does not run
+
+The merge gate runs the repository's detected test command and, where enabled, remote CI. It does not run a second suite that lives in a sub-project (a console's `npm test` beside a Python `pytest`), and with the CI gate off nothing else does either. A brief that says "run the tests" lets such a suite go red on main unnoticed.
+
+Measured 2026-11-22: two console stories merged on a green `pytest` with four header tests failing under `npm test`; a later story had to repair them.
+
+**How to apply:** end every brief with a GATES line that lists each command literally, in the directory it runs from, and marks any the merge gate does not enforce: "the merge gate does not run this, so you must". For a multi-project repository, list every suite the change can affect.
 
 ## The brief must carry the literal artifact
 
@@ -165,3 +173,9 @@ A plan that has been ingested cannot be re-ingested from a bare source unless ev
 ### `.tdd_split_test_author_done` has two meanings — never write it as a shortcut
 
 The marker file skips the always-on test-author phase, but the dispatch prompt also reads its presence as "the tech lead has already committed the tests" and splices the planner clause that forbids the executor from creating or editing test files. Writing the marker to skip a drifting test-author phase therefore makes the executor refuse to write the tests the brief asked for (observed live 2026-11-10). If you must skip the phase, remove the marker before the next dispatch and state explicitly in the brief that the test file must be created by the executor.
+
+## Unblocking a parked story that has uncommitted work
+
+A story that parks mid-attempt usually leaves finished work uncommitted in its worktree. The cheap recovery is to keep it, not to redo it.
+
+**How to apply:** before writing the unblock note, look at the worktree (`git status`, the diff, and one run of the failing test). Then write a note that (1) says the work is in the worktree and must be kept, (2) names the ONE thing that stopped the attempt with the measured evidence (the failing test and its assertion, or the conflicted file), (3) gives the ruling as an exact edit, and (4) repeats the gates. Adding files or a note to an approved plan resets its approval: re-approve it and tell the plan's owner.

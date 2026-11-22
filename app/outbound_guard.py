@@ -226,6 +226,33 @@ def resolve_public_address(
     return _resolve_host(host, allow_private=allow_private, timeout=timeout)
 
 
+def resolve_public_host(
+    host: str, *, allow_private: bool = False, timeout: float | None = None
+) -> str | None:
+    """Return the address a bare ``host`` name may be connected to, or None.
+
+    The same judgement as :func:`resolve_public_address`, for callers that hold
+    a host name rather than a URL (SMTP). A literal IP is judged directly with
+    no lookup, and ``localhost`` / ``*.localhost`` are internal without one; any
+    other name is resolved and every answer judged. ``allow_private`` skips the
+    internal-address rejection, as there.
+    """
+    name = host.casefold().rstrip(".")
+    if not name:
+        return None
+    try:
+        literal = ipaddress.ip_address(name)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not allow_private and is_internal_address(literal):
+            return None
+        return str(literal)
+    if not allow_private and (name == "localhost" or name.endswith(".localhost")):
+        return None
+    return _resolve_host(name, allow_private=allow_private, timeout=timeout)
+
+
 class PinnedTransport(httpx.HTTPTransport):
     """HTTPS transport that connects to one already-validated address.
 

@@ -21,6 +21,7 @@ import pytest
 
 from pipeline.notification_channels import DeliveryStatus
 from pipeline.notification_email import EmailChannelType
+from tests.unit._smtp_host_dns import stub_smtp_dns
 
 PASSWORD = "fake-not-a-real-password"
 
@@ -175,3 +176,9 @@ def test_should_deliver_when_login_and_send_succeed(channel: EmailChannelType) -
 
     assert result.status is DeliveryStatus.DELIVERED
     assert len(FakeSMTP.sent) == 1
+
+
+@pytest.fixture(autouse=True)
+def _smtp_host_resolves_publicly(monkeypatch):
+    # The SMTP host guard resolves the configured host; see _smtp_host_dns.
+    stub_smtp_dns(monkeypatch)

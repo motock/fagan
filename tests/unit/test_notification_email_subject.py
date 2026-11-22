@@ -58,6 +58,7 @@ import pytest
 
 from pipeline import notification_email
 from pipeline.notification_email import send_notification_email
+from tests.unit._smtp_host_dns import stub_smtp_dns
 
 ENABLED = "PIPELINE_NOTIFY_EMAIL_ENABLED"
 HOST = "PIPELINE_NOTIFY_EMAIL_HOST"
@@ -513,3 +514,9 @@ def test_subject_and_body_never_reach_the_log(monkeypatch, caplog):
     assert message["Subject"] == f"[pipeline] story parked: PLAN-42/{subject_sentinel}"
     assert subject_sentinel not in caplog.text
     assert body_sentinel not in caplog.text
+
+
+@pytest.fixture(autouse=True)
+def _smtp_host_resolves_publicly(monkeypatch):
+    # The SMTP host guard resolves the configured host; see _smtp_host_dns.
+    stub_smtp_dns(monkeypatch)

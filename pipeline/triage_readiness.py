@@ -133,21 +133,20 @@ def _supplied_input(resolution: dict[str, Any]) -> bool:
 def _score(
     tally: dict[str, int],
     action: Any,
-    resolution: dict[str, Any],
-    *,
-    count_input: bool = True,
+    human_action: Any,
+    resolution: dict[str, Any] | None = None,
 ) -> None:
     """Score one paired ruling.
 
-    ``count_input=False`` scores a park the human answered with input as a
-    false park, the rule the overlord replay still reports.
+    ``resolution`` is the human resolution record. Without it a park the human
+    answered with input is still a false park, the rule ``overlord_replay``
+    scores with.
     """
-    human_action = resolution.get("human_action")
     parked_by_machine = action == PARK_ACTION
     parked_by_human = human_action == _HUMAN_PARK
     if parked_by_machine and parked_by_human:
         tally["agree"] += 1
-    elif parked_by_machine and count_input and _supplied_input(resolution):
+    elif parked_by_machine and resolution is not None and _supplied_input(resolution):
         tally["agree"] += 1
         tally["park_needed_input"] += 1
     elif parked_by_machine:
@@ -291,7 +290,7 @@ def readiness(
         if resolution is None:
             continue
         tally["paired_count"] += 1
-        _score(tally, ruling.get("action"), resolution)
+        _score(tally, ruling.get("action"), resolution.get("human_action"), resolution)
     report = {}
     for name, tally in tallies.items():
         verdict = _verdict(tally, limits, _tier_label(name))

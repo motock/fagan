@@ -119,6 +119,8 @@ in practice.
 
 - The CI rework message names the failing checks and tests. A CI failure answered from the rollup cache kept no check names, and the failing-log lookup ran outside the story repository and read the newest workflow run rather than the failing job, so the message said only `ci fail:`. It now names each failing check, and the failing tests from the failing job's own log.
 
+- Deployment-layer settings now apply to teams in every namespace. Before, a team outside the default namespace never saw them, so deployment locks and ceilings (for example `tenant_test_policy_locked`, `test_scope`, `merge_ci_gate`) were not applied to it. Operators of a multi-namespace deployment should review their deployment settings, because they take effect for all teams on upgrade.
+
 ### Security
 
 - Lint and suite baseline probes, the acceptance-oracle gate, the failing-test re-run, pytest collection for the guard-liveness check and the local reviewer's `bash` tool run their commands through the command-wrap seam (`tenant_exec.wrap`), so a configured wrap plugin sees every one of them; a refused command makes its probe report `*_probe_failed` (detail `CommandWrapError`), the oracle gate report `errors`, the re-run return no facts, the collection return no data, and the reviewer shell return exit code 126 without running the command. With no plugin configured, nothing changes (tcw-05).

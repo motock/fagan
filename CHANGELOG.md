@@ -9,6 +9,36 @@ in practice.
 
 ## [Unreleased]
 
+### Added
+
+- The overlord prepares park options for a parked story. With failure triage on (`PIPELINE_AUTO_TRIAGE`), each scheduler tick prepares options for at most one parked story that has none for its current `parked_reason`: `park_option_count` options (2 to 5, default 3, settable on the org, team and team/repo layers) drawn from the park class's menu plus `retry`, one recommended. Nothing runs until a person chooses. `GET /api/plans/{plan}/stories/{story}/park-options` lists them and `POST /api/plans/{plan}/stories/{story}/park-options/{option_id}/choose` carries the choice out: `retry` clears the retry counters and sets the story `interrupted`, and any other action runs through the triage executor under the plan lock. A stale or unknown choice is refused with a 409 and an error of `not_parked`, `no_options`, `options_stale` or `unknown_option`, and nothing changes.
+
+- Dashboard chat explains a parked story's options and can propose `choose_park_option`. The chat never runs it: the Run button calls the park-option choose route as the signed-in person.
+
+- Jira Cloud intake. With `PIPELINE_JIRA_ENABLED=1` and `PIPELINE_PLAN_APPROVAL` on, the scheduler plans each Jira story assigned to the service account as the plan `jira-<issue key>`, with the team and the board's `repo_url`. Only sites listed in `PIPELINE_JIRA_SITES` are contacted. Each team's `jira_site` (org layer: site, service account and a `secret://` token reference) and `jira_board` (team layer: project key, repo URL, status names and poll interval) settings describe the connection. A planned story gets the label `fagan-planned`; a failure gets `fagan-intake-failed`, and removing that label retries it. The resulting plan still needs a person's approval before anything runs.
+
+- With `PIPELINE_JIRA_ENABLED=1`, each story of a `jira-<issue key>` plan becomes a Jira sub-task labelled `fagan-story-<story key>`. Only the story's summary and description are copied; its brief, files and acceptance fixtures stay in Fagan. The sub-task's status follows the story (in progress when dispatched, in review when its PR opens, done when the story is done), and the parent moves to parent review once every story is done.
+
+- A `webhook` notification channel POSTs each notice as JSON to your own automation, signed with HMAC-SHA256 in `X-Fagan-Signature` over `X-Fagan-Timestamp` and the body. Its `url_ref` and `secret_ref` are credential references (both required) and `timeout` (1 to 30 seconds, default 10) is optional. The URL must be `https` to a public host, and redirects are not followed. The verification example is in REFERENCE.md under "Notification routing".
+
+- A deliver entry may name an `audience` (`plan_owner`, `plan_approvers`) instead of, or as well as, `to`, and an instance may carry a `principal` naming the person who owns it. With both, only the `to` instances whose principal is in the audience receive the notice. `PIPELINE_AUDIENCE_PLUGIN` supplies the members of an audience; without it `plan_owner` is the plan's owner and `plan_approvers` is empty.
+
+- Story-level notifications (`story_parked`, `dispatch_failed`, `tests_failed`, `agent_gave_up`, `story_stalled`, `merge_conflict_rework`) carry a direct link. Slack and e-mail append it as a final `Open:` line, built from `PIPELINE_DASHBOARD_PUBLIC_URL` and the new `PIPELINE_STORY_LINK_PATH` (default `/`). The line is omitted when the origin is unset or either value is invalid.
+
+- An `openai` provider calls OpenAI's Responses API at `https://api.openai.com`, a host that cannot be configured. Its key is the per-namespace credential `openai_api_key`, read on every call; `OPENAI_API_KEY` is the fallback for the default namespace only. List its models under `providers.openai.models` in `model_registry.json`.
+
+- The authority matrix's `readiness.min_paired` and `readiness.max_false_park_percent` rules let an organization tighten the bar a class must clear before its `PIPELINE_TRIAGE_MODE` promotion. They can only tighten; the shipped 20 paired decisions and 10% false-park rate are the loosest values allowed. Each verdict in the readiness report names the thresholds and tier it was judged against.
+
+- `python -m pipeline.overlord_replay` asks the overlord again about recorded rulings, optionally with a candidate `--policy FILE` or `--context DIR`, and scores the new answers against the human resolutions. It is read-only and never executes a ruling.
+
+- `python -m pipeline.overlord_scenarios` asks the overlord a shipped set of known-answer hard cases and reports which pass. `--scenarios DIR` replaces that set. It is read-only, but it does call the overlord.
+
+- `python -m pipeline.rehearsal_report --plan <plan> --repo <mirror checkout>` pairs each story's rehearsal merge with the reference merge of a plan that already finished and lists the files only one side touched. The runbook is `docs/guides/OVERLORD_REHEARSAL.md`.
+
+- A new `own_lint_failure` park class covers a story whose suite passes but whose lint gate is red only on files the story added or declared. Its allowed actions are `rebrief` and `park_for_human`; a lint failure in any other file keeps the `unknown` class.
+
+- An identity provider loaded through `PIPELINE_IDENTITY_PLUGIN` can serve the remote MCP transport only when its class sets `network_grade = True` (exactly `True`). Any other provider makes the transport refuse to start, and the dashboard browser login stays OIDC-only. The plugin requires `PIPELINE_PLUGIN_MODULES`.
+
 ### Security
 
 - Email delivery to a host that resolves to a loopback, private, link-local or other non-public address is now refused. An install that sends through an internal relay (for example a postfix container) must list that host in `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` or its email stops after upgrading.
@@ -66,6 +96,26 @@ in practice.
 - With `PIPELINE_CHECKPOINT_MODE=file`, the control plane journals a checkpoint an agent drops as `.agent_checkpoint` in its worktree (size-capped, never followed, never committed), so a sandboxed agent without store credentials can checkpoint (hrc-03).
 
 - The acceptance-fixture pytest dry-run collects from a `.pipeline-fixtures-*` directory inside the story's repo when a repo root is set, so a sandboxed command that sees only the worktree can run it; `_commit_wip` never commits such a directory left by a killed run (hrc-05).
+
+- `PIPELINE_TRIAGE_MODE` no longer promotes every overlord decision class at once. Each class follows its tier in the authority matrix (`PIPELINE_AUTHORITY_MATRIX`): `human` stays in shadow, `auto+notify` executes and notifies through the sweep summary, and `auto` executes. Any `PIPELINE_TRIAGE_MODE` other than `execute` still holds everything. The high-risk merge gate is always governed: a `proceed` ruling merges only when the matrix's `high_risk_merge` tier is `auto+notify` or `auto`, and the shipped matrix keeps it at `human`, so deployments in shadow see no change.
+
+- Under full autonomy, the merge gate runs the repository's tests, build and lint on the branch head before the overlord rules on a high-risk merge, and shows the result to the overlord as a `LOCAL CHECKS:` line. Red checks park the story with `high risk held: local checks red @ <sha>` without a ruling. The story stays `pr_open` while the detached job runs.
+
+- The overlord's high-risk merge prompt carries a `DIFF EVIDENCE` block: the diff stat, the declared files, changed files outside them, existing tests modified or deleted, and a redacted production diff excerpt of up to 12000 characters. If git cannot produce it the block reads `DIFF EVIDENCE: unavailable`, which is missing evidence and never a pass.
+
+- The overlord sees the context sources recorded at dispatch for the `triage` and `merge_adjudication` phases, rendered after its policy. Context guides the ruling and cannot grant an action; the digests of what was rendered are recorded with the ruling.
+
+- Every failure-triage and high-risk merge ruling records an `input` object: the redacted question (capped at 16000 characters, with a `truncated` flag), digests of the prompt and policy, the context digests, the overlord backend and model, and the park class. The raw prompt is not stored, and the plan-detail response omits `input`. Earlier records have no `input` and are read unchanged.
+
+- The park-option readiness report counts the choices a person made per park class, as `park_option_choices` and `park_option_agreements`, beside each class's verdict. Choices never enter the paired counts or the false-park rates.
+
+### Fixed
+
+- A team layer's `notification_routes` was stored but never used. Notices now deliver through the team's routes in every namespace, and an instance name defined with different settings by two layers is skipped and logged by namespace and name.
+
+- Email, Slack and webhook channels look up their credentials in the namespace of the notice being sent instead of `default`, so a credentials plugin can serve each team's secrets.
+
+- The merge gate applies the plan's stored settings when it is called without a plan argument, which is how the merge path calls it. Under full autonomy a high-risk merge had been parked as `high risk held for human review` without reaching the overlord, and the stored autonomy and auto-merge values were ignored.
 
 ### Security
 

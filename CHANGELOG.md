@@ -111,6 +111,8 @@ in practice.
 
 ### Fixed
 
+- `GET /api/usage` reports each role's provider and model from the team's `role_routing` setting. The per-role backend rows resolved from the model registry file only, so a deployment that keeps its routing in settings showed every role with an empty provider and model.
+
 - A team layer's `notification_routes` was stored but never used. Notices now deliver through the team's routes in every namespace, and an instance name defined with different settings by two layers is skipped and logged by namespace and name.
 
 - Email, Slack and webhook channels look up their credentials in the namespace of the notice being sent instead of `default`, so a credentials plugin can serve each team's secrets.

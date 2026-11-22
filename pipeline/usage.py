@@ -459,12 +459,17 @@ def _role_resource_ok(
     return bool(status.get("ok", True)), status.get("reason", "")
 
 
-def collect_backend_status(plan_role_config: dict | None = None) -> list[dict]:
+def collect_backend_status(
+    plan_role_config: dict | None = None, layer_routing: dict | None = None
+) -> list[dict]:
     """Read-only per-role backend report for the dashboard banner. Never raises; fails open.
 
     For every role in config_provenance.PIPELINE_ROLES, resolve the backend that
     serves it (exactly as _role_resource_ok does, via role_registry.resolve_role
     with plan_role_config forwarded) and report that backend's resource_status().
+    When layer_routing is None, the calling request's scope is read once before
+    the loop, so the team's role_routing setting is honoured; a caller that
+    passes layer_routing (even {}) gets exactly that value and no settings read.
     resource_status() is probed at most ONCE per distinct provider and the
     result (including a probe failure) is reused for every role on that
     provider, because the Ollama driver's probe is a live network reachability
@@ -475,6 +480,14 @@ def collect_backend_status(plan_role_config: dict | None = None) -> list[dict]:
     failure. This is a diagnostic feeding a dashboard banner — a probe error
     must never be mistaken for a tripped gate (see CLAUDE.md, Resource Gates).
     """
+    # Imported here: role_routing_scope reaches pipeline.ci lazily, and a
+    # module-level import risks a cycle.
+    from .actor import current_namespace
+    from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
+
+    if layer_routing is None:
+        layer_routing = layer_routing_for_manifest({"namespace": current_namespace()})
+    routing_kwargs = layer_routing_kwargs(layer_routing)
     rows: list[dict] = []
     probe_cache: dict[str, tuple[bool, str]] = {}
     for role in PIPELINE_ROLES:
@@ -483,6 +496,7 @@ def collect_backend_status(plan_role_config: dict | None = None) -> list[dict]:
                 role,
                 plan_role_config=plan_role_config,
                 registry=role_registry.load_registry(),
+                **routing_kwargs,
             )
             provider = resolution.provider
             model = resolution.model

@@ -622,6 +622,18 @@ class SchedulerDaemon:
                 extra={"error_type": type(exc).__name__},
             )
 
+        # Operator intake plugins: its own try/except so a failure, including a
+        # refused plugin list, never affects the tick. Logs the type only.
+        try:
+            from pipeline import intake_plugins
+
+            intake_plugins.run_intake_plugins(time.time())
+        except Exception as exc:  # noqa: BLE001 - a plugin failure never breaks the tick
+            logger.warning(
+                "intake plugins failed during tick",
+                extra={"error_type": type(exc).__name__},
+            )
+
         # SRR-2: the abandoned-worker ledger is the streak's missing half.
         # Prune workers whose blocked call has returned (dead = the lock it
         # held was released by normal completion), then treat a survivor that

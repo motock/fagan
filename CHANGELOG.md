@@ -59,6 +59,8 @@ in practice.
 
 - Adds the deployment-only `tenant_test_policy_locked` setting: when the deployment layer sets it to `true`, its `test_scope` and `reverify_full_suite` are final for every tenant, so a team, plan, story or env request cannot loosen them (hrc-02).
 
+- With `PIPELINE_CHECKPOINT_MODE=file`, the control plane journals a checkpoint an agent drops as `.agent_checkpoint` in its worktree (size-capped, never followed, never committed), so a sandboxed agent without store credentials can checkpoint (hrc-03).
+
 ### Security
 
 - Lint and suite baseline probes, the acceptance-oracle gate, the failing-test re-run, pytest collection for the guard-liveness check and the local reviewer's `bash` tool run their commands through the command-wrap seam (`tenant_exec.wrap`), so a configured wrap plugin sees every one of them; a refused command makes its probe report `*_probe_failed` (detail `CommandWrapError`), the oracle gate report `errors`, the re-run return no facts, the collection return no data, and the reviewer shell return exit code 126 without running the command. With no plugin configured, nothing changes (tcw-05).

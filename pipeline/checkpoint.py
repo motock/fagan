@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import bound_records
+from . import bound_records, checkpoint_drop
 from .git_ops import _commit_wip
 from .store_records import InvalidRecordKeyError
 
@@ -199,6 +199,17 @@ def _terminate_and_checkpoint(
             os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
+
+    # The last file-dropped checkpoint of an interrupted agent is journalled
+    # before the WIP commit; a failure here must not stop the termination.
+    try:
+        checkpoint_drop.ingest(plan_name, story_key, story)
+    except Exception as exc:  # noqa: BLE001 - the termination must proceed
+        logger.warning(
+            "checkpoint drop ingest failed during termination: %s",
+            type(exc).__name__,
+            extra={"plan": plan_name, "story": story_key},
+        )
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
     interrupted_at = datetime.now(UTC).isoformat()

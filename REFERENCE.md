@@ -86,6 +86,18 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   uncommitted, and sets the story to `interrupted` rather than `failed`.
   The worktree and branch are left in place. A later `dispatch_story` call
   resumes it. Used by `advance_pipeline` when the usage gate trips.
+- File-dropped checkpoints (`PIPELINE_CHECKPOINT_MODE=file`) — for an agent that
+  has no store credentials. The agent writes `.agent_checkpoint` in its worktree
+  as one JSON object: `step` (string, 1–120 characters, required), `summary`
+  (string, at most 4000 characters), `next_hint` (string, at most 2000
+  characters) and `commit` (a 40- or 64-character lowercase hex SHA, otherwise
+  dropped). Unknown keys are ignored. The file is at most 16384 bytes. The
+  control plane claims the drop in its worktree scan, before the done-marker
+  scan, and journals it for each `in_progress` story. A drop that is not a
+  regular file, is over the size limit, is not a JSON object or has a bad field
+  is deleted and logged with a reason code only. The mode variable is read as
+  stripped and lowercased; any value other than `file` (including unset) keeps
+  the `checkpoint_story` tool path. The drop is never committed.
 
 ### Decisions (overlord)
 - `request_decision(plan_name, story_key, question, options, context="")` —

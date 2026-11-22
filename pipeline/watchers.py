@@ -23,6 +23,7 @@ from app.credentials import is_default_namespace
 
 from . import (
     audit_anchor,
+    checkpoint_drop,
     ci_rollup,
     forge_github,
     manifest_source,
@@ -609,6 +610,8 @@ def scan_all_plans(bus):
         capacity_in_use += counts.get(CAPACITY_IN_USE_STATUS, 0)
         for status, count in counts.items():
             status_counts[status] = status_counts.get(status, 0) + count
+        # A checkpoint dropped just before the done marker is journalled first.
+        checkpoint_drop.scan(manifest, plan_name)
         events.extend(scan_done_markers(manifest, plan_name, bus))
         # A finished detached job is visible in this manifest alone. The wake
         # is a hint: the advance re-reads the manifest and the result file.

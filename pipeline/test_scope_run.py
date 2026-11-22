@@ -23,6 +23,11 @@ def is_scoped(story: dict) -> bool:
     return isinstance(resolution, dict) and resolution.get("test_scope") == "scoped"
 
 
+def host_tests_skipped(story: dict) -> bool:
+    """True when a CI-gated scoped story runs no test command on the host."""
+    return is_scoped(story) and story["test_scope_resolution"].get("host_tests") == "skipped"
+
+
 def _is_safe_node_id(node_id: str) -> bool:
     if not _NODE_ID_RE.match(node_id):
         return False
@@ -98,6 +103,14 @@ def _absolute(worktree, rel_paths: list[str]) -> list[str]:
 def grade_test_cmd(story: dict, story_key: str, worktree, test_dir, base_test_cmd: list[str], test_cmd: list[str]) -> list[str]:
     if not is_scoped(story):
         return test_cmd
+    if host_tests_skipped(story):
+        story["test_scope_grade"] = {
+            "targets": [],
+            "no_tests": True,
+            "host_tests": "skipped",
+            "ts": datetime.now(UTC).isoformat(),
+        }
+        return list(NO_TESTS_CMD)
     from .server import _default_branch
 
     acceptance = _acceptance_rel_paths(story)

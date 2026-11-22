@@ -296,6 +296,16 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=("deployment",),
             legacy_env="",
         ),
+        # Deployment-only: when True, a story that resolved scoped (CI gates
+        # the merge) runs no test command on the pipeline host.
+        SettingKey(
+            name="host_tests_skipped",
+            type="bool",
+            kind="lock",
+            safe_value=False,
+            allowed_layers=("deployment",),
+            legacy_env="",
+        ),
         SettingKey(
             name="merge_ci_timeout_s",
             type="int",

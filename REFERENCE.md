@@ -666,24 +666,6 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_FROM` | unset (empty) | Envelope From address; falls back to the username |
 | `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of notification e-mails |
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
-| `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` | unset (empty) | Comma-separated exact hostnames allowed to resolve to an internal address, for a self-hosted relay on a private network; see the SMTP host guard below |
-
-**SMTP host guard.** The SMTP host must resolve to a public address. The
-check is the webhook channel's outbound guard (`app/outbound_guard.py`),
-applied before any connection. A name that does not resolve, that resolves
-to any loopback, private, link-local or otherwise non-public address, or that
-is a literal internal IP, `localhost` or `*.localhost`, is refused: the
-outcome is `REJECTED` and no socket is opened. The refusal log line names the
-channel and a fixed reason, never the host or the address. The connection is
-made to the address the host resolved to, and TLS verifies the certificate
-against the configured host name.
-
-A single-tenant install that sends through a private relay opts that exact host
-in with `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS`. Matching is case-insensitive
-and ignores a trailing dot. The variable is read from the process environment
-only, never from `notification.json`, so a hosted tenant cannot widen it. A blank
-or malformed entry is ignored with one WARNING that names the variable, not its
-value.
 
 The subject line is derived from the record's structured event —
 `record["payload"]["event"]` (`pipeline/notification_email.py:136`). Labelled

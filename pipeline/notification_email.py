@@ -45,7 +45,7 @@ from email.message import EmailMessage
 from typing import Any
 
 from app.credentials import CredentialRef, resolve
-from app.outbound_guard import resolve_public_host
+from app.outbound_guard import is_internal_address, resolve_public_address
 from pipeline.notification_channels import (
     ChannelConfigError,
     DeliveryResult,
@@ -169,7 +169,9 @@ def _log_malformed(exc: Exception) -> None:
     )
 
 
-def _build_message(settings: EmailSettings, rendered: RenderedNotification) -> EmailMessage:
+def _build_message(
+    settings: EmailSettings, rendered: RenderedNotification
+) -> EmailMessage:
     message = EmailMessage()
     message["From"] = settings.from_addr
     message["To"] = ", ".join(settings.to_addrs)
@@ -228,14 +230,35 @@ def _allowed_private_hosts() -> frozenset[str]:
     return frozenset(hosts)
 
 
+def _resolve_smtp_host(name: str, *, allow_private: bool) -> str | None:
+    """The address to dial for a normalised, syntactically valid ``name``.
+
+    A literal IP is judged directly, with no lookup.  ``localhost`` and
+    ``*.localhost`` are internal without one.  Any other name is resolved and
+    every answer judged by the webhook channel's guard.
+    """
+    try:
+        literal = ipaddress.ip_address(name)
+    except ValueError:
+        if not allow_private and (name == "localhost" or name.endswith(".localhost")):
+            return None
+        return resolve_public_address(f"smtp://{name}", allow_private=allow_private)
+    if not allow_private and is_internal_address(literal):
+        return None
+    return str(literal)
+
+
 def _pinned_smtp_address(channel: str, host: str) -> str | None:
     """The validated address to dial for ``host``, or None to refuse the send.
 
-    Refusals log the channel name and a constant reason only: the host and the
-    address are never logged.
+    A malformed host is refused before any lookup.  Refusals log the channel
+    name and a constant reason only: the host and the address are never logged.
     """
-    allow_private = _normalise_host(host) in _allowed_private_hosts()
-    address = resolve_public_host(host, allow_private=allow_private)
+    name = _normalise_host(host)
+    address = None
+    if _is_valid_host(name):
+        allow_private = name in _allowed_private_hosts()
+        address = _resolve_smtp_host(name, allow_private=allow_private)
     if address is None:
         log.warning(
             "notification email refused: channel=%s reason=%s",
@@ -292,7 +315,9 @@ def _smtp_deliver(settings: EmailSettings, message: EmailMessage, address: str) 
         try:
             smtp.login(settings.user, settings.password)
         except smtplib.SMTPServerDisconnected as exc:
-            raise SMTPAuthPhaseDisconnect("connection closed during authentication") from exc
+            raise SMTPAuthPhaseDisconnect(
+                "connection closed during authentication"
+            ) from exc
         smtp.send_message(message)
 
 
@@ -341,8 +366,14 @@ _CHANNEL_KEYS = frozenset(
 
 def _require_str(name: str, settings: Mapping[str, Any], key: str) -> str:
     value = settings.get(key)
-    if not isinstance(value, str) or not value or any(c in value for c in _ADDRESS_FORBIDDEN):
-        raise ChannelConfigError(f"channel {name!r}: setting {key!r} must be a non-empty string")
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(c in value for c in _ADDRESS_FORBIDDEN)
+    ):
+        raise ChannelConfigError(
+            f"channel {name!r}: setting {key!r} must be a non-empty string"
+        )
     return value
 
 
@@ -352,16 +383,22 @@ def _validated_address(name: str, key: str, value: Any) -> str:
         or any(c in value for c in _ADDRESS_FORBIDDEN)
         or value.count("@") != 1
     ):
-        raise ChannelConfigError(f"channel {name!r}: setting {key!r} has an invalid address")
+        raise ChannelConfigError(
+            f"channel {name!r}: setting {key!r} has an invalid address"
+        )
     local, domain = value.split("@")
     if not local.strip() or not domain.strip():
-        raise ChannelConfigError(f"channel {name!r}: setting {key!r} has an invalid address")
+        raise ChannelConfigError(
+            f"channel {name!r}: setting {key!r} has an invalid address"
+        )
     return value
 
 
 def _positive_number(name: str, key: str, value: Any, kind: type) -> Any:
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
-        raise ChannelConfigError(f"channel {name!r}: setting {key!r} must be a positive number")
+        raise ChannelConfigError(
+            f"channel {name!r}: setting {key!r} must be a positive number"
+        )
     return kind(value)
 
 
@@ -422,7 +459,9 @@ class EmailChannelType:
         host = _require_str(instance_name, settings, "host")
         user = settings.get("user", "")
         if not isinstance(user, str) or any(c in user for c in _ADDRESS_FORBIDDEN):
-            raise ChannelConfigError(f"channel {instance_name!r}: setting 'user' must be a string")
+            raise ChannelConfigError(
+                f"channel {instance_name!r}: setting 'user' must be a string"
+            )
         from_addr = _validated_address(instance_name, "from", settings.get("from"))
         raw_to = settings.get("to")
         if not isinstance(raw_to, list) or not raw_to:
@@ -431,9 +470,13 @@ class EmailChannelType:
             )
         to_addrs = tuple(_validated_address(instance_name, "to", a) for a in raw_to)
         port = _positive_number(instance_name, "port", settings.get("port", 587), int)
-        timeout = _positive_number(instance_name, "timeout", settings.get("timeout", 20), float)
+        timeout = _positive_number(
+            instance_name, "timeout", settings.get("timeout", 20), float
+        )
         password_env = settings.get("password_env")
-        if password_env is not None and (not isinstance(password_env, str) or not password_env):
+        if password_env is not None and (
+            not isinstance(password_env, str) or not password_env
+        ):
             raise ChannelConfigError(
                 f"channel {instance_name!r}: setting 'password_env' must name an env var"
             )
@@ -473,7 +516,9 @@ class EmailChannelType:
             return _secret_text(
                 resolve(
                     CredentialRef(
-                        "notification", self._password_ref, namespace=current_namespace()
+                        "notification",
+                        self._password_ref,
+                        namespace=current_namespace(),
                     )
                 )
             )
@@ -518,18 +563,27 @@ class EmailChannelType:
         try:
             _smtp_deliver(settings, message, address)
         except SMTPAuthPhaseDisconnect as exc:
-            return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_disconnect"))
+            return self._failed(
+                exc, DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_disconnect")
+            )
         except smtplib.SMTPAuthenticationError as exc:
             # 4xx means "try again later" (e.g. Gmail's `454 4.7.0 Too many login
             # attempts`); 5xx rejects the credential outright.
             if 400 <= exc.smtp_code < 500:
-                return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_temporary"))
-            return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected"))
+                return self._failed(
+                    exc,
+                    DeliveryResult(DeliveryStatus.RETRY, reason="smtp_auth_temporary"),
+                )
+            return self._failed(
+                exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected")
+            )
         except (
             smtplib.SMTPRecipientsRefused,
             smtplib.SMTPSenderRefused,
         ) as exc:
-            return self._failed(exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected"))
+            return self._failed(
+                exc, DeliveryResult(DeliveryStatus.REJECTED, reason="smtp_rejected")
+            )
         except smtplib.SMTPResponseException as exc:
             permanent = 500 <= exc.smtp_code < 600
             return self._failed(

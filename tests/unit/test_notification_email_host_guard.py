@@ -258,6 +258,17 @@ def test_localhost_names_are_refused_without_dns(resolver, name):
     assert _FakeSMTP.instances == []
 
 
+@pytest.mark.parametrize(
+    "host", ["10.0.0.5@smtp.public.example", "mail/relay", "a b.example"]
+)
+def test_malformed_host_is_refused_before_any_lookup(resolver, host):
+    result = _channel(host).send(RECORD)
+
+    assert result.status is DeliveryStatus.REJECTED
+    assert resolver.lookups == []
+    assert _FakeSMTP.instances == []
+
+
 def test_unlisted_host_with_same_internal_address_is_refused(resolver, monkeypatch):
     monkeypatch.setenv(ALLOW, "relay.other.example")
     resolver.answers[PRIVATE_NAME] = [PRIVATE_ADDRESS]

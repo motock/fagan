@@ -272,7 +272,7 @@ def _replay_ruling(
     if merge:
         _score_merge(tally, decision, human_action)
     else:
-        _score(tally, decision, resolution, count_input=False)
+        _score(tally, decision, human_action)
 
 
 def _replay_plan(plan: str, inputs: _Inputs, *, runs: int, limit: int) -> dict[str, dict[str, Any]]:

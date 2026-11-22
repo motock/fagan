@@ -12,6 +12,7 @@ in practice.
 ### Security
 
 - A process serving several namespaces gives each non-default namespace its own worktree directory (`WORKTREE_ROOT/_ns/<org>@<team>/<key>`), so two teams' stories with the same key no longer share a worktree on dispatch; the default namespace keeps `WORKTREE_ROOT/<key>` and refuses the key `_ns` (hrc-01).
+- The security reviewer is told the findings format the review gate parses (`- Blocking: <path>: <description>` or `- Blocking: (unscoped) <description>`), so a REQUEST_CHANGES no longer parks the story as inconclusive for using markdown headings instead (srf-01).
 
 ### Changed
 

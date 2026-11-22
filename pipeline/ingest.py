@@ -24,6 +24,7 @@ from typing import Any
 from . import cross_plan, external_refs, plan_draft, plan_names, testfiles
 from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
+from .branch_names import worktree_parent
 from .build_detect import _lint_acceptance_fixtures
 from .context_sources import (
     DEFAULT_MAX_TOTAL_CHARS,
@@ -433,7 +434,7 @@ def _story_key_conflict_error(
         if isinstance(story.get("key"), str) and story["key"]
     ]
     conflicts = cross_plan.key_conflicts(
-        keys, _neighbour_manifests(plan_name), WORKTREE_ROOT._value()
+        keys, _neighbour_manifests(plan_name), worktree_parent(WORKTREE_ROOT._value(), current_namespace())
     )
     if not conflicts:
         return None

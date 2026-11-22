@@ -272,3 +272,38 @@ def test_dispatch_should_refuse_reserved_key_in_default_namespace(dispatch_probe
         "story_key": "_ns",
     }
     assert captured == []
+
+
+# ---------- worktree_or_refusal ----------
+
+
+def test_should_return_refusal_for_reserved_key_in_default_namespace(tmp_path):
+    assert bn.worktree_or_refusal(tmp_path, {}, "_ns") == (None, "story key is reserved")
+
+
+def test_should_return_refusal_for_invalid_bound_namespace(tmp_path, monkeypatch):
+    monkeypatch.setattr(actor, "current_namespace", lambda: "../x")
+    assert bn.worktree_or_refusal(tmp_path, {}, "S1") == (None, "invalid namespace")
+
+
+def test_should_return_path_for_valid_bound_namespace(tmp_path, monkeypatch):
+    monkeypatch.setattr(actor, "current_namespace", lambda: "acme/web")
+    assert bn.worktree_or_refusal(tmp_path, {}, "S1") == (
+        tmp_path / "_ns" / "acme@web" / "S1",
+        None,
+    )
+
+
+def test_should_unwrap_server_reference_root(tmp_path):
+    class _Ref:
+        def _value(self):
+            return tmp_path
+
+    assert bn.worktree_or_refusal(_Ref(), {}, "S1") == (tmp_path / "S1", None)
+
+
+def test_should_let_misconfigured_env_namespace_propagate(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV, "Bad Name")
+    with pytest.raises(ValueError) as info:
+        bn.worktree_or_refusal(tmp_path, {}, "S1")
+    assert not isinstance(info.value, bn.WorktreeRefused)

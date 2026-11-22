@@ -53,7 +53,7 @@ def worktree_dir_name(story_key: str, namespace: str | None = None) -> str:
     ``story_branch`` lowercases, but directory names are not and dispatch must
     keep the exact key spelling it has always used.
     """
-    from pipeline.store_records import DEFAULT_NAMESPACE
+    from app.credentials import is_default_namespace
 
     env_namespace = os.environ.get(WORKTREE_NAMESPACE_ENV, "")
     if env_namespace:
@@ -62,7 +62,7 @@ def worktree_dir_name(story_key: str, namespace: str | None = None) -> str:
                 f"{WORKTREE_NAMESPACE_ENV} must match {_NAMESPACE_RE.pattern}"
             )
         return f"{env_namespace}/{story_key}"
-    if namespace is None or namespace == DEFAULT_NAMESPACE:
+    if namespace is None or is_default_namespace(namespace):
         if story_key.lower() == RESERVED_DIR:
             raise WorktreeRefused("story key is reserved")
         return story_key
@@ -109,11 +109,29 @@ def worktree_parent(root, namespace: str | None):
     """
     from pathlib import Path
 
-    from pipeline.store_records import DEFAULT_NAMESPACE
+    from app.credentials import is_default_namespace
 
-    if os.environ.get(WORKTREE_NAMESPACE_ENV, "") or namespace in (None, DEFAULT_NAMESPACE):
+    if os.environ.get(WORKTREE_NAMESPACE_ENV, "") or namespace is None or is_default_namespace(namespace):
         return Path(root)
     return Path(root) / RESERVED_DIR / _encoded_namespace(namespace)
+
+
+def worktree_or_refusal(root, story: dict, story_key: str):
+    """``(path, None)`` for a story's worktree, or ``(None, message)`` when it
+    cannot be placed for the bound namespace.
+
+    ``root`` may be a live server reference (anything with ``_value``), which
+    is unwrapped here so dispatch keeps one call. A misconfigured
+    ``PIPELINE_WORKTREE_NAMESPACE`` is a plain ``ValueError`` and propagates.
+    """
+    from pipeline.actor import current_namespace
+
+    if hasattr(root, "_value"):
+        root = root._value()
+    try:
+        return story_worktree_path(root, story, story_key, current_namespace()), None
+    except WorktreeRefused as exc:
+        return None, str(exc)
 
 
 def story_branch(story_key: str, recorded: str | None = None) -> str:

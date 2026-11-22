@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from . import checkpoint_drop
 from .config import _LOCAL_SKIP_PERSONAS, DEFAULT_MODEL
 from .context_sources import render_files_pointer
 from .file_size_policy_dispatch import file_size_advisory_note
@@ -120,7 +121,16 @@ def _build_dispatch_command(
     """
     persona = story.get("persona")
     checkpoint_instruction = ""
-    if plan_name:
+    if plan_name and checkpoint_drop.is_file_mode():
+        checkpoint_instruction = (
+            "After completing each meaningful, idempotent step, commit your work, "
+            "then record a checkpoint: write a JSON object with the keys \"step\" "
+            "(short id), \"summary\" (what you did) and \"next_hint\" (what to do "
+            "next) to a temporary file in the worktree root and rename it to "
+            ".agent_checkpoint, replacing any earlier one. Never add that file "
+            "to git.\n\n"
+        )
+    elif plan_name:
         checkpoint_instruction = (
             f"After completing each meaningful, idempotent step, call the "
             f'checkpoint tool (plan_name="{plan_name}", story_key="{story_key}", '

@@ -37,6 +37,8 @@ in practice.
 
 - A new `own_lint_failure` park class covers a story whose suite passes but whose lint gate is red only on files the story added or declared. Its allowed actions are `rebrief` and `park_for_human`; a lint failure in any other file keeps the `unknown` class.
 
+- An identity provider loaded through `PIPELINE_IDENTITY_PLUGIN` can serve the remote MCP transport only when its class sets `network_grade = True` (exactly `True`). Any other provider makes the transport refuse to start, and the dashboard browser login stays OIDC-only. The plugin requires `PIPELINE_PLUGIN_MODULES`.
+
 ### Security
 
 - Email delivery to a host that resolves to a loopback, private, link-local or other non-public address is now refused. An install that sends through an internal relay (for example a postfix container) must list that host in `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` or its email stops after upgrading.

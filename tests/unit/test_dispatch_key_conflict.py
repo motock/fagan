@@ -132,3 +132,19 @@ def test_should_not_leak_filesystem_paths_in_error_or_notification(
 
     leaked = [s for s in (json.dumps(result), notes[0][1]) if str(tmp_path) in s]
     assert leaked == []
+
+
+@pytest.mark.parametrize("status", ["changes_requested", "interrupted"])
+def test_should_dispatch_resumed_story_when_other_plan_done_and_worktree_present(
+    env, plan_dir, worktree_root, status,
+):
+    _, popen_calls, _ = env
+    (worktree_root / "TOPO-X").mkdir()
+    _write(plan_dir, "mine", {"TOPO-X": _story(status)})
+    _write(plan_dir, "other", {"TOPO-X": _story("done")})
+
+    result = p.dispatch_story("mine", "TOPO-X")
+
+    assert result.get("error") != ERROR
+    assert "error" not in result
+    assert len(popen_calls) == 1

@@ -310,7 +310,7 @@ def test_state_none_with_error_is_rendered_verbatim(monkeypatch):
     assert "PR CHECKS: (none)" not in h.prompt
 
 
-def test_pending_state_is_rendered_verbatim(monkeypatch):
+def test_pending_state_defers_the_ruling_without_a_prompt(monkeypatch):
     gathered = {"state": "pending", "error": ""}
     h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=gathered)
     story = _story()
@@ -318,10 +318,8 @@ def test_pending_state_is_rendered_verbatim(monkeypatch):
     h.decide(story)
 
     assert story["pr_checks"] == gathered
-    line = h.pr_checks_line()
-    assert "'state': 'pending'" in line
-    assert "(unreadable" not in line
-    assert "PR CHECKS: (none)" not in h.prompt
+    assert h.invocations == []
+    assert "pr_checks_error" not in story
 
 
 # --------------------------------------------------------------------------

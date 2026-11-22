@@ -181,9 +181,7 @@ def test_a_deferred_ruling_logs_one_info_line_naming_plan_and_story(
 # --- the deferred hold is re-adjudicated once CI finishes ---------------------
 
 
-def test_a_deferred_hold_is_re_adjudicated_when_checks_pass(
-    plan_dir, monkeypatch
-):
+def test_a_deferred_hold_is_re_adjudicated_when_checks_pass(plan_dir, monkeypatch):
     _full_autonomy(monkeypatch)
     story = _high_risk_story()
     forge = _Forge(monkeypatch, value=_snapshot("pending"))
@@ -243,7 +241,9 @@ def test_an_unreadable_ci_read_goes_to_the_overlord_as_unreadable(
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
     assert len(overlord.prompts) == 1
-    assert "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
+    assert (
+        "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
+    )
     assert len(_records(plan_dir)) == 1
 
 
@@ -285,5 +285,7 @@ def test_a_failed_refresh_of_a_cached_pending_snapshot_reports_unreadable(
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
     assert len(overlord.prompts) == 1
-    assert "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
+    assert (
+        "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
+    )
     assert len(_records(plan_dir)) == 1

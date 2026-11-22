@@ -221,14 +221,14 @@ def test_missing_pr_checks_gathers_evidence_into_the_prompt(monkeypatch):
 
 
 def test_gathered_state_is_the_single_poll_result(monkeypatch):
-    pending = {"state": "pending", "error": ""}
-    h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=pending)
+    failed = {"state": "fail", "error": ""}
+    h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=failed)
     story = _story()
 
     h.decide(story)
 
-    assert story["pr_checks"] == pending
-    assert "'state': 'pending'" in h.pr_checks_line()
+    assert story["pr_checks"] == failed
+    assert "'state': 'fail'" in h.pr_checks_line()
 
 
 def test_gather_result_is_kept_when_the_overlord_fails(monkeypatch):

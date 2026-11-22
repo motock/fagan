@@ -117,6 +117,8 @@ in practice.
 
 - The merge gate applies the plan's stored settings when it is called without a plan argument, which is how the merge path calls it. Under full autonomy a high-risk merge had been parked as `high risk held for human review` without reaching the overlord, and the stored autonomy and auto-merge values were ignored.
 
+- The CI rework message names the failing checks and tests. A CI failure answered from the rollup cache kept no check names, and the failing-log lookup ran outside the story repository and read the newest workflow run rather than the failing job, so the message said only `ci fail:`. It now names each failing check, and the failing tests from the failing job's own log.
+
 ### Security
 
 - Lint and suite baseline probes, the acceptance-oracle gate, the failing-test re-run, pytest collection for the guard-liveness check and the local reviewer's `bash` tool run their commands through the command-wrap seam (`tenant_exec.wrap`), so a configured wrap plugin sees every one of them; a refused command makes its probe report `*_probe_failed` (detail `CommandWrapError`), the oracle gate report `errors`, the re-run return no facts, the collection return no data, and the reviewer shell return exit code 126 without running the command. With no plugin configured, nothing changes (tcw-05).

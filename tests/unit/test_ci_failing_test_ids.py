@@ -44,9 +44,15 @@ def _matrix_log(failed_lines_per_job):
 
 
 def _install_gh(monkeypatch, log, *, run_list_rc=0, view_rc=0):
-    """Route the two ``gh`` calls ``failure_log_excerpt`` makes."""
+    """Route the ``gh`` calls ``failure_log_excerpt`` makes.
 
-    def _fake_run(argv, **_):
+    The failing-job lookup (``gh api .../check-runs``) answers with no failing
+    check, so these tests keep exercising the run-log fallback they pin.
+    """
+
+    def _fake_run(argv, cwd=None, **_):
+        if argv[:2] == ["gh", "api"] and "check-runs" in argv[2]:
+            return _Result(stdout="", returncode=0)
         if argv[:3] == ["gh", "run", "list"]:
             return _Result(stdout=f"{RUN_ID}\n", returncode=run_list_rc)
         if argv[:3] == ["gh", "run", "view"]:

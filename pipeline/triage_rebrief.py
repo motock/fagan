@@ -44,7 +44,6 @@ REBRIEF_RESET_FIELDS = frozenset(
     {
         "ci_rework",
         "merge_attempts",
-        "pr_open_failures",
         "review_deferred_count",
         "review_inconclusive_count",
         "rework_attempts",

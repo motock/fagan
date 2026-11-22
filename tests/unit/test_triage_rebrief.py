@@ -724,12 +724,3 @@ def _write_file(path: Path) -> Path:
 def _make_dir(path: Path) -> Path:
     path.mkdir()
     return path
-
-
-def test_rebrief_clears_pr_open_failures_for_a_fresh_count(plan_dir, notices):
-    story = _story(parked_reason=_NO_COMMIT_REASON, pr_open_failures=1)
-    _write(story)
-
-    _rebrief(story, "Retry.")
-
-    assert "pr_open_failures" not in story

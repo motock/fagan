@@ -247,10 +247,28 @@ def test_dispatch_should_keep_root_collision_check_for_default_namespace(dispatc
     assert captured == [worktree_root]
 
 
-def test_dispatch_should_raise_for_invalid_bound_namespace_before_collision_check(
+def test_dispatch_should_refuse_invalid_bound_namespace_before_collision_check(
     dispatch_probe,
 ):
     _, captured = dispatch_probe
-    with actor.bind_namespace("../x"), pytest.raises(ValueError, match="invalid namespace"):
-        pdisp._dispatch_story_impl("plan-a", "ABC-1")
+    with actor.bind_namespace("../x"):
+        result = pdisp._dispatch_story_impl("plan-a", "ABC-1")
+    assert result == {
+        "ok": False,
+        "error": "invalid namespace",
+        "story_key": "ABC-1",
+    }
+    assert "../x" not in result["error"]
+    assert captured == []
+
+
+def test_dispatch_should_refuse_reserved_key_in_default_namespace(dispatch_probe):
+    _, captured = dispatch_probe
+    pdisp._store._manifest["stories"]["_ns"] = {"status": "todo"}
+    result = pdisp._dispatch_story_impl("plan-a", "_ns")
+    assert result == {
+        "ok": False,
+        "error": "story key is reserved",
+        "story_key": "_ns",
+    }
     assert captured == []

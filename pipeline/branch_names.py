@@ -11,6 +11,15 @@ _NAMESPACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 RESERVED_DIR = "_ns"
 
 
+class WorktreeRefused(ValueError):
+    """This story's worktree cannot be placed for its namespace or key.
+
+    Raised for a reserved key or an invalid bound namespace. Dispatch turns it
+    into a refusal result; a misconfigured ``PIPELINE_WORKTREE_NAMESPACE``
+    stays a plain ``ValueError`` and still fails loudly.
+    """
+
+
 def recorded_kwargs(story: dict) -> dict:
     """``{"recorded": branch}`` when the story has a dispatched branch, else
     ``{}`` so callers of branch resolvers stay unchanged for legacy stories."""
@@ -55,7 +64,7 @@ def worktree_dir_name(story_key: str, namespace: str | None = None) -> str:
         return f"{env_namespace}/{story_key}"
     if namespace is None or namespace == DEFAULT_NAMESPACE:
         if story_key.lower() == RESERVED_DIR:
-            raise ValueError("story key is reserved")
+            raise WorktreeRefused("story key is reserved")
         return story_key
     return f"{RESERVED_DIR}/{_encoded_namespace(namespace)}/{story_key}"
 
@@ -65,9 +74,12 @@ def _encoded_namespace(namespace: str) -> str:
 
     Imported lazily: this module imports only ``os`` and ``re`` at load time.
     """
-    from pipeline.store_records import validate_namespace
+    from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
-    validate_namespace(namespace)
+    try:
+        validate_namespace(namespace)
+    except InvalidRecordKeyError:
+        raise WorktreeRefused("invalid namespace") from None
     return namespace.replace("/", "@")
 
 

@@ -12,7 +12,7 @@ from app import backend, role_registry  # noqa: F401
 from . import access_hooks, bound_records, cross_plan, plan_approval, triage_rebrief
 from .actor import current_namespace
 from .branch_guard import remote_branch_exists  # noqa: F401
-from .branch_names import record_story_branch, story_worktree_path
+from .branch_names import WorktreeRefused, record_story_branch, story_worktree_path
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .concurrency import _plan_lock
 from .config import WORKTREE_SCOPE_RULE
@@ -152,7 +152,10 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "story_key": story_key}
         root = WORKTREE_ROOT._value() if isinstance(WORKTREE_ROOT, _ServerRef) else WORKTREE_ROOT
-        worktree_path = story_worktree_path(root, story, story_key, current_namespace())
+        try:
+            worktree_path = story_worktree_path(root, story, story_key, current_namespace())
+        except WorktreeRefused as exc:
+            return {"ok": False, "error": str(exc), "story_key": story_key}
         if not story.get("correlation_id"):
             story["correlation_id"] = uuid.uuid4().hex[:12]
         bound_records.put_manifest(_store, plan_name, manifest)

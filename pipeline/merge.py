@@ -242,6 +242,12 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
 
 
+def _pr_checks_pending(story: dict[str, Any]) -> bool:
+    """True when the story's gathered CI snapshot says checks are still running."""
+    checks = story.get("pr_checks")
+    return isinstance(checks, dict) and checks.get("state") == "pending"
+
+
 def _populate_pr_checks_once(story, story_key: str | None = None):
     """Best-effort single-poll CI evidence for the overlord prompt.
 
@@ -264,11 +270,17 @@ def _populate_pr_checks_once(story, story_key: str | None = None):
     would outrank the recovered state and keep a green story parked.
     """
     if story.get("pr_checks"):
-        # Already gathered (e.g. advance._readjudicate_parked_merge_hold wrote
-        # the fresh state before calling the gate): drop any stale failure so
-        # the render cannot report a readable state as unreadable.
-        story.pop("pr_checks_error", None)
-        return
+        if not _pr_checks_pending(story):
+            # Already gathered (e.g. advance._readjudicate_parked_merge_hold
+            # wrote the fresh state before calling the gate): drop any stale
+            # failure so the render cannot report a readable state as
+            # unreadable.
+            story.pop("pr_checks_error", None)
+            return
+        # A cached pending snapshot is stale once CI may have finished: drop it
+        # and read the forge again, so the ruling never waits on a snapshot
+        # that nothing refreshes.
+        story.pop("pr_checks")
     # Hoisted ABOVE the try: the first statement inside it is an import, so a
     # key bound in there would be unbound exactly when the failure handler
     # below needs it (NameError raised from inside the swallow path).
@@ -440,8 +452,6 @@ def _adjudicate_high_risk_merge(
         or story.get("story_key")
     )
     _invoke_pr_checks_gather(_populate_pr_checks_once, story, story_key)
-    from .overlord import _invoke_overlord
-    from .persistence import _plan_role_config
 
     if plan_name is None:
         # Compat shim for direct callers; production always supplies the
@@ -450,6 +460,19 @@ def _adjudicate_high_risk_merge(
         plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
 
     hold = {"action": "park", "reason": "high risk held for human review"}
+    if _pr_checks_pending(story):
+        # A ruling made while CI runs is made on incomplete evidence. The hold
+        # stands, and the park branch's pending snapshot lets
+        # _readjudicate_parked_merge_hold rule once CI finishes.
+        logging.getLogger("pipeline").info(
+            "high-risk merge adjudication deferred: PR checks pending",
+            extra={"plan_name": plan_name, "story_key": story_key},
+        )
+        return hold
+
+    from .overlord import _invoke_overlord
+    from .persistence import _plan_role_config
+
     # Prior state captured before any mutation: the caller parks/merges only
     # after this returns, so the story dict still holds its pre-gate state.
     prior_status = story.get("status")

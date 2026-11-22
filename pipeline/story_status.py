@@ -55,6 +55,7 @@ from .escalation import (
     _escalation_label,
     _escalation_target,
 )
+from .failure_reasons import auth_failure_hint, tests_failed_reason
 from .git_ops import _commit_wip, _untrack_scratchpad
 from .no_progress import classify_no_progress
 from .parsers import (
@@ -756,6 +757,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["failure_reason"] = (
             f"tests passed but agent branch has no new commits vs {base}; "
             "agent likely parked without writing code."
+            + auth_failure_hint(story.get("log"))
         )
         bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
         return {"status": "failed", "reason": "empty_agent_branch"}
@@ -788,6 +790,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     ):
         story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
         story["acceptance_failed_review"] = True
+
+    # The reason names this attempt only: a pass drops any reason an earlier
+    # attempt left, and a red test run gets its exit code. Output is never
+    # copied into the reason. A red grade whose test command passed (lint or
+    # dead-code) has no new reason to give, so the stale one is dropped.
+    if story["status"] == "tests_passed":
+        story.pop("failure_reason", None)
+    elif story["status"] == "failed":
+        story.pop("failure_reason", None)
+        returncode = (story.get("last_test_check") or {}).get("returncode")
+        if returncode not in (None, 0):
+            story["failure_reason"] = tests_failed_reason(returncode)
 
     # Mode 27 guard: the story is about to land on tests_passed (via either
     # path above — a genuine pass, or the PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL
@@ -981,6 +995,9 @@ def bind_to_server(_server: Any) -> None:
     _server.grade_test_cmd = grade_test_cmd
     _server._clear_failure_streaks = _clear_failure_streaks
     _server.classify_no_progress = classify_no_progress
+    # Pure failure-reason wording, read by the grade path on every failed grade.
+    _server.auth_failure_hint = auth_failure_hint
+    _server.tests_failed_reason = tests_failed_reason
 
     # The post-agent scratchpad untrack has the detached-grade primitives'
     # reason AND one of its own: it shells out to git, so exporting the real

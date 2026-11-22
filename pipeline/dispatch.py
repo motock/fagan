@@ -236,8 +236,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                             if acquired:
                                 subprocess.run(
                                     ["git", "fetch", "origin", _default_branch()],
-                                    cwd=repo_root,
-                                    check=True, **forge_auth.env_kw(),
+                                    cwd=repo_root, check=True, **forge_auth.env_kw(),
                                 )
                         count_out = subprocess.run(
                             [

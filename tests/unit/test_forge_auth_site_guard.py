@@ -51,6 +51,7 @@ HELPER_SITES: tuple[tuple[str, str], ...] = (
     ("pipeline/review_merge_binding.py", "_git"),
     ("pipeline/ci_rollup.py", "_owner_and_name"),
     ("pipeline/ci_rollup.py", "_graphql_payload"),
+    ("pipeline/forge_github.py", "_run"),  # every GitHub push, pr and gh verb runs through it
 )
 
 

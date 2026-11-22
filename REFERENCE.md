@@ -2683,6 +2683,8 @@ The purposes resolved through the seam in this release:
   and CI-status commands for that namespace use the same token, passed in the
   child environment only. The process's own forge token is never used for a
   team namespace, and a team without a token gets none, so its remote calls fail.
+  The operator's own stored `gh` login and git config are hidden from a team
+  namespace's commands too, so a team without a token cannot act as the operator.
 - `notification` — the reference a notification channel instance configures: `password_ref` (e-mail), `webhook_url_ref` (Slack), or `url_ref` and `secret_ref` (the signed `webhook` type; see "Notification routing"). The lookup carries the namespace the notice is being delivered for, so a credentials plugin can tell which team a notice belongs to.
 - `secret` — a `secret://<provider>/<name>` reference. `env` reads an
   environment variable and only in the `default` namespace; `file` reads a file

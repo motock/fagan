@@ -91,6 +91,9 @@ def _commit_wip(worktree: str, story_key: str, step: str,
     # Unstage a file-dropped checkpoint (and its claimed copy) the same way.
     subprocess.run(["git", "reset", "-q", "--", DROP_NAME, DROP_NAME + ".claimed"],
                     check=False, cwd=worktree, capture_output=True, text=True)
+    # Unstage fixture directories a killed acceptance dry-run left in the repo.
+    subprocess.run(["git", "reset", "-q", "--", ".pipeline-fixtures-*"],
+                    check=False, cwd=worktree, capture_output=True, text=True)
 
     if guard_against_deletion:
         # Detect staged deletions and restore them from HEAD before committing.

@@ -63,6 +63,8 @@ in practice.
 
 - With `PIPELINE_CHECKPOINT_MODE=file`, the control plane journals a checkpoint an agent drops as `.agent_checkpoint` in its worktree (size-capped, never followed, never committed), so a sandboxed agent without store credentials can checkpoint (hrc-03).
 
+- The acceptance-fixture pytest dry-run collects from a `.pipeline-fixtures-*` directory inside the story's repo when a repo root is set, so a sandboxed command that sees only the worktree can run it; `_commit_wip` never commits such a directory left by a killed run (hrc-05).
+
 ### Security
 
 - Lint and suite baseline probes, the acceptance-oracle gate, the failing-test re-run, pytest collection for the guard-liveness check and the local reviewer's `bash` tool run their commands through the command-wrap seam (`tenant_exec.wrap`), so a configured wrap plugin sees every one of them; a refused command makes its probe report `*_probe_failed` (detail `CommandWrapError`), the oracle gate report `errors`, the re-run return no facts, the collection return no data, and the reviewer shell return exit code 126 without running the command. With no plugin configured, nothing changes (tcw-05).

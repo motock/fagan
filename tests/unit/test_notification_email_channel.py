@@ -13,6 +13,7 @@ import pytest
 
 from pipeline import notification_channels as nc
 from pipeline import notification_email as ne
+from tests.unit._smtp_host_dns import PUBLIC_SMTP_ADDRESS, stub_smtp_dns
 
 PASSWORD = "s3cret-pw-value"
 RECORD = {"plan": "PLAN-1", "payload": {"message": "hello world", "event": "plan_completed"}}
@@ -160,7 +161,8 @@ def test_should_use_verifying_tls_context(fake_smtp):
 def test_should_pass_host_port_and_timeout(fake_smtp):
     _channel(port=2525, timeout=7).send(RECORD)
     inst = fake_smtp.instances[0]
-    assert (inst.host, inst.port, inst.timeout) == ("smtp.example.test", 2525, 7.0)
+    # Pinned to the resolved address, not the name (see the host-guard tests).
+    assert (inst.host, inst.port, inst.timeout) == (PUBLIC_SMTP_ADDRESS, 2525, 7.0)
 
 
 @pytest.mark.parametrize(
@@ -255,3 +257,9 @@ def test_legacy_sender_still_shares_core(monkeypatch, fake_smtp):
         monkeypatch.setenv(name, value)
     assert ne.send_notification_email(RECORD) is True
     assert fake_smtp.instances[0].sent[0]["To"] == "legacy@example.test"
+
+
+@pytest.fixture(autouse=True)
+def _smtp_host_resolves_publicly(monkeypatch):
+    # The SMTP host guard resolves the configured host; see _smtp_host_dns.
+    stub_smtp_dns(monkeypatch)

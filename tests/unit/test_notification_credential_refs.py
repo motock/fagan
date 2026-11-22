@@ -24,6 +24,7 @@ import app.credentials as creds
 from pipeline import notification_channels as nc
 from pipeline import notification_email as ne
 from pipeline import notification_slack as ns
+from tests.unit._smtp_host_dns import stub_smtp_dns
 
 # Made-up credential values.  None of them may reach a log record, an
 # exception message, a repr or an assertion message.
@@ -432,3 +433,9 @@ def test_slack_ref_payload_is_still_the_rendered_text(tmp_path, monkeypatch, ope
 
     body = json.loads(opener["opener"].requests[0].data)
     assert "hello world" in body["text"]
+
+
+@pytest.fixture(autouse=True)
+def _smtp_host_resolves_publicly(monkeypatch):
+    # The SMTP host guard resolves the configured host; see _smtp_host_dns.
+    stub_smtp_dns(monkeypatch)

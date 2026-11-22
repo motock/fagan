@@ -37,6 +37,7 @@ import pytest
 
 from pipeline import config_provenance, notification_email
 from pipeline.notification_email import send_notification_email
+from tests.unit._smtp_host_dns import PUBLIC_SMTP_ADDRESS, stub_smtp_dns
 
 ENABLED = "PIPELINE_NOTIFY_EMAIL_ENABLED"
 HOST = "PIPELINE_NOTIFY_EMAIL_HOST"
@@ -240,7 +241,9 @@ def test_success_returns_true_and_sends_expected_email(monkeypatch):
     assert len(fake_cls.instances) == 1
     fake = fake_cls.instances[0]
     host, port, timeout = fake.ctor_values()
-    assert host == "smtp.example.test"
+    # The connection is pinned to the address the host resolved to, not the
+    # name; the name is kept for TLS verification (see the host-guard tests).
+    assert host == PUBLIC_SMTP_ADDRESS
     assert int(port) == 2525
     assert timeout == 7
     assert fake.starttls_calls == 1
@@ -767,3 +770,9 @@ def test_malformed_record_logs_error_without_leaking_password(
     for record in caplog.records:
         assert secret not in record.getMessage()
         assert secret not in str(record.exc_info or "")
+
+
+@pytest.fixture(autouse=True)
+def _smtp_host_resolves_publicly(monkeypatch):
+    # The SMTP host guard resolves the configured host; see _smtp_host_dns.
+    stub_smtp_dns(monkeypatch)

@@ -13,6 +13,7 @@ atomically (temp file plus ``os.replace``, temp file cleaned up on failure).
 
 import fcntl
 import json
+import logging
 import math
 import os
 import time
@@ -25,6 +26,8 @@ from typing import Any, Protocol
 from pipeline.live_ref import LiveRef
 from pipeline.parsers import _validate_key
 from pipeline.store_records import validate_context_digest
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FileHostState",
@@ -119,14 +122,102 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+def _proc_available() -> bool:
+    """Whether this host exposes process identities under ``/proc``."""
+    return os.path.isdir("/proc/self")
+
+
+def _read_proc_file(pid: int, name: str) -> str | None:
+    """Text of ``/proc/<pid>/<name>``, or ``None`` when it cannot be read."""
+    try:
+        return Path("/proc", str(pid), name).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _read_start_ticks(pid: int) -> int | None:
+    """Field 22 (``starttime``) of ``/proc/<pid>/stat``, or ``None``."""
+    stat = _read_proc_file(pid, "stat")
+    if stat is None:
+        return None
+    # The name in field 2 is parenthesised and may hold spaces or parentheses,
+    # so the fields are counted from after the last ")": field 3 comes first.
+    fields = stat.rpartition(")")[2].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+# The lock file holds "<pid>" (bare, when /proc is unavailable) or
+# "<pid> <start_ticks>". Anything else is malformed and taken over.
+_LockRecord = tuple[int, int | None]
+
+
+def _parse_lock_record(raw: str) -> _LockRecord | None:
+    """The ``(pid, start_ticks)`` recorded in *raw*, or ``None`` if malformed."""
+    parts = raw.split()
+    if len(parts) not in (1, 2) or not all(p.isascii() and p.isdigit() for p in parts):
+        return None
+    pid = int(parts[0])
+    if pid <= 0:
+        return None
+    return pid, (int(parts[1]) if len(parts) == 2 else None)
+
+
+def _recorded_holder_runs(record: _LockRecord) -> bool:
+    """Whether the recorded holder is still the daemon that wrote the record."""
+    pid, start_ticks = record
+    if not _pid_is_alive(pid):
+        return False
+    if not _proc_available():
+        # No identity to check: a live pid is the only evidence there is.
+        return True
+    if start_ticks is None:
+        # A legacy bare pid: only a live scheduler process still holds it.
+        cmdline = _read_proc_file(pid, "cmdline") or ""
+        return "scheduler_daemon" in cmdline
+    current = _read_start_ticks(pid)
+    # An unreadable stat leaves only the live pid to go on, as without /proc.
+    return current is None or current == start_ticks
+
+
+def _takeover_reason(raw: str, record: _LockRecord | None) -> str | None:
+    """Why a stale record is being taken over, or ``None`` when it is not logged.
+
+    An empty file (a first start) and a dead holder (a clean earlier exit) are
+    the normal case and are not reported.
+    """
+    if not raw.strip():
+        return None
+    if record is None:
+        return "malformed"
+    pid, start_ticks = record
+    if not _pid_is_alive(pid):
+        return None
+    return "pid_reused" if start_ticks is not None else "not_a_scheduler"
+
+
+def _read_lock_record(fd: int) -> str:
+    """The text recorded in the lock file behind *fd*."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    return os.read(fd, 256).decode("utf-8", errors="replace")
+
+
+def _own_lock_record() -> str:
+    """This process's identity for the lock file: ``<pid> <start_ticks>``."""
+    pid = os.getpid()
+    start_ticks = _read_start_ticks(pid)
+    return str(pid) if start_ticks is None else f"{pid} {start_ticks}"
+
+
 def _pid_from_fd(fd: int) -> int | None:
     """Read the pid recorded in the lock file behind *fd*, if any."""
     try:
-        os.lseek(fd, 0, os.SEEK_SET)
-        raw = os.read(fd, 32).strip()
-        return int(raw) if raw else None
-    except (OSError, ValueError):
+        record = _parse_lock_record(_read_lock_record(fd))
+    except OSError:
         return None
+    return record[0] if record is not None else None
 
 
 class SchedulerPidLock:
@@ -150,16 +241,23 @@ class SchedulerPidLock:
         except BlockingIOError:
             os.close(fd)
             return False
-        holder = _pid_from_fd(fd)
-        if holder is not None and _pid_is_alive(holder):
-            # A live pid recorded in the file names a running daemon: the flock
-            # may be free again (this process could be the holder itself) but the
-            # recorded owner never got to finish, so refuse and let it exit.
+        raw = _read_lock_record(fd)
+        record = _parse_lock_record(raw)
+        if record is not None and _recorded_holder_runs(record):
+            # The recorded daemon is still running: the flock may be free again
+            # (this process could be the holder itself) but that owner never got
+            # to finish, so refuse and let it exit.
             os.close(fd)  # releases the flock taken above
             return False
+        reason = _takeover_reason(raw, record)
+        if reason is not None:
+            logger.info(
+                "scheduler lock taken over",
+                extra={"recorded_pid": record[0] if record else None, "reason": reason},
+            )
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, str(os.getpid()).encode("utf-8"))
+        os.write(fd, _own_lock_record().encode("utf-8"))
         self._fd = fd
         return True
 

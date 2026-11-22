@@ -127,6 +127,8 @@ in practice.
 
 ### Fixed
 
+- The scheduler's single-instance lock records the daemon's identity (`<pid> <start_ticks>` from `/proc`), so a lock file left by a previous container whose pid now belongs to an unrelated process is taken over instead of blocking the scheduler from starting. A takeover logs one INFO record, `scheduler lock taken over`, with the recorded pid and a reason.
+
 - `GET /api/usage` reports each role's provider and model from the team's `role_routing` setting. The per-role backend rows resolved from the model registry file only, so a deployment that keeps its routing in settings showed every role with an empty provider and model.
 
 - A team layer's `notification_routes` was stored but never used. Notices now deliver through the team's routes in every namespace, and an instance name defined with different settings by two layers is skipped and logged by namespace and name.

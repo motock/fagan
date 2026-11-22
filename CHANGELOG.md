@@ -9,10 +9,6 @@ in practice.
 
 ## [Unreleased]
 
-### Added
-
-- Adds the deployment-only `tenant_test_policy_locked` setting: when the deployment layer sets it to `true`, its `test_scope` and `reverify_full_suite` are final for every tenant, so a team, plan, story or env request cannot loosen them (hrc-02).
-
 ### Security
 
 - A process serving several namespaces gives each non-default namespace its own worktree directory (`WORKTREE_ROOT/_ns/<org>@<team>/<key>`), so two teams' stories with the same key no longer share a worktree on dispatch; the default namespace keeps `WORKTREE_ROOT/<key>` and refuses the key `_ns` (hrc-01).
@@ -59,6 +55,8 @@ in practice.
 - Ingest can read organization-level context sources from an operator-selected provider (`PIPELINE_ORG_CONTEXT_PLUGIN`) in addition to `PIPELINE_CONTEXT_CONFIG`; a provider failure refuses the ingest.
 
 - `scripts/dashboard.sh` honours `PIPELINE_PYTHON` as the interpreter it runs the dashboard with, ahead of `.venv` and PATH, and refuses an unusable value instead of falling back; the dashboard script tests now pass in a git worktree with no `.venv`.
+
+- Adds the deployment-only `tenant_test_policy_locked` setting: when the deployment layer sets it to `true`, its `test_scope` and `reverify_full_suite` are final for every tenant, so a team, plan, story or env request cannot loosen them (hrc-02).
 
 ### Security
 

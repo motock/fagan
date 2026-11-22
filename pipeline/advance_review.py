@@ -33,12 +33,14 @@ from __future__ import annotations
 import logging
 import math
 import os
+import subprocess
 from collections.abc import Callable
 from typing import Any
 
 from . import bound_records, review_job
 from .host_state import build_host_state
 from .module_ref import _ModuleRef
+from .review_logic import is_unchanged_since_review
 
 __all__ = ["review_or_collect"]
 
@@ -47,6 +49,9 @@ __all__ = ["review_or_collect"]
 REVIEW_JOB_TIMEOUT_DEFAULT = 900.0
 
 TIMEOUT_ENV_VAR = "PIPELINE_REVIEW_JOB_TIMEOUT_SECONDS"
+
+#: Budget for the one ``git rev-parse HEAD`` the certain-skip check runs.
+GIT_TIMEOUT_SECONDS = 5.0
 
 # Resolved through pipeline.advance so ``monkeypatch.setattr(pipeline.advance,
 # "_notify_user", ...)`` keeps landing, the same seam advance_merge uses.
@@ -91,6 +96,10 @@ def review_or_collect(
         return
 
     if not job:
+        if _certainly_skips(story):
+            # Quiet by design: this repeats every tick until the branch moves.
+            summary.setdefault("skipped", []).append(story_key)
+            return
         _start(plan_name, story_key, story, summary)
         return
 
@@ -104,6 +113,35 @@ def review_or_collect(
 
 # ---------------------------------------------------------------------------
 # Internals
+
+
+def _certainly_skips(story: dict[str, Any]) -> bool:
+    """True only when the review would certainly skip this unchanged story.
+
+    Mirrors the unchanged-since-review skip in ``review_orchestrator``: the
+    story's last-reviewed commit is still HEAD, the reviewing logic is unchanged,
+    and the one skip notice for this commit has already been sent. Any doubt -
+    a missing worktree, a git failure or timeout, no notice yet - answers False,
+    so the review runs as before. Writes nothing to the story.
+    """
+    last_reviewed = story.get("last_reviewed_sha")
+    if not last_reviewed or story.get("skip_notified_sha") != last_reviewed:
+        return False
+    worktree = story.get("worktree")
+    if not isinstance(worktree, str) or not os.path.isdir(worktree):
+        return False
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return head == last_reviewed and is_unchanged_since_review(story, head)
 
 
 def _start(

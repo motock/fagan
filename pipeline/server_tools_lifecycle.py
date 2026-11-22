@@ -346,6 +346,9 @@ def verify_audit() -> dict[str, Any]:
 #: Longest note ``unblock_story`` appends to a story's brief.
 UNBLOCK_NOTE_MAX_CHARS = 8000
 
+#: Result code for an unblock that leaves ``review_story`` nothing to review.
+UNCHANGED_REVIEW_HINT = "unchanged_since_last_review"
+
 
 def _has_note(note: str | None) -> bool:
     """True when ``note`` carries text: a blank note changes no brief."""
@@ -459,6 +462,19 @@ def unpark_story(
     }
 
 
+def _review_hint(plan_name: str, story_key: str) -> dict[str, str]:
+    """``review_hint`` when the story is waiting on a branch that has not moved.
+
+    A ``tests_passed`` story that keeps its ``last_reviewed_sha`` is declined by
+    ``review_story`` until HEAD moves. The hint is a fixed code only: nothing
+    about the sha or the brief is returned, and it is never recorded.
+    """
+    story = _store.get_manifest(plan_name)["stories"].get(story_key) or {}
+    if story.get("status") == "tests_passed" and story.get("last_reviewed_sha"):
+        return {"review_hint": UNCHANGED_REVIEW_HINT}
+    return {}
+
+
 def unblock_story(
     plan_name: str,
     story_key: str,
@@ -488,6 +504,10 @@ def unblock_story(
     patch_story does; the result says so with ``approval_reset``. A refused
     value is never echoed. If the plan lock is busy the result carries
     ``skipped: "locked"`` and ``retry_after_seconds``: call again.
+
+    A story sent to ``tests_passed`` whose ``last_reviewed_sha`` is kept will
+    not be re-reviewed until its branch moves; clear ``last_reviewed_sha`` in
+    the same call or use ``review_story(force=True)``.
     """
     from .actor import actor_id
     from .authorization import authorize
@@ -554,7 +574,12 @@ def unblock_story(
     unpark_module._record_resolution(
         result, principal=actor_id(), brief_changed=_has_note(note)
     )
-    return {"ok": True, **result, "approval_reset": approval_reset}
+    return {
+        "ok": True,
+        **result,
+        "approval_reset": approval_reset,
+        **_review_hint(plan_name, story_key),
+    }
 
 
 # The tools this module provides, in registration order. pipeline.server

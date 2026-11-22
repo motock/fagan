@@ -113,6 +113,8 @@ in practice.
 
 - The readiness report counts a `park_for_human` ruling that a person answered with input as agreement, not a false park. Changing the brief (`rebrief`), widening the scope (`amend_scope`), approving a test edit (`approve_test_edit`), adding files, or an unblock with a note now agrees and is tallied as `park_needed_input` beside each class's verdict. A false park is now only a park the person answered with nothing supplied (`retry`, `resume_review` or `other` with no input). The unblock with a non-blank `note` records `brief_changed` on its resolution; the note's text is not recorded.
 
+- `unblock_story` says what the review will do with the story it leaves at `tests_passed`: a kept `last_reviewed_sha` means no re-review until the branch moves.
+
 ### Fixed
 
 - `GET /api/usage` reports each role's provider and model from the team's `role_routing` setting. The per-role backend rows resolved from the model registry file only, so a deployment that keeps its routing in settings showed every role with an empty provider and model.
@@ -126,6 +128,8 @@ in practice.
 - The CI rework message names the failing checks and tests. A CI failure answered from the rollup cache kept no check names, and the failing-log lookup ran outside the story repository and read the newest workflow run rather than the failing job, so the message said only `ci fail:`. It now names each failing check, and the failing tests from the failing job's own log.
 
 - Deployment-layer settings now apply to teams in every namespace. Before, a team outside the default namespace never saw them, so deployment locks and ceilings (for example `tenant_test_policy_locked`, `test_scope`, `merge_ci_gate`) were not applied to it. Operators of a multi-namespace deployment should review their deployment settings, because they take effect for all teams on upgrade.
+
+- A review that would certainly skip is no longer respawned on every tick. Once a commit's unchanged-since-review skip has been announced, the advance starts no `review_job` for it and lists the story under `skipped`, instead of spawning a process that skipped again each minute. `unblock_story` returns `review_hint: "unchanged_since_last_review"` when it sends a story to `tests_passed` and keeps its `last_reviewed_sha`, so the operator sees that no review will run.
 
 ### Security
 

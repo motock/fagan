@@ -104,3 +104,8 @@ target-version = "py311"
 # tests/unit/_pipeline_mcp_server_test_helpers.py and uses it as a
 # test-function parameter.
 "tests/unit/test_advance_cloud_slot_exempt.py" = ["F811"]
+# Same fixture-sharing pattern as above: test_dispatch_gated_notice.py imports
+# the plan_dir pytest fixture from
+# tests/unit/_pipeline_mcp_server_test_helpers.py and uses it as a
+# test-function parameter.
+"tests/unit/test_dispatch_gated_notice.py" = ["F811"]

@@ -35,6 +35,7 @@ from .concurrency import (
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
+from .dispatch_gate_notice import group_gated_stories, take_new_gate_reasons
 from .dispatch_lease import claim_dispatch_lease
 from .park_options import run_park_options_sweep
 from .rebrief import (
@@ -536,7 +537,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # Gate on Claude's usage resource_status, NOT local memory.
                 status = backend.get_backend("dispatch", name="claude").resource_status()
                 if not status.get("ok", True):
-                    gated.append(key)
+                    gated.append((key, status.get("reason")))
                     continue
             else:
                 tag = story.get("model") or _story_model
@@ -547,7 +548,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 else:
                     status = backend.get_backend("dispatch", name=story_backend).resource_status()
                 if not status.get("ok", True):
-                    gated.append(key)
+                    gated.append((key, status.get("reason")))
                     continue
             # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch lease
             # (LOCKSTARVE-B2) before releasing the plan lock around
@@ -684,6 +685,23 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 st.pop("dispatch_lease_expires_at", None)
                 st.pop("dispatch_lease_owner_pid", None)
                 bound_records.put_manifest(_store, plan_name, m)
+
+        # Say why ready stories were held back: the gate reason is otherwise
+        # used only for interruptions, so a dead dispatch backend left stories
+        # in todo with no notice at all. One notice per distinct reason per
+        # gated episode (see pipeline/dispatch_gate_notice.py).
+        gate_groups = group_gated_stories(gated)
+        if gate_groups:
+            first_reason, first_keys = next(iter(gate_groups.items()))
+            summary["dispatch_gated"] = {"reason": first_reason, "stories": first_keys}
+        for reason in take_new_gate_reasons(plan_name, list(gate_groups)):
+            _notify_user(
+                plan_name,
+                f"dispatch is waiting: {reason}",
+                event="dispatch_gated",
+                severity="warning",
+                dedup_key=f"dispatch_gated:{plan_name}:{reason}",
+            )
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate

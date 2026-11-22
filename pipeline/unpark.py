@@ -72,6 +72,7 @@ UNPARKABLE_FIELDS: frozenset[str] = frozenset(
         "parked_reason",
         "pre_escalation_backend",
         "pre_escalation_model",
+        "pr_open_failures",
         "review_deferred_count",
         "review_feedback",
         "review_inconclusive_count",

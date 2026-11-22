@@ -310,6 +310,7 @@ def test_allowlist_is_exactly_the_retry_counters_and_review_records():
             "parked_reason",
             "pre_escalation_backend",
             "pre_escalation_model",
+            "pr_open_failures",
             "review_deferred_count",
             "review_feedback",
             "review_inconclusive_count",
@@ -344,3 +345,16 @@ def test_manifest_is_valid_json_after_a_clear(plan_dir, monkeypatch):
     unpark_mod.clear_story_fields(_PLAN, _STORY, ["rework_attempts"])
 
     assert json.loads(_manifest_bytes())["stories"][_STORY]["status"] == "parked"
+
+
+def test_clears_pr_open_failures_so_an_unparked_story_gets_a_fresh_count(plan_dir, monkeypatch):
+    # A failed pull-request open counts toward pr_open_failures. Without this
+    # clear, a story unparked after one failure would park again on its next
+    # non-auth failure instead of getting its two attempts.
+    _write_manifest({**_populated_story(), "status": "parked", "pr_open_failures": 1})
+    _capture_notices(monkeypatch)
+
+    result = unpark_mod.clear_story_fields(_PLAN, _STORY, ["pr_open_failures"])
+
+    assert result["cleared"] == ["pr_open_failures"]
+    assert "pr_open_failures" not in _read_story()

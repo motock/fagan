@@ -26,6 +26,7 @@ from pipeline.access_hooks import (
     refuse_dispatch,
 )
 from pipeline.actor import bind_namespace
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLAN = "plan-x"
@@ -427,7 +428,7 @@ class TestLineBudget:
     )
     def test_source_file_is_within_the_cap(self, relative: str) -> None:
         lines = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
-        assert len(lines) <= 1000
+        assert_within_line_limit(len(lines), 1000, relative)
 
 
 def _manual_merge_story(worktree: str) -> dict[str, Any]:

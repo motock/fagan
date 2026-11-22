@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from pipeline import scheduler_daemon as sd
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DAEMON_PATH = REPO_ROOT / "pipeline" / "scheduler_daemon.py"
@@ -88,7 +89,7 @@ def test_daemon_module_is_under_the_ci_line_cap():
     # is advisory and was missed by two lines because the restored public
     # re-exports must stay one name per line for ruff's import sorting.
     line_count = len(DAEMON_PATH.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 1000, f"{DAEMON_PATH.name} is {line_count} lines; CI cap is 1000"
+    assert_within_line_limit(line_count, 1000, DAEMON_PATH.name)
 
 
 def test_daemon_module_has_no_watchdog_loop_body():

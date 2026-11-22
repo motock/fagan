@@ -23,6 +23,7 @@ from app import role_registry
 from pipeline import dispatch_attempt, review_orchestrator, server
 from pipeline import escalation as esc
 from pipeline import persistence as ppers
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 SAFE_DEFAULT_SOURCE = "safe_default"
 TEAM_SOURCE = "team"
@@ -578,7 +579,4 @@ def test_the_touched_modules_stay_under_the_line_ceiling(module):
 
     lines = gate.count_lines(Path(module.__file__))
 
-    assert lines <= gate.DEFAULT_LIMIT, (
-        f"{Path(module.__file__).name} grew to {lines} lines "
-        f"(limit {gate.DEFAULT_LIMIT})"
-    )
+    assert_within_line_limit(lines, gate.DEFAULT_LIMIT, Path(module.__file__).name)

@@ -25,6 +25,7 @@ import pytest
 from pipeline import server
 from pipeline import server_tools_read, story_evidence
 from pipeline.actor import bind_namespace, current_namespace
+from tests.unit._line_limit_policy import assert_within_line_limit
 from pipeline.remote_tool_policy import (
     PLAN_SCOPED_READ,
     REMOTE_READ,
@@ -213,7 +214,7 @@ def test_should_classify_the_tool_as_a_plan_scoped_remote_read():
 
 
 def test_server_stays_under_the_line_cap():
-    assert len(Path(server.__file__).read_text().splitlines()) < 1000
+    assert_within_line_limit(len(Path(server.__file__).read_text().splitlines()), 999, "pipeline/server.py")
 
 
 # ---------------------------------------------------------------------------

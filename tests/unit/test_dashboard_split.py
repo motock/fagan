@@ -22,7 +22,7 @@ import pytest
 
 from app import dashboard as d
 from tests.unit._dashboard_helpers import client, plan_dir  # noqa: F401
-from tests.unit._line_limit_policy import assert_within_line_limit
+from tests.unit._line_limit_policy import assert_within_line_limit, line_limit_gate_mode
 
 NEW_MODULE = "app.dashboard_routes"
 LINE_LIMIT = 1000
@@ -69,7 +69,7 @@ def test_should_drop_local_agent_allowlist_entry():
 
 
 def test_should_pass_line_limit_gate_on_repo():
-    assert check_line_limit.check(REPO_ROOT) == 0
+    assert check_line_limit.check(REPO_ROOT, mode=line_limit_gate_mode()) == 0
 
 
 # --- importability / no cycle ----------------------------------------------

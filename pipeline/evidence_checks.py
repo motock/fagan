@@ -40,6 +40,7 @@ import subprocess
 from collections.abc import Mapping
 from typing import Any
 
+from pipeline import forge_auth
 from pipeline.scope_gate import is_test_path, scope_violations
 
 #: ``detail`` is bounded so an evidence record stays a one-line receipt.
@@ -132,6 +133,7 @@ def check_merge_base(
                     base_branch,
                 ],
                 check=False,
+                **forge_auth.env_kw(),
                 capture_output=True,
                 text=True,
                 timeout=GIT_TIMEOUT_SECONDS,

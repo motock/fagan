@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import subprocess
 
+from . import forge_auth
 from .config import REVIEWER_INLINE_DIFF_MAX_CHARS
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def _run_git(worktree: str, args: list[str], *, check: bool = False,
     return subprocess.run(
         ["git", *args], cwd=worktree, capture_output=True, text=True,
         check=check, timeout=timeout,
+        **forge_auth.env_kw(),
     )
 
 

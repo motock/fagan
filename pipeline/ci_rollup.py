@@ -36,6 +36,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import forge_auth
 from .forge import (
     CANCELLED,  # noqa: F401  (re-exported for callers mapping states)
     FAIL,
@@ -113,6 +114,7 @@ def _owner_and_name(repo_root: str) -> tuple[str, str]:
             text=True,
             cwd=repo_root,
             timeout=_TIMEOUT_S,
+            **forge_auth.env_kw(),
         )
     except subprocess.TimeoutExpired:
         raise CIStatusUnreadable(
@@ -170,6 +172,7 @@ def _graphql_payload(repo_root: str, owner: str, name: str) -> dict:
             text=True,
             cwd=repo_root,
             timeout=_TIMEOUT_S,
+            **forge_auth.env_kw(),
         )
     except subprocess.TimeoutExpired:
         raise CIStatusUnreadable("gh api graphql timed out fetching the CI rollup") from None

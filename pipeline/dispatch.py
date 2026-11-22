@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app import backend, role_registry  # noqa: F401
+from pipeline import forge_auth
 
 from . import access_hooks, bound_records, cross_plan, plan_approval, triage_rebrief
 from .branch_guard import remote_branch_exists  # noqa: F401
@@ -236,7 +237,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                 subprocess.run(
                                     ["git", "fetch", "origin", _default_branch()],
                                     cwd=repo_root,
-                                    check=True,
+                                    check=True, **forge_auth.env_kw(),
                                 )
                         count_out = subprocess.run(
                             [

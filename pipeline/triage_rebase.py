@@ -21,7 +21,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 
-from . import triage_rebrief
+from . import forge_auth, triage_rebrief
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
 from .triage_park_classes import _is_test_path, check_ruling_allowed, classify_park
@@ -83,6 +83,7 @@ def _git(repo_root, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=_GIT_TIMEOUT_SECONDS,
         check=False,
+        **forge_auth.env_kw(),
     )
 
 

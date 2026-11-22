@@ -35,6 +35,8 @@ Every call fetches again.
 import logging
 import subprocess
 
+from . import forge_auth
+
 log = logging.getLogger(__name__)
 
 # Candidate default-branch refs, most specific first. Order only breaks ties
@@ -54,6 +56,7 @@ def _fetch_origin(worktree: str, timeout: int) -> None:
             ["git", "fetch", "--quiet", "origin"],
             cwd=worktree, check=False,
             capture_output=True, text=True, timeout=timeout,
+            **forge_auth.env_kw(),
         )
     except subprocess.TimeoutExpired:
         log.warning(

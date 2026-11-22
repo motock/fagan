@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from pipeline import dispatch, dispatch_revised_note
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 1000
@@ -23,12 +24,12 @@ def test_should_import_moved_symbol_from_new_module():
 
 def test_should_keep_dispatch_module_under_line_limit():
     lines = sum(1 for _ in (REPO_ROOT / "pipeline/dispatch.py").open())
-    assert lines < LIMIT
+    assert_within_line_limit(lines, LIMIT - 1, "pipeline/dispatch.py")
 
 
 def test_should_keep_new_module_under_line_limit():
     lines = sum(1 for _ in (REPO_ROOT / "pipeline/dispatch_revised_note.py").open())
-    assert lines < LIMIT
+    assert_within_line_limit(lines, LIMIT - 1, "pipeline/dispatch_revised_note.py")
 
 
 def test_should_not_list_dispatch_in_line_limit_allowlist():

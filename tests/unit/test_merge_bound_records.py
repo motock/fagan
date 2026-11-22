@@ -37,6 +37,7 @@ from pipeline.actor import bind_namespace, current_namespace
 from pipeline.store import FileStore
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.store_records import DEFAULT_NAMESPACE
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -182,7 +183,7 @@ def test_advance_merge_stays_under_its_line_cap() -> None:
     """``advance_merge`` sits at its 1000-line cap and must not grow past it."""
     source = (REPO_ROOT / "pipeline/advance_merge.py").read_text(encoding="utf-8")
 
-    assert len(source.splitlines()) <= 1000
+    assert_within_line_limit(len(source.splitlines()), 1000, "pipeline/advance_merge.py")
 
 
 # -- story commit -------------------------------------------------------------

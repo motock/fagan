@@ -16,6 +16,7 @@ from pipeline.remote_tool_policy import (
     remote_tool_policy,
 )
 from pipeline.story_evidence import redact
+from tests.unit._line_limit_policy import assert_within_line_limit
 from app.identity import Principal
 
 TOOLS = ("get_story_log", "get_story_journal")
@@ -230,4 +231,4 @@ def test_should_answer_hidden_and_missing_plan_identically(name, tmp_path, monke
 
 
 def test_server_stays_under_the_line_cap():
-    assert len(Path(server.__file__).read_text().splitlines()) < 1000
+    assert_within_line_limit(len(Path(server.__file__).read_text().splitlines()), 999, "pipeline/server.py")

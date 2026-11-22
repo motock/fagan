@@ -26,6 +26,7 @@ import importlib.util
 from pathlib import Path
 
 from pipeline import dispatch as pdispatch
+from tests.unit._line_limit_policy import assert_within_line_limit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -99,10 +100,7 @@ def test_dispatch_module_stays_inside_the_blocking_line_limit():
 
     count = checker.count_lines(path)
 
-    assert count < checker.DEFAULT_LIMIT, (
-        f"pipeline/dispatch.py is {count} lines, at or over the "
-        f"{checker.DEFAULT_LIMIT}-line cap"
-    )
+    assert_within_line_limit(count, checker.DEFAULT_LIMIT - 1, "pipeline/dispatch.py")
 
 
 def test_dispatch_module_is_not_in_the_blocking_allowlist():

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._line_limit_policy import line_limit_gate_mode
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_line_limit.py"
 
@@ -199,7 +201,7 @@ def test_clean_tree_prints_summary(checker, tmp_path):
 def test_real_repo_tree_is_green():
     # Day-one-green assertion: a real run against the real repo, not a fixture.
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--root", str(REPO_ROOT)],
+        [sys.executable, str(SCRIPT), "--root", str(REPO_ROOT), "--mode", line_limit_gate_mode()],
         capture_output=True,
         text=True,
         check=False,

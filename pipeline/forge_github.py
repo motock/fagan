@@ -378,7 +378,7 @@ class GitHubForge(Forge):
                     cwd, sha, ci_rollup_state_root(), max_age
                 )
                 if cached is not None:
-                    return cached
+                    return CISnapshot(cached, detail=_cached_detail(cached))
         try:
             if sha:
                 proc = subprocess.run(
@@ -492,16 +492,66 @@ class GitHubForge(Forge):
         return snapshot
 
     def failure_log_excerpt(self, branch: str) -> str | None:
-        """Capture a bounded failing-test excerpt from the failed workflow run.
+        """Capture a bounded failing-test excerpt from the failed CI job(s).
 
-        Resolves the most recent workflow run id for ``branch`` via
-        ``gh run list``, then pulls the failing job's log with
-        ``gh run view --log-failed`` (falling back to ``--log`` if that errors
-        or returns empty). Returns a bounded tail (~800 chars) of the log,
-        led by a ``Failing tests:`` block when the log names failing node ids,
-        or ``None`` on any failure so callers can fall back to the
+        Reads the log of each failing check run on the branch head (at most
+        three, in id order), so the excerpt comes from the job that failed and
+        not from whichever workflow run is newest. When no failing check run
+        yields a log, falls back to the most recent workflow run's log via
+        ``gh run list`` and ``gh run view``. Returns a bounded tail (~800 chars)
+        of the log, led by a ``Failing tests:`` block when the log names failing
+        node ids, or ``None`` on any failure so callers can fall back to the
         classification-only ``error``. Never raises.
         """
+        from .ci import _scoped_repo_cwd
+
+        cwd = _scoped_repo_cwd()
+        job_logs = self._failing_job_logs(branch, cwd)
+        if job_logs:
+            return _log_excerpt(job_logs)
+        return self._latest_run_log_excerpt(branch, cwd)
+
+    @staticmethod
+    def _failing_job_logs(branch: str, cwd: str) -> str:
+        """The logs of up to three failing check runs of ``branch``'s head.
+
+        A completed job's log is readable while its sibling jobs still run, so
+        this works while the gate is already reporting FAIL. Returns ``""`` on
+        any failure and never raises.
+        """
+        from urllib.parse import quote
+
+        ref = quote(branch, safe="")
+        try:
+            listing = subprocess.run(
+                [
+                    "gh", "api", f"repos/{{owner}}/{{repo}}/commits/{ref}/check-runs",
+                    "--jq", _FAILING_CHECK_RUN_IDS_JQ,
+                ],
+                check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+            )
+            if listing.returncode != 0:
+                return ""
+            job_ids = sorted(int(t) for t in listing.stdout.split() if t.isdigit())[:3]
+            logs = []
+            for job_id in job_ids:
+                job = subprocess.run(
+                    ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs"],
+                    check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
+                )
+                if job.returncode == 0 and job.stdout.strip():
+                    logs.append(job.stdout)
+        except (subprocess.SubprocessError, OSError) as e:
+            _LOGGER.debug(
+                "failing job logs unavailable",
+                extra={"error_type": type(e).__name__},
+            )
+            return ""
+        return "\n".join(logs)
+
+    @staticmethod
+    def _latest_run_log_excerpt(branch: str, cwd: str) -> str | None:
+        """The log of the newest workflow run for ``branch``, or ``None``."""
         import json
 
         try:
@@ -510,7 +560,7 @@ class GitHubForge(Forge):
                     "gh", "run", "list", "--branch", branch, "--limit", "1",
                     "--json", "databaseId", "--jq", ".[0].databaseId",
                 ],
-                check=False, capture_output=True, text=True, timeout=20,
+                check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
             )
             if run_list.returncode != 0:
                 _LOGGER.debug("CI run lookup failed; no failing-test ids")
@@ -531,7 +581,7 @@ class GitHubForge(Forge):
             for flag in ("--log-failed", "--log"):
                 view = subprocess.run(
                     ["gh", "run", "view", run_id, flag],
-                    check=False, capture_output=True, text=True, timeout=20,
+                    check=False, capture_output=True, text=True, timeout=20, cwd=cwd,
                 )
                 if view.returncode == 0 and view.stdout.strip():
                     return _log_excerpt(view.stdout)
@@ -550,6 +600,9 @@ class GitHubForge(Forge):
         Never raises; on any failure it returns ``False`` so callers can fall
         back to the ordinary retry logic.
         """
+        from .ci import _scoped_repo_cwd
+
+        cwd = _scoped_repo_cwd()
         try:
             proc = subprocess.run(
                 [
@@ -560,7 +613,7 @@ class GitHubForge(Forge):
                     ".workflow_runs[0].id",
                 ],
                 check=False, capture_output=True,
-                text=True,
+                text=True, cwd=cwd,
             )
         except OSError:
             return False
@@ -573,7 +626,7 @@ class GitHubForge(Forge):
             rerun = subprocess.run(
                 ["gh", "run", "rerun", run_id, "--failed"],
                 check=False, capture_output=True,
-                text=True,
+                text=True, cwd=cwd,
             )
         except OSError:
             return False
@@ -643,6 +696,25 @@ class GitHubForge(Forge):
 # ---------------------------------------------------------------------------
 
 _LOGGER = logging.getLogger(__name__)
+
+
+#: jq filter selecting the ids of check runs that failed or timed out.
+_FAILING_CHECK_RUN_IDS_JQ = (
+    '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .id'
+)
+
+
+def _cached_detail(states: dict[str, str]) -> str:
+    """The ``detail`` a cache-answered snapshot would carry, as the REST path builds it.
+
+    The cache stores only canonical states, so the names come from the states
+    themselves: every FAIL check when any failed, else every CANCELLED check.
+    """
+    for wanted in (FAIL, CANCELLED):
+        named = sorted(name for name, state in states.items() if state == wanted)
+        if named:
+            return "; ".join(f"{name}: {wanted}" for name in named)
+    return ""
 
 
 def _log_excerpt(log: str) -> str:

@@ -15,6 +15,7 @@ pipeline/dispatch.py and pipeline/merge.py.
 
 import logging
 import os
+import re
 from typing import Any
 
 from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
@@ -223,6 +224,66 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
         logging.getLogger("pipeline").warning("stall scan raised; tick continues")
     return _impl_ref(plan_name)
+
+
+# "dispatch is waiting" notice (hrf-04): a tick whose dispatch-eligible stories
+# were held back by the dispatch gate says why, so a dead backend is not silent.
+# A gate reason can embed a URL and can span lines, so it is sanitised first.
+_GATE_REASON_MAX_CHARS = 200
+_GATE_REASON_FALLBACK = "dispatch backend unavailable"
+_GATE_URL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(\S*)")
+_GATE_WHITESPACE_RE = re.compile(r"\s+")
+# Reasons already announced per plan in the gated episode in progress.
+# _notify_user records a dedup_key but does not suppress on it, so the
+# once-per-episode guard lives here, in-process.
+_GATE_ANNOUNCED: dict[str, set[str]] = {}
+
+
+def _strip_url_credentials_and_query(match: re.Match[str]) -> str:
+    """Keep ``scheme://host/path``; drop userinfo, query and fragment."""
+    scheme, rest = match.group(1), match.group(2)
+    without_query = re.split(r"[?#]", rest, maxsplit=1)[0]
+    host, slash, path = without_query.partition("/")
+    host = host.rpartition("@")[2]
+    return f"{scheme}{host}{slash}{path}"
+
+
+def sanitise_gate_reason(reason: str | None) -> str:
+    """One line, at most ``_GATE_REASON_MAX_CHARS``, no URL credentials or query."""
+    if not reason:
+        return ""
+    one_line = _GATE_WHITESPACE_RE.sub(" ", str(reason)).strip()
+    clean = _GATE_URL_RE.sub(_strip_url_credentials_and_query, one_line)
+    return clean[:_GATE_REASON_MAX_CHARS].rstrip()
+
+
+def _group_gated_stories(gated: list[tuple[str, str | None]]) -> dict[str, list[str]]:
+    """Group ``(story_key, raw_reason)`` pairs by their sanitised reason.
+
+    Insertion order is kept, so the first gated story sets the first group.
+    A story whose gate gave no reason is grouped under a fixed fallback.
+    """
+    groups: dict[str, list[str]] = {}
+    for key, raw_reason in gated:
+        reason = sanitise_gate_reason(raw_reason) or _GATE_REASON_FALLBACK
+        groups.setdefault(reason, []).append(key)
+    return groups
+
+
+def _take_new_gate_reasons(plan_name: str, reasons: list[str]) -> list[str]:
+    """Return the reasons not yet announced for this plan in this episode.
+
+    ``reasons`` is the full set gated this tick. A reason that is no longer
+    gated is forgotten, so the gate going down again is announced again. An
+    empty ``reasons`` (gate up, or nothing eligible) ends the episode.
+    """
+    announced = _GATE_ANNOUNCED.get(plan_name, set())
+    fresh = [reason for reason in reasons if reason not in announced]
+    if reasons:
+        _GATE_ANNOUNCED[plan_name] = set(reasons)
+    else:
+        _GATE_ANNOUNCED.pop(plan_name, None)
+    return fresh
 
 
 def _story_dispatch_is_on_device(story: dict[str, Any]) -> bool:
@@ -536,7 +597,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # Gate on Claude's usage resource_status, NOT local memory.
                 status = backend.get_backend("dispatch", name="claude").resource_status()
                 if not status.get("ok", True):
-                    gated.append(key)
+                    gated.append((key, status.get("reason")))
                     continue
             else:
                 tag = story.get("model") or _story_model
@@ -547,7 +608,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 else:
                     status = backend.get_backend("dispatch", name=story_backend).resource_status()
                 if not status.get("ok", True):
-                    gated.append(key)
+                    gated.append((key, status.get("reason")))
                     continue
             # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch lease
             # (LOCKSTARVE-B2) before releasing the plan lock around
@@ -684,6 +745,23 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 st.pop("dispatch_lease_expires_at", None)
                 st.pop("dispatch_lease_owner_pid", None)
                 bound_records.put_manifest(_store, plan_name, m)
+
+        # Say why ready stories were held back: the gate reason is otherwise
+        # used only for interruptions, so a dead dispatch backend left stories
+        # in todo with no notice at all. One notice per distinct reason per
+        # gated episode (see _take_new_gate_reasons above).
+        gate_groups = _group_gated_stories(gated)
+        if gate_groups:
+            first_reason, first_keys = next(iter(gate_groups.items()))
+            summary["dispatch_gated"] = {"reason": first_reason, "stories": first_keys}
+        for reason in _take_new_gate_reasons(plan_name, list(gate_groups)):
+            _notify_user(
+                plan_name,
+                f"dispatch is waiting: {reason}",
+                event="dispatch_gated",
+                severity="warning",
+                dedup_key=f"dispatch_gated:{plan_name}:{reason}",
+            )
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate

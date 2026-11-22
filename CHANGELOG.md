@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- A plan whose ready stories are held back by the dispatch gate now says so: the advance tick records `dispatch_gated` in its summary and notifies once per distinct reason (`dispatch is waiting: <reason>`). The reason is sanitised first: one line, at most 200 characters, URL credentials and query strings removed.
+
 - The deployment-only `host_tests_skipped` lock: when the deployment layer sets it to `true`, a story that resolved `scoped` (CI gates its merge) runs no test command on the pipeline host, and the pre-dispatch baseline is skipped. A story degraded to `full` still runs its tests.
 
 - A `role_routing` value may name an undeclared Ollama cloud model. On a remote Ollama endpoint a plain name is accepted, and a `:cloud` tag is accepted on any endpoint; the settings value check now applies the same rule as role resolution, so such a value can be saved (it was refused with `invalid_value` before).

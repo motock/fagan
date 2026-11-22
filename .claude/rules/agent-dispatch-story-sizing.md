@@ -178,3 +178,7 @@ conflict class; do it at plan-authoring time, not at merge time.
 - Run `.claude/rules/check_plan_files.py` on the manifest before ingest, then
   re-check the plan after authoring: `ingest_plan` reports `file_overlaps` for
   concurrently-dispatchable stories — it must be empty.
+
+**Across plans too.** `dependencies` only order stories inside one plan, so two plans whose open stories append to the same file (a changelog, a shared stylesheet, a registry) will conflict at the merge gate whichever merges second. `ingest_plan` reports these in `file_overlaps`: treat a non-empty list as a defect in the plan you just registered, not as information. Put the stories in one plan and chain them, or hold the second plan's approval until the first story has merged.
+
+Measured 2026-11-22: two plans each appended a block to the same stylesheet; the second story parked on a rebase conflict twice and was resolved by hand, and the hand resolution first dropped a closing brace the two blocks shared.

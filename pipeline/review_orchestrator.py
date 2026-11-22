@@ -35,6 +35,7 @@ from .review_logic import (
     is_unchanged_since_review,
     review_logic_fingerprint,
 )
+from .review_open_pr import handle_open_pr_failure
 from .review_orchestrator_comments import _format_security_comment
 from .review_refs import _ServerRef
 from .review_verdict_binding import bind_verdict
@@ -741,24 +742,16 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # adjudication entirely for the rest of that tick (confirmed live in
         # advance-scheduler.err.log, story 30e5f9fc, 2026-08-19: an
         # unguarded CalledProcessError from this exact call propagated
-        # through wake_handler and silently dropped the tick). The sibling
-        # REQUEST_CHANGES-path call (below, in the PR-comment block) already
-        # swallows this error the same way - mirror that here. Fail open:
-        # leave status/verdict untouched so the next tick's review_story
-        # call retries from scratch rather than getting stuck.
+        # through wake_handler and silently dropped the tick). A failed open
+        # is counted and parks after a bounded number of tries, so a missing
+        # token cannot re-run a paid review every tick (review_open_pr).
         try:
             pr_url = _open_pr(worktree, story_key, story)
             _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **_cid_kwargs)
         except (subprocess.CalledProcessError, OSError) as exc:
-            _notify_user(
-                plan_name,
-                f"{story_key}: review APPROVEd but could not open PR "
-                f"({exc.__class__.__name__}); will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "verdict": verdict, "status": story["status"]}
+            return handle_open_pr_failure(plan_name, story_key, story, exc, **_cid_kwargs)
         story["pr_url"] = pr_url
+        story.pop("pr_open_failures", None)
         story["status"] = "pr_open"
         # The security-engineer pass's verdict otherwise lives only in the
         # manifest, so a reader of the PR sees no evidence it ran. Post it now

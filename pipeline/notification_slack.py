@@ -212,8 +212,18 @@ class SlackChannelType:
             return DeliveryResult(DeliveryStatus.REJECTED, reason="malformed_record")
 
         if self._webhook_url_ref is not None:
+            # Imported here: ``pipeline.actor`` pulls in the identity layer, which
+            # must not load just to validate a channel.
+            from pipeline.actor import current_namespace
+
             url = _secret_text(
-                resolve(CredentialRef("notification", self._webhook_url_ref))
+                resolve(
+                    CredentialRef(
+                        "notification",
+                        self._webhook_url_ref,
+                        namespace=current_namespace(),
+                    )
+                )
             ).strip()
             source = self._webhook_url_ref
         else:

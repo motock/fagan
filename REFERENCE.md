@@ -4192,6 +4192,8 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 
 `tenant_test_policy_locked` is a deployment-only lock. When the deployment layer sets it to `true`, the deployment layer's `test_scope` is final for every team, plan, story and env request (a request for `full` against a `scoped` deployment resolves to `scoped` and is listed as a lock rejection), and the deployment's `reverify_full_suite` value replaces the org, team and team-repo values. Any other value leaves these keys as described above.
 
+The deployment layer is a single record for the whole deployment. `set_setting` at `deployment` writes it, and every team in every namespace reads it. Org, team and team-repo records belong to the team's own namespace.
+
 `autonomy`, `auto_merge` and `triage_mode` keep their environment variables
 (`PIPELINE_AUTONOMY`, `PIPELINE_AUTO_MERGE`, `PIPELINE_TRIAGE_MODE`). Until the
 deployment layer sets one of them, the variable's value stands in for the deployment layer,

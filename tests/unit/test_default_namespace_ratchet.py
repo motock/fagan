@@ -58,6 +58,8 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/namespace_resolver.py": 2,
     "pipeline/persistence.py": 2,
     "pipeline/plan_draft.py": 3,
+    # The ratchet counts lines, so the import line counts beside the use.
+    "pipeline/settings_store.py": 2,
     "pipeline/settings_tools.py": 5,
     "pipeline/store.py": 5,
     "pipeline/store_contract.py": 101,
@@ -89,6 +91,7 @@ ALLOWLIST_REASONS: dict[str, str] = {
     "pipeline/namespace_resolver.py": "built-in resolver maps a request with no namespace plugin to the default namespace",
     "pipeline/persistence.py": "file-layout refusal check: legacy notification and decision writers hold only the default partition",
     "pipeline/plan_draft.py": "draft list helpers default to the default namespace; bound draft reads are refused upstream",
+    "pipeline/settings_store.py": "the deployment settings layer is one record held in the default namespace",
     "pipeline/settings_tools.py": "settings plumbing: settings are read and written in the default namespace",
     "pipeline/store.py": "store-layer parameter defaults and the legacy FileStore surface, which is default-only",
     "pipeline/store_contract.py": "record-store contract definition: the contract names the default namespace",

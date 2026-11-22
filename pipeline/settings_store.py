@@ -3,7 +3,9 @@
 Reads the Store layers (deployment, org, team, team_repo) and hands them to the
 pure resolver in ``pipeline.settings_resolve``. When ``PIPELINE_SETTINGS_PLUGIN``
 selects a provider, its org and team layers replace the Store's for those two
-scopes; the deployment and team_repo layers always come from the Store.
+scopes; the deployment and team_repo layers always come from the Store. The
+deployment layer is always the default namespace's record, whatever namespace
+the caller is in.
 
 Never raises into the caller. A failure reading the Store resolves every key to
 its safe value with source ``settings_error``; the warning names the exception
@@ -23,6 +25,7 @@ from pipeline.policy_settings import (
 )
 from pipeline.settings_registry import REGISTRY
 from pipeline.settings_resolve import resolve
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger("pipeline.settings_store")
 
@@ -56,7 +59,12 @@ def _read_layers(namespace: str, *, org: str, team: str, repo: str) -> dict:
         if org:
             _add(layers, "org", _store_layer(records, namespace, "org", org, ""))
         _add(layers, "team", _store_layer(records, namespace, "team", team, ""))
-    _add(layers, "deployment", _store_layer(records, namespace, "deployment", "", ""))
+    # One record for the whole deployment: every namespace reads the default one.
+    _add(
+        layers,
+        "deployment",
+        _store_layer(records, DEFAULT_NAMESPACE, "deployment", "", ""),
+    )
     # An empty repo names no repository, so there is no team_repo layer to read.
     if repo:
         _add(layers, "team_repo", _store_layer(records, namespace, "team_repo", team, repo))

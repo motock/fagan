@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -518,7 +519,16 @@ def test_a_stale_lock_from_a_dead_pid_does_not_block_the_daemon(
 def test_a_lock_from_a_live_pid_blocks_the_daemon(plan_root, monkeypatch):
     """A lock naming a live process keeps the next daemon out."""
     lock_path = plan_root / LOCK_FILE
-    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+    # The lock now records process identity ("<pid> <start_ticks>"), so a
+    # live holder is this process's own identity, not a bare pid (a bare pid
+    # whose cmdline is not the scheduler is stale by design).
+    try:
+        with open("/proc/self/stat", encoding="utf-8") as stat_file:
+            start_ticks = stat_file.read().rsplit(")", 1)[1].split()[19]
+        holder = f"{os.getpid()} {start_ticks}"
+    except (OSError, IndexError):
+        holder = str(os.getpid())  # no /proc: bare pid, today's rule
+    lock_path.write_text(holder, encoding="utf-8")
 
     code, err = _run_daemon(monkeypatch, plan_root)
 
@@ -526,3 +536,173 @@ def test_a_lock_from_a_live_pid_blocks_the_daemon(plan_root, monkeypatch):
         f"a lock held by a live pid must block the daemon; got exit code "
         f"{code} (stderr: {err!r})"
     )
+    assert lock_path.read_text(encoding="utf-8").strip() == holder, (
+        "a live holder with a matching identity must block the daemon "
+        "without the lock file being taken over"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The lock's recorded identity: a pid alone does not name the daemon
+# ---------------------------------------------------------------------------
+
+
+def _stat_line(pid: int, start_ticks: int) -> str:
+    """A ``/proc/<pid>/stat`` line whose field 22 is *start_ticks*.
+
+    The name is parenthesised with a space in it, as a real stat line can be,
+    so the reader has to split after the last ``)``.
+    """
+    rest = ["S"] + ["0"] * 18 + [str(start_ticks)]
+    return f"{pid} (sched uler) " + " ".join(rest) + "\n"
+
+
+@pytest.fixture
+def fake_proc(monkeypatch):
+    """Inject the ``/proc`` reader: a dict of ``(pid, name) -> text``.
+
+    ``available`` switches the whole reader off, which is what a host without
+    ``/proc`` (macOS) looks like to the lock.
+    """
+    proc = {"available": True, "files": {}}
+    monkeypatch.setattr(host_state, "_proc_available", lambda: proc["available"])
+    monkeypatch.setattr(
+        host_state, "_read_proc_file", lambda pid, name: proc["files"].get((pid, name))
+    )
+    return proc
+
+
+def _seed_lock(plan_root, text: str) -> Path:
+    path = plan_root / LOCK_FILE
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_a_recorded_identity_blocks_when_pid_and_start_ticks_match(plan_root, fake_proc):
+    pid = os.getpid()
+    fake_proc["files"][(pid, "stat")] = _stat_line(pid, 4242)
+    path = _seed_lock(plan_root, f"{pid} 4242")
+
+    assert host_state.SchedulerPidLock(path).acquire() is False
+
+
+def test_a_recorded_identity_is_taken_over_when_the_start_ticks_differ(
+    plan_root, fake_proc
+):
+    pid = os.getpid()
+    fake_proc["files"][(pid, "stat")] = _stat_line(pid, 9999)
+    path = _seed_lock(plan_root, f"{pid} 4242")
+    lock = host_state.SchedulerPidLock(path)
+    try:
+        assert lock.acquire() is True
+        assert path.read_text(encoding="utf-8") == f"{pid} 9999", (
+            "the lock must now hold this process's identity"
+        )
+    finally:
+        lock.release()
+
+
+def test_a_bare_live_pid_whose_cmdline_is_not_the_scheduler_is_taken_over(
+    plan_root, fake_proc
+):
+    pid = os.getpid()
+    fake_proc["files"][(pid, "cmdline")] = "python\0-m\0pytest\0"
+    path = _seed_lock(plan_root, str(pid))
+    lock = host_state.SchedulerPidLock(path)
+    try:
+        assert lock.acquire() is True
+    finally:
+        lock.release()
+
+
+def test_a_bare_live_pid_whose_cmdline_is_the_scheduler_blocks(plan_root, fake_proc):
+    pid = os.getpid()
+    fake_proc["files"][(pid, "cmdline")] = "python\0-m\0pipeline.scheduler_daemon\0"
+    path = _seed_lock(plan_root, str(pid))
+
+    assert host_state.SchedulerPidLock(path).acquire() is False
+
+
+def test_a_bare_pid_that_is_no_longer_running_is_taken_over(plan_root, fake_proc):
+    dead = subprocess.Popen([sys.executable, "-c", ""])
+    dead.wait()
+    path = _seed_lock(plan_root, str(dead.pid))
+    lock = host_state.SchedulerPidLock(path)
+    try:
+        assert lock.acquire() is True
+    finally:
+        lock.release()
+
+
+@pytest.mark.parametrize("content", ["", "not-a-pid", "63 1 2", "63 abc", "-4", "0"])
+def test_malformed_lock_content_is_taken_over(plan_root, fake_proc, content):
+    path = _seed_lock(plan_root, content)
+    lock = host_state.SchedulerPidLock(path)
+    try:
+        assert lock.acquire() is True
+    finally:
+        lock.release()
+
+
+def test_a_second_acquire_from_another_fd_is_refused_while_the_flock_is_held(plan_root):
+    path = plan_root / LOCK_FILE
+    first = host_state.SchedulerPidLock(path)
+    second = host_state.SchedulerPidLock(path)
+    assert first.acquire() is True
+    try:
+        assert second.acquire() is False
+    finally:
+        first.release()
+
+
+@pytest.mark.parametrize("content", [None, "{pid}", "{pid} 4242"])
+def test_without_proc_a_live_recorded_pid_still_blocks(plan_root, fake_proc, content):
+    fake_proc["available"] = False
+    pid = os.getpid()
+    path = _seed_lock(plan_root, str(pid) if content is None else content.format(pid=pid))
+
+    assert host_state.SchedulerPidLock(path).acquire() is False
+
+
+def test_without_proc_the_lock_records_a_bare_pid(plan_root, fake_proc):
+    fake_proc["available"] = False
+    dead = subprocess.Popen([sys.executable, "-c", ""])
+    dead.wait()
+    path = _seed_lock(plan_root, str(dead.pid))
+    lock = host_state.SchedulerPidLock(path)
+    try:
+        assert lock.acquire() is True
+        assert path.read_text(encoding="utf-8") == str(os.getpid())
+    finally:
+        lock.release()
+
+
+@pytest.mark.parametrize(
+    ("content", "stat_ticks", "cmdline", "reason", "logs_pid"),
+    [
+        ("{pid} 4242", 9999, None, "pid_reused", True),
+        ("{pid}", None, "python\0-m\0pytest\0", "not_a_scheduler", True),
+        ("not-a-pid", None, None, "malformed", False),
+    ],
+)
+def test_a_takeover_logs_one_info_record_naming_the_reason(
+    plan_root, fake_proc, caplog, content, stat_ticks, cmdline, reason, logs_pid
+):
+    pid = os.getpid()
+    if stat_ticks is not None:
+        fake_proc["files"][(pid, "stat")] = _stat_line(pid, stat_ticks)
+    if cmdline is not None:
+        fake_proc["files"][(pid, "cmdline")] = cmdline
+    path = _seed_lock(plan_root, content.format(pid=pid))
+    lock = host_state.SchedulerPidLock(path)
+    caplog.set_level(logging.INFO, logger="pipeline.host_state")
+    try:
+        assert lock.acquire() is True
+    finally:
+        lock.release()
+
+    takeovers = [r for r in caplog.records if r.getMessage() == "scheduler lock taken over"]
+    assert len(takeovers) == 1, f"expected one takeover record; got {takeovers!r}"
+    assert takeovers[0].levelno == logging.INFO
+    assert takeovers[0].recorded_pid == (pid if logs_pid else None)
+    assert takeovers[0].reason == reason

@@ -10,17 +10,11 @@ arguments that carry it, meant to be splatted into a ``subprocess.run`` call::
 
 The default namespace gets exactly the call it had before: no keyword at all,
 or ``env=base`` when the caller already passed an environment. A team
-namespace never runs on the process token, and never runs on the operator's own
-login. It gets its own token from the credential seam, or none; the operator's
-gh login and git config are hidden from it, so a team without a token fails at
-the remote instead of acting as the operator.
+namespace never runs on the process token. It gets its own token from the
+credential seam, or none, so a team without a token fails at the remote.
 """
 
-import atexit
 import os
-import shutil
-import tempfile
-from functools import lru_cache
 
 from app.credentials import (
     CredentialMissing,
@@ -46,14 +40,6 @@ _GIT_CREDENTIAL_CONFIG = (
 )
 
 
-@lru_cache(maxsize=1)
-def _empty_gh_config_dir() -> str:
-    """An empty directory that holds no gh login, created once per process."""
-    path = tempfile.mkdtemp(prefix="pipeline-forge-")
-    atexit.register(shutil.rmtree, path, True)
-    return path
-
-
 def env_kw(base: dict | None = None) -> dict:
     """Return the ``subprocess.run`` keyword arguments for the bound namespace.
 
@@ -67,11 +53,6 @@ def env_kw(base: dict | None = None) -> dict:
     for name in _PROCESS_FORGE_TOKENS:
         env.pop(name, None)
     env["GIT_TERMINAL_PROMPT"] = "0"
-    # The operator's stored gh login and git config would answer for github.com
-    # through gh and the credential helper, so point both away from them.
-    env["GH_CONFIG_DIR"] = _empty_gh_config_dir()
-    env["GIT_CONFIG_GLOBAL"] = os.devnull
-    env["GIT_CONFIG_NOSYSTEM"] = "1"
     _append_git_config(env, _GIT_CREDENTIAL_CONFIG)
     try:
         env["GH_TOKEN"] = resolve_for_injection(

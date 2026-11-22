@@ -749,7 +749,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # Say why ready stories were held back: the gate reason is otherwise
         # used only for interruptions, so a dead dispatch backend left stories
         # in todo with no notice at all. One notice per distinct reason per
-        # gated episode (see pipeline/dispatch_gate_notice.py).
+        # gated episode (see _take_new_gate_reasons above).
         gate_groups = _group_gated_stories(gated)
         if gate_groups:
             first_reason, first_keys = next(iter(gate_groups.items()))

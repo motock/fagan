@@ -50,7 +50,6 @@ def _capture_prompt(monkeypatch, **kwargs) -> str:
             return "VERDICT: APPROVE"
 
     monkeypatch.setattr(review_mod.backend, "get_backend", lambda *a, **k: FakeBackend())
-    monkeypatch.setattr(review_mod, "_persona_body", lambda name: "persona")
     review_mod._run_security_reviewer("/tmp/wt", "agent/SRF-01", **kwargs)
     return captured["prompt"]
 

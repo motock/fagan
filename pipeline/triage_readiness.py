@@ -15,7 +15,9 @@ Definitions, from a paired ruling and the human's ``human_action``:
 - A ruling that proceeds is any action but ``park_for_human``. It is a false
   proceed when the human parked the story instead.
 - A ``park_for_human`` ruling is a false park when the human resolved the
-  story without parking it.
+  story without parking it and without supplying anything. A human who changed
+  the brief, widened the scope, approved a test edit or added files supplied
+  input, so that pairing agrees; it is also tallied as ``park_needed_input``.
 - ``false_park_rate`` is false parks over paired decisions. Unpaired rulings
   count toward ``shadow_count`` only.
 
@@ -82,6 +84,10 @@ _MERGE_PARK = "park"
 #: The human action that holds a merge the machine would have let go.
 _HUMAN_MERGE_HELD = "merge_held"
 
+#: Human actions that supply input the machine did not have: a changed scope,
+#: a rewritten brief or an approved test edit.
+_HUMAN_INPUT_ACTIONS = frozenset({"amend_scope", "rebrief", "approve_test_edit"})
+
 
 def _tally() -> dict[str, int]:
     return {
@@ -90,6 +96,7 @@ def _tally() -> dict[str, int]:
         "agree": 0,
         "false_proceed": 0,
         "false_park": 0,
+        "park_needed_input": 0,
     }
 
 
@@ -110,11 +117,39 @@ def _latest_resolutions(records: list[dict[str, Any]]) -> dict[tuple[Any, Any], 
     return latest
 
 
-def _score(tally: dict[str, int], action: Any, human_action: Any) -> None:
+def _supplied_input(resolution: dict[str, Any]) -> bool:
+    """True when the human's answer carried input the machine did not have.
+
+    ``brief_changed`` counts only as the boolean ``True``: a stored string or
+    number is not evidence that the brief changed.
+    """
+    return (
+        resolution.get("human_action") in _HUMAN_INPUT_ACTIONS
+        or bool(resolution.get("files_added"))
+        or resolution.get("brief_changed") is True
+    )
+
+
+def _score(
+    tally: dict[str, int],
+    action: Any,
+    resolution: dict[str, Any],
+    *,
+    count_input: bool = True,
+) -> None:
+    """Score one paired ruling.
+
+    ``count_input=False`` scores a park the human answered with input as a
+    false park, the rule the overlord replay still reports.
+    """
+    human_action = resolution.get("human_action")
     parked_by_machine = action == PARK_ACTION
     parked_by_human = human_action == _HUMAN_PARK
     if parked_by_machine and parked_by_human:
         tally["agree"] += 1
+    elif parked_by_machine and count_input and _supplied_input(resolution):
+        tally["agree"] += 1
+        tally["park_needed_input"] += 1
     elif parked_by_machine:
         tally["false_park"] += 1
     elif parked_by_human:
@@ -256,7 +291,7 @@ def readiness(
         if resolution is None:
             continue
         tally["paired_count"] += 1
-        _score(tally, ruling.get("action"), resolution.get("human_action"))
+        _score(tally, ruling.get("action"), resolution)
     report = {}
     for name, tally in tallies.items():
         verdict = _verdict(tally, limits, _tier_label(name))

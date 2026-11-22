@@ -152,6 +152,14 @@ decisions and the rules.**
    avoid is demoting only the false-proceed record while leaving the class state
    at act-and-notify, so the next decision still acts.
 
+   *Amendment, 2026-11-22.* A false park is a park the human answered without
+   supplying anything: a retry, a resume or a plain release. A park the human
+   answered by changing the brief, widening the scope or approving a test edit
+   counts as agreement, and is reported as `park_needed_input` beside the
+   class's verdict. So does a park the human answered by adding files to the
+   story or by an unblock that appended a note to its brief. False proceeds are
+   unchanged: a human park after a proceeding ruling is still a false proceed.
+
 9. **Humans review.** A periodic digest lists decisions with their evidence. A
    human marks each one correct, wrong or should-have-escalated in a review
    record chained to the decision; the reviewer principal must be human and

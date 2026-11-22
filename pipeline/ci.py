@@ -152,10 +152,12 @@ def settings_for_plan(plan_name: str) -> SettingsContext:
     its deployment or safe value.
     """
     if not plan_name:
-        return context_from_manifest({})
+        return context_from_manifest({"namespace": DEFAULT_NAMESPACE})
     from .server import _store
 
-    manifest = bound_records.get_manifest(_store, plan_name) or {}
+    manifest = bound_records.get_manifest(_store, plan_name)
+    if not manifest:
+        return context_from_manifest({"namespace": DEFAULT_NAMESPACE})
     return context_from_manifest(manifest)
 
 

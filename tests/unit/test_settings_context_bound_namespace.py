@@ -165,11 +165,11 @@ def test_should_resolve_a_plan_merge_gate_from_its_teams_layer(records):
     assert context.value("merge_ci_gate") is False
 
 
-def test_should_return_the_default_context_for_an_unknown_plan_name():
+def test_should_return_the_default_namespace_for_an_unknown_plan_name():
     with bind_namespace(TEAM_NAMESPACE):
         context = settings_for_plan("no-such-plan")
 
-    assert context.namespace == TEAM_NAMESPACE
+    assert context.namespace == DEFAULT_NAMESPACE
     assert context.team == "local"
 
 

@@ -227,7 +227,7 @@ def blocked_by_gaps(story: dict, manifests: dict[str, dict]) -> list[str]:
     return gaps
 
 
-def key_conflicts(keys, manifests: dict[str, dict], worktree_root) -> list[dict]:
+def key_conflicts(keys, manifests: dict[str, dict], worktree_root, *, resuming=()) -> list[dict]:
     """Return the other-plan stories whose key collides with one of *keys*.
 
     A story's branch and worktree are derived from its key alone, so another
@@ -235,11 +235,17 @@ def key_conflicts(keys, manifests: dict[str, dict], worktree_root) -> list[dict]
     and macOS filesystems are case-insensitive) shares them. It conflicts unless
     it is done or merged and its worktree directory is gone. A missing status
     counts as unsatisfied: an unknown state must not release a collision.
+
+    *resuming* holds the keys the calling plan has already dispatched. For those
+    keys the worktree directory is the calling story's own, so a done or merged
+    neighbour does not conflict whether or not the directory exists; an
+    unsatisfied neighbour still does. Matching is case-insensitive.
     """
     wanted = {}
     for key in keys:
         if isinstance(key, str) and key:
             wanted.setdefault(key.lower(), []).append(key)
+    resumed = {key.lower() for key in resuming if isinstance(key, str) and key}
     conflicts = []
     for plan, manifest in manifests.items():
         stories = manifest.get("stories") if isinstance(manifest, dict) else None
@@ -252,7 +258,9 @@ def key_conflicts(keys, manifests: dict[str, dict], worktree_root) -> list[dict]
             if not requested:
                 continue
             status = story.get("status")
-            if status in _SATISFIED_STATUSES and not (Path(worktree_root) / other_key).exists():
+            if status in _SATISFIED_STATUSES and (
+                other_key.lower() in resumed or not (Path(worktree_root) / other_key).exists()
+            ):
                 continue
             for key in requested:
                 conflicts.append(

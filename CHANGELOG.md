@@ -127,6 +127,8 @@ in practice.
 
 ### Fixed
 
+- A story can be dispatched again after a review sends it back (`changes_requested`, `interrupted`) even when a finished (`done` or `merged`) story in another plan holds the same key. Its own worktree directory no longer counts as the other plan's, so the re-dispatch is no longer refused with `story key collides with another plan`. A todo story, or a neighbour still in progress, still refuses.
+
 - A failed story's `failure_reason` names why its latest attempt failed. A red test run reads `tests failed (exit <code>)` (or the not-found text for exit 127), a passing grade clears a reason left by an earlier attempt, and an empty branch whose agent could not authenticate to its model provider says so.
 
 - The scheduler's single-instance lock records the daemon's identity (`<pid> <start_ticks>` from `/proc`), so a lock file left by a previous container whose pid now belongs to an unrelated process is taken over instead of blocking the scheduler from starting. A takeover logs one INFO record, `scheduler lock taken over`, with the recorded pid and a reason.

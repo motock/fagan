@@ -161,7 +161,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         collisions = cross_plan.key_conflicts(
             [story_key],
             cross_plan.neighbour_manifests(_store, plan_name),
-            worktree_path.parent,
+            worktree_path.parent, resuming=() if story.get("status") == "todo" else (story_key,),
         )
         if collisions:
             other = collisions[0]

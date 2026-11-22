@@ -666,6 +666,23 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_FROM` | unset (empty) | Envelope From address; falls back to the username |
 | `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of notification e-mails |
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
+| `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` | unset (empty) | Comma-separated exact hostnames or IP literals the operator allows to resolve to an internal address (for example a relay container such as `postfix`). Unset or empty means no SMTP host may be internal. See "SMTP host guard" below |
+
+**SMTP host guard.** Before connecting, every SMTP host is resolved and must
+resolve only to public addresses; the judgement is the same one the webhook
+channel uses (`app/outbound_guard.py`). A host that does not resolve, or any
+of whose addresses is loopback, private, link-local, or otherwise non-public
+(including `localhost`, `*.localhost`, and literal IPs), is refused: the send
+returns `REJECTED` with reason `smtp_host_not_public`, no connection is opened,
+and the log names the channel and that reason only, never the host or address.
+`PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` is the operator opt-in. Its entries
+are case-folded and a trailing dot is ignored; blank or malformed entries are
+dropped with one WARNING that names the variable. It is read from the process
+environment only, never from a settings layer, so a tenant cannot set it. A
+listed host may resolve to an internal address and is still resolved and
+connected to by the resolved address. The connection is pinned to that address,
+and TLS still verifies the configured host name, so STARTTLS certificate
+checks are unchanged.
 
 The subject line is derived from the record's structured event —
 `record["payload"]["event"]` (`pipeline/notification_email.py:136`). Labelled

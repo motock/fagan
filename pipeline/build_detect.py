@@ -412,7 +412,10 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
         return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest not found on PATH")
 
     try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        # Inside the repo when there is one: a sandboxed collect sees only the
+        # story's worktree, so a path under the system temp dir does not exist there.
+        tmp_dir_kwargs = {"dir": repo_root, "prefix": ".pipeline-fixtures-"} if repo_root else {}
+        with tempfile.TemporaryDirectory(**tmp_dir_kwargs) as tmp_dir:
             tmp_path = Path(tmp_dir)
             _materialize_acceptance_fixtures(story, tmp_path)
             env = os.environ.copy()

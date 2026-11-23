@@ -3,12 +3,14 @@ pattern as server_tools_lifecycle); _service resolves through pipeline.server
 at call time so tests patching pipeline.server._service keep landing."""
 
 import logging
+import math
 import os
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from . import decision_record_tool, repo_listing_hooks, story_worktree_status
+from . import repo_listing_hooks, story_worktree_status
 from .actor import current_correlation_id, current_principal
 from .audit import append_host_audit
 from .module_ref import _ModuleRef
@@ -172,8 +174,8 @@ INVALID_REPOSITORY_REASON = "invalid_repository"
 RATE_LIMITED_REASON = "rate_limited"
 
 #: The rolling window of repository reads, per principal, in process memory.
-#: The limiter is ``record_decision``'s; the window and the limit are this tool's own.
 _READ_WINDOWS: dict[str, deque[float]] = {}
+_READ_WINDOW_SECONDS = 60.0
 
 #: The generic errors the workspace service returns, as stable reason tokens.
 #: Anything else is ``read_failed``, so no service text reaches the caller.
@@ -188,6 +190,37 @@ _SERVICE_REASONS = {
     "search failed": "search_failed",
     "repository not cloned yet": NOT_AVAILABLE_REASON,
 }
+
+
+def _read_limit() -> int:
+    """Return the configured reads per minute; anything unusable means the default."""
+    raw = os.environ.get(REPO_READ_RATE_ENV)
+    if raw is None:
+        return REPO_READ_DEFAULT_PER_MINUTE
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return REPO_READ_DEFAULT_PER_MINUTE
+    return value if value > 0 else REPO_READ_DEFAULT_PER_MINUTE
+
+
+def _limit_refusal(subject: str) -> int | None:
+    """Return the retry-after seconds when the principal is over its limit, else count the read.
+
+    Only an admitted read takes a slot: a refused caller that waits out the
+    advertised delay must find the window drained.
+    """
+    limit = _read_limit()
+    now = time.monotonic()
+    window = _READ_WINDOWS.setdefault(subject, deque())
+
+    while window and window[0] <= now - _READ_WINDOW_SECONDS:
+        window.popleft()
+
+    if len(window) >= limit:
+        return max(1, math.ceil(window[0] + _READ_WINDOW_SECONDS - now))
+    window.append(now)
+    return None
 
 
 def _valid_repository(repo: Any) -> bool:
@@ -220,18 +253,13 @@ def _repository_read(
         _audit_read(tool, None, INVALID_REPOSITORY_REASON)
         return {"ok": False, "reason": INVALID_REPOSITORY_REASON}
 
-    limited = decision_record_tool._limit_refusal(
-        current_principal().subject,
-        env=REPO_READ_RATE_ENV,
-        default=REPO_READ_DEFAULT_PER_MINUTE,
-        windows=_READ_WINDOWS,
-    )
+    limited = _limit_refusal(current_principal().subject)
     if limited is not None:
         _audit_read(tool, repo, RATE_LIMITED_REASON)
         return {
             "ok": False,
             "reason": RATE_LIMITED_REASON,
-            "retry_after_seconds": limited["retry_after_seconds"],
+            "retry_after_seconds": limited,
         }
 
     # The shared resolver runs the allow-list, the containment check and the

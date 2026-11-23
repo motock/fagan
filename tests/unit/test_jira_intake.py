@@ -156,7 +156,7 @@ def intake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     decompose_calls: list[str] = []
 
-    def _decompose(request_text, repo_root=None):
+    def _decompose(request_text, repo_root=None, layer_routing=None):
         decompose_calls.append(request_text)
         return json.dumps(PLAN_JSON), None
 
@@ -343,7 +343,7 @@ def test_decompose_failure_adds_the_failed_label_and_a_comment_without_exception
     fake = FakeJira({"ABC": [_issue("ABC-9")]})
     _use_fake(monkeypatch, fake)
 
-    def _explode(request_text, repo_root=None):
+    def _explode(request_text, repo_root=None, layer_routing=None):
         raise RuntimeError("model endpoint leaked SECRET-MARKER-42")
 
     monkeypatch.setattr(service, "_run_decompose_detailed", _explode)
@@ -374,7 +374,7 @@ def test_failed_decompose_result_is_treated_as_an_intake_failure(
     fake = FakeJira({"ABC": [_issue("ABC-10")]})
     _use_fake(monkeypatch, fake)
     monkeypatch.setattr(
-        service, "_run_decompose_detailed", lambda r, repo_root=None: ("", "boom")
+        service, "_run_decompose_detailed", lambda r, repo_root=None, layer_routing=None: ("", "boom")
     )
 
     assert jira_intake.run_jira_intake(1000.0)["failed"] == 1

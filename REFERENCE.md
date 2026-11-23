@@ -18,7 +18,6 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   true, "plan": <name>, "staged": true, "epic_count": ..., "story_count":
   ...}` — no filesystem path.
 - `list_plans()` — list plans with a staged draft or an ingested manifest.
-- `list_repositories()` — list the repositories the bound namespace may work with: sorted `host/owner/name` items, at most 500 (`truncated` when cut). Takes no namespace argument.
 - `export_plan(plan_name)` — render a plan's document from its ingested
   manifest, on demand (ADR 0012 decision 5: the document is rendered from the
   manifest when an export is wanted, never stored as a second copy). Returns
@@ -274,8 +273,9 @@ has a dashboard HTTP route.
 
 ### Story diagnosis tools
 
-Four read-only tools and one mutation for working a stuck or parked story over
-MCP. None takes a path: the plan name and story key name the story, and the
+Four read-only story tools and one mutation for working a stuck or parked story
+over MCP, plus `list_repositories`, a namespace read that names no story. None
+takes a path: the plan name and story key name the story, and the
 worktree is resolved from the story record and contain-checked under the
 worktrees root. Every read masks secret values before returning them. An
 unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
@@ -298,6 +298,13 @@ unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
   story's `review_feedback`, `parked_reason`, `failure_reason` and
   `last_inconclusive_output_excerpt` (masked, at most 4,000 characters) are
   returned alongside when present.
+- `list_repositories()` — the repositories the bound namespace may work with,
+  as sorted `host/owner/name` items, each `{"repo", "level", "state"}`. It takes
+  no namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the items are
+  the distinct repositories of the plans the caller can see, with `level` and
+  `state` null; at most 500 items, `truncated: true` when cut. A failing or
+  malformed listing returns `{"ok": false, "reason":
+  "repositories_unavailable", "correlation_id": ...}`.
 - `unblock_story(plan_name, story_key, clear_fields, status=None,
   add_files=None, note=None)` — the MCP form of `python -m pipeline.unpark`.
   Authorized like `set_story_status` (the plan's owner or a delegate). Under

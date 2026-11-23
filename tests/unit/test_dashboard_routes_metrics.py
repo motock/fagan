@@ -171,3 +171,118 @@ def test_the_route_is_in_the_committed_openapi_snapshot() -> None:
 def test_the_route_serves_a_get_operation_in_the_snapshot() -> None:
     snapshot = json.loads((_REPO_ROOT / "docs/api/openapi.json").read_text())
     assert "get" in snapshot["paths"]["/api/metrics"]
+
+
+_PLAN_PATH = "/api/plans/demo"
+_APPROVE_PATH = "/api/plans/demo/review/approve"
+
+
+def _use_principal(monkeypatch, principal: Principal) -> None:
+    """Make the OIDC middleware authenticate every request as *principal*."""
+    monkeypatch.setattr(
+        oidc_login,
+        "authenticate_api_request",
+        lambda request, identity, config: principal,
+    )
+
+
+def _oidc_principal(scopes: tuple[str, ...], roles: frozenset[str] = frozenset()) -> Principal:
+    return Principal(
+        subject="https://issuer.example#machine",
+        roles=roles,
+        scopes=scopes,
+        auth_method="oidc",
+    )
+
+
+@pytest.fixture
+def stub_exposition(monkeypatch):
+    monkeypatch.setattr("app.dashboard_routes_metrics.collect", dict)
+    monkeypatch.setattr("app.dashboard_routes_metrics.render", lambda snapshot: _BODY)
+
+
+def test_metrics_read_scope_gets_200_and_the_exposition(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("openid", "metrics-read")))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 200
+    assert response.text == _BODY
+
+
+def test_scope_without_metrics_read_is_refused_with_the_fixed_body(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("openid",)))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 403
+    assert response.json() == _NOT_AUTHORIZED
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [("metrics-read-all",), ("xmetrics-read",), ("METRICS-READ",), "xmetrics-read"],
+    ids=["suffix", "prefix", "case", "bare-string"],
+)
+def test_scope_that_only_contains_the_text_is_refused(
+    scopes, key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(scopes))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 403
+    assert response.json() == _NOT_AUTHORIZED
+
+
+def test_empty_scopes_are_refused(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(()))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 403
+    assert response.json() == _NOT_AUTHORIZED
+
+
+def test_scope_caller_without_a_namespace_header_is_served_in_the_default_namespace(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    # The default resolver gives every principal the one default namespace, so
+    # a caller that names none is bound to it and reaches the handler. The
+    # exempt-path case (PIPELINE_TENANT_DATA_EXEMPT_PATHS) is not covered here.
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 200
+
+
+def test_scope_only_caller_gets_the_same_refusal_as_a_plain_non_admin_on_a_plan_read(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    client = TestClient(d.app)
+    headers = {"Authorization": "Bearer good"}
+    _use_principal(monkeypatch, _oidc_principal(()))
+    plain = client.get(_PLAN_PATH, headers=headers)
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    scoped = client.get(_PLAN_PATH, headers=headers)
+    assert scoped.status_code == plain.status_code
+    assert scoped.status_code != 200
+
+
+def test_scope_only_caller_gets_the_same_refusal_as_a_plain_non_admin_on_an_approval(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    client = TestClient(d.app)
+    headers = {"Authorization": "Bearer good"}
+    body = {"digest": "0" * 64}
+    _use_principal(monkeypatch, _oidc_principal(()))
+    plain = client.post(_APPROVE_PATH, headers=headers, json=body)
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    scoped = client.post(_APPROVE_PATH, headers=headers, json=body)
+    assert scoped.status_code == plain.status_code
+    assert scoped.status_code != 200
+
+
+def test_post_is_still_405_for_a_metrics_read_caller(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    response = TestClient(d.app).post(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 405

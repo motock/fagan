@@ -63,6 +63,8 @@ in practice.
 
 ### Changed
 
+- `GET /api/metrics` admits a caller whose token carries the scope `metrics-read`, so a machine scraper needs no admin role. The scope grants nothing else; every other caller still gets the same 403.
+
 - Detached merge re-verify, merge local-checks and review jobs keep their state in a directory named by the story's namespace as well as its key. A team namespace (`acme/web`) uses `<state>/<kind>/_ns/acme@web/<key>`, so two teams with a story of the same key can no longer read or overwrite each other's verdict; the default namespace keeps `<state>/<kind>/<key>`. A job already running when this ships keeps working, because its handle stores absolute paths and nothing is migrated. A key made only of dots, or `_ns` in the default namespace, is refused.
 
 - A `role_routing` setting may route a role to the `ollama` provider with a cloud model the registry does not declare under `providers.ollama.models`. A plain name such as `kimi-k3` is accepted when the Ollama endpoint is remote, and a `:cloud` tag such as `kimi-k3:cloud` is accepted on any endpoint; local models are still refused. Other undeclared names keep failing with `RoleRegistryError`.

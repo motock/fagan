@@ -315,7 +315,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         return _store.records().get_notification_history(current_namespace(), plan_name)
 
     def list_plans(self) -> list[str]:
-        return plan_draft.list_plan_names(_store.records())
+        return plan_draft.list_plan_names(_store.records(), current_namespace())
 
     def list_ingestable_plans(self) -> list[str]:
         """List the plans staged for ingest and not yet ingested.
@@ -327,7 +327,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         read or parsed is silently skipped rather than raising. Returns names
         sorted alphabetically.
         """
-        return plan_draft.list_ingestable_plan_names(_store.records())
+        return plan_draft.list_ingestable_plan_names(_store.records(), current_namespace())
 
     def resolve_workspace(self, path: str | None, create: bool = False) -> dict:
         """Resolve a workspace path.

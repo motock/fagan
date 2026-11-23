@@ -280,6 +280,10 @@ worktree is resolved from the story record and contain-checked under the
 worktrees root. Every read masks secret values before returning them. An
 unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
 
+`list_plans` and `list_ingestable_plans` list the plans of the caller's namespace,
+not the default one. Plan drafts are held in the default namespace only, so a
+caller bound to another namespace sees its ingested manifests and no drafts.
+
 - `get_story_log(plan_name, story_key, lines=200)` — the tail of the story's
   log. `lines` is clamped to 1..500 (a non-integer uses the default). The
   joined text is masked as a whole, so a multi-line PEM block is masked

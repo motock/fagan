@@ -52,7 +52,7 @@ from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
-from . import bound_records, config_provenance, tenant_exec
+from . import bound_records, config_provenance, repo_listing_hooks, tenant_exec
 from . import ci as _ci_module
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
@@ -687,7 +687,7 @@ def list_repositories() -> dict:
     state are null. A failure returns {"ok": false, "reason":
     "repositories_unavailable", "correlation_id": ...}.
     """
-    return _service.list_repositories()
+    return repo_listing_hooks.list_repositories_result(_store)
 
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,

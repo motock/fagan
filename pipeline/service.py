@@ -22,13 +22,7 @@ import os
 import subprocess
 from typing import Any
 
-from pipeline import (
-    cross_plan,
-    plan_activity,
-    repo_listing_hooks,
-    wake,
-    workspace_reader,
-)
+from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline import workspace_fs as _workspace_fs
 from pipeline.plan_approval import PlanApprovalMixin
 from pipeline.store_records import UnknownNamespaceError
@@ -322,9 +316,6 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     def list_plans(self) -> list[str]:
         return plan_draft.list_plan_names(_store.records())
-
-    def list_repositories(self) -> dict:
-        return repo_listing_hooks.list_repositories_result(_store)
 
     def list_ingestable_plans(self) -> list[str]:
         """List the plans staged for ingest and not yet ingested.

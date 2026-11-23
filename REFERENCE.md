@@ -18,6 +18,11 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   true, "plan": <name>, "staged": true, "epic_count": ..., "story_count":
   ...}` — no filesystem path.
 - `list_plans()` — list plans with a staged draft or an ingested manifest.
+- `list_repositories()` — list the repositories the bound namespace may work
+  with, sorted, at most 500 (`"truncated": true` when cut). No parameters; the
+  answer is always the caller's own namespace. `PIPELINE_REPO_LISTING_PLUGIN`
+  may supply the list; without it the repositories are those of the visible
+  plans. Fails closed to `repositories_unavailable`.
 - `export_plan(plan_name)` — render a plan's document from its ingested
   manifest, on demand (ADR 0012 decision 5: the document is rendered from the
   manifest when an export is wanted, never stored as a second copy). Returns
@@ -2597,6 +2602,7 @@ who is authenticated or allowed without saying so.
 | Command wrap | `PIPELINE_COMMAND_WRAP_PLUGIN` | `factory()` returning an object with `wrap(argv, cwd, kind, namespace) -> list[str]` | Consulted before every command that runs repository-controlled code. `kind` is `agent`, `review`, `test`, `build`, `setup`, `lint` or `validate`. Unset: commands run unchanged. A plugin failure or a malformed answer refuses the command. Cannot be combined with ssh execution or `PIPELINE_SANDBOX=docker`. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Audience | `PIPELINE_AUDIENCE_PLUGIN` | `factory()` returning an object with `members(namespace, plan, audience, owner) -> frozenset[str]` | Subjects in the `plan_owner` or `plan_approvers` audience of a plan, matched against notification instance `principal` settings. Unset: `plan_owner` is the plan's owner and `plan_approvers` is empty. A failing plugin or a non-set return resolves that audience to nobody and logs the exception type. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Reference hook | `PIPELINE_REFERENCE_PLUGIN` | `factory()` returning an object with `allow(from_namespace, to_namespace) -> bool` | Decides `blocked_by` entries of the form `ref:<namespace>:<plan>:<story_key>`. **Unset refuses every such reference**; only an answer of exactly `True` allows one. Plain `<plan>:<story_key>` entries are unaffected. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Repository listing | `PIPELINE_REPO_LISTING_PLUGIN` | `factory()` returning an object with `list_repositories(namespace) -> list[dict]`, each item `{"repo": "host/owner/name", "level": ..., "state": ...}` | Answers the `list_repositories` tool for the caller's bound namespace. Unset: the distinct repositories of the plans the caller can see, with `level` and `state` null. A plugin that raises, returns a non-list or returns a malformed item (a `repo` with a scheme, credentials, port, query or whitespace) fails closed to `repositories_unavailable`. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Secret providers | `PIPELINE_SECRET_PROVIDER_PLUGINS` | comma list of `module:attr`; each object has `name` and `get(name) -> str \| None` | Extra providers for `secret://<provider>/<name>` references, beside the built-in `env` and `file`. See "Credentials". |
 | Scheduled intake | `PIPELINE_INTAKE_PLUGINS` | comma list of `module:attr` callables `run(now) -> None` | Each is called once per scheduler tick, after Jira intake, to create plans from the operator's own sources. Skipped while `PIPELINE_PLAN_APPROVAL` is off. A plugin that raises is logged by exception type and the others still run. Requires `PIPELINE_PLUGIN_MODULES`. |
 
@@ -3961,9 +3967,9 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `record_decision`, `record_security_audit`, `reject_plan`,
   `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
-- nine read-only tools — `check_story_status`, `check_usage`, `export_plan`,
+- ten read-only tools — `check_story_status`, `check_usage`, `export_plan`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
-  `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
+  `list_ready_stories`, `list_repositories` and `verify_audit`. Reads are scoped to the plans the
   caller may see (`app.policy.can_view`): the plan-scoped tools
   (`check_story_status`, `export_plan`, `get_effective_config`,
   `get_story_diff`, `list_decisions`, `list_ready_stories`) refuse before their

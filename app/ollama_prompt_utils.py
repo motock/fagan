@@ -72,6 +72,25 @@ def _is_declared_tag(model: str, provider: str) -> bool:
     )
 
 
+def _is_allowed_undeclared_cloud_model(model: str, provider: str) -> bool:
+    """True when model is an undeclared Ollama cloud model role_registry allows.
+
+    Fails CLOSED (False) on the same registry and environment errors as
+    _is_declared_tag, so a bad registry degrades to the default model rather
+    than raising into the dispatch path. role_registry is imported inside the
+    function so this module stays cheap to import.
+    """
+    from app import role_registry
+
+    try:
+        # Read the registry first: the cloud rule alone does not touch it, so
+        # an unreadable registry must still degrade to the default here.
+        role_registry.load_registry()
+        return role_registry.is_allowed_undeclared_cloud_model(provider, model)
+    except (role_registry.RoleRegistryError, OSError, ValueError):
+        return False
+
+
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
     # or '/' (LiteLLM's vendor/model form, e.g. "openai/gpt-5-mini") is
@@ -88,6 +107,18 @@ def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # this tag, so rewriting it to PIPELINE_LOCAL_MODEL_DEFAULT would run a
     # different model than the role declared.
     if tier and _is_declared_tag(tier, provider):
+        return tier
+    # A plain-named Ollama cloud model the team chose (e.g. "glm-5.3-flash")
+    # is also a concrete model, not a tier name. It is kept only when
+    # role_registry.is_allowed_undeclared_cloud_model accepts it: provider
+    # ollama, a well-formed name and a remote endpoint. Tier names are never
+    # kept here, so "sonnet" still resolves through its tier variable on a
+    # cloud endpoint. Fails closed to the default on registry errors.
+    if (
+        tier
+        and tier.lower() not in _LOCAL_TIER_ENV
+        and _is_allowed_undeclared_cloud_model(tier, provider)
+    ):
         return tier
     default = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
     env_var = _LOCAL_TIER_ENV.get(tier.lower())

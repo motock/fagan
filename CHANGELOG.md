@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- A plan naming a `repo_url` is checked against the repository access hook for `dispatch` when it is saved, drafted or ingested, before anything is cloned. A namespace the hook does not admit for that repository gets `access refused: <reason>` at save, not only at dispatch, and a refused plan leaves no clone behind. With no `PIPELINE_REPO_ACCESS_PLUGIN` nothing changes.
+
 - Three read-only MCP tools serve the source of a repository the caller's namespace may read: `read_repository_file`, `list_repository_directory` and `search_repository`. Each checks the repository access hook before naming a clone, answers `repository_not_available` for a granted repository with no clone (nothing is cloned or fetched), is rate-limited per principal by `PIPELINE_REPO_READ_PER_MINUTE` (default 120), and writes one audit record per call that carries no path, pattern or content.
 
 - A `list_repositories()` MCP tool answers which repositories the bound namespace may work with: sorted `host/owner/name` items, at most 500, with the repositories of the caller's visible plans by default. `PIPELINE_REPO_LISTING_PLUGIN` lets a deployment supply its own list; a failing or malformed answer fails closed to `repositories_unavailable`.

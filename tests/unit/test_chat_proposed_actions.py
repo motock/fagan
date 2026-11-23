@@ -44,6 +44,7 @@ VALID_ARGS: dict[str, dict] = {
     "pause_plan": {"plan_name": "demo"},
     "resume_plan": {"plan_name": "demo"},
     "answer_decision": {"plan_name": "demo", "story_key": "s1", "question": "q", "answer": "a"},
+    "resolve_plan_guidance": {"plan_name": "demo", "note": "decided"},
 }
 
 

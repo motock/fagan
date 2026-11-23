@@ -129,6 +129,8 @@ in practice.
 
 ### Fixed
 
+- The merge re-verify job runs in the story's own namespace, so a story in a team namespace can pass the pre-merge re-verify. The spawning tick passes its namespace to the detached child as `--namespace=<value>`, and the child binds it before it reads the plan; before, the child read the default namespace, found no manifest for a team plan and failed with `merge re-verify raised FileNotFoundError`. A harness error is now reported as that error: the merge gate reads the job's state before its commit SHA, so a job that failed before it graded a commit no longer shows as `merge re-verify graded a different commit`.
+
 - A story whose approved pull request cannot be opened no longer re-runs a paid review on every tick. An authentication failure (the token was refused or is missing) parks the story at once, and any other failure parks it on the second attempt, with the reason in `parked_reason`; the git or gh output is never copied into the park reason or the notification. The failure count is `pr_open_failures` and is cleared when the pull request opens.
 
 - A team namespace's remaining pipeline git and gh network commands now carry that team's GitHub token: the merge and rebase pushes, the default-branch fetches at dispatch, worktree creation and review, the ls-remote and fetch probes behind the branch guard and the rebase checks, and the CI rollup queries. Before, a private team repository failed at the first fetch or push. A team namespace's commands also never fall back to the operator's own `gh` login or git config, so a team without a token fails at the remote instead of acting as the operator. A new guard test fails any new unauthenticated git or gh network site under `pipeline/` or `app/`.

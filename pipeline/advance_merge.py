@@ -282,28 +282,32 @@ def _merge_reverify_gate(
     story.pop("merge_reverify", None)
     if isinstance(res.get("last_test_check"), dict):
         story["last_test_check"] = res["last_test_check"]
-    # Equality, not presence: a result that does not name the SHA it graded
-    # (missing key, null, or a document written by another version or a
-    # sibling writer) cannot authorise a merge of this commit. Treating a
-    # missing ``sha`` as "no mismatch" would fail open - ``collect`` only
-    # checks ``state`` - and would let any ``{"state": "pass"}`` document in
-    # the job dir merge an unverified branch.
+    # The state is read before the SHA. An error - or any state this module
+    # does not recognise - is never a pass: fail closed, and report the job's
+    # own error. A job that died before it graded a commit reports sha None;
+    # checking the SHA first would misreport that as a commit mismatch and hide
+    # the real error. Keep the tail of the job log for the operator.
+    if res.get("state") not in (_REVERIFY_PASS, _REVERIFY_FAIL):
+        story["merge_reverify_log_tail"] = res.get("log_tail", "")
+        return (
+            "merge re-verify harness error: "
+            + res.get("error", "unrecognised re-verify result"),
+            False,
+        )
+    # Only a pass or a fail reaches the SHA check. Equality, not presence: a
+    # result that does not name the SHA it graded (missing key, null, or a
+    # document written by another version or a sibling writer) cannot
+    # authorise a merge of this commit. Treating a missing ``sha`` as "no
+    # mismatch" would fail open - ``collect`` only checks ``state`` - and would
+    # let any ``{"state": "pass"}`` document in the job dir merge an unverified
+    # branch.
     if res.get("sha") != pushed_sha:
         return "merge re-verify graded a different commit", False
     if res.get("state") == _REVERIFY_PASS:
         return "", False
-    if res.get("state") == _REVERIFY_FAIL:
-        # A red gate is an ordinary gate failure: it counts against
-        # MERGE_MAX_ATTEMPTS and retries like a transient merge failure.
-        return res.get("error", "merge re-verify failed"), False
-    # An error - or any state this module does not recognise - is never a
-    # pass: fail closed and keep the tail of the job log for the operator.
-    story["merge_reverify_log_tail"] = res.get("log_tail", "")
-    return (
-        "merge re-verify harness error: "
-        + res.get("error", "unrecognised re-verify result"),
-        False,
-    )
+    # A red gate is an ordinary gate failure: it counts against
+    # MERGE_MAX_ATTEMPTS and retries like a transient merge failure.
+    return res.get("error", "merge re-verify failed"), False
 
 
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:

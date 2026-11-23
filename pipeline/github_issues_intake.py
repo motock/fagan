@@ -28,8 +28,10 @@ from pipeline.github_issues_client import (
     GitHubIssuesError,
     token_source_for,
 )
+from pipeline.intake_guidance import take_questions
 from pipeline.live_ref import LiveRef
 from pipeline.plan_approval import approval_enabled
+from pipeline.plan_guidance import raise_guidance
 from pipeline.service import PipelineService
 from pipeline.store_namespaces import namespaces_with_plans
 
@@ -39,6 +41,7 @@ ENABLE_ENV = "PIPELINE_GITHUB_ISSUES_ENABLED"
 ENABLED_VALUE = "1"
 PLANNED_LABEL = "fagan-planned"
 FAILED_LABEL = "fagan-intake-failed"
+NEEDS_GUIDANCE_LABEL = "fagan-needs-guidance"
 PLAN_PREFIX = "gh-"
 MAX_ISSUES_PER_RUN = 5
 MAX_REQUEST_CHARS = 8000
@@ -47,6 +50,11 @@ PLANNED_COMMENT = (
     "Fagan planned this issue into {count} stories. "
     "It is waiting for team lead approval."
 )
+GUIDANCE_COMMENT = (
+    "Fagan planned this issue into {count} stories and has {questions} questions "
+    "before it can be approved. Answer them in Fagan."
+)
+MAX_EXCERPT_CHARS = 2000
 FAILED_COMMENT = (
     "Fagan could not plan this issue. A team member can fix the issue and "
     "remove the label fagan-intake-failed to retry."
@@ -172,7 +180,7 @@ def _run_team(
     pending = [issue for issue in issues if not _is_marked(issue)]
     for issue in pending[:MAX_ISSUES_PER_RUN]:
         try:
-            _intake_issue(client, issue, team, repo_url, repo, counts)
+            _intake_issue(client, issue, team, repo_url, owner, repo, counts)
         except GitHubIssuesError as exc:
             if exc.kind in _STOP_KINDS:
                 _stop_team(team, exc)
@@ -231,6 +239,7 @@ def _intake_issue(
     issue: dict[str, Any],
     team: str,
     repo_url: str,
+    owner: str,
     repo: str,
     counts: dict[str, int],
 ) -> None:
@@ -244,8 +253,9 @@ def _intake_issue(
         counts["existing"] += 1
         return
 
+    request_text = _request_text(issue)
     try:
-        story_count = _plan_story(plan_name, _request_text(issue), team, repo_url)
+        story_count, questions = _plan_story(plan_name, request_text, team, repo_url)
     except Exception as exc:  # noqa: BLE001 - any decompose/save/ingest failure parks the issue
         logger.warning(
             "github issue could not be planned",
@@ -256,12 +266,16 @@ def _intake_issue(
         counts["failed"] += 1
         return
 
-    client.add_labels(number, [PLANNED_LABEL])
-    client.add_comment(
-        number,
-        PLANNED_COMMENT.format(count=story_count),
-        link=_plan_link(plan_name),
+    needs_guidance = bool(questions) and _raise_guidance(
+        plan_name, number, owner, repo, questions, request_text
     )
+    if needs_guidance:
+        client.add_labels(number, [PLANNED_LABEL, NEEDS_GUIDANCE_LABEL])
+        comment = GUIDANCE_COMMENT.format(count=story_count, questions=len(questions))
+    else:
+        client.add_labels(number, [PLANNED_LABEL])
+        comment = PLANNED_COMMENT.format(count=story_count)
+    client.add_comment(number, comment, link=_plan_link(plan_name))
     counts["planned"] += 1
 
 
@@ -272,19 +286,59 @@ def _request_text(issue: dict[str, Any]) -> str:
     return f"{title}\n\n{body}"[:MAX_REQUEST_CHARS]
 
 
-def _plan_story(plan_name: str, request_text: str, team: str, repo_url: str) -> int:
-    """Decompose, save and ingest one plan. Returns its story count."""
+def _plan_story(
+    plan_name: str, request_text: str, team: str, repo_url: str
+) -> tuple[int, list[str]]:
+    """Decompose, save and ingest one plan. Returns its story count and open questions."""
     service = PipelineService()
     decomposed = service.decompose_plan(request_text, repo_url=repo_url)
     if not decomposed.get("ok"):
         raise _PlanFailed("decompose")
     plan = decomposed["plan"]
+    questions = take_questions(plan)
     plan["team"] = team
     if not service.save_plan(plan_name, json.dumps(plan)).get("ok"):
         raise _PlanFailed("save")
     if not service.ingest_plan(plan_name).get("ok"):
         raise _PlanFailed("ingest")
-    return sum(len(epic.get("stories", [])) for epic in plan["epics"])
+    story_count = sum(len(epic.get("stories", [])) for epic in plan["epics"])
+    return story_count, questions
+
+
+def _raise_guidance(
+    plan_name: str,
+    number: int,
+    owner: str,
+    repo: str,
+    questions: list[str],
+    request_text: str,
+) -> bool:
+    """Mark the planned ``plan_name`` as needing guidance. ``False`` when it did not.
+
+    A refusal or a failure is logged with its reason token only and the issue is
+    planned normally: the questions and the issue text never reach a log.
+    """
+    try:
+        result = raise_guidance(
+            plan_name,
+            questions,
+            "github",
+            f"{owner}/{repo}#{number}",
+            request_text[:MAX_EXCERPT_CHARS],
+        )
+    except Exception as exc:  # noqa: BLE001 - a guidance failure never fails the intake
+        logger.warning(
+            "github guidance not raised",
+            extra={"issue": number, "error_type": type(exc).__name__},
+        )
+        return False
+    if result.get("ok") is True:
+        return True
+    logger.warning(
+        "github guidance not raised",
+        extra={"issue": number, "reason": result.get("error")},
+    )
+    return False
 
 
 def _plan_link(plan_name: str) -> str | None:

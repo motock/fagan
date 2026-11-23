@@ -4637,6 +4637,7 @@ the request. The team's `poll_seconds` bounds how often a team is searched.
 | Planned (decompose, save and ingest succeed) | Label `fagan-planned`; status moves to `status.in_progress`; comment "Fagan planned this story into N stories. It is waiting for team lead approval.", with a link to the plan when `PIPELINE_DASHBOARD_PUBLIC_URL` is set |
 | Plan already exists | Label `fagan-planned` only; nothing is planned again |
 | Planned, and the analyst returned open questions (`open_questions`, at most 5) | Label `fagan-planned`; status moves to `status.in_progress`; comment "Fagan drafted this story into N stories and has M questions before it can be approved. Answer them in Fagan.", with the same plan link. The plan is saved without the key and is marked as needing guidance, so its approval is refused until the questions are resolved in Fagan |
+| Guidance resolved in Fagan (`plan_guidance_resolved`) | Comment "Questions answered in Fagan. The plan is waiting for approval." on the parent issue, once: a replayed event finds that comment and posts nothing. A failed request is logged with its error kind only |
 | Decompose, save or ingest fails | Label `fagan-intake-failed`; comment "Fagan could not plan this story. A team member can fix the story and remove the label fagan-intake-failed to retry." The exception text is never written to Jira |
 
 Labels and retries:
@@ -4724,6 +4725,8 @@ issues is not seen.
 |---|---|
 | Planned (decompose, save and ingest succeed) | Label `fagan-planned`; comment "Fagan planned this issue into N stories. It is waiting for team lead approval.", with a link to the plan when `PIPELINE_DASHBOARD_PUBLIC_URL` is set |
 | Plan already exists | Label `fagan-planned` only; nothing is planned again |
+| Planned, and the analyst returned open questions (`open_questions`, at most 5) | Labels `fagan-planned` and `fagan-needs-guidance`; comment "Fagan planned this issue into N stories and has M questions before it can be approved. Answer them in Fagan.", with the same plan link. The plan is marked as needing guidance, so its approval is refused until the questions are resolved in Fagan |
+| Guidance resolved in Fagan (`plan_guidance_resolved`) | Label `fagan-needs-guidance` removed when present; comment "Questions answered in Fagan. The plan is waiting for approval." A replayed event finds that comment and changes nothing |
 | Decompose, save or ingest fails | Label `fagan-intake-failed`; comment "Fagan could not plan this issue. A team member can fix the issue and remove the label fagan-intake-failed to retry." The exception text is never written to GitHub |
 
 Labels and retries:

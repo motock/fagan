@@ -34,7 +34,16 @@ SUBTASK_LABEL_PREFIX = "fagan-story-"
 BASE_LABELS = ("fagan",)
 PARKED_COMMENT = "Parked: needs a decision in Fagan."
 PARENT_DONE_COMMENT = "All Fagan stories are done. Ready for review."
-SUBSCRIBED_EVENT_TYPES = ("notification", "agent_dispatched", "pr_open", "story_done", "parked")
+GUIDANCE_RESOLVED_EVENT = "plan_guidance_resolved"
+GUIDANCE_RESOLVED_COMMENT = "Questions answered in Fagan. The plan is waiting for approval."
+SUBSCRIBED_EVENT_TYPES = (
+    "notification",
+    "agent_dispatched",
+    "pr_open",
+    "story_done",
+    "parked",
+    GUIDANCE_RESOLVED_EVENT,
+)
 
 # Event type -> the board status key the sub-task moves to. ``parked`` and
 # ``story_done`` are handled on their own paths below.
@@ -136,6 +145,8 @@ def _run(action, plan, parent, story_key, stories, board, site) -> None:
         if _all_done(stories):
             _move(client, plan, parent, statuses["parent_review"])
             client.add_comment(parent, PARENT_DONE_COMMENT)
+    elif action == GUIDANCE_RESOLVED_EVENT:
+        _answer_guidance(client, plan, parent)
     else:
         _move_story(client, plan, parent, story_key, statuses[_STATUS_FOR_EVENT[action]])
 
@@ -211,6 +222,39 @@ def _move(client, plan: str, issue_key: str, status_name: str) -> None:
     logger.info(
         "jira status has no transition from this issue",
         extra={"plan": plan, "status": status_name},
+    )
+
+
+def _answer_guidance(client, plan: str, parent: str) -> None:
+    """Comment once on the parent that its questions are answered.
+
+    The parent's comments are read first, so a replayed event posts nothing. A
+    failed request is logged by kind only and never raised into the bus.
+    """
+    from pipeline.jira_client import JiraError
+
+    try:
+        if _has_comment(client.get_issue(parent), GUIDANCE_RESOLVED_COMMENT):
+            return
+        client.add_comment(parent, GUIDANCE_RESOLVED_COMMENT)
+    except JiraError as exc:
+        logger.warning(
+            "jira guidance comment failed",
+            extra={"plan": plan, "error_kind": exc.kind},
+        )
+
+
+def _has_comment(issue: dict, text: str) -> bool:
+    """True when the issue document already holds a comment whose text is ``text``."""
+    from pipeline.jira_client import adf_to_text
+
+    fields = issue.get("fields")
+    comment = fields.get("comment") if isinstance(fields, dict) else None
+    comments = comment.get("comments") if isinstance(comment, dict) else None
+    if not isinstance(comments, list):
+        return False
+    return any(
+        isinstance(item, dict) and adf_to_text(item.get("body")) == text for item in comments
     )
 
 

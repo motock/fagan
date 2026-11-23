@@ -48,7 +48,6 @@ from pipeline.actor import (
 )
 from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
-from pipeline.store_records import DEFAULT_NAMESPACE
 
 from . import bound_records
 
@@ -162,8 +161,10 @@ def start_merge_reverify(
     # manifest for a team plan and never returns a verdict.  The default
     # namespace is left implicit so the argv of default-namespace jobs is
     # unchanged.
+    from app.credentials import is_default_namespace
+
     namespace = current_namespace()
-    if namespace != DEFAULT_NAMESPACE:
+    if not is_default_namespace(namespace):
         argv.append(f"--namespace={namespace}")
     with open(log_path, "ab") as log_file:
         proc = subprocess.Popen(

@@ -294,7 +294,18 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     # lookup must never block a merge that would otherwise have succeeded.
     forge = get_forge(repo_root)
     result = forge.merge_pr(worktree, branch, forge.pr_title(worktree, branch))
+    _remove_story_checkout(worktree, branch)
+    return result
 
+
+def _remove_story_checkout(worktree: str, branch: str) -> None:
+    """Remove a finished story's worktree, local branch and remote branch.
+
+    Shared by the pipeline's own merge and by ``pipeline.external_merge``, which
+    finishes a story whose PR a person merged on the forge. Every step is
+    best-effort (``check=False``): a missing worktree or branch is not an error.
+    """
+    repo_root = _repo_root()
     subprocess.run(["git", "worktree", "remove", "--force", worktree],
                     check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
@@ -302,8 +313,6 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     subprocess.run(["git", "push", "origin", "--delete", branch],
                     check=False, cwd=repo_root, capture_output=True, text=True,
                     **forge_auth.env_kw())
-
-    return result
 
 
 def _format_review_comment(findings: str, cycle: int) -> str:

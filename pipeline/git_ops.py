@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .branch_names import story_branch
 from .checkpoint_drop import DROP_NAME
+from .paths import _AGENT_RUNTIME_FILES
 
 # Scratchpad files are the dispatched agent's own running notes. They must
 # never be tracked by a checkpoint commit: .gitignore keeps a NEW one out, but
@@ -146,7 +147,10 @@ def _commit_wip(worktree: str, story_key: str, step: str,
     # .agent_scratchpad.md directly, and a third story's merge then hit a
     # real rebase conflict in that same file, burning its triage budget and
     # sitting parked for hours before a human intervened.
-    for pattern in _SCRATCHPAD_PATTERNS:
+    # The agent runtime files get the same treatment: the exclude keeps a new
+    # copy out of `git add -A`, but a copy an earlier commit tracked stays
+    # tracked until it is removed from the index here (2026-11-23).
+    for pattern in (*_SCRATCHPAD_PATTERNS, *_AGENT_RUNTIME_FILES):
         subprocess.run(
             ["git", "rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", pattern],
             check=False, cwd=worktree, capture_output=True, text=True,

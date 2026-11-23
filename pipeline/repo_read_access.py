@@ -20,7 +20,12 @@ import time
 
 from pipeline.access_hooks import _record_refusal, _refusal_reason
 from pipeline.remote_scope import clone_root_for
-from pipeline.repo_clone import RepoUrlError, managed_path, parse_repo_url
+from pipeline.repo_clone import (
+    RepoUrlError,
+    managed_path,
+    parse_repo_url,
+    refresh_default_branch,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -35,6 +40,12 @@ FAILED_CLONE_RETRY_SECONDS = 60.0
 _clock = time.monotonic
 #: Managed path -> monotonic time of its last failed first-read clone.
 _FAILED_AT: dict[str, float] = {}
+#: How stale a clone may be before a read refreshes it; a read is at most this behind.
+READ_REFRESH_SECONDS = 60.0
+#: Upper bound on one refresh's git work; a refresh that overruns is a failed refresh.
+READ_REFRESH_TIMEOUT_SECONDS = 20.0
+#: Managed path -> monotonic time of its last clone or refresh attempt.
+_REFRESHED_AT: dict[str, float] = {}
 #: One lock per managed path, so concurrent first reads run one clone.
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -84,6 +95,7 @@ def read_root_kwargs(repo_url: str | None) -> dict:
     if read_refusal(repo_url) is not None:
         raise RepoReadRefused
     _clone_on_first_read(repo_url, candidate)
+    _refresh_existing_clone(repo_url, candidate)
     return {"root": candidate}
 
 
@@ -91,7 +103,7 @@ def _clone_on_first_read(repo_url: str, root: str) -> None:
     """Clone ``repo_url`` into ``root`` when no clone is there yet.
 
     Only called once every check in :func:`read_root_kwargs` has passed. An
-    existing clone is left alone: a read never fetches. A failure never
+    existing clone is left to :func:`_refresh_existing_clone`. A failure never
     raises; the caller then answers a missing clone, as it always has.
     """
     if os.path.isdir(root):
@@ -105,6 +117,7 @@ def _clone_on_first_read(repo_url: str, root: str) -> None:
         error_type = _clone_error_type(repo_url)
         if error_type is None:
             _FAILED_AT.pop(root, None)
+            _REFRESHED_AT[root] = _clock()
             return
         _FAILED_AT[root] = _clock()
         LOG.warning(
@@ -115,6 +128,43 @@ def _clone_on_first_read(repo_url: str, root: str) -> None:
                 "error_type": error_type,
             },
         )
+
+
+def _refresh_existing_clone(repo_url: str, root: str) -> None:
+    """Fetch the default branch into an existing clone when it is over a minute old.
+
+    A read that finds another read already refreshing ``root`` does not wait
+    for it: it serves the clone as it is. The attempt time is recorded before
+    the fetch, so a failed refresh is not retried until the window has passed
+    again. A failure never raises and is logged once with its error class only.
+    """
+    if not os.path.isdir(root) or not _refresh_due(root):
+        return
+    lock = _lock_for(root)
+    if not lock.acquire(blocking=False):
+        return
+    try:
+        if not _refresh_due(root):
+            return
+        _REFRESHED_AT[root] = _clock()
+        try:
+            refresh_default_branch(repo_url, timeout=READ_REFRESH_TIMEOUT_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - a refresh failure must not fail the read
+            LOG.warning(
+                "repository read refresh failed",
+                extra={
+                    "event": "repo_read_refresh_failed",
+                    "repository": _repo_identity(repo_url),
+                    "error_type": type(exc).__name__,
+                },
+            )
+    finally:
+        lock.release()
+
+
+def _refresh_due(root: str) -> bool:
+    refreshed_at = _REFRESHED_AT.get(root)
+    return refreshed_at is None or _clock() - refreshed_at >= READ_REFRESH_SECONDS
 
 
 def _clone_error_type(repo_url: str) -> str | None:

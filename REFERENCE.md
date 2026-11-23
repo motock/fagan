@@ -358,16 +358,23 @@ whitespace, `..`, a query or an empty value answers `invalid_repository` before
 any lookup. The access hook (`PIPELINE_REPO_ACCESS_PLUGIN`, `action` `read`) is
 asked before any clone is named: an ungranted repository answers
 `repository_access_refused` whether or not a clone is present, and a granted
-repository with no clone is cloned on its first read (below). Reads never fetch
-or refresh an existing clone. Failures return `{"ok": false, "reason": ...}`, never
+repository with no clone is cloned on its first read (below). An existing clone is
+refreshed by a read that finds it at least a minute old, so repository reads are at
+most one minute behind the default branch (see below). Failures return `{"ok": false, "reason": ...}`, never
 a filesystem path. Each call writes one host audit record with the tool, the
 repository, the outcome and the correlation id; a refusal also leaves the access
 hook's own `repo_access_refused` record. No record carries the path, the pattern
 or the content.
 
 A granted repository with no clone is cloned once, on its first read, through the
-same clone path `save_plan` uses. A later read finds the clone and neither clones
-nor fetches again. The clone starts only after every check above has passed, so a
+same clone path `save_plan` uses. A later read finds the clone and does not clone
+it again; once a minute has passed since the last clone or refresh, it fetches the
+default branch and fast-forwards the checkout if the clone is on the default branch,
+its tree is clean and the default branch is a fast-forward of it. Any other state is
+left as it is. The refresh is bounded to 20 seconds per git command, a read that finds
+another refresh running serves the clone as it is, and a failed refresh still answers
+the read, logged once as WARNING `repo_read_refresh_failed` with the repository identity
+and the error class name. The clone starts only after every check above has passed, so a
 refused or off-allow-list repository never triggers one. `repository_not_available`
 therefore means the clone could not be made: git failed, or the last attempt failed
 less than 60 seconds ago and is not retried yet. Each failed attempt is logged as one

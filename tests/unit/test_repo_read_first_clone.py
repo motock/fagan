@@ -3,7 +3,8 @@
 ``read_root_kwargs`` names the managed clone a read serves. When the clone does
 not exist yet and every check has passed (allow-list, containment, access hook),
 the first read clones it once through ``remote_scope.clone_root_for``. An
-existing clone is never fetched or re-cloned on a read. A failed clone answers
+existing clone is never re-cloned on a read; a refresh of it is covered in
+test_repo_read_refresh.py. A failed clone answers
 as a missing clone, is logged once without git detail, and is not retried for 60
 seconds. Only the git clone (``repo_clone.ensure_clone``) and the monotonic clock
 are mocked; the resolver and the allow-list are real.
@@ -152,7 +153,7 @@ def test_second_read_of_the_same_repository_does_not_clone_again(repos_root, hoo
     assert fake_clone.calls == [GRANTED_URL]
 
 
-def test_existing_clone_is_neither_cloned_nor_fetched_on_a_read(repos_root, hook, fake_clone):
+def test_existing_clone_is_not_cloned_again_on_a_read(repos_root, hook, fake_clone):
     clone = repos_root / "github.com" / "a" / "new"
     (clone / ".git").mkdir(parents=True)
 

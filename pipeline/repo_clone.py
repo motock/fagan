@@ -79,6 +79,9 @@ DEFAULT_CLONE_TIMEOUT = 600
 
 _FILE_HOST = "local"
 _ORIGIN_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
+_ORIGIN_DEFAULT_REF = "refs/remotes/origin/HEAD"
+_ORIGIN_PREFIX = "refs/remotes/origin/"
+_LOCAL_PREFIX = "refs/heads/"
 
 _ALLOWED_SCHEMES = ("https",)
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._-]+")
@@ -546,7 +549,6 @@ def _untrusted(target: Path, key: str) -> RepoCloneError:
         "refusing to refresh an untrusted clone",
         extra={
             "event": "repo_config_untrusted",
-            "path": str(target),
             "key": _loggable(key),
         },
     )
@@ -594,7 +596,6 @@ def _refuse_worktree_config(
         "refusing to refresh an untrusted clone",
         extra={
             "event": "repo_config_untrusted",
-            "path": str(target),
             "key": "config.worktree",
         },
     )
@@ -885,3 +886,48 @@ def ensure_clone(
     repo = ClonedRepo(str(target))
     repo._commit = commit
     return repo
+
+
+def refresh_default_branch(
+    url: str, environ: Mapping[str, str] | None = None, timeout: float = 20.0
+) -> None:
+    """Fetch ``url``'s default branch into its existing clone, then fast-forward.
+
+    The checkout moves only when the clone is on the default branch, its tree is
+    clean and the fetched default branch is a fast-forward of it. Any other
+    state is left as it is, and a missing clone is a no-op. Unlike
+    :func:`ensure_clone` this never resets or cleans the tree, so a branch or
+    worktree a story holds is never touched.
+
+    Git runs through :func:`_try_output`, so no git output reaches a log; a
+    failure raises :class:`RepoCloneError` whose message names the URL with any
+    credential redacted, and the caller logs only the error class.
+    """
+    env = _config(environ)
+    target = managed_path(url, env)
+    canonical = _canonical_url(url, env)
+    safe_url = _redact(canonical)
+    with _askpass(_token_file(env)) as auth:
+        child_env = _child_env(auth)
+        if not _is_existing_clone(target, safe_url):
+            return
+        _audit_local_config(target, canonical, child_env, timeout)
+
+        def git(*args: str) -> str | None:
+            argv = ["git", *_safe_opts(target), "-C", str(target), *args]
+            return _try_output(argv, child_env, timeout)
+
+        if git("fetch", "--prune", "--no-tags", "--", canonical, _ORIGIN_REFSPEC) is None:
+            raise RepoCloneError(f"git fetch failed for {safe_url}")
+        head = git("symbolic-ref", "--quiet", "HEAD")
+        default = git("symbolic-ref", "--quiet", _ORIGIN_DEFAULT_REF)
+        if not head or not default or not default.startswith(_ORIGIN_PREFIX):
+            return
+        if head != _LOCAL_PREFIX + default.removeprefix(_ORIGIN_PREFIX):
+            return
+        if git("status", "--porcelain") != "":
+            return
+        if git("merge-base", "--is-ancestor", "HEAD", default) is None:
+            return
+        if git("merge", "--ff-only", "--quiet", default) is None:
+            raise RepoCloneError(f"git merge failed for {safe_url}")

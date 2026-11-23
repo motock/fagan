@@ -4746,6 +4746,35 @@ Security rules:
 - The token is read through the `github_issues` setting's `token_ref` at each
   request. See the setting table above for the rules on `token_ref`.
 
+### Mirroring a plan's progress to GitHub (`pipeline/github_issues_sync.py`)
+
+Off unless `PIPELINE_GITHUB_ISSUES_ENABLED` is exactly `1`, read on every event.
+Only a plan named `gh-<repo name>-<number>` is mirrored, and only when its
+team's `github_issues` is enabled and its repository name is the setting's
+repository. Otherwise nothing is sent.
+
+Each plan has one checklist comment on its issue. The comment starts with the
+line `<!-- fagan-stories -->`, followed by one task-list line per story:
+`- [ ] <story key>: <story summary> (<state>)`. The states are `waiting`,
+`in progress`, `in review, PR #<n>` and `done` (a checked box). A story summary
+is capped at 120 characters, and backticks, angle brackets and pipes are
+removed, with line breaks and runs of whitespace collapsed to one space.
+
+| Fagan event | Issue change |
+|---|---|
+| `plan_approved` notification | The checklist comment is posted, or rewritten when it exists |
+| `agent_dispatched`, `pr_open`, `story_done` | The checklist comment is rewritten from the manifest's current states |
+| `parked` | The checklist is rewritten, and the comment "Parked: <story key> needs a decision in Fagan." is added once |
+| `story_done` when every story is done | Label `fagan-done` and the comment "All Fagan stories are done. Ready for review." are added once |
+
+Every event rewrites the checklist from the manifest, so a replayed or
+out-of-order event leaves the same result. When the checklist comment is
+missing, it is posted again. A comment is never added twice with the same
+text. The issue is never closed; closing it is the team's decision.
+
+The GitHub client's failures are logged once per plan and failure kind, with the
+kind only. A handler never raises into the event bus.
+
 ### Mirroring a plan's progress to Jira (`pipeline/jira_sync.py`)
 
 Off unless `PIPELINE_JIRA_ENABLED` is exactly `1`, read on every event. Only a

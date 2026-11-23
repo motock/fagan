@@ -21,7 +21,9 @@ from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
 from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
+from app.chat_errors import ChatBackendError, is_chat_refusal, refuse
 from pipeline import server as _server
+from pipeline.actor import current_correlation_id
 from pipeline.repo_clone import RepoUrlError, parse_repo_url
 
 
@@ -690,6 +692,7 @@ class ChatService:
         self._max_turns = raw_max
         self._resolved_driver = None
         self._resolved_model = None
+        self._resolved_provider = None
 
     def _resolve_driver(self, repo_url: str | None = None) -> tuple[object, str]:
         if self._driver is not None:
@@ -717,6 +720,7 @@ class ChatService:
         driver = backend.get_backend("chat", name=resolution.provider)
         self._resolved_driver = driver
         self._resolved_model = resolution.model
+        self._resolved_provider = resolution.provider
         return driver, resolution.model
 
     def stream_turn(self, message, *, plan_name=None, history=None, workspace=None, repo_url=None):
@@ -752,7 +756,11 @@ class ChatService:
                 )
             if plan_name:
                 system_prompt += _selected_plan_sentence(plan_name)
-            response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
+            try:
+                response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
+            except Exception as exc:
+                # Only the model call is wrapped: the endpoints answer this one failure with a refusal.
+                raise ChatBackendError(self._resolved_provider or type(driver).__name__) from exc
             yield {"type": "turn", "data": {"n": turns}}
             parsed = _parse_tool_calls(response)
             if not parsed:
@@ -908,7 +916,13 @@ def chat_endpoint(
         api_base_url=_resolve_chat_api_base_url(request),
         caller_headers=_caller_credential_headers(request),
     )
-    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace, **_repo_url_kwargs(req))
+    correlation = current_correlation_id()
+    try:
+        result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace, **_repo_url_kwargs(req))
+    except Exception as exc:
+        if not is_chat_refusal(exc):
+            raise
+        raise HTTPException(status_code=502, detail=refuse(exc, correlation)) from None
     return ChatResponse(**result)
 
 
@@ -945,11 +959,17 @@ def chat_stream_endpoint(
         caller_headers=_caller_credential_headers(request),
     )
 
+    correlation = current_correlation_id()
+
     def event_stream():
         try:
             for event in svc.stream_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace, **_repo_url_kwargs(req)):
                 yield _sse_pack(event)
-        except Exception:
+        except Exception as exc:
+            if is_chat_refusal(exc):
+                yield _sse_pack({"type": "error", "data": refuse(exc, correlation)})
+                return
+
             logging.getLogger("pipeline").exception("chat stream failed")
             yield _sse_pack({"type": "error", "data": {"message": "chat stream failed"}})
 

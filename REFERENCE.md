@@ -345,6 +345,41 @@ dashboard refuses with `409` and the panel asks the reviewer to reload.
 Unauthenticated sessions and shared-secret sessions cannot decide (see
 [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) §9).
 
+### Repository read tools
+
+Three read-only tools serve the source of a repository the caller's namespace
+may read, from its managed clone. Each takes `repo` as `host/owner/name`,
+exactly as `list_repositories` returns it; a value with a scheme, credentials,
+whitespace, `..`, a query or an empty value answers `invalid_repository` before
+any lookup. The access hook (`PIPELINE_REPO_ACCESS_PLUGIN`, `action` `read`) is
+asked before any clone is named: an ungranted repository answers
+`repository_access_refused` whether or not a clone is present, and a granted
+repository with no clone answers `repository_not_available` without starting git
+or cloning. Nothing is written, cloned or fetched. Failures return `{"ok": false,
+"reason": ...}`, never a filesystem path. Each call writes one host audit record
+with the tool, the repository, the outcome and the correlation id; a refusal also
+leaves the access hook's own `repo_access_refused` record. No record carries the
+path, the pattern or the content.
+
+- `read_repository_file(repo, path)` — one UTF-8 text file, as the service's
+  `{"ok": true, "path", "content"}`. A path that escapes the clone, including
+  through a symlink, is `invalid_path`; a file over 200,000 bytes is
+  `file_too_large` and is not read.
+- `list_repository_directory(repo, path="")` — the immediate children of a
+  directory as `{"name", "type"}` (`dir` or `file`), sorted by name. `""` is the
+  repository root. Nothing recurses.
+- `search_repository(repo, pattern)` — grep's basic-regular-expression matches as
+  `path:line:text` strings, with `path` relative to the repository root, at most
+  200, with `truncated` when cut. `.git` and binary files are skipped.
+
+With no `PIPELINE_REPO_ACCESS_PLUGIN` selected, every allow-listed repository that
+has a clone is readable by any caller that can reach these tools. A multi-tenant
+deployment must configure the access hook.
+
+Every call counts against `PIPELINE_REPO_READ_PER_MINUTE` per principal, refused
+calls included. Past the limit a call answers `{"ok": false, "reason":
+"rate_limited", "retry_after_seconds": n}`.
+
 ---
 
 ## Overlord decision fail-open
@@ -3972,7 +4007,10 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `review_story`, `save_plan` and `set_story_status`;
 - nine read-only tools — `check_story_status`, `check_usage`, `export_plan`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
-  `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
+  `list_ready_stories` and `verify_audit`. The three repository reads
+  (`read_repository_file`, `list_repository_directory`, `search_repository`) are
+  remote reads too, gated by the repository access hook for the caller's
+  namespace rather than by plan visibility. Reads are scoped to the plans the
   caller may see (`app.policy.can_view`): the plan-scoped tools
   (`check_story_status`, `export_plan`, `get_effective_config`,
   `get_story_diff`, `list_decisions`, `list_ready_stories`) refuse before their
@@ -4091,6 +4129,7 @@ install, and `requirements.txt` gains nothing.
 | --- | --- | --- |
 | `PIPELINE_REPOS_ROOT` | unset | Directory under which managed clones are placed. Required to compute a managed repository path; without it a `repo_url` is refused. The standalone deployment documents its value in `deploy/README.md`. |
 | `PIPELINE_REPO_URL_ALLOW_FILE` | unset (`file://` URLs refused) | `1` accepts `file://` repository URLs that name no host or `localhost`. |
+| `PIPELINE_REPO_READ_PER_MINUTE` | `120` | Calls per minute, per principal, to the repository read tools (`read_repository_file`, `list_repository_directory`, `search_repository`), refused calls included. A missing, malformed (`abc`) or non-positive (`0`, `-5`) value means 120. The window is in-process memory. Past the limit a call answers `rate_limited` with `retry_after_seconds`. |
 | `PIPELINE_GIT_TOKEN_FILE` | unset | Path to the git forge token file. The file must be non-empty, owned by the pipeline user and not readable by group or others. The git askpass helper reads it at clone time. Delivery of the secret: [DEPLOY_STANDALONE.md](docs/DEPLOY_STANDALONE.md). |
 | `PIPELINE_ANTHROPIC_API_KEY` | unset | The operator's Anthropic API key for the `claude` backend, read through the credentials seam (`app/credentials.py`). It is never passed to agent processes; the Claude CLI receives it as `ANTHROPIC_API_KEY`. A value with embedded whitespace, a secret-file path or an unexpanded `${...}` template is refused. Delivery of the secret: [DEPLOY_STANDALONE.md](docs/DEPLOY_STANDALONE.md). |
 

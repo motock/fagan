@@ -18,11 +18,6 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   true, "plan": <name>, "staged": true, "epic_count": ..., "story_count":
   ...}` — no filesystem path.
 - `list_plans()` — list plans with a staged draft or an ingested manifest.
-- `list_repositories()` — list the repositories (`host/owner/name`) the bound
-  namespace may work with, sorted, at most 500 (`truncated` when cut). Takes no
-  namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the repositories
-  are those of the plans the caller can see; a failure answers `{"ok": false,
-  "reason": "repositories_unavailable"}`.
 - `export_plan(plan_name)` — render a plan's document from its ingested
   manifest, on demand (ADR 0012 decision 5: the document is rendered from the
   manifest when an export is wanted, never stored as a second copy). Returns
@@ -2598,7 +2593,6 @@ who is authenticated or allowed without saying so.
 | Namespace resolver | `PIPELINE_NAMESPACE_RESOLVER_PLUGIN` | `factory()` returning an object with `accesses(principal) -> tuple[NamespaceAccess, ...]` | Which namespaces a principal may reach, with its roles in each. Unset: the `default` namespace with the principal's own roles. An empty answer, a duplicate namespace or a wrong-typed entry is refused. Requires `PIPELINE_PLUGIN_MODULES`. See "Namespaces". |
 | View scope | `PIPELINE_VIEW_SCOPE_PLUGIN` | `factory()` returning an object with `visible(principal) -> frozenset[str] \| ALL` | Which namespaces plan views (the dashboard plan list) show. Unset: the namespaces the resolver reports. An empty or malformed answer, or an exception, denies the view. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Repo access hook | `PIPELINE_REPO_ACCESS_PLUGIN` | `factory()` returning an object with `check(namespace, repo, action, risk) -> AccessDecision` | Consulted before a dispatch and before a merge (scheduler and `approve_merge`). Unset: no hook, nothing changes. A refusal, an exception or a malformed answer refuses: a dispatch or scheduler merge parks the story with `access refused: <reason>`; `approve_merge` returns the error and leaves the story as it was. Requires `PIPELINE_PLUGIN_MODULES`. |
-| Repo listing hook | `PIPELINE_REPO_LISTING_PLUGIN` | `factory()` returning an object with `list_repositories(namespace) -> list[dict]`, each item `{"repo": "host/owner/name", "level": str or None, "state": str or None}` | Answers the `list_repositories` tool for the bound namespace. Unset: the repositories of the plans the caller can see, read from each plan's `repo_url`, with `level` and `state` null. A raising plugin, a non-list, or an item that is malformed or whose `repo` is not `host/owner/name` fails closed to `repositories_unavailable`. |
 | Admission hook | `PIPELINE_ADMISSION_PLUGIN` | `factory()` returning an object with `admit(kind, namespace, context) -> AdmissionDecision` | `kind` is `dispatch`, `spend` or `notification`; `context` carries counts only. Unset: everything is admitted. A refused dispatch is deferred to a later tick (not parked); a refused spend pauses the spend poll; a refused notification is dropped and counted. A hook failure fails closed for dispatch and spend and open for notifications. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Command wrap | `PIPELINE_COMMAND_WRAP_PLUGIN` | `factory()` returning an object with `wrap(argv, cwd, kind, namespace) -> list[str]` | Consulted before every command that runs repository-controlled code. `kind` is `agent`, `review`, `test`, `build`, `setup`, `lint` or `validate`. Unset: commands run unchanged. A plugin failure or a malformed answer refuses the command. Cannot be combined with ssh execution or `PIPELINE_SANDBOX=docker`. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Audience | `PIPELINE_AUDIENCE_PLUGIN` | `factory()` returning an object with `members(namespace, plan, audience, owner) -> frozenset[str]` | Subjects in the `plan_owner` or `plan_approvers` audience of a plan, matched against notification instance `principal` settings. Unset: `plan_owner` is the plan's owner and `plan_approvers` is empty. A failing plugin or a non-set return resolves that audience to nobody and logs the exception type. Requires `PIPELINE_PLUGIN_MODULES`. |
@@ -3967,9 +3961,9 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   `record_decision`, `record_security_audit`, `reject_plan`,
   `request_decision`, `resume_plan`,
   `review_story`, `save_plan` and `set_story_status`;
-- ten read-only tools — `check_story_status`, `check_usage`, `export_plan`,
+- nine read-only tools — `check_story_status`, `check_usage`, `export_plan`,
   `get_effective_config`, `get_story_diff`, `list_decisions`, `list_plans`,
-  `list_ready_stories`, `list_repositories` and `verify_audit`. Reads are scoped to the plans the
+  `list_ready_stories` and `verify_audit`. Reads are scoped to the plans the
   caller may see (`app.policy.can_view`): the plan-scoped tools
   (`check_story_status`, `export_plan`, `get_effective_config`,
   `get_story_diff`, `list_decisions`, `list_ready_stories`) refuse before their
@@ -3977,8 +3971,7 @@ principal may call exactly the allowlist in `pipeline/remote_tool_policy.py`:
   unless the caller owns or is a delegate of the plan, and return one fixed
   refusal that is identical for a plan that does not exist and one the caller
   may not see, so the reply is no existence oracle; `list_plans` and
-  `verify_audit` are filtered to visible plans; `list_repositories` lists the
-  repositories of visible plans unless a listing plugin answers, and `verify_audit` drops its
+  `verify_audit` are filtered to visible plans, and `verify_audit` drops its
   `host` entry for every remote caller because that chain records other
   principals' authentication attempts. `check_usage` stays host-level and
   unfiltered: it reports deployment-wide counters that belong to no plan.

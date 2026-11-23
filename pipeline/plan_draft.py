@@ -55,6 +55,18 @@ def read_plan_draft(plan_name: str) -> tuple[dict[str, Any] | None, dict[str, An
     return plan, None
 
 
+def _draft_names(records: Any, namespace: str) -> list[str]:
+    """Return the draft names in ``namespace``, or none for a partition without drafts.
+
+    The record views serve plan drafts from the default partition only and
+    refuse any other namespace, so a bound team has no drafts of its own.
+    """
+    try:
+        return records.list_plan_drafts(namespace)
+    except UnknownNamespaceError:
+        return []
+
+
 def list_plan_names(records: Any, namespace: str = DEFAULT_NAMESPACE) -> list[str]:
     """Return the sorted plan names with a staged draft *or* a manifest.
 
@@ -64,7 +76,7 @@ def list_plan_names(records: Any, namespace: str = DEFAULT_NAMESPACE) -> list[st
     part -- ``list_plan_drafts`` admits only ``<plan>.json`` documents holding
     an ``epics`` key, so ``<plan>.decisions`` and journals cannot surface.
     """
-    drafted = records.list_plan_drafts(namespace)
+    drafted = _draft_names(records, namespace)
     return sorted(set(drafted) | set(records.list_plans(namespace)))
 
 
@@ -77,4 +89,4 @@ def list_ingestable_plan_names(records: Any, namespace: str = DEFAULT_NAMESPACE)
     caller that lists them all.
     """
     ingested = set(records.list_plans(namespace))
-    return [name for name in records.list_plan_drafts(namespace) if name not in ingested]
+    return [name for name in _draft_names(records, namespace) if name not in ingested]

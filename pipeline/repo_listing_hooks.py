@@ -110,7 +110,9 @@ def _visible_repositories(store: Any) -> list[dict[str, Any]]:
         manifest = bound_records.get_manifest(store, plan_name)
         if not manifest:
             continue
-        if not can_view(principal, authorization.resource_for(manifest, plan_name, None)):
+        if not can_view(
+            principal, authorization.resource_for(manifest, plan_name, None)
+        ):
             continue
         repo = _listed_repo(manifest)
         if repo is not None:

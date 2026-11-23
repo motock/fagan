@@ -52,7 +52,7 @@ from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
-from . import bound_records, config_provenance, repo_listing_hooks, tenant_exec
+from . import bound_records, config_provenance, tenant_exec
 from . import ci as _ci_module
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
@@ -673,22 +673,6 @@ def list_plans() -> list[str]:
     """
     return _service.list_plans()
 
-
-@mcp.tool()
-def list_repositories() -> dict:
-    """
-    List the repositories the caller may work with, in its namespace. No
-    parameters: the answer is always the namespace bound to this call.
-
-    Returns {"ok": true, "repositories": [{"repo": "host/owner/name",
-    "level": ..., "state": ...}]} sorted by repo, at most 500 items
-    ("truncated": true when cut). Without a deployment listing plugin the
-    repositories are those of the plans list_plans shows you, and level and
-    state are null. A failure returns {"ok": false, "reason":
-    "repositories_unavailable", "correlation_id": ...}.
-    """
-    return repo_listing_hooks.list_repositories_result(_store)
-
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,
 # review_verdict, journal, ...) is pipeline-owned runtime state and must
@@ -986,7 +970,7 @@ from . import server_tools_lifecycle as _lifecycle_tools
 from . import server_tools_read as _read_tools
 from . import settings_tools as _settings_tools
 
-for _tool in (*_lifecycle_tools.TOOLS, *_settings_tools.TOOLS):
+for _tool in (*_lifecycle_tools.TOOLS, *_settings_tools.TOOLS, *_read_tools.TOOLS):
     globals()[_tool.__name__] = _tool
     mcp.tool()(_tool)
 get_story_diff = mcp.tool()(_read_tools.get_story_diff)

@@ -4,7 +4,7 @@ at call time so tests patching pipeline.server._service keep landing."""
 
 from typing import Any
 
-from . import story_worktree_status
+from . import repo_listing_hooks, story_worktree_status
 from .module_ref import _ModuleRef
 from .story_evidence import (  # noqa: F401  (get_story_events is re-exported)
     REDACTED,
@@ -16,6 +16,7 @@ from .workspace_reader import STORY_LOG_TAIL_DEFAULT, STORY_LOG_TAIL_MAX
 
 _service = _ModuleRef("pipeline.server", "_service")
 _worktree_root = _ModuleRef("pipeline.server", "WORKTREE_ROOT")
+_store = _ModuleRef("pipeline.server", "_store")
 
 # Filesystem PATH_MAX; no real repo-relative path is longer.
 MAX_PATH_LENGTH = 4096
@@ -127,3 +128,21 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
         return dict(_NOT_FOUND)
     available, entries = _service.get_journal(plan_name, story_key)
     return {"available": available, "entries": _redact_value(entries)}
+
+
+def list_repositories() -> dict[str, Any]:
+    """
+    List the repositories the caller may work with, in its namespace. No
+    parameters: the answer is always the namespace bound to this call.
+
+    Returns {"ok": true, "repositories": [{"repo": "host/owner/name",
+    "level": ..., "state": ...}]} sorted by repo, at most 500 items
+    ("truncated": true when cut). Without a deployment listing plugin the
+    repositories are those of the plans list_plans shows you, and level and
+    state are null. A failure returns {"ok": false, "reason":
+    "repositories_unavailable", "correlation_id": ...}.
+    """
+    return repo_listing_hooks.list_repositories_result(_store._value())
+
+
+TOOLS = (list_repositories,)

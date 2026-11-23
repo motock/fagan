@@ -563,10 +563,15 @@ def test_api_routes_still_require_the_credential_under_a_plugin_resolver(
     assert response.json()["detail"] == "unauthorized"
 
 
-def test_metrics_route_is_still_refused_by_the_namespace_wrapper(
+def test_metrics_route_is_served_without_the_namespace_wrapper(
     client, plan_dir, monkeypatch, tmp_path
 ):
-    """``/api/metrics`` keeps the namespace wrapper like every other route."""
+    """``/api/metrics`` is served without a bound namespace; the shared-secret caller is the operator.
+
+    The route carries deployment aggregates and authorizes its own callers, so a
+    resolver that reaches no namespace must not refuse the operator at binding.
+    ``/livez`` and ``/readyz`` stay separate: the metrics route is not a probe.
+    """
     _install_resolver_plugin(
         tmp_path, monkeypatch, _stub_resolver_source("return ()")
     )
@@ -574,8 +579,8 @@ def test_metrics_route_is_still_refused_by_the_namespace_wrapper(
 
     response = client.get("/api/metrics", headers={"x-pipeline-api-key": key})
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == NAMESPACE_ERROR
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
 
 
 def test_the_index_page_is_served_without_the_namespace_wrapper(

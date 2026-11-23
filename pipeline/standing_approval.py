@@ -13,6 +13,12 @@ or the usage gate: it only moves a ``pending_approval`` record to ``approved``.
 A refusal writes no manifest and no decision and records one ``refused`` audit
 event whose only detail is a reason token. The approver subject, the digest
 and the standing id are never placed in a refusal.
+
+Policy for ``approver_subject`` is not evaluated here: that person is not
+signed in and core holds no membership or role data for them (tenancy lives
+in the enterprise overlay). Whether they may still approve for the plan's team
+is therefore the caller's ``still_valid`` re-check, which is mandatory, runs
+under the plan lock, and refuses on anything but exactly ``True``.
 """
 
 import os
@@ -23,7 +29,7 @@ from typing import Any
 
 from app.identity import LOCAL_OPERATOR
 
-from .actor import current_correlation_id, current_principal, transport_bound
+from .actor import actor_id, current_correlation_id, current_principal, transport_bound
 from .audit import record_audit
 from .plan_approval import (
     APPROVAL_DIGEST_VERSION,
@@ -68,8 +74,15 @@ def approve_standing(
     ):
         return _refuse(plan_name, "bad_argument", "invalid standing approval arguments")
 
+    from .authorization import authorize
     from .concurrency import command_lock_wait_seconds
     from .server import _store
+
+    # authorize records a denial itself; record_allowed=False keeps the allowed
+    # case to the single plan.approved record written below.
+    refusal = authorize("plan:approve", plan_name=plan_name, record_allowed=False)
+    if refusal is not None:
+        return {"ok": False, "error": "not authorized", "reason": "not_authorized"}
 
     wait_seconds = command_lock_wait_seconds()
     with _store.transaction(plan_name, wait_seconds) as acquired:
@@ -117,21 +130,29 @@ def _decide_under_lock(
     if previous.get("digest") != digest or expected_digest != digest:
         return _refuse(plan_name, "digest_mismatch", "plan content changed")
     if not _still_valid(still_valid):
-        return _refuse(plan_name, "standing_invalid", "standing approval is no longer valid")
+        return _refuse(
+            plan_name, "standing_invalid", "standing approval is no longer valid"
+        )
 
     warnings_seen = previous.get("warnings_seen")
     if not isinstance(warnings_seen, list):
         warnings_seen = []
+    # Same rule as PlanApprovalMixin._decide_plan, with the named approver in
+    # place of the principal: a plan with no recorded ingester counts as self-approved.
+    ingested_by = manifest.get("ingested_by") or approver_subject
+    self_approved = approver_subject == ingested_by
+    actor = actor_id()
     record: dict[str, Any] = {
         "plan": plan_name,
         "status": "approved",
         "digest": digest,
         "digest_version": APPROVAL_DIGEST_VERSION,
         "decided_by": approver_subject,
+        "recorded_by": actor,
         "at": datetime.now(UTC).isoformat(),
         "correlation_id": current_correlation_id(),
         "role": _ROLE,
-        "self_approved": False,
+        "self_approved": self_approved,
         "warnings_seen": list(warnings_seen),
         "standing_id": standing_id,
     }
@@ -146,7 +167,9 @@ def _decide_under_lock(
         detail={
             "digest": digest,
             "decided_by": approver_subject,
+            "actor": actor,
             "role": _ROLE,
+            "self_approved": self_approved,
             "standing_id": standing_id,
         },
     )

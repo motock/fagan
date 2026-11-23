@@ -19,6 +19,7 @@ from pipeline.standing_approval import STANDING_ENV, approve_standing
 
 PLAN = "p"
 APPROVER = "alice@example.test"
+INGESTER = "ingester@example.test"
 STANDING_ID = "standing-1"
 HUMAN = Principal(subject="bob", roles=frozenset({"approver"}), auth_method="oidc")
 NETWORK_CLIENT = Principal(
@@ -59,6 +60,7 @@ def plan(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
     manifest = _manifest()
+    manifest["ingested_by"] = INGESTER
     manifest["approval"] = {
         "status": "pending_approval",
         "digest": canonical_digest(manifest),
@@ -133,6 +135,16 @@ def _manifest_bytes(plan_dir):
     return (plan_dir / f"{PLAN}.manifest.json").read_bytes()
 
 
+def _restamp(plan_dir, *, drop=(), **fields):
+    """Change manifest fields and re-stamp the pending digest to match them."""
+    manifest = _read_manifest(plan_dir)
+    for key in drop:
+        manifest.pop(key)
+    manifest.update(fields)
+    manifest["approval"]["digest"] = canonical_digest(manifest)
+    _write_manifest(plan_dir, manifest)
+
+
 # -- positive path ----------------------------------------------------------
 
 
@@ -164,6 +176,48 @@ def test_should_record_allowed_audit_with_standing_identity(plan, enabled):
     assert record["detail"]["decided_by"] == APPROVER
     assert record["detail"]["role"] == "standing"
     assert record["detail"]["standing_id"] == STANDING_ID
+
+
+def test_should_record_self_approval_when_approver_ingested_the_plan(plan, enabled):
+    _restamp(plan, ingested_by=APPROVER)
+
+    result = _call(_digest(plan))
+
+    assert result["ok"] is True
+    assert result["self_approved"] is True
+    assert _read_manifest(plan)["approval"]["self_approved"] is True
+    [record] = _audit_records(plan)
+    assert record["detail"]["self_approved"] is True
+
+
+def test_should_record_no_self_approval_when_another_person_ingested_the_plan(
+    plan, enabled
+):
+    result = _call(_digest(plan))
+
+    assert result["self_approved"] is False
+    assert _read_manifest(plan)["approval"]["self_approved"] is False
+    [record] = _audit_records(plan)
+    assert record["detail"]["self_approved"] is False
+
+
+def test_should_record_self_approval_when_the_plan_has_no_ingester(plan, enabled):
+    _restamp(plan, drop=("ingested_by",))
+
+    result = _call(_digest(plan))
+
+    assert result["self_approved"] is True
+    assert _read_manifest(plan)["approval"]["self_approved"] is True
+
+
+def test_should_record_the_scheduler_as_the_real_actor(plan, enabled):
+    _call(_digest(plan))
+
+    approval = _read_manifest(plan)["approval"]
+    assert approval["decided_by"] == APPROVER
+    assert approval["recorded_by"] == LOCAL_OPERATOR.subject
+    [record] = _audit_records(plan)
+    assert record["detail"]["actor"] == LOCAL_OPERATOR.subject
 
 
 # -- the flag ---------------------------------------------------------------
@@ -402,6 +456,31 @@ def test_should_refuse_when_the_plan_lock_is_not_acquired(plan, enabled, monkeyp
     [record] = _audit_records(plan)
     assert record["outcome"] == "refused"
     assert record["detail"] == {"reason": "locked"}
+
+
+def test_should_refuse_when_policy_denies_plan_approve_to_the_scheduler(
+    plan, enabled, monkeypatch
+):
+    from pipeline import authorization
+
+    def _deny_plan_approve(_authorizer, _principal, action, _resource):
+        return str(getattr(action, "value", action)) != "plan:approve"
+
+    monkeypatch.setattr(authorization, "is_allowed", _deny_plan_approve)
+    before = _manifest_bytes(plan)
+
+    result = _call(_digest(plan))
+
+    assert result == {
+        "ok": False,
+        "error": "not authorized",
+        "reason": "not_authorized",
+    }
+    assert _manifest_bytes(plan) == before
+    assert _decisions(plan) == []
+    records = _audit_records(plan)
+    assert [r["action"] for r in records] == ["plan:approve"]
+    assert records[0]["outcome"] == "denied"
 
 
 # -- exposure ---------------------------------------------------------------

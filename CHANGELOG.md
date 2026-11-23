@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- Three read-only MCP tools serve the source of a repository the caller's namespace may read: `read_repository_file`, `list_repository_directory` and `search_repository`. Each checks the repository access hook before naming a clone, answers `repository_not_available` for a granted repository with no clone (nothing is cloned or fetched), is rate-limited per principal by `PIPELINE_REPO_READ_PER_MINUTE` (default 120), and writes one audit record per call that carries no path, pattern or content.
+
 - A `list_repositories()` MCP tool answers which repositories the bound namespace may work with: sorted `host/owner/name` items, at most 500, with the repositories of the caller's visible plans by default. `PIPELINE_REPO_LISTING_PLUGIN` lets a deployment supply its own list; a failing or malformed answer fails closed to `repositories_unavailable`.
 
 - A plan whose ready stories are held back by the dispatch gate now says so: the advance tick records `dispatch_gated` in its summary and notifies once per distinct reason (`dispatch is waiting: <reason>`). The reason is sanitised first: one line, at most 200 characters, URL credentials and query strings removed.

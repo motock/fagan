@@ -112,28 +112,37 @@ def _now() -> float:
     return time.monotonic()
 
 
-def _per_minute() -> int:
-    """Return the configured per-minute limit; anything unusable means 30."""
-    raw = os.environ.get(RATE_ENV)
+def _per_minute(env: str = RATE_ENV, default: int = DEFAULT_PER_MINUTE) -> int:
+    """Return the limit named by ``env``; anything unusable means ``default``."""
+    raw = os.environ.get(env)
     if raw is None:
-        return DEFAULT_PER_MINUTE
+        return default
     try:
         value = int(str(raw).strip())
     except (TypeError, ValueError):
-        return DEFAULT_PER_MINUTE
-    return value if value > 0 else DEFAULT_PER_MINUTE
+        return default
+    return value if value > 0 else default
 
 
-def _limit_refusal(subject: str) -> dict[str, Any] | None:
+def _limit_refusal(
+    subject: str,
+    *,
+    env: str = RATE_ENV,
+    default: int = DEFAULT_PER_MINUTE,
+    windows: dict[str, deque[float]] = _WINDOWS,
+) -> dict[str, Any] | None:
     """Return a ``rate_limited`` refusal, or admit the call and count it.
+
+    ``env``, ``default`` and ``windows`` let another tool share this limiter
+    with its own limit and its own window; ``record_decision`` uses the defaults.
 
     Only an admitted call is appended: a refusal must not consume a slot, or a
     caller that retries after the advertised delay would still be refused and
     the window would never drain.
     """
-    limit = _per_minute()
+    limit = _per_minute(env, default)
     now = _now()
-    window = _WINDOWS.setdefault(subject, deque())
+    window = windows.setdefault(subject, deque())
 
     while window and window[0] <= now - WINDOW_SECONDS:
         window.popleft()

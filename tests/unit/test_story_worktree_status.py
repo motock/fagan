@@ -446,5 +446,8 @@ def test_should_leave_every_other_read_tool_classified_as_before() -> None:
         "list_plans",
         "list_ready_stories",
         "list_repositories",
+        "list_repository_directory",
+        "read_repository_file",
+        "search_repository",
         "verify_audit",
     }

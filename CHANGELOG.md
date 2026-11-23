@@ -131,6 +131,8 @@ in practice.
 
 ### Fixed
 
+- A plain-named Ollama cloud model a team chose (for example `glm-5.3-flash`) is the model the agent boots with. Before, a bare name that the model registry did not declare was read as a tier name and replaced by `PIPELINE_LOCAL_MODEL_DEFAULT`, so the agent booted on the on-device default and the cloud endpoint returned `404`. A plain name is kept on a remote Ollama endpoint when the role registry accepts it; a tier name (`opus`, `sonnet`, `haiku`) still resolves through its tier variable, and an on-device install keeps the default.
+
 - The code review runs on the provider a team routed the `review` role to. Before, a provider named only by the team's `role_routing` was ignored for the driver: the model came from the routed provider, but the Claude CLI was called with it, so a routed Ollama model failed with `unrecognized_model` and the story parked as inconclusive. The driver now follows that provider too, as it already did for a provider named by the plan or the registry.
 
 - The merge re-verify job runs in the story's own namespace, so a story in a team namespace can pass the pre-merge re-verify. The spawning tick passes its namespace to the detached child as `--namespace=<value>`, and the child binds it before it reads the plan; before, the child read the default namespace, found no manifest for a team plan and failed with `merge re-verify raised FileNotFoundError`. A harness error is now reported as that error: the merge gate reads the job's state before its commit SHA, so a job that failed before it graded a commit no longer shows as `merge re-verify graded a different commit`.

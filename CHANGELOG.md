@@ -11,6 +11,8 @@ in practice.
 
 ### Added
 
+- A `list_repositories()` MCP tool answers which repositories the bound namespace may work with: sorted `host/owner/name` items, at most 500, with the repositories of the caller's visible plans by default. `PIPELINE_REPO_LISTING_PLUGIN` lets a deployment supply its own list; a failing or malformed answer fails closed to `repositories_unavailable`.
+
 - A plan whose ready stories are held back by the dispatch gate now says so: the advance tick records `dispatch_gated` in its summary and notifies once per distinct reason (`dispatch is waiting: <reason>`). The reason is sanitised first: one line, at most 200 characters, URL credentials and query strings removed.
 
 - The deployment-only `host_tests_skipped` lock: when the deployment layer sets it to `true`, a story that resolved `scoped` (CI gates its merge) runs no test command on the pipeline host, and the pre-dispatch baseline is skipped. A story degraded to `full` still runs its tests.

@@ -273,8 +273,9 @@ has a dashboard HTTP route.
 
 ### Story diagnosis tools
 
-Four read-only tools and one mutation for working a stuck or parked story over
-MCP. None takes a path: the plan name and story key name the story, and the
+Four read-only story tools and one mutation for working a stuck or parked story
+over MCP, plus `list_repositories`, a namespace read that names no story. None
+takes a path: the plan name and story key name the story, and the
 worktree is resolved from the story record and contain-checked under the
 worktrees root. Every read masks secret values before returning them. An
 unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
@@ -297,6 +298,13 @@ unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
   story's `review_feedback`, `parked_reason`, `failure_reason` and
   `last_inconclusive_output_excerpt` (masked, at most 4,000 characters) are
   returned alongside when present.
+- `list_repositories()` — the repositories the bound namespace may work with,
+  as sorted `host/owner/name` items, each `{"repo", "level", "state"}`. It takes
+  no namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the items are
+  the distinct repositories of the plans the caller can see, with `level` and
+  `state` null; at most 500 items, `truncated: true` when cut. A failing or
+  malformed listing returns `{"ok": false, "reason":
+  "repositories_unavailable", "correlation_id": ...}`.
 - `unblock_story(plan_name, story_key, clear_fields, status=None,
   add_files=None, note=None)` — the MCP form of `python -m pipeline.unpark`.
   Authorized like `set_story_status` (the plan's owner or a delegate). Under
@@ -2593,6 +2601,7 @@ who is authenticated or allowed without saying so.
 | Namespace resolver | `PIPELINE_NAMESPACE_RESOLVER_PLUGIN` | `factory()` returning an object with `accesses(principal) -> tuple[NamespaceAccess, ...]` | Which namespaces a principal may reach, with its roles in each. Unset: the `default` namespace with the principal's own roles. An empty answer, a duplicate namespace or a wrong-typed entry is refused. Requires `PIPELINE_PLUGIN_MODULES`. See "Namespaces". |
 | View scope | `PIPELINE_VIEW_SCOPE_PLUGIN` | `factory()` returning an object with `visible(principal) -> frozenset[str] \| ALL` | Which namespaces plan views (the dashboard plan list) show. Unset: the namespaces the resolver reports. An empty or malformed answer, or an exception, denies the view. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Repo access hook | `PIPELINE_REPO_ACCESS_PLUGIN` | `factory()` returning an object with `check(namespace, repo, action, risk) -> AccessDecision` | Consulted before a dispatch and before a merge (scheduler and `approve_merge`). Unset: no hook, nothing changes. A refusal, an exception or a malformed answer refuses: a dispatch or scheduler merge parks the story with `access refused: <reason>`; `approve_merge` returns the error and leaves the story as it was. Requires `PIPELINE_PLUGIN_MODULES`. |
+| Repo listing hook | `PIPELINE_REPO_LISTING_PLUGIN` | `factory()` returning an object with `list_repositories(namespace) -> list[dict]`, each item `{"repo": "host/owner/name", "level": str or None, "state": str or None}` | Answers `list_repositories` for the bound namespace. Unset: the distinct repositories of the plans the caller can see, with `level` and `state` null. A plugin that raises, returns a non-list or returns a malformed item fails closed to `repositories_unavailable`. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Admission hook | `PIPELINE_ADMISSION_PLUGIN` | `factory()` returning an object with `admit(kind, namespace, context) -> AdmissionDecision` | `kind` is `dispatch`, `spend` or `notification`; `context` carries counts only. Unset: everything is admitted. A refused dispatch is deferred to a later tick (not parked); a refused spend pauses the spend poll; a refused notification is dropped and counted. A hook failure fails closed for dispatch and spend and open for notifications. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Command wrap | `PIPELINE_COMMAND_WRAP_PLUGIN` | `factory()` returning an object with `wrap(argv, cwd, kind, namespace) -> list[str]` | Consulted before every command that runs repository-controlled code. `kind` is `agent`, `review`, `test`, `build`, `setup`, `lint` or `validate`. Unset: commands run unchanged. A plugin failure or a malformed answer refuses the command. Cannot be combined with ssh execution or `PIPELINE_SANDBOX=docker`. Requires `PIPELINE_PLUGIN_MODULES`. |
 | Audience | `PIPELINE_AUDIENCE_PLUGIN` | `factory()` returning an object with `members(namespace, plan, audience, owner) -> frozenset[str]` | Subjects in the `plan_owner` or `plan_approvers` audience of a plan, matched against notification instance `principal` settings. Unset: `plan_owner` is the plan's owner and `plan_approvers` is empty. A failing plugin or a non-set return resolves that audience to nobody and logs the exception type. Requires `PIPELINE_PLUGIN_MODULES`. |

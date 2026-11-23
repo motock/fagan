@@ -970,7 +970,7 @@ from . import server_tools_lifecycle as _lifecycle_tools
 from . import server_tools_read as _read_tools
 from . import settings_tools as _settings_tools
 
-for _tool in (*_lifecycle_tools.TOOLS, *_settings_tools.TOOLS):
+for _tool in (*_lifecycle_tools.TOOLS, *_settings_tools.TOOLS, *_read_tools.TOOLS):
     globals()[_tool.__name__] = _tool
     mcp.tool()(_tool)
 get_story_diff = mcp.tool()(_read_tools.get_story_diff)

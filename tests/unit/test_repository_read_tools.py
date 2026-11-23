@@ -306,8 +306,10 @@ def test_no_git_command_runs_for_an_ungranted_repository_without_a_clone(
 # --- the repository identifier --------------------------------------------------
 
 
+# The https:// form is accepted now (see test_repository_read_git_dir.py), so it
+# left this list; http:// is still malformed.
 _BAD_REPOSITORIES = [
-    "https://github.com/a/one",
+    "http://github.com/a/one",
     "user:token@github.com/a/one",
     "github.com/a/../one",
     "github.com/a/one two",

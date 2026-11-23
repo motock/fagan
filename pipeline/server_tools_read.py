@@ -223,13 +223,25 @@ def _limit_refusal(subject: str) -> int | None:
     return None
 
 
-def _valid_repository(repo: Any) -> bool:
-    """Return whether ``repo`` is exactly ``host/owner/name``, as listed."""
-    return (
-        isinstance(repo, str)
-        and ".." not in repo
-        and repo_listing_hooks._REPO_RE.fullmatch(repo) is not None
-    )
+_HTTPS_PREFIX = "https://"
+
+
+def _repository_name(repo: Any) -> str | None:
+    """Return ``repo`` as ``host/owner/name``, or None when it is not one.
+
+    An ``https://`` URL is normalised first: its scheme goes, and one trailing
+    slash and one ``.git`` suffix are dropped. Every other spelling is checked
+    as given, so ``http://``, credentials, a query or a fragment all fail the
+    name pattern here.
+    """
+    if not isinstance(repo, str):
+        return None
+    name = repo
+    if name.startswith(_HTTPS_PREFIX):
+        name = name[len(_HTTPS_PREFIX):].removesuffix("/").removesuffix(".git")
+    if ".." in name or repo_listing_hooks._REPO_RE.fullmatch(name) is None:
+        return None
+    return name
 
 
 def _audit_read(tool: str, repository: str | None, outcome: str) -> None:
@@ -264,7 +276,8 @@ def _repository_read(
     tool: str, repo: Any, read: Callable[[str], dict[str, Any]]
 ) -> dict[str, Any]:
     """Run one repository read through the gate, in the fixed order."""
-    if not _valid_repository(repo):
+    repo = _repository_name(repo)
+    if repo is None:
         _audit_read(tool, None, INVALID_REPOSITORY_REASON)
         return {"ok": False, "reason": INVALID_REPOSITORY_REASON}
 
@@ -304,9 +317,12 @@ def read_repository_file(repo: str, path: str) -> dict[str, Any]:
     """
     Read one UTF-8 text file from a repository the caller's namespace may read.
 
-    repo: ``host/owner/name``, exactly as list_repositories returns it.
+    repo: ``host/owner/name``, exactly as list_repositories returns it; an
+        ``https://host/owner/name`` URL (optionally ending in ``.git`` or ``/``)
+        is accepted as the same repository.
     path: repo-relative path. A path that escapes the clone, including through
-        a symlink, is refused; a file over 200000 bytes is refused unread.
+        a symlink, or that has a ``.git`` component, is refused; a file over
+        200000 bytes is refused unread.
 
     Returns {"ok": true, "path": ..., "content": ...}. A failure returns
     {"ok": false, "reason": ...}: invalid_repository, repository_access_refused,
@@ -323,9 +339,10 @@ def read_repository_file(repo: str, path: str) -> dict[str, Any]:
 def list_repository_directory(repo: str, path: str = "") -> dict[str, Any]:
     """
     List the immediate children of a directory in a repository the caller's
-    namespace may read. Nothing recurses.
+    namespace may read. Nothing recurses; a ``.git`` entry is never listed.
 
-    repo: ``host/owner/name``, exactly as list_repositories returns it.
+    repo: ``host/owner/name``, exactly as list_repositories returns it; an
+        ``https://`` URL form is accepted as for read_repository_file.
     path: repo-relative directory; "" names the repository root.
 
     Returns {"ok": true, "path": ..., "entries": [{"name", "type"}]} with type
@@ -344,7 +361,8 @@ def search_repository(repo: str, pattern: str) -> dict[str, Any]:
     Search a repository the caller's namespace may read for lines that match
     ``pattern`` (grep's basic regular expression), skipping .git and binary files.
 
-    repo: ``host/owner/name``, exactly as list_repositories returns it.
+    repo: ``host/owner/name``, exactly as list_repositories returns it; an
+        ``https://`` URL form is accepted as for read_repository_file.
     pattern: the text to search for; it is passed to grep as one argument.
 
     Returns {"ok": true, "matches": ["path:line:text", ...], "truncated": bool}

@@ -61,7 +61,13 @@ from urllib.parse import unquote
 
 from pipeline.workspace import _MAX_DECODE_PASSES, WorkspaceSecurityError
 
-__all__ = ["read_root", "resolve_within_workspace"]
+__all__ = ["GIT_DIR_GLOB_ANY_CASE", "GIT_DIR_NAME", "names_git_dir", "read_root", "resolve_within_workspace"]
+
+#: The name of git's metadata directory, refused by ``hide_git`` reads.
+GIT_DIR_NAME = ".git"
+
+#: ``grep --exclude-dir`` glob matching ``.git`` in any letter case.
+GIT_DIR_GLOB_ANY_CASE = "[.][gG][iI][tT]"
 
 
 def read_root(root: str | None, active: str | None) -> tuple[str | None, dict | None]:
@@ -131,7 +137,24 @@ def _reject_unsafe_relative(text: str) -> None:
             )
 
 
-def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
+def names_git_dir(name: str) -> bool:
+    """Return whether one path component is git's ``.git`` metadata name.
+
+    The comparison folds case (``.GIT`` is the same store on a case-insensitive
+    filesystem) and NFKC, as the traversal checks do.
+    """
+    return unicodedata.normalize("NFKC", name).casefold() == GIT_DIR_NAME
+
+
+def _reject_git_dir(text: str) -> None:
+    """Raise :class:`WorkspaceSecurityError` if any component of *text* is ``.git``."""
+    if any(names_git_dir(comp) for comp in PurePosixPath(text).parts):
+        raise WorkspaceSecurityError("relative path must not address git metadata")
+
+
+def resolve_within_workspace(
+    workspace_root: str, relative_path: str, *, hide_git: bool = False
+) -> Path:
     """Resolve *relative_path* inside *workspace_root*, or raise.
 
     Returns the resolved absolute path, which is guaranteed to be
@@ -141,6 +164,10 @@ def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
     ``relative_path`` of ``"."`` addresses the workspace root itself.  An
     empty string is rejected: an unset parameter must not silently mean "the
     root", so callers asking for the root have to say so explicitly.
+
+    ``hide_git`` refuses any path with a ``.git`` component (compared
+    case-insensitively, decoded forms included).  The repository reads set it
+    for a managed clone; the active workspace does not.
 
     Raises
     ------
@@ -159,6 +186,8 @@ def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
     try:
         # 1. Structural checks on the raw spelling, before touching the disk.
         _reject_unsafe_relative(relative_path)
+        if hide_git:
+            _reject_git_dir(relative_path)
 
         # 2. Bounded percent-decoding; re-check every decoded form so encoded
         #    traversal is caught even though the raw spelling looks harmless.
@@ -169,6 +198,8 @@ def resolve_within_workspace(workspace_root: str, relative_path: str) -> Path:
                 break
             decoded = step
             _reject_unsafe_relative(decoded)
+            if hide_git:
+                _reject_git_dir(decoded)
 
         # 3. Resolve the root, following symlinks. The candidate is resolved
         #    in step 4 from the RAW spelling: decoding above was detection,

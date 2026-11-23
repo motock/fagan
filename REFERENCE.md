@@ -375,13 +375,22 @@ read clones, and a failed clone answers `repository not cloned yet`.
 - `read_repository_file(repo, path)` — one UTF-8 text file, as the service's
   `{"ok": true, "path", "content"}`. A path that escapes the clone, including
   through a symlink, is `invalid_path`; a file over 200,000 bytes is
-  `file_too_large` and is not read.
+  `file_too_large` and is not read. A path with any component equal to `.git`
+  (compared case-insensitively) is `invalid_path` before the filesystem is
+  touched; `.gitignore` and `.github` are ordinary paths.
 - `list_repository_directory(repo, path="")` — the immediate children of a
   directory as `{"name", "type"}` (`dir` or `file`), sorted by name. `""` is the
-  repository root. Nothing recurses.
+  repository root. Nothing recurses. An entry named `.git` (any letter case) is
+  never listed; listing a `.git` directory is `invalid_path`.
 - `search_repository(repo, pattern)` — grep's basic-regular-expression matches as
   `path:line:text` strings, with `path` relative to the repository root, at most
-  200, with `truncated` when cut. `.git` and binary files are skipped.
+  200, with `truncated` when cut. `.git` (any letter case, at any depth) and
+  binary files are skipped, so no match comes from inside a `.git` directory.
+- `repo` is `host/owner/name`. The `https://host/owner/name` form is accepted as
+  the same repository, with an optional trailing `/` and an optional `.git`
+  suffix; the audit record names the normalised `host/owner/name`. `http://`,
+  credentials (`user@`), a query, a fragment or any other malformed value is
+  `invalid_repository`.
 
 With no `PIPELINE_REPO_ACCESS_PLUGIN` selected, every allow-listed repository that
 has a clone is readable by any caller that can reach these tools. A multi-tenant

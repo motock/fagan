@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- A repository read refreshes an existing managed clone once it is a minute old: the clone fetches the default branch and fast-forwards its checkout only when it sits on the default branch with a clean tree and the fetch is a fast-forward. Other checkouts are left alone, a failed refresh still answers the read, and a read is at most one minute behind the default branch.
 - A plan naming a `repo_url` is checked against the repository access hook for `dispatch` when it is saved, drafted or ingested, before anything is cloned. A namespace the hook does not admit for that repository gets `access refused: <reason>` at save, not only at dispatch, and a refused plan leaves no clone behind. With no `PIPELINE_REPO_ACCESS_PLUGIN` nothing changes.
 - `PIPELINE_OPENAI_BASE_URL`, an operator-only test switch that replaces the `openai` provider's API host for the whole deployment (for example a local Ollama Responses endpoint for a free smoke test). Unset or empty keeps `https://api.openai.com`. A set value must be `https://<host>[:port]`, or `http://` for localhost only; anything else stops OpenAI calls with a configuration error and sends nothing. Setting it sends every team's OpenAI key to that host, and it logs one warning per process.
 

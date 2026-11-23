@@ -138,12 +138,32 @@ class FileAuditLog:
             return self._directory
         return audit.audit_path("").parent
 
+    def _contained_path(self, chain: str) -> Path:
+        """Return the file *chain* lives in, refused when it resolves outside its directory.
+
+        A symlink already sitting in the audit directory can point anywhere, so
+        the stream is resolved once here and every file operation uses the
+        resolved path. The directory is the log's own when it is bound to one,
+        otherwise the directory the pipeline's stream for *chain* lives in.
+        """
+        if self._directory is not None:
+            base_directory = self._directory
+        elif chain == HOST_CHAIN_ID:
+            base_directory = audit.host_audit_path().parent
+        else:
+            base_directory = self._streams_directory()
+        real = os.path.realpath(self.stream_path(chain))
+        base = os.path.realpath(base_directory)
+        if not real.startswith(base + os.sep):
+            raise ValueError("audit path escapes the audit directory")
+        return Path(real)
+
     # -- appending -----------------------------------------------------
     def append(self, namespace: str, chain: str, body: dict) -> dict:
         """Append ``body`` to *chain* under an exclusive lock and return it."""
         self._require_default(namespace)
         validate_chain(chain)
-        return self._append_at(self.stream_path(chain), body)
+        return self._append_at(self._contained_path(chain), body)
 
     @staticmethod
     def _append_at(path: Path, body: dict[str, Any]) -> dict[str, Any]:
@@ -165,7 +185,7 @@ class FileAuditLog:
         """Return *chain* in storage order, ``[]`` when it is absent."""
         self._require_default(namespace)
         validate_chain(chain)
-        return read_chain_at(self.stream_path(chain))
+        return read_chain_at(self._contained_path(chain))
 
     def head(self, namespace: str, chain: str) -> dict | None:
         """Return the newest record of *chain*, or ``None`` when absent."""

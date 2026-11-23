@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from app import dashboard as d
 from app.chat import SYSTEM_PROMPT, ChatService
+from pipeline import repo_read_access
 
 REPO_URL = "https://github.com/acme/widgets"
 OTHER_REPO_URL = "https://github.com/evil/other"
@@ -114,7 +115,7 @@ def test_should_refuse_a_clone_path_outside_the_repos_root(client, tmp_path, mon
     outside = tmp_path / "elsewhere" / "widgets"
     outside.mkdir(parents=True)
     (outside / "README.md").write_text("outside the root\n", encoding="utf-8")
-    monkeypatch.setattr(d, "managed_path", lambda url: outside)
+    monkeypatch.setattr(repo_read_access, "managed_path", lambda url: outside)
 
     response = client.get("/api/workspace/file", params={"path": "README.md", "repo_url": REPO_URL})
 

@@ -531,6 +531,19 @@
     "title": "RequestChangesBody",
     "type": "object"
    },
+   "ResolveBody": {
+    "additionalProperties": false,
+    "description": "The resolve request body: an optional note on the answer.",
+    "properties": {
+     "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+     }
+    },
+    "title": "ResolveBody",
+    "type": "object"
+   },
    "RoleDefaultBody": {
     "properties": {
      "model": {
@@ -1864,6 +1877,58 @@
      }
     },
     "summary": "Add Decision"
+   }
+  },
+  "/api/plans/{plan_name}/guidance/resolve": {
+   "post": {
+    "description": "Settle the guidance a plan needs answered before it can be approved.",
+    "operationId": "post_plan_guidance_resolve_api_plans__plan_name__guidance_resolve_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "plan_name",
+      "required": true,
+      "schema": {
+       "title": "Plan Name",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ResolveBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Post Plan Guidance Resolve Api Plans  Plan Name  Guidance Resolve Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Post Plan Guidance Resolve"
    }
   },
   "/api/plans/{plan_name}/ingest": {

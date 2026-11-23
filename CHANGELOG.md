@@ -131,6 +131,8 @@ in practice.
 
 ### Fixed
 
+- The code review runs on the provider a team routed the `review` role to. Before, a provider named only by the team's `role_routing` was ignored for the driver: the model came from the routed provider, but the Claude CLI was called with it, so a routed Ollama model failed with `unrecognized_model` and the story parked as inconclusive. The driver now follows that provider too, as it already did for a provider named by the plan or the registry.
+
 - The merge re-verify job runs in the story's own namespace, so a story in a team namespace can pass the pre-merge re-verify. The spawning tick passes its namespace to the detached child as `--namespace=<value>`, and the child binds it before it reads the plan; before, the child read the default namespace, found no manifest for a team plan and failed with `merge re-verify raised FileNotFoundError`. A harness error is now reported as that error: the merge gate reads the job's state before its commit SHA, so a job that failed before it graded a commit no longer shows as `merge re-verify graded a different commit`.
 
 - A story whose approved pull request cannot be opened no longer re-runs a paid review on every tick. An authentication failure (the token was refused or is missing) parks the story at once, and any other failure parks it on the second attempt, with the reason in `parked_reason`; the git or gh output is never copied into the park reason or the notification. The failure count is `pr_open_failures` and is cleared when the pull request opens.

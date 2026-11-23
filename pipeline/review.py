@@ -334,18 +334,29 @@ def _run_reviewer(
         # DISCARDED provider and must never be passed straight through as
         # an invalid --model value to the new one.
         model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
-    # Only pass an explicit resolved name to get_backend when a plan/registry
-    # override actually named a provider - otherwise keep passing
+    # Only pass an explicit resolved name to get_backend when a plan, layer
+    # or registry override actually named a provider - otherwise keep passing
     # backend_name (None in the common case) unchanged, so an unconfigured
     # install still relies on get_backend's own internal PIPELINE_BACKEND_
     # REVIEW lookup exactly as before (behaviorally identical either way,
-    # but this preserves what a mocked get_backend observes).
+    # but this preserves what a mocked get_backend observes). A layer
+    # (role_routing) provider counts the same as the other two: without it
+    # the driver fell back to claude while the model was an Ollama tag.
     plan_cfg_review = (plan_role_config or {}).get("review", {})
+    layer_cfg_review = (layer_routing or {}).get("review")
+    layer_review_provider = (
+        layer_cfg_review.get("provider")
+        if isinstance(layer_cfg_review, dict) else None
+    )
     registry_review_provider = (
         role_registry.load_registry().get("roles", {}).get("review", {}).get("provider")
     )
     name_for_get_backend = backend_name
-    if backend_name is None and (plan_cfg_review.get("provider") or registry_review_provider):
+    if backend_name is None and (
+        plan_cfg_review.get("provider")
+        or (isinstance(layer_review_provider, str) and layer_review_provider)
+        or registry_review_provider
+    ):
         name_for_get_backend = resolution.provider
 
     # Diff-scoping lead. On a rework (since_sha set) the reviewer reviews

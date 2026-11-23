@@ -339,6 +339,10 @@ def _primary_role(principal: Principal) -> str:
 #: approval record was made against.
 _DIGEST_MISMATCH_ERROR = "plan content changed; re-ingest before approving"
 
+#: Refusal message while the plan's guidance record is still needed: the
+#: conversation a ticket too unclear to plan requires has not been settled.
+_GUIDANCE_NEEDED_ERROR = "plan needs guidance before it can be approved"
+
 #: Refusal message when the approval record was written under a digest version
 #: that is not the current one. Deciding on such a record would approve content
 #: the caller may never have been shown, so the record is never upgraded here.
@@ -426,6 +430,7 @@ class PlanApprovalMixin:
         notification; it records one ``refused`` audit event.
         """
         from .parsers import _validate_key
+        from .plan_guidance import needs_guidance
         from .server import _append_decision, _store
 
         _validate_key(plan_name)
@@ -456,6 +461,21 @@ class PlanApprovalMixin:
             if plan_name not in bound_records.list_plans(_store):
                 return {"ok": False, "error": f"No such plan {plan_name!r}"}
             manifest = _store.get_manifest(plan_name)
+            # An approval waits for the conversation a plan needs; a rejection
+            # does not. Checked before the digest so the refusal writes nothing.
+            if status == "approved" and needs_guidance(manifest):
+                record_audit(
+                    plan_name,
+                    action=f"plan.{status}",
+                    outcome="refused",
+                    target={"plan": plan_name},
+                    detail={"reason": "guidance_needed"},
+                )
+                return {
+                    "ok": False,
+                    "error": _GUIDANCE_NEEDED_ERROR,
+                    "guidance_needed": True,
+                }
             digest = canonical_digest(manifest)
             if expected_digest is not None and expected_digest != digest:
                 record_audit(

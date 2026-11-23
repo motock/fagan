@@ -110,6 +110,7 @@ def _decide_under_lock(
     """Apply the approval once the plan lock is held. Every check is re-read here."""
     from .bound_records import list_plans
     from .plan_approval_notice import notify_approval_event
+    from .plan_guidance import needs_guidance
     from .server import _append_decision
 
     if plan_name not in list_plans(store):
@@ -120,6 +121,12 @@ def _decide_under_lock(
         previous = {}
     if previous.get("status") != "pending_approval":
         return _refuse(plan_name, "not_pending", "plan is not awaiting approval")
+    if needs_guidance(manifest):
+        return _refuse(
+            plan_name,
+            "guidance_needed",
+            "plan needs guidance before it can be approved",
+        )
     if not digest_version_is_current(previous):
         return _refuse(
             plan_name,

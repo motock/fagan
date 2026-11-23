@@ -67,7 +67,9 @@ _CLEAN_STORY = {
 
 #: The exact keys the 200 payload carries — no more, no less.  ``team`` is
 #: the plan's team: it is part of the approved content, so the reviewer sees
-#: it (the payload change is purely additive).
+#: it (the payload change is purely additive). ``guidance`` is the plan's open
+#: guidance record (null when none was raised): the approver reads the questions
+#: it must settle before approving.
 _PAYLOAD_KEYS = {
     "plan",
     "approval",
@@ -79,6 +81,7 @@ _PAYLOAD_KEYS = {
     "stories",
     "warnings",
     "team",
+    "guidance",
 }
 
 #: The exact keys of the projected ``approval`` block.

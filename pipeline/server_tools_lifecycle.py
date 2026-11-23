@@ -20,6 +20,7 @@ from . import audit, audit_anchor, security_audit
 from . import unpark as unpark_module
 from .decision_record_tool import record_decision
 from .module_ref import _ModuleRef
+from .plan_guidance_tool import resolve_plan_guidance
 from .unpark import (
     _VALID_STATUSES,
     UNPARKABLE_FIELDS,
@@ -602,4 +603,5 @@ TOOLS = (
     record_decision,
     export_plan,
     unblock_story,
+    resolve_plan_guidance,
 )

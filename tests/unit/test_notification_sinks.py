@@ -75,12 +75,12 @@ def test_event_types_still_a_frozenset():
     assert isinstance(events.EVENT_TYPES, frozenset)
 
 
-def test_event_types_has_exactly_twelve_members():
-    """The frozenset now has exactly twelve members: the eleven originals plus
-    "notification" - nothing renamed, removed, or reordered beyond the single
-    addition."""
-    assert len(events.EVENT_TYPES) == 12
-    assert events.EVENT_TYPES == PRE_EXISTING_EVENT_TYPES | {"notification"}
+def test_event_types_has_exactly_thirteen_members():
+    """The frozenset now has exactly thirteen members: the eleven originals,
+    "notification", and "plan_guidance_resolved" - nothing renamed, removed,
+    or reordered beyond these additions."""
+    assert len(events.EVENT_TYPES) == 13
+    assert events.EVENT_TYPES == PRE_EXISTING_EVENT_TYPES | {"notification", "plan_guidance_resolved"}
 
 
 # ---------------------------------------------------------------------------

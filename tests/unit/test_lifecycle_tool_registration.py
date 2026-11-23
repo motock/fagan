@@ -32,6 +32,7 @@ EXPECTED_TOOL_NAMES = [
     "record_decision",
     "export_plan",
     "unblock_story",
+    "resolve_plan_guidance",
 ]
 
 SERVER_PY = Path(__file__).resolve().parents[2] / "pipeline" / "server.py"
@@ -43,7 +44,7 @@ def test_tools_tuple_has_nine_entries_in_original_order():
     # thirteen until export_plan was appended, and fourteen until unblock_story
     # was appended. The assertion is unchanged in strength: exact length plus exact
     # order.
-    assert len(lifecycle.TOOLS) == 15
+    assert len(lifecycle.TOOLS) == 16
     assert [tool.__name__ for tool in lifecycle.TOOLS] == EXPECTED_TOOL_NAMES
 
 

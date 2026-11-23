@@ -30,6 +30,7 @@ EXPECTED_EVENT_TYPES = frozenset(
         "rework",
         "reconcile",
         "notification",
+        "plan_guidance_resolved",
     }
 )
 

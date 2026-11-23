@@ -37,7 +37,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app import dashboard_refusal, policy
-from pipeline import actor, audit, authorization, parsers, plan_approval, plan_review
+from pipeline import (
+    actor,
+    audit,
+    authorization,
+    parsers,
+    plan_approval,
+    plan_guidance,
+    plan_review,
+)
 
 router = APIRouter()
 
@@ -153,6 +161,9 @@ def _review_payload(plan_name: str, manifest: dict, principal: Any) -> dict[str,
         "role_config": role_config,
         "stories": stories,
         "warnings": plan_review.review_warnings(manifest),
+        # Open questions and the request excerpt: the untrusted text an
+        # approver reads before settling them. Copied, never the manifest.
+        "guidance": plan_guidance.guidance_view(manifest),
     }
 
 

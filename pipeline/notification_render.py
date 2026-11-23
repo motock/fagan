@@ -36,6 +36,7 @@ SUBJECT_LABELS = {
     "plan_pending_approval": "plan awaiting approval",
     "plan_approved": "plan approved",
     "plan_changes_requested": "plan changes requested",
+    "plan_needs_guidance": "plan needs guidance",
 }
 
 # Neutral label for a notification emitted without an event: the record

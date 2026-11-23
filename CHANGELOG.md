@@ -58,6 +58,8 @@ in practice.
 
 ### Changed
 
+- Detached merge re-verify, merge local-checks and review jobs keep their state in a directory named by the story's namespace as well as its key. A team namespace (`acme/web`) uses `<state>/<kind>/_ns/acme@web/<key>`, so two teams with a story of the same key can no longer read or overwrite each other's verdict; the default namespace keeps `<state>/<kind>/<key>`. A job already running when this ships keeps working, because its handle stores absolute paths and nothing is migrated. A key made only of dots, or `_ns` in the default namespace, is refused.
+
 - A `role_routing` setting may route a role to the `ollama` provider with a cloud model the registry does not declare under `providers.ollama.models`. A plain name such as `kimi-k3` is accepted when the Ollama endpoint is remote, and a `:cloud` tag such as `kimi-k3:cloud` is accepted on any endpoint; local models are still refused. Other undeclared names keep failing with `RoleRegistryError`.
 
 - With `PIPELINE_CHECKPOINT_MODE=file`, a dispatched agent records a checkpoint by committing its work and dropping `.agent_checkpoint` in its worktree (the prompt asks for that file instead of the checkpoint tool), and the local agent's checkpoint tool does the same without store access; with the mode unset the prompt and tool call are unchanged (hrc-04).

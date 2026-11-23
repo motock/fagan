@@ -46,6 +46,7 @@ from pipeline.actor import (
     current_namespace,
     new_correlation_id,
 )
+from pipeline.job_dirs import job_dir_under, make_job_dir
 from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
 
@@ -127,12 +128,11 @@ def start_merge_reverify(
     # Resolve before use: PYTHONPYCACHEPREFIX is interpreted by the child, and
     # a relative value would be resolved against the child's cwd (the control
     # plane's source root) rather than the caller's.
-    job_dir = (Path(state_root) / kind / story_key).resolve()
-    job_dir.mkdir(parents=True, exist_ok=True)
-    # mkdir's mode is filtered by the process umask and does not re-tighten an
-    # existing directory, so chmod it explicitly: the result and the log carry
-    # story paths and test output.
-    os.chmod(job_dir, 0o700)
+    base = (Path(state_root) / kind).resolve()
+    job_dir = job_dir_under(base, story_key, current_namespace())
+    # The result and the log carry story paths and test output: the directory
+    # is private to its owner, namespace levels included.
+    make_job_dir(base, job_dir)
     result_path = job_dir / "result.json"
     log_path = job_dir / "job.log"
     pycache_dir = job_dir / "pycache"

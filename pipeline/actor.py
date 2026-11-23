@@ -73,6 +73,16 @@ def current_principal() -> Principal:
     return _BOUND.get() or LOCAL_OPERATOR
 
 
+def transport_bound() -> bool:
+    """Return whether a transport bound a principal for this request.
+
+    ``current_principal`` answers ``LOCAL_OPERATOR`` both when nothing is bound
+    and when the dashboard's shared-secret login binds that same object. A
+    caller that must mean "the scheduler itself" needs this to tell them apart.
+    """
+    return _BOUND.get() is not None
+
+
 def actor_id() -> str:
     """Return the current actor's subject, for stamping onto records."""
     return current_principal().subject

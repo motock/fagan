@@ -691,7 +691,7 @@ class ChatService:
         self._resolved_driver = None
         self._resolved_model = None
 
-    def _resolve_driver(self) -> tuple[object, str]:
+    def _resolve_driver(self, repo_url: str | None = None) -> tuple[object, str]:
         if self._driver is not None:
             model_tag = getattr(self._driver, "model", "") or ""
             return self._driver, model_tag
@@ -703,11 +703,16 @@ class ChatService:
         # configured (e.g. the PP-01 provider-neutral registry, roles:{}), the
         # same degrade path _run_decompose already uses.
         from pipeline.config import DEFAULT_MODEL
+        from pipeline.role_routing_scope import (
+            layer_routing_for_request,
+            layer_routing_kwargs,
+        )
 
         resolution = role_registry.resolve_role(
             "chat",
             registry=role_registry.load_registry(),
             model_fallback=lambda: DEFAULT_MODEL,
+            **layer_routing_kwargs(layer_routing_for_request(repo_url)),
         )
         driver = backend.get_backend("chat", name=resolution.provider)
         self._resolved_driver = driver
@@ -727,7 +732,7 @@ class ChatService:
         ``execute_turn`` returns). Calling this method performs no work at
         all -- the driver is resolved and first called on the first ``next()``.
         """
-        driver, model_tag = self._resolve_driver()
+        driver, model_tag = self._resolve_driver(repo_url)
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
         proposals: list[dict] = []

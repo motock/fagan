@@ -107,3 +107,45 @@ def layer_routing_for_plan(plan_name: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - a settings read never breaks dispatch
         _warn(exc)
         return {}
+
+
+def _well_formed(routing: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the role entries ``resolve_role`` can read.
+
+    An entry must be a mapping whose ``provider`` and ``model``, when present,
+    are non-empty strings. Anything else (a bare string, an empty provider) is
+    dropped, so a malformed setting resolves as unset instead of raising inside
+    ``resolve_role``.
+    """
+
+    def _name_ok(value: Any) -> bool:
+        return value is None or (isinstance(value, str) and value.strip() != "")
+
+    return {
+        role: entry
+        for role, entry in routing.items()
+        if isinstance(entry, dict) and _name_ok(entry.get("provider")) and _name_ok(entry.get("model"))
+    }
+
+
+def layer_routing_for_request(repo_url: str | None = None) -> dict[str, Any]:
+    """Layer routing for the namespace bound to this call, and ``repo_url`` when given.
+
+    A request names no team, so the team comes from ``context_from_manifest``
+    exactly as it does for a manifest that names none. ``{}`` when the scope
+    inherits the safe default, when the Store read fails, or when ``repo_url``
+    is unusable - never raises, and nothing is cached.
+    """
+    try:
+        from .ci import context_from_manifest
+
+        manifest = {"repo_url": repo_url} if repo_url else {}
+        context = context_from_manifest(manifest)
+    except Exception as exc:  # noqa: BLE001 - a settings read never breaks a chat turn
+        _warn(exc)
+        return {}
+    try:
+        return _well_formed(_layer_routing_for_context(context))
+    except Exception as exc:  # noqa: BLE001 - a settings read never breaks a chat turn
+        _warn(exc)
+        return {}

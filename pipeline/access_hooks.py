@@ -1,9 +1,10 @@
-"""Consult the repository access hook before a dispatch and before a merge.
+"""Consult the repository access hook before a dispatch, a merge and a read.
 
 ``refuse_dispatch`` runs once a story is known and before any worktree or git
 work. ``merge_decision`` wraps the merge gate's decision so a refused story is
-parked before that decision is computed. With ``PIPELINE_REPO_ACCESS_PLUGIN``
-unset there is no hook, and both entry points change nothing.
+parked before that decision is computed. ``pipeline.repo_read_access`` asks the
+same hook before a repository read. With ``PIPELINE_REPO_ACCESS_PLUGIN`` unset
+there is no hook, and every entry point changes nothing.
 
 The hook is a security seam. It loads only through the plugin allowlist, and
 every failure to consult it (an exception, a malformed result, a bad spec)

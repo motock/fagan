@@ -56,6 +56,7 @@ in practice.
 - Email delivery to a host that resolves to a loopback, private, link-local or other non-public address is now refused. An install that sends through an internal relay (for example a postfix container) must list that host in `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` or its email stops after upgrading.
 
 - A process serving several namespaces gives each non-default namespace its own worktree directory (`WORKTREE_ROOT/_ns/<org>@<team>/<key>`), so two teams' stories with the same key no longer share a worktree on dispatch; the default namespace keeps `WORKTREE_ROOT/<key>` and refuses the key `_ns` (hrc-01).
+- A repository read that names a `repo_url` (the dashboard's workspace file, directory and search routes, and the chat tools that use them) is now checked against `PIPELINE_REPO_ACCESS_PLUGIN` with action `read` before the clone is read. A namespace the hook refuses gets 403 `repository access refused`; before this, only the host allow-list and root containment applied, so a namespace could read another namespace's clone (mcr-01).
 - The security reviewer is told the findings format the review gate parses (`- Blocking: <path>: <description>` or `- Blocking: (unscoped) <description>`), so a REQUEST_CHANGES no longer parks the story as inconclusive for using markdown headings instead (srf-01).
 
 ### Changed

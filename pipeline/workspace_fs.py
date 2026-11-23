@@ -55,13 +55,22 @@ Security model
 from __future__ import annotations
 
 import os
+import subprocess
 import unicodedata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import unquote
 
 from pipeline.workspace import _MAX_DECODE_PASSES, WorkspaceSecurityError
 
-__all__ = ["GIT_DIR_GLOB_ANY_CASE", "GIT_DIR_NAME", "names_git_dir", "read_root", "resolve_within_workspace"]
+__all__ = [
+    "GIT_DIR_GLOB_ANY_CASE",
+    "GIT_DIR_NAME",
+    "names_git_dir",
+    "read_root",
+    "relative_match_lines",
+    "resolve_within_workspace",
+    "run_grep",
+]
 
 #: The name of git's metadata directory, refused by ``hide_git`` reads.
 GIT_DIR_NAME = ".git"
@@ -144,6 +153,41 @@ def names_git_dir(name: str) -> bool:
     filesystem) and NFKC, as the traversal checks do.
     """
     return unicodedata.normalize("NFKC", name).casefold() == GIT_DIR_NAME
+
+
+def run_grep(active: str, pattern: str, git_dir_glob: str) -> subprocess.CompletedProcess:
+    """Run grep over *active*, from inside it, so each match names a relative path.
+
+    grep runs with ``cwd=active`` and searches ``.``: its output then starts
+    with ``./`` and the relative path, never the server's absolute root. The
+    argv is a LIST with *pattern* as one ``-e`` element; never ``shell=True``.
+    Spawn errors (``TimeoutExpired``, ``FileNotFoundError``) propagate to the
+    caller, which owns the fixed error strings.
+    """
+    return subprocess.run(
+        [
+            'grep',
+            '-rn',
+            '-I',
+            f'--exclude-dir={git_dir_glob}',
+            '-e',
+            pattern,
+            '--',
+            '.',
+        ],
+        cwd=active,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
+        check=False,
+    )
+
+
+def relative_match_lines(stdout: str) -> list[str]:
+    """Split grep output into lines, each naming its path without a leading ``./``."""
+    return [line.removeprefix('./') for line in stdout.splitlines()]
 
 
 def _reject_git_dir(text: str) -> None:

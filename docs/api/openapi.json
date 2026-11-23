@@ -3473,6 +3473,7 @@
   },
   "/api/workspace/search": {
    "get": {
+    "description": "Grep the active workspace (or the repo_url clone). Each match is `path:line:text` with path relative to the repository root, never the server's absolute path.",
     "operationId": "search_workspace_route_api_workspace_search_get",
     "parameters": [
      {

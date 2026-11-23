@@ -258,18 +258,8 @@ def _audit_read(tool: str, repository: str | None, outcome: str) -> None:
 
 
 def _search_clone(pattern: str, root: str) -> dict[str, Any]:
-    """Search the clone and name each match relative to it.
-
-    grep echoes the directory it was given, so every match starts with the
-    server's clone root. That prefix is stripped here, and a match that does
-    not start with it is dropped rather than returned.
-    """
-    result = _service.search_workspace(pattern, root=root)
-    if not result.get("ok"):
-        return result
-    prefix = root + os.sep
-    matches = [line[len(prefix):] for line in result["matches"] if line.startswith(prefix)]
-    return {**result, "matches": matches}
+    """Search the clone; its matches already name paths relative to it."""
+    return _service.search_workspace(pattern, root=root)
 
 
 def _repository_read(
@@ -365,7 +355,8 @@ def search_repository(repo: str, pattern: str) -> dict[str, Any]:
         ``https://`` URL form is accepted as for read_repository_file.
     pattern: the text to search for; it is passed to grep as one argument.
 
-    Returns {"ok": true, "matches": ["path:line:text", ...], "truncated": bool}
+    Returns {"ok": true, "matches": ["path:line:text", ...], "truncated": bool}, with
+    each path relative to the repository root
     with at most 200 matches. Failures return {"ok": false, "reason": ...} with
     the tokens of read_repository_file, plus invalid_pattern, search_timed_out
     and search_failed.

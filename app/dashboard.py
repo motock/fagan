@@ -615,7 +615,7 @@ def list_workspace_directory_route(path: str = '', repo_url: str | None = None):
     return result
 
 
-@app.get('/api/workspace/search', responses={200: {"model": dashboard_schemas.WorkspaceSearchResponse}})
+@app.get('/api/workspace/search', responses={200: {"model": dashboard_schemas.WorkspaceSearchResponse}}, description="Grep the active workspace (or the repo_url clone). Each match is `path:line:text` with path relative to the repository root, never the server's absolute path.")
 def search_workspace_route(pattern: str, repo_url: str | None = None):
     result = _service.search_workspace(pattern, **_repo_read_kwargs(repo_url))
     if not result.get('ok'):

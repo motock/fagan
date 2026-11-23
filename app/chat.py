@@ -361,7 +361,7 @@ TOOLS: dict[str, dict] = {
         ),
     },
     "search_code": {
-        "description": "Search for a text pattern (grep-style) and return matching lines with file and line number.",
+        "description": "Search for a text pattern (grep-style) and return matching lines with file and line number. File paths are relative to the repository root.",
         "params": {"pattern": "str"},
         "execute": lambda http_client, api_base_url, pattern, repo_url=None, **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/search"), params=_repo_read_params({"pattern": pattern}, repo_url)).json()

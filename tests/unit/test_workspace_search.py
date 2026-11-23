@@ -226,7 +226,8 @@ def test_grep_argv_is_a_list_with_exact_elements_and_no_shell(
     # The whole pattern, metacharacters and all, is ONE argv element.
     assert args[5] == nasty
     assert args[6] == "--"
-    assert os.path.realpath(args[7]) == os.path.realpath(root)
+    assert args[7] == "."
+    assert os.path.realpath(recorded["kwargs"]["cwd"]) == os.path.realpath(root)
 
     kwargs = recorded["kwargs"]
     assert kwargs.get("capture_output") is True
@@ -401,7 +402,7 @@ def test_known_string_match_includes_path_and_line_number(
     match = matches[0]
     # grep -rn format: <path>:<line>:<text>  -> path and line number present.
     assert ":3:" in match
-    assert any(variant in match for variant in _path_variants(seed))
+    assert match.startswith("notes.txt:3:")
     assert "NEEDLE_TOKEN_XYZ" in match
 
 

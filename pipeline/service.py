@@ -503,6 +503,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     def search_workspace(self, pattern: str, *, max_results: int = 200, root: str | None = None) -> dict:
         """Search the active workspace (or ``root``) with grep and return matching lines.
 
+        Each match names its path relative to the workspace root (``src/a.py:1:...``).
+
         Mirrors :meth:`read_workspace_file` / :meth:`list_workspace_directory`'s
         error-shape conventions: every failure mode returns a dict with ``ok``
         false and a fixed generic error string; grep's stderr, the workspace
@@ -523,30 +525,13 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # workspace keeps the exact-case exclusion it always had.
         git_dir_glob = _workspace_fs.GIT_DIR_GLOB_ANY_CASE if root is not None else '.git'
         try:
-            result = subprocess.run(
-                [
-                    'grep',
-                    '-rn',
-                    '-I',
-                    f'--exclude-dir={git_dir_glob}',
-                    '-e',
-                    pattern,
-                    '--',
-                    active,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-                check=False,
-            )
+            result = _workspace_fs.run_grep(active, pattern, git_dir_glob)
         except subprocess.TimeoutExpired:
             return {'ok': False, 'error': 'search timed out'}
         except FileNotFoundError:
             return {'ok': False, 'error': 'search failed'}
         if result.returncode == 0:
-            lines = result.stdout.splitlines()
+            lines = _workspace_fs.relative_match_lines(result.stdout)
             truncated = len(lines) > max_results
             return {
                 'ok': True,

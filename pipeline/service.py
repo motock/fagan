@@ -25,6 +25,7 @@ from typing import Any
 from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline import workspace_fs as _workspace_fs
 from pipeline.plan_approval import PlanApprovalMixin
+from pipeline.role_routing_scope import layer_routing_for_request
 from pipeline.store_records import UnknownNamespaceError
 from pipeline.telemetry import record_dispatch_attempt
 from pipeline.usage_record import scoped_story_call
@@ -831,7 +832,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             context_root, err = remote_scope.clone_root_for(repo_url)
             if err is not None:
                 return err
-        text, backend_error = _run_decompose_detailed(request, repo_root=context_root)
+        layer_routing = layer_routing_for_request(repo_url)
+        text, backend_error = _run_decompose_detailed(request, repo_root=context_root, layer_routing=layer_routing)
         plan: Any = None
         parse_error: json.JSONDecodeError | None = None
         retries_left = PipelineService._DECOMPOSE_JSON_RETRY_ATTEMPTS - 1
@@ -851,7 +853,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 if retries_left <= 0:
                     break
                 retries_left -= 1
-                text, backend_error = _run_decompose_detailed(request, repo_root=context_root)
+                text, backend_error = _run_decompose_detailed(request, repo_root=context_root, layer_routing=layer_routing)
         if parse_error is not None:
             return {"ok": False, "error": f"invalid JSON: {parse_error}", "raw": text}
         if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):

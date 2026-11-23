@@ -12,6 +12,7 @@ in practice.
 ### Added
 
 - A plan naming a `repo_url` is checked against the repository access hook for `dispatch` when it is saved, drafted or ingested, before anything is cloned. A namespace the hook does not admit for that repository gets `access refused: <reason>` at save, not only at dispatch, and a refused plan leaves no clone behind. With no `PIPELINE_REPO_ACCESS_PLUGIN` nothing changes.
+- `PIPELINE_OPENAI_BASE_URL`, an operator-only test switch that replaces the `openai` provider's API host for the whole deployment (for example a local Ollama Responses endpoint for a free smoke test). Unset or empty keeps `https://api.openai.com`. A set value must be `https://<host>[:port]`, or `http://` for localhost only; anything else stops OpenAI calls with a configuration error and sends nothing. Setting it sends every team's OpenAI key to that host, and it logs one warning per process.
 
 - Three read-only MCP tools serve the source of a repository the caller's namespace may read: `read_repository_file`, `list_repository_directory` and `search_repository`. Each checks the repository access hook before naming a clone, answers `repository_not_available` for a granted repository with no clone (nothing is cloned or fetched), is rate-limited per principal by `PIPELINE_REPO_READ_PER_MINUTE` (default 120), and writes one audit record per call that carries no path, pattern or content.
 
@@ -39,7 +40,7 @@ in practice.
 
 - Story-level notifications (`story_parked`, `dispatch_failed`, `tests_failed`, `agent_gave_up`, `story_stalled`, `merge_conflict_rework`) carry a direct link. Slack and e-mail append it as a final `Open:` line, built from `PIPELINE_DASHBOARD_PUBLIC_URL` and the new `PIPELINE_STORY_LINK_PATH` (default `/`). The line is omitted when the origin is unset or either value is invalid.
 
-- An `openai` provider calls OpenAI's Responses API at `https://api.openai.com`, a host that cannot be configured. Its key is the per-namespace credential `openai_api_key`, read on every call; `OPENAI_API_KEY` is the fallback for the default namespace only. List its models under `providers.openai.models` in `model_registry.json`.
+- An `openai` provider calls OpenAI's Responses API at `https://api.openai.com`, a host only the operator can replace, for the whole deployment (`PIPELINE_OPENAI_BASE_URL`). Its key is the per-namespace credential `openai_api_key`, read on every call; `OPENAI_API_KEY` is the fallback for the default namespace only. List its models under `providers.openai.models` in `model_registry.json`.
 
 - The authority matrix's `readiness.min_paired` and `readiness.max_false_park_percent` rules let an organization tighten the bar a class must clear before its `PIPELINE_TRIAGE_MODE` promotion. They can only tighten; the shipped 20 paired decisions and 10% false-park rate are the loosest values allowed. Each verdict in the readiness report names the thresholds and tier it was judged against.
 

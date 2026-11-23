@@ -1,8 +1,12 @@
 """The direct OpenAI provider: OpenAI's Responses API with a per-namespace key.
 
 Unlike the tenant gateway (:mod:`app.gateway_provider`), the host here is
-fixed: every request goes to :data:`OPENAI_BASE_URL`, and nothing a caller or
-the environment supplies can change it. The API key is a per-namespace
+fixed: every request goes to :data:`OPENAI_BASE_URL` unless the operator sets
+``PIPELINE_OPENAI_BASE_URL`` for the whole deployment (see :func:`_base_url`).
+A caller or a plan cannot change it: the ``endpoint`` argument and the
+``PIPELINE_LOCAL_ENDPOINT*`` variables are ignored. Setting the override
+sends every team's API key to that host, so it is an operator test switch,
+not a tenant setting. The API key is a per-namespace
 credential, resolved through :func:`app.credentials.resolve_for_injection`
 from *inside every call* (``CredentialRef("model", "openai_api_key",
 namespace=current_namespace())``). Nothing is cached on the instance or at
@@ -20,20 +24,36 @@ status and OpenAI's error code only, never the response text.
 """
 from __future__ import annotations
 
+import logging
+import os
+from urllib.parse import urlsplit
+
 import httpx
 
 from app.credentials import CredentialMissing, CredentialRef, resolve_for_injection
 from app.openai_responses import responses_body, responses_envelope
 from pipeline.actor import current_namespace
 
+_LOGGER = logging.getLogger(__name__)
+
 #: Registered provider name: PIPELINE_LOCAL_PROVIDER=openai, plan provider
 #: "openai", backend driver "openai".
 OPENAI_PROVIDER_NAME = "openai"
 
-#: The fixed API host. Not configurable: a driver-level or
-#: ``PIPELINE_LOCAL_ENDPOINT*`` value must never be able to send the key
-#: elsewhere.
+#: The default API host. The operator may replace it for the whole deployment
+#: with :data:`OPENAI_BASE_URL_ENV`; nothing else can.
 OPENAI_BASE_URL = "https://api.openai.com"
+
+#: The operator-only override of the host. Read from the process environment
+#: on every call, and nowhere else: not from a plan, a story, a role or
+#: settings layer, or a request.
+OPENAI_BASE_URL_ENV = "PIPELINE_OPENAI_BASE_URL"
+
+#: Logged once per process when the override is in effect; carries the host only.
+OPENAI_BASE_URL_OVERRIDDEN_EVENT = "openai_base_url_overridden"
+
+#: The only hosts that may use plain ``http://``.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 #: The Responses API path, appended to :data:`OPENAI_BASE_URL`.
 OPENAI_RESPONSES_PATH = "/v1/responses"
@@ -44,6 +64,64 @@ OPENAI_API_KEY_CREDENTIAL = "openai_api_key"
 #: ``think=True`` maps to this reasoning effort; a string ``think`` is passed
 #: through and validated by :func:`app.openai_responses.responses_body`.
 _THINK_TRUE_EFFORT = "medium"
+
+#: Set once the override warning has been logged in this process.
+_override_warned = False
+
+
+class OpenAIBaseUrlError(ValueError):
+    """``PIPELINE_OPENAI_BASE_URL`` is set to a value that is not an allowed origin.
+
+    The message names the variable and never the value, so a rejected
+    override cannot leak a credential placed in it.
+    """
+
+
+def _override_host(value: str) -> str:
+    """The host of an allowed override value, or :class:`OpenAIBaseUrlError`.
+
+    Allowed: ``https://<host>[:port]``, or ``http://`` for a loopback host.
+    No path, query, fragment, userinfo or whitespace.
+    """
+    refusal = (
+        f"{OPENAI_BASE_URL_ENV} must be an https origin (host and optional "
+        "port), or an http origin for localhost, 127.0.0.1 or ::1; the value "
+        "is refused and not logged"
+    )
+    if any(char.isspace() for char in value) or any(char in value for char in "?#@"):
+        raise OpenAIBaseUrlError(refusal)
+    try:
+        parts = urlsplit(value)
+        _ = parts.port  # raises ValueError for a non-numeric or out-of-range port
+    except ValueError as e:
+        raise OpenAIBaseUrlError(refusal) from e
+    host = parts.hostname
+    if parts.scheme not in ("https", "http") or not host or parts.path:
+        raise OpenAIBaseUrlError(refusal)
+    if parts.scheme == "http" and host not in _LOOPBACK_HOSTS:
+        raise OpenAIBaseUrlError(refusal)
+    return host
+
+
+def _base_url() -> str:
+    """The API host for this call: the default, or the validated operator override.
+
+    Unset or empty means :data:`OPENAI_BASE_URL`. A set value that is not an
+    allowed origin raises :class:`OpenAIBaseUrlError`; it never falls back to
+    another host. The first call that uses an override logs one warning.
+    """
+    global _override_warned
+    value = os.environ.get(OPENAI_BASE_URL_ENV, "")
+    if value == "":
+        return OPENAI_BASE_URL
+    host = _override_host(value)
+    if not _override_warned:
+        _override_warned = True
+        _LOGGER.warning(
+            "OpenAI API host is overridden for this deployment",
+            extra={"event": OPENAI_BASE_URL_OVERRIDDEN_EVENT, "host": host},
+        )
+    return value
 
 
 def openai_credential_ref() -> CredentialRef:
@@ -100,10 +178,15 @@ class OpenAIProvider:
     """Direct access to OpenAI's Responses API (see the module docstring)."""
 
     name = OPENAI_PROVIDER_NAME
-    #: The fixed host is also the default endpoint, so ``OllamaDriver`` can
-    #: report it. The driver never sends to it through this attribute: the
-    #: request URL is :data:`OPENAI_BASE_URL` in :meth:`chat`.
-    default_endpoint = OPENAI_BASE_URL
+    @property
+    def default_endpoint(self) -> str:
+        """The API host in effect now: the default, or the operator override.
+
+        ``OllamaDriver`` reads it when it is constructed. The driver never
+        sends to it through this attribute: the request URL comes from
+        :func:`_base_url` in :meth:`chat`.
+        """
+        return _base_url()
 
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
@@ -113,7 +196,8 @@ class OpenAIProvider:
         """POST one non-streaming response; return Ollama's envelope shape.
 
         ``endpoint`` is accepted for signature parity and ignored: the host is
-        always :data:`OPENAI_BASE_URL`, so a driver-level or
+        :data:`OPENAI_BASE_URL` unless the operator sets
+        ``PIPELINE_OPENAI_BASE_URL``, so a driver-level or
         ``PIPELINE_LOCAL_ENDPOINT*`` value cannot redirect the key.
         ``temperature`` is ignored because reasoning models reject it.
         ``num_ctx`` is ignored because it is a context size, not an output
@@ -127,6 +211,8 @@ class OpenAIProvider:
         # back would be circular. The shared timeout helper lives there.
         from app import inference_providers
 
+        # Validated before the key is read: a bad override sends nothing.
+        base_url = _base_url()
         api_key = resolve_openai_api_key()
         body = responses_body(
             messages, model=model, tools=tools,
@@ -144,7 +230,7 @@ class OpenAIProvider:
         }
         try:
             resp = httpx.post(
-                OPENAI_BASE_URL + OPENAI_RESPONSES_PATH,
+                base_url + OPENAI_RESPONSES_PATH,
                 json=body,
                 headers=headers,
                 timeout=wire_timeout,

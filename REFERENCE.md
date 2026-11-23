@@ -375,6 +375,9 @@ WARNING (`repo_first_read_clone_failed`) with the repository identity and the
 failure's class name, never git's output or a credential. The dashboard's
 `/api/workspace/{file,files,search}?repo_url=` routes behave the same way: a first
 read clones, and a failed clone answers `repository not cloned yet`.
+The `/api/workspace/search` route's `matches` are `path:line:text` lines whose
+`path` is relative to the repository root (or to the active workspace root), never
+the server's absolute path.
 
 - `read_repository_file(repo, path)` — one UTF-8 text file, as the service's
   `{"ok": true, "path", "content"}`. A path that escapes the clone, including

@@ -4670,6 +4670,28 @@ Security rules:
   decomposer, and the resulting plan still needs a person's plan approval before
   anything runs (ADR 0007).
 
+### GitHub Issues settings (`pipeline/github_issues_client.py`)
+
+| Setting | Layer | Value |
+|---|---|---|
+| `github_issues` | team only | `{"enabled": bool, "repo_url": "https://github.com/<owner>/<repo>", "label": str 1 to 50 characters, "poll_seconds": int 60 to 3600, "token_ref": ""}` or the same with `"token_ref": "secret://<provider>/github-issues<suffix>"` |
+
+The default is `{}`, which leaves the integration off. Only `repo_url` on
+`github.com` is accepted: GitHub Enterprise Server hosts are refused. `label` is
+`[A-Za-z0-9._-]`, so it cannot carry a space or a slash. An empty `token_ref`
+uses the team's forge `github_token`. Any other `token_ref` must be a
+`secret://` reference whose name starts with `github-issues`, so a separate
+token with narrower rights can be used. A raw token in this field is refused and
+is not echoed back in the error.
+
+The client sends every request to `https://api.github.com`. Owner and repository
+names must match `[A-Za-z0-9._-]+` and may not be `.` or `..`. Requests time out
+after 10 seconds, and redirects are never followed. `401` and `403` are `auth`,
+a `403` carrying `X-RateLimit-Remaining: 0` or `Retry-After` and any `429` are
+`rate_limited`, `404` is `not_found`, `5xx` and transport failures are
+`unavailable`, and any other failure is `invalid`. The token is read at each
+request and is never logged, stored or put in an error.
+
 ### Mirroring a plan's progress to Jira (`pipeline/jira_sync.py`)
 
 Off unless `PIPELINE_JIRA_ENABLED` is exactly `1`, read on every event. Only a

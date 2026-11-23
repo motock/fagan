@@ -17,6 +17,8 @@ in practice.
 
 - Standing approval: an in-process `pipeline.standing_approval.approve_standing` lets the scheduler record a named person's approval of a pending plan when `PIPELINE_STANDING_APPROVAL=1` is set; it is not exposed as an MCP tool, route or CLI command, and it leaves the plan-approval gate, the high-risk merge hold and the usage gate unchanged.
 
+- A team's `github_issues` setting (team layer only, default `{}`) and a GitHub REST client, `pipeline/github_issues_client.py`, for reading and labelling a repository's issues. The setting names a `github.com` repository, an issue label and a poll interval, and its `token_ref` is either empty (the team's repository token) or a `secret://` reference named `github-issues...`. The client is github.com only, redirects are not followed, and no caller can change its API base. No scheduler intake reads the setting yet.
+
 - Three read-only MCP tools serve the source of a repository the caller's namespace may read: `read_repository_file`, `list_repository_directory` and `search_repository`. Each checks the repository access hook before naming a clone, answers `repository_not_available` for a granted repository with no clone (nothing is cloned or fetched), is rate-limited per principal by `PIPELINE_REPO_READ_PER_MINUTE` (default 120), and writes one audit record per call that carries no path, pattern or content.
 
 - A `list_repositories()` MCP tool answers which repositories the bound namespace may work with: sorted `host/owner/name` items, at most 500, with the repositories of the caller's visible plans by default. `PIPELINE_REPO_LISTING_PLUGIN` lets a deployment supply its own list; a failing or malformed answer fails closed to `repositories_unavailable`.

@@ -26,6 +26,7 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "park_option_count",
         "jira_site",
         "jira_board",
+        "github_issues",
     }
 
 
@@ -93,6 +94,7 @@ def test_legacy_env_names_are_the_plan_names():
         "park_option_count": "",
         "jira_site": "",
         "jira_board": "",
+        "github_issues": "",
     }
 
 

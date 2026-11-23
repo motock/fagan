@@ -707,8 +707,7 @@ repository, so it stays on the server's own console.
 Two mistakes this table exists to prevent: listing every tool as available to
 anyone with a valid token (the policy is default-deny, and a valid token buys
 nothing a plan's owner has not granted), and listing `record_security_audit` as
-remote-callable because it appears in the enforced set (it is enforced, and the
-enforcement refuses it).
+remote-callable because it appears in the enforced set (it is enforced, and the enforcement refuses it).
 
 ### Plan approval
 

@@ -68,6 +68,17 @@ def default_notification_config_path() -> Path:
 # it, and the pre-merge rebase then failed on an add/add conflict against the
 # copy that had leaked onto the default branch - terminal-failing an
 # otherwise-green story's merge gate (P3-6, 3/3 attempts exhausted).
+# Files the local driver and the done watcher write into a story's worktree.
+# A team repo's .gitignore usually has no line for them (core's does), so a
+# `git add -A` swept them into a story commit: the scope gate parked
+# otp-03's calc-06 story on .agent_transcript.json and .agent_done.consumed
+# through three review cycles (hosted run 6, 2026-11-23).
+_AGENT_RUNTIME_FILES = (
+    ".agent_transcript.json",
+    ".agent_done",
+    ".agent_done.consumed",
+)
+
 _WORKTREE_LOG_EXCLUDES = (
     # "*.log.ts" (not just "agent.log.ts"): spawn_local writes a timestamp
     # sidecar for EVERY log it opens - agent.log, review.log, test_author.log,
@@ -88,6 +99,7 @@ _WORKTREE_LOG_EXCLUDES = (
     # otherwise-green story.
     ".tdd_split_test_author_done",
     ".dispatch_baseline_test_checked",
+    *_AGENT_RUNTIME_FILES,
 )
 
 

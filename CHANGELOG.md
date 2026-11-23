@@ -131,6 +131,8 @@ in practice.
 
 ### Fixed
 
+- A local agent's own working files are kept out of a team's commits. `.agent_transcript.json`, `.agent_done` and `.agent_done.consumed` were missing from the exclude list, and a team repository's `.gitignore` does not hide them, so the scope gate parked a story on them through three review cycles. They are now excluded like the other runtime files, and a copy an earlier commit already tracked is untracked at the next checkpoint.
+
 - A plain-named Ollama cloud model a team chose (for example `glm-5.3-flash`) is the model the agent boots with. Before, a bare name that the model registry did not declare was read as a tier name and replaced by `PIPELINE_LOCAL_MODEL_DEFAULT`, so the agent booted on the on-device default and the cloud endpoint returned `404`. A plain name is kept on a remote Ollama endpoint when the role registry accepts it; a tier name (`opus`, `sonnet`, `haiku`) still resolves through its tier variable, and an on-device install keeps the default.
 
 - The code review runs on the provider a team routed the `review` role to. Before, a provider named only by the team's `role_routing` was ignored for the driver: the model came from the routed provider, but the Claude CLI was called with it, so a routed Ollama model failed with `unrecognized_model` and the story parked as inconclusive. The driver now follows that provider too, as it already did for a provider named by the plan or the registry.

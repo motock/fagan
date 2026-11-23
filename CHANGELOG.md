@@ -138,6 +138,8 @@ in practice.
 
 ### Fixed
 
+- Decompose resolves its roles from the calling team's `role_routing`, not the deployment default. A team that routes `decompose` to a model it hosts no longer falls back to the deployment's own claude credential and fails with `Not logged in`; with no routing the registry default applies as before.
+
 - A failed chat model call is answered with a structured refusal instead of a bare HTTP 500. `POST /api/chat` answers 502 with `reason` `chat_backend_failed` (or `chat_not_configured` when no chat model is configured), a fixed message and the request's correlation id; the stream's terminal `error` event carries the same fields. The raw error text is kept out of the response and logged server-side at WARNING.
 
 - A chat turn runs on the provider and model the caller's team routed the `chat` role to. Before, `role_routing` was ignored for chat and the Claude CLI ran the turn, failing with `job checkout refused` on a stack with no Claude key. A team's routing that is unset or malformed resolves as it did before.

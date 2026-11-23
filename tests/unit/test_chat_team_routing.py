@@ -67,7 +67,7 @@ def routing_store(monkeypatch):
     state: dict = {"value": ROUTING, "source": "team", "exc": None, "reads": []}
 
     def fake_effective_setting(key, *, namespace, team, repo, **_kwargs):
-        state["reads"].append({"key": key, "namespace": namespace})
+        state["reads"].append({"key": key, "namespace": namespace, "repo": repo})
         if state["exc"] is not None:
             raise state["exc"]
         return {"value": state["value"], "source": state["source"]}
@@ -215,3 +215,12 @@ def test_should_return_empty_when_the_settings_read_raises(routing_store, caplog
 
     with caplog.at_level(logging.WARNING, logger="pipeline"):
         assert layer_routing_for_request(REPO_URL) == {}
+
+
+def test_should_resolve_the_turn_through_its_repository_scope(routing_store, backend_calls):
+    with bind_namespace(TEAM_NAMESPACE):
+        _driver, model = ChatService()._resolve_driver(REPO_URL)
+
+    assert backend_calls == [{"role": "chat", "name": "ollama"}]
+    assert model == OLLAMA_TAG
+    assert routing_store["reads"][-1]["repo"] == "github.com/acme/app-a"

@@ -732,7 +732,7 @@ class ChatService:
         ``execute_turn`` returns). Calling this method performs no work at
         all -- the driver is resolved and first called on the first ``next()``.
         """
-        driver, model_tag = self._resolve_driver(repo_url)
+        driver, model_tag = self._resolve_driver(**({"repo_url": repo_url} if repo_url else {}))
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
         proposals: list[dict] = []

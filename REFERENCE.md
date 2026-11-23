@@ -4692,6 +4692,60 @@ a `403` carrying `X-RateLimit-Remaining: 0` or `Retry-After` and any `429` are
 `unavailable`, and any other failure is `invalid`. The token is read at each
 request and is never logged, stored or put in an error.
 
+### GitHub Issues intake (`pipeline/github_issues_intake.py`)
+
+**Intake is off by default.** Set `PIPELINE_GITHUB_ISSUES_ENABLED=1` (read on
+every call; any other value, including `true`, leaves it off) to let the
+scheduler plan labelled GitHub issues. With it unset, no setting is read and no
+request is made.
+
+**Intake also requires plan approval.** It runs only while
+`PIPELINE_PLAN_APPROVAL` is on. With the gate off, or with an unrecognised
+value of it, each tick logs one WARNING ("github issues intake skipped: plan
+approval gate is off") and does nothing. A planned issue is ingested as a plan,
+and without the gate that plan would run on the next tick with no person's
+approval, while issue text is written by anyone who can open an issue there.
+
+Each scheduler tick, the intake runs for every namespace. For each team whose
+`github_issues` is enabled, it lists up to 5 open issues of the setting's
+repository that carry the setting's `label` and neither `fagan-planned` nor
+`fagan-intake-failed`. Each issue is planned as the plan
+`gh-<repository name>-<issue number>` (for example `gh-widget-5`), with the team
+set to the team and `repo_url` set to the setting's `repo_url`. The request is
+the issue title and body, capped at 8000 characters. The team's `poll_seconds`
+bounds how often the team is polled. GitHub lists issues newest first and the
+intake reads one page of 100, so an issue older than the 100 newest labelled
+issues is not seen.
+
+| Outcome | Issue change |
+|---|---|
+| Planned (decompose, save and ingest succeed) | Label `fagan-planned`; comment "Fagan planned this issue into N stories. It is waiting for team lead approval.", with a link to the plan when `PIPELINE_DASHBOARD_PUBLIC_URL` is set |
+| Plan already exists | Label `fagan-planned` only; nothing is planned again |
+| Decompose, save or ingest fails | Label `fagan-intake-failed`; comment "Fagan could not plan this issue. A team member can fix the issue and remove the label fagan-intake-failed to retry." The exception text is never written to GitHub |
+
+Labels and retries:
+
+- Removing the label `fagan-intake-failed` from an issue makes the next run
+  plan it again. There is no other retry switch.
+- A planned issue still needs a person's plan approval before anything runs.
+- A GitHub `auth`, `rate_limited` or `unavailable` error stops that team's run
+  for the tick and logs one warning; another team still runs. Any other error
+  affects only the issue it occurred on.
+
+A team has one ticketing provider. A team whose `jira_board` is also enabled is
+skipped on every tick with the reason `both_configured`, and nothing is read
+from GitHub for it.
+
+Security rules:
+
+- Issue titles and bodies are untrusted. They reach only the decomposer, and
+  the resulting plan still needs a person's plan approval before anything runs.
+- No log record, error or audit entry carries the issue text, the repository
+  URL or the token reference. A skipped team logs its namespace, team and
+  reason only.
+- The token is read through the `github_issues` setting's `token_ref` at each
+  request. See the setting table above for the rules on `token_ref`.
+
 ### Mirroring a plan's progress to Jira (`pipeline/jira_sync.py`)
 
 Off unless `PIPELINE_JIRA_ENABLED` is exactly `1`, read on every event. Only a

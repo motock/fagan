@@ -622,6 +622,18 @@ class SchedulerDaemon:
                 extra={"error_type": type(exc).__name__},
             )
 
+        # GitHub Issues intake: its own try/except so a failure never affects the tick.
+        # Logs the exception type only; issue text and tokens never reach a log.
+        try:
+            from pipeline import github_issues_intake
+
+            github_issues_intake.run_github_issues_intake(time.time())
+        except Exception as exc:  # noqa: BLE001 - a GitHub failure never breaks the tick
+            logger.warning(
+                "github issues intake failed during tick",
+                extra={"error_type": type(exc).__name__},
+            )
+
         # Operator intake plugins: its own try/except so a failure, including a
         # refused plugin list, never affects the tick. Logs the type only.
         try:

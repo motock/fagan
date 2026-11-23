@@ -369,8 +369,12 @@ path, the pattern or the content.
   directory as `{"name", "type"}` (`dir` or `file`), sorted by name. `""` is the
   repository root. Nothing recurses.
 - `search_repository(repo, pattern)` — grep's basic-regular-expression matches as
-  `path:line:text` strings, at most 200, with `truncated` when cut. `.git` and
-  binary files are skipped.
+  `path:line:text` strings, with `path` relative to the repository root, at most
+  200, with `truncated` when cut. `.git` and binary files are skipped.
+
+With no `PIPELINE_REPO_ACCESS_PLUGIN` selected, every allow-listed repository that
+has a clone is readable by any caller that can reach these tools. A multi-tenant
+deployment must configure the access hook.
 
 Every call counts against `PIPELINE_REPO_READ_PER_MINUTE` per principal, refused
 calls included. Past the limit a call answers `{"ok": false, "reason":

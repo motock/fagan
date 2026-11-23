@@ -191,6 +191,17 @@ def test_search_returns_the_matching_line_of_a_granted_repository(repos_root: Pa
     assert any(line.endswith("src/app.py:1:needle = 1") for line in result["matches"])
 
 
+def test_search_match_names_its_path_relative_to_the_clone(repos_root: Path) -> None:
+    result = server.search_repository(GRANTED, "needle")
+    assert "src/app.py:1:needle = 1" in result["matches"]
+
+
+def test_search_match_never_names_the_server_repos_root(repos_root: Path) -> None:
+    result = server.search_repository(GRANTED, "needle")
+    assert result["matches"]
+    assert not any(str(repos_root) in match for match in result["matches"])
+
+
 def test_search_returns_at_most_200_results(repos_root: Path) -> None:
     (repos_root / "github.com" / "a" / "one" / "many.txt").write_text(
         "needle\n" * 250, encoding="utf-8"

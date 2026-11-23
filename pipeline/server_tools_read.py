@@ -245,6 +245,21 @@ def _audit_read(tool: str, repository: str | None, outcome: str) -> None:
         logger.warning("repository read audit append failed", extra={"tool": tool})
 
 
+def _search_clone(pattern: str, root: str) -> dict[str, Any]:
+    """Search the clone and name each match relative to it.
+
+    grep echoes the directory it was given, so every match starts with the
+    server's clone root. That prefix is stripped here, and a match that does
+    not start with it is dropped rather than returned.
+    """
+    result = _service.search_workspace(pattern, root=root)
+    if not result.get("ok"):
+        return result
+    prefix = root + os.sep
+    matches = [line[len(prefix):] for line in result["matches"] if line.startswith(prefix)]
+    return {**result, "matches": matches}
+
+
 def _repository_read(
     tool: str, repo: Any, read: Callable[[str], dict[str, Any]]
 ) -> dict[str, Any]:
@@ -340,7 +355,7 @@ def search_repository(repo: str, pattern: str) -> dict[str, Any]:
     return _repository_read(
         "search_repository",
         repo,
-        lambda root: _service.search_workspace(pattern, root=root),
+        lambda root: _search_clone(pattern, root),
     )
 
 

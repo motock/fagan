@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from app.identity import Principal
-from pipeline import access_hooks, server, server_tools_read
+from pipeline import access_hooks, repo_clone, server, server_tools_read
 from pipeline.access_hooks import ACCESS_HOOK_PLUGIN_ENV, AccessDecision
 from pipeline.actor import bind_principal
 from pipeline.remote_tool_policy import (
@@ -120,6 +120,33 @@ def repos_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         (clone / "src" / "app.py").write_text("needle = 1\n", encoding="utf-8")
     monkeypatch.setenv("PIPELINE_REPOS_ROOT", str(root))
     return root
+
+
+@pytest.fixture
+def clone_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A first read's clone is refused by git: the clone boundary is mocked, never run."""
+
+    def fail(url: str, environ: Any = None, timeout: float = 600) -> None:
+        raise repo_clone.RepoCloneError("git clone failed")
+
+    monkeypatch.setattr(repo_clone, "ensure_clone", fail)
+
+
+@pytest.fixture
+def clone_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """A first read's clone succeeds: the clone boundary is mocked to write a checkout."""
+    calls: list[str] = []
+
+    def write(url: str, environ: Any = None, timeout: float = 600) -> Path:
+        calls.append(url)
+        path = repo_clone.managed_path(url)
+        (path / "src").mkdir(parents=True)
+        (path / "README.md").write_text("hello empty\n", encoding="utf-8")
+        (path / "src" / "app.py").write_text("needle = 1\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(repo_clone, "ensure_clone", write)
+    return calls
 
 
 @pytest.fixture
@@ -253,15 +280,26 @@ def test_a_hook_that_raises_refuses_the_repository(repos_root: Path, hook: StubH
 
 
 @pytest.mark.parametrize("tool", TOOL_NAMES)
-def test_granted_repository_without_a_clone_is_not_available(repos_root: Path, tool: str) -> None:
+def test_granted_repository_whose_first_clone_fails_is_not_available(
+    repos_root: Path, clone_fails: None, tool: str
+) -> None:
     assert _CALLS[tool](GRANTED_NO_CLONE) == NOT_AVAILABLE
 
 
-def test_no_git_command_runs_for_a_granted_repository_without_a_clone(
+@pytest.mark.parametrize("tool", TOOL_NAMES)
+def test_first_read_of_a_granted_repository_without_a_clone_is_served(
+    repos_root: Path, clone_writes: list[str], tool: str
+) -> None:
+    result = _CALLS[tool](GRANTED_NO_CLONE)
+    assert result["ok"] is True
+    assert clone_writes == [f"https://{GRANTED_NO_CLONE}"]
+
+
+def test_no_git_command_runs_for_an_ungranted_repository_without_a_clone(
     repos_root: Path, git_calls: list[Any]
 ) -> None:
     for tool in TOOL_NAMES:
-        _CALLS[tool](GRANTED_NO_CLONE)
+        _CALLS[tool](UNGRANTED_NO_CLONE)
     assert git_calls == []
 
 

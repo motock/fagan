@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from app import dashboard as d
 from app.chat import SYSTEM_PROMPT, ChatService
-from pipeline import repo_read_access
+from pipeline import repo_clone, repo_read_access
 
 REPO_URL = "https://github.com/acme/widgets"
 OTHER_REPO_URL = "https://github.com/evil/other"
@@ -128,10 +128,35 @@ def test_should_refuse_a_clone_path_outside_the_repos_root(client, tmp_path, mon
 def test_should_answer_repository_not_cloned_yet_for_a_missing_clone(client, tmp_path, monkeypatch, no_active_workspace):
     monkeypatch.setenv("PIPELINE_REPOS_ROOT", str(tmp_path / "empty"))
 
+    def refused_clone(url, environ=None, timeout=600):
+        raise repo_clone.RepoCloneError("git clone failed")
+
+    monkeypatch.setattr(repo_clone, "ensure_clone", refused_clone)
+
     response = client.get("/api/workspace/file", params={"path": "README.md", "repo_url": REPO_URL})
 
     assert response.status_code == 400
     assert response.json() == {"detail": "repository not cloned yet"}
+
+
+def test_should_read_a_file_from_a_repository_cloned_on_its_first_read(client, tmp_path, monkeypatch, no_active_workspace):
+    monkeypatch.setenv("PIPELINE_REPOS_ROOT", str(tmp_path / "fresh"))
+    cloned: list[str] = []
+
+    def write_clone(url, environ=None, timeout=600):
+        cloned.append(url)
+        path = repo_clone.managed_path(url)
+        path.mkdir(parents=True)
+        (path / "README.md").write_text("hello widgets\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(repo_clone, "ensure_clone", write_clone)
+
+    response = client.get("/api/workspace/file", params={"path": "README.md", "repo_url": REPO_URL})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "path": "README.md", "content": "hello widgets\n"}
+    assert cloned == [REPO_URL]
 
 
 def test_should_keep_the_active_workspace_when_no_repo_url_is_given(client, tmp_path, monkeypatch):

@@ -305,37 +305,6 @@ unknown plan or story returns `{"ok": false, "status": 404, "error": ...}`.
   `state` null; at most 500 items, `truncated: true` when cut. A failing or
   malformed listing returns `{"ok": false, "reason":
   "repositories_unavailable", "correlation_id": ...}`.
-
-### Repository read tools
-
-Three read-only tools serve the source of a repository the caller's namespace
-may read, from its managed clone. Each takes `repo` as `host/owner/name`,
-exactly as `list_repositories` returns it; a value with a scheme, credentials,
-whitespace, `..`, a query or an empty value answers `invalid_repository` before
-any lookup. The access hook (`PIPELINE_REPO_ACCESS_PLUGIN`, `action` `read`) is
-asked before any clone is named: an ungranted repository answers
-`repository_access_refused` whether or not a clone is present, and a granted
-repository with no clone answers `repository_not_available` without starting git
-or cloning. Nothing is written, cloned or fetched. Failures return `{"ok": false,
-"reason": ...}`, never a filesystem path. Each call writes one host audit record
-with the tool, the repository, the outcome and the correlation id; a refusal also
-leaves the access hook's own `repo_access_refused` record. No record carries the
-path, the pattern or the content.
-
-- `read_repository_file(repo, path)` — one UTF-8 text file, as the service's
-  `{"ok": true, "path", "content"}`. A path that escapes the clone, including
-  through a symlink, is `invalid_path`; a file over 200,000 bytes is
-  `file_too_large` and is not read.
-- `list_repository_directory(repo, path="")` — the immediate children of a
-  directory as `{"name", "type"}` (`dir` or `file`), sorted by name. `""` is the
-  repository root. Nothing recurses.
-- `search_repository(repo, pattern)` — grep's basic-regular-expression matches as
-  `path:line:text` strings, at most 200, with `truncated` when cut. `.git` and
-  binary files are skipped.
-
-Every call counts against `PIPELINE_REPO_READ_PER_MINUTE` per principal, refused
-calls included. Past the limit a call answers `{"ok": false, "reason":
-"rate_limited", "retry_after_seconds": n}`.
 - `unblock_story(plan_name, story_key, clear_fields, status=None,
   add_files=None, note=None)` — the MCP form of `python -m pipeline.unpark`.
   Authorized like `set_story_status` (the plan's owner or a delegate). Under
@@ -375,6 +344,37 @@ applies only to the content the reviewer saw; if the plan changed since, the
 dashboard refuses with `409` and the panel asks the reviewer to reload.
 Unauthenticated sessions and shared-secret sessions cannot decide (see
 [docs/specs/PLAN_APPROVAL.md](docs/specs/PLAN_APPROVAL.md) §9).
+
+### Repository read tools
+
+Three read-only tools serve the source of a repository the caller's namespace
+may read, from its managed clone. Each takes `repo` as `host/owner/name`,
+exactly as `list_repositories` returns it; a value with a scheme, credentials,
+whitespace, `..`, a query or an empty value answers `invalid_repository` before
+any lookup. The access hook (`PIPELINE_REPO_ACCESS_PLUGIN`, `action` `read`) is
+asked before any clone is named: an ungranted repository answers
+`repository_access_refused` whether or not a clone is present, and a granted
+repository with no clone answers `repository_not_available` without starting git
+or cloning. Nothing is written, cloned or fetched. Failures return `{"ok": false,
+"reason": ...}`, never a filesystem path. Each call writes one host audit record
+with the tool, the repository, the outcome and the correlation id; a refusal also
+leaves the access hook's own `repo_access_refused` record. No record carries the
+path, the pattern or the content.
+
+- `read_repository_file(repo, path)` — one UTF-8 text file, as the service's
+  `{"ok": true, "path", "content"}`. A path that escapes the clone, including
+  through a symlink, is `invalid_path`; a file over 200,000 bytes is
+  `file_too_large` and is not read.
+- `list_repository_directory(repo, path="")` — the immediate children of a
+  directory as `{"name", "type"}` (`dir` or `file`), sorted by name. `""` is the
+  repository root. Nothing recurses.
+- `search_repository(repo, pattern)` — grep's basic-regular-expression matches as
+  `path:line:text` strings, at most 200, with `truncated` when cut. `.git` and
+  binary files are skipped.
+
+Every call counts against `PIPELINE_REPO_READ_PER_MINUTE` per principal, refused
+calls included. Past the limit a call answers `{"ok": false, "reason":
+"rate_limited", "retry_after_seconds": n}`.
 
 ---
 

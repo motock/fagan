@@ -131,6 +131,8 @@ in practice.
 
 ### Fixed
 
+- A failed chat model call is answered with a structured refusal instead of a bare HTTP 500. `POST /api/chat` answers 502 with `reason` `chat_backend_failed` (or `chat_not_configured` when no chat model is configured), a fixed message and the request's correlation id; the stream's terminal `error` event carries the same fields. The raw error text is kept out of the response and logged server-side at WARNING.
+
 - A chat turn runs on the provider and model the caller's team routed the `chat` role to. Before, `role_routing` was ignored for chat and the Claude CLI ran the turn, failing with `job checkout refused` on a stack with no Claude key. A team's routing that is unset or malformed resolves as it did before.
 
 - A local agent's own working files are kept out of a team's commits. `.agent_transcript.json`, `.agent_done` and `.agent_done.consumed` were missing from the exclude list, and a team repository's `.gitignore` does not hide them, so the scope gate parked a story on them through three review cycles. They are now excluded like the other runtime files, and a copy an earlier commit already tracked is untracked at the next checkpoint.

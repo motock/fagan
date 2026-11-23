@@ -38,6 +38,15 @@ from pathlib import Path
 from typing import Any
 
 import pipeline
+from pipeline.actor import (
+    SYSTEM_SCHEDULER,
+    bind_correlation_id,
+    bind_namespace,
+    bind_principal,
+    current_namespace,
+    new_correlation_id,
+)
+from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
 
 from . import bound_records
@@ -147,6 +156,16 @@ def start_merge_reverify(
     ]
     if with_lint:
         argv.append("--lint")
+    # The tick that spawns this job is bound to the plan's namespace; without
+    # the flag the child binds nothing, reads the default partition, finds no
+    # manifest for a team plan and never returns a verdict.  The default
+    # namespace is left implicit so the argv of default-namespace jobs is
+    # unchanged.
+    from app.credentials import is_default_namespace
+
+    namespace = current_namespace()
+    if not is_default_namespace(namespace):
+        argv.append(f"--namespace={namespace}")
     with open(log_path, "ab") as log_file:
         proc = subprocess.Popen(
             argv,
@@ -332,16 +351,28 @@ def main(argv: list[str] | None = None) -> int:
     """Run one detached re-verify and write its result; 0 on a verdict, else 1.
 
     Usage: ``python -m pipeline.merge_reverify <plan> <story_key> <worktree>
-    <result_path> [--lint]``.  ``0`` covers both a green gate (``state ==
-    "pass"``) and a red one (``state == "fail"``); ``1`` means the job itself
-    failed (``state == "error"``).  ``--lint`` also runs the repo's lint gate
-    and reports it under ``checks["lint"]``.
+    <result_path> [--lint] [--namespace=<value>]``.  ``0`` covers both a green
+    gate (``state == "pass"``) and a red one (``state == "fail"``); ``1`` means
+    the job itself failed (``state == "error"``) or the invocation was bad.
+    ``--lint`` also runs the repo's lint gate and reports it under
+    ``checks["lint"]``.  ``--namespace`` names the namespace the spawning tick
+    was bound to; without it the plan is read from the default namespace.  A
+    namespace the plan does not hold is refused as an error.
     """
     args = list(sys.argv[1:] if argv is None else argv)
-    with_lint = len(args) == 5 and args[4] == "--lint"
-    if len(args) not in (4, 5) or (len(args) == 5 and not with_lint):
+    if len(args) < 4:
         return 1
     plan_name, story_key, worktree, result_path = args[:4]
+    options = args[4:]
+    with_lint = bool(options) and options[0] == "--lint"
+    if with_lint:
+        options = options[1:]
+    requested: str | None = None
+    if options and options[0].startswith("--namespace="):
+        requested = options[0][len("--namespace=") :]
+        options = options[1:]
+    if options:
+        return 1
 
     result: dict[str, Any] = {
         "state": "pass",
@@ -357,49 +388,64 @@ def main(argv: list[str] | None = None) -> int:
         from pipeline import server
         from pipeline.ci import context_from_manifest
 
-        manifest = bound_records.get_manifest(server._store, plan_name)
-        if manifest is None:
-            raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
-        story = manifest["stories"][story_key]
-        result["sha"] = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=worktree,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        # Identity is re-bound here (SYSTEM_SCHEDULER + a fresh correlation id)
+        # so the child's records and policy decisions look exactly like the
+        # scheduler's own.
+        with bind_principal(SYSTEM_SCHEDULER), bind_correlation_id(new_correlation_id()):
+            namespace, reason = read_plan_namespace(plan_name, requested)
+            if reason is not None:
+                audit_refusal(reason)
+                result["state"] = "error"
+                result["error"] = reason
+            else:
+                with bind_namespace(namespace):
+                    manifest = bound_records.get_manifest(server._store, plan_name)
+                    if manifest is None:
+                        raise FileNotFoundError(f"no manifest for plan {plan_name!r}")
+                    story = manifest["stories"][story_key]
+                    result["sha"] = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=worktree,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
 
-        settings = context_from_manifest(manifest)
-        acc = server._reverify_acceptance(
-            story, worktree, story_key, settings=settings
-        )
-        # Read AFTER the call: _reverify_acceptance refreshes this field on its
-        # in-memory copy of the story, and the caller copies that fresh value
-        # back into the manifest under the plan lock.
-        result["last_test_check"] = story.get("last_test_check")
-        if acc.get("state") == "fail":
-            result["state"] = "fail"
-            result["error"] = "acceptance reverify fail: " + acc.get("error", "")
-            result["checks"]["tests"] = "fail"
-        else:
-            result["checks"]["tests"] = "pass" if acc.get("state") == "pass" else "skipped"
-            build = server._reverify_build(worktree, settings=settings)
-            if build.get("state") == "fail":
-                result["state"] = "fail"
-                result["error"] = "build reverify fail: " + build.get("error", "")
-                result["checks"]["build"] = "fail"
-            else:
-                result["checks"]["build"] = "pass" if build.get("state") == "pass" else "skipped"
-        if with_lint and result["state"] == "pass":
-            lint = server._run_lint_gate(Path(worktree), dict(os.environ))
-            if lint is None:
-                result["checks"]["lint"] = "not configured"
-            elif lint.get("returncode") != 0:
-                result["state"] = "fail"
-                result["error"] = "lint reverify fail"
-                result["checks"]["lint"] = "fail"
-            else:
-                result["checks"]["lint"] = "pass"
+                    settings = context_from_manifest(manifest)
+                    acc = server._reverify_acceptance(
+                        story, worktree, story_key, settings=settings
+                    )
+                    # Read AFTER the call: _reverify_acceptance refreshes this field on its
+                    # in-memory copy of the story, and the caller copies that fresh value
+                    # back into the manifest under the plan lock.
+                    result["last_test_check"] = story.get("last_test_check")
+                    if acc.get("state") == "fail":
+                        result["state"] = "fail"
+                        result["error"] = "acceptance reverify fail: " + acc.get("error", "")
+                        result["checks"]["tests"] = "fail"
+                    else:
+                        result["checks"]["tests"] = (
+                            "pass" if acc.get("state") == "pass" else "skipped"
+                        )
+                        build = server._reverify_build(worktree, settings=settings)
+                        if build.get("state") == "fail":
+                            result["state"] = "fail"
+                            result["error"] = "build reverify fail: " + build.get("error", "")
+                            result["checks"]["build"] = "fail"
+                        else:
+                            result["checks"]["build"] = (
+                                "pass" if build.get("state") == "pass" else "skipped"
+                            )
+                    if with_lint and result["state"] == "pass":
+                        lint = server._run_lint_gate(Path(worktree), dict(os.environ))
+                        if lint is None:
+                            result["checks"]["lint"] = "not configured"
+                        elif lint.get("returncode") != 0:
+                            result["state"] = "fail"
+                            result["error"] = "lint reverify fail"
+                            result["checks"]["lint"] = "fail"
+                        else:
+                            result["checks"]["lint"] = "pass"
     except Exception as exc:  # noqa: BLE001 - the job must always write a result
         # The class name alone: exception text can carry tokens, payloads and
         # paths, and this result is logged and surfaced to operators.

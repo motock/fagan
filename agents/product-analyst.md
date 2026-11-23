@@ -163,6 +163,24 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
    the design, ask the one or two highest-leverage clarifying questions rather
    than guessing.
 
+## Open questions
+
+When the request leaves a decision open that would change **what** gets built
+(not how it is built), still return your best plan, and add a top-level
+`open_questions` list beside `epics`:
+
+- Include at most 5 questions. Each is short, specific, and answerable in one sentence.
+- Ask only about decisions that a person must make. Never ask about anything you
+  can read in the repository.
+- When the request is clear, omit the `open_questions` key entirely.
+
+```json
+{
+  "open_questions": ["Should refunds return to the original card or to store credit?"],
+  "epics": []
+}
+```
+
 ## Communication Style
 
 - Lead with the proposed epic/story breakdown, then the rationale.

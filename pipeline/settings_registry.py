@@ -222,6 +222,41 @@ def accepts_jira_board(value: Any) -> bool:
     )
 
 
+# GitHub Issues settings shape (the github_issues accept function). Pure, like
+# the Jira shapes. github.com only: GitHub Enterprise Server hosts are refused.
+GITHUB_ISSUES_FIELDS = frozenset(
+    {"enabled", "repo_url", "label", "poll_seconds", "token_ref"}
+)
+GITHUB_ISSUE_LABEL_RE = re.compile(r"[A-Za-z0-9._-]{1,50}")
+GITHUB_REPO_PREFIX = "https://github.com/"
+
+
+def accepts_github_issues(value: Any) -> bool:
+    """True for the empty safe value or a well-formed ``github_issues`` value.
+
+    ``token_ref`` is "" (use the team's repository token) or a ``secret://``
+    reference, so the issues client can hold a credential with narrower rights.
+    """
+    if isinstance(value, dict) and not value:
+        return True
+    if not isinstance(value, dict) or set(value) != GITHUB_ISSUES_FIELDS:
+        return False
+    repo_url = value["repo_url"]
+    token_ref = value["token_ref"]
+    return (
+        isinstance(value["enabled"], bool)
+        and _is_str(repo_url)
+        and repo_url.startswith(GITHUB_REPO_PREFIX)
+        and REPO_URL_RE.fullmatch(repo_url) is not None
+        and _is_str(value["label"])
+        and GITHUB_ISSUE_LABEL_RE.fullmatch(value["label"]) is not None
+        and _is_plain_int(value["poll_seconds"])
+        and POLL_SECONDS_MIN <= value["poll_seconds"] <= POLL_SECONDS_MAX
+        and _is_str(token_ref)
+        and (token_ref == "" or _is_token_ref(token_ref))
+    )
+
+
 @dataclass(frozen=True)
 class SettingKey:
     name: str
@@ -252,6 +287,8 @@ class SettingKey:
             return accepts_jira_site(value)
         if self.type == "jira_board":
             return accepts_jira_board(value)
+        if self.type == "github_issues":
+            return accepts_github_issues(value)
         return isinstance(value, str) and value in self.choices
 
 
@@ -421,6 +458,16 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             # The board a team's plans are read from. Team layer only.
             name="jira_board",
             type="jira_board",
+            kind="pref",
+            safe_value={},
+            allowed_layers=("team",),
+            legacy_env="",
+        ),
+        SettingKey(
+            # The GitHub repository whose labelled issues a team's plans are
+            # read from. Team layer only, like jira_board.
+            name="github_issues",
+            type="github_issues",
             kind="pref",
             safe_value={},
             allowed_layers=("team",),

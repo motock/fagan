@@ -41,7 +41,16 @@ MARKER = "<!-- fagan-stories -->"
 DONE_LABEL = "fagan-done"
 PARKED_COMMENT = "Parked: {story} needs a decision in Fagan."
 DONE_COMMENT = "All Fagan stories are done. Ready for review."
-SUBSCRIBED_EVENT_TYPES = ("notification", "agent_dispatched", "pr_open", "story_done", "parked")
+GUIDANCE_RESOLVED_EVENT = "plan_guidance_resolved"
+GUIDANCE_RESOLVED_COMMENT = "Questions answered in Fagan. The plan is waiting for approval."
+SUBSCRIBED_EVENT_TYPES = (
+    "notification",
+    "agent_dispatched",
+    "pr_open",
+    "story_done",
+    "parked",
+    GUIDANCE_RESOLVED_EVENT,
+)
 SUMMARY_MAX = 120
 # Characters that could open markup in a comment. They are removed, and line
 # breaks become spaces so one story can never start a second checklist line.
@@ -134,12 +143,31 @@ def _client_for(namespace: str, setting: dict):
 
 
 def _run(client, number: int, event_type: object, story_key: object, stories: dict) -> None:
+    if event_type == GUIDANCE_RESOLVED_EVENT:
+        _answer_guidance(client, number)
+        return
     comments = client.list_comments(number, MAX_LIST_RESULTS)
     _write_checklist(client, number, comments, stories)
     if event_type == "parked":
         _add_once(client, number, comments, PARKED_COMMENT.format(story=_clean(story_key)))
     elif event_type == "story_done" and _all_done(stories):
         _finish_once(client, number, comments)
+
+
+def _answer_guidance(client, number: int) -> None:
+    """Take the guidance label off and say the plan awaits approval, once.
+
+    The comment is the marker: a replay finds it and changes nothing. The label
+    is checked first, so a label already removed by a person is not a failure.
+    """
+    from pipeline.github_issues_intake import NEEDS_GUIDANCE_LABEL, _label_names
+
+    comments = client.list_comments(number, MAX_LIST_RESULTS)
+    if _has_comment(comments, GUIDANCE_RESOLVED_COMMENT):
+        return
+    if NEEDS_GUIDANCE_LABEL in _label_names(client.get_issue(number)):
+        client.remove_label(number, NEEDS_GUIDANCE_LABEL)
+    client.add_comment(number, GUIDANCE_RESOLVED_COMMENT)
 
 
 def _write_checklist(client, number: int, comments: list[dict], stories: dict) -> None:

@@ -563,3 +563,103 @@ def test_scheduler_contains_a_failing_github_intake_inside_its_own_block():
     assert "except Exception as exc:" in block
     assert "github issues intake failed during tick" in block
     assert '"error_type": type(exc).__name__' in block
+
+
+# ---------------------------------------------------------------------------
+# open questions from the decomposer: guidance instead of a plain plan
+# ---------------------------------------------------------------------------
+
+QUESTION_TEXT = "Which payment provider should refunds use?"
+GUIDANCE_LABEL = "fagan-needs-guidance"
+
+
+def _decompose_with(monkeypatch, plan_extra):
+    """Stub the decomposer to return PLAN_JSON plus extra top-level keys."""
+
+    def _decompose(request_text, repo_root=None, layer_routing=None):
+        return json.dumps({**PLAN_JSON, **plan_extra}), None
+
+    monkeypatch.setattr(service, "_run_decompose_detailed", _decompose)
+
+
+@pytest.fixture()
+def notices(monkeypatch, intake_env):
+    """Record every notice, and make a successful ingest write the manifest."""
+    records: list[dict] = []
+
+    def recorder(plan_name, message, **kwargs):
+        records.append(
+            {"plan": plan_name, "message": message, "event": kwargs.get("event")}
+        )
+
+    def _ingest_writes_manifest(name, only_epics=None, overwrite=False):
+        intake_env["ingested"].append(name)
+        saved = json.loads((server.PLAN_DIR / f"{name}.json").read_text())
+        intake_env["records"].put_manifest("default", name, saved)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_notify_user", recorder)
+    monkeypatch.setattr(service, "_ingest_plan_impl", _ingest_writes_manifest)
+    return records
+
+
+def test_issue_with_open_questions_is_planned_marked_labelled_and_commented(
+    intake_env, monkeypatch, notices
+):
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeGitHub({WIDGET_PATH: [_issue(12, "Refunds", "Refund it.")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+
+    counts = github_issues_intake.run_github_issues_intake(1000.0)
+
+    assert counts["planned"] == 1
+    manifest = intake_env["records"].get_manifest("default", "gh-widget-12")
+    assert manifest["guidance"]["status"] == "needed"
+    assert manifest["guidance"]["questions"] == [QUESTION_TEXT]
+    assert manifest["guidance"]["source"] == {"kind": "github", "ref": "acme/widget#12"}
+    assert [n["event"] for n in notices] == ["plan_needs_guidance"]
+    assert fake.label_writes() == [[PLANNED, GUIDANCE_LABEL]]
+    _repo_path, number, body = fake.comment_bodies[0]
+    assert number == 12
+    assert "has 1 questions before it can be approved. Answer them in Fagan." in body
+    assert "waiting for team lead approval" not in body
+    assert f"{LINK_ORIGIN}/?plan=gh-widget-12" in body
+    assert QUESTION_TEXT not in body
+
+
+def test_issue_without_open_questions_keeps_todays_labels_and_comment(
+    intake_env, monkeypatch, notices
+):
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeGitHub({WIDGET_PATH: [_issue(12)]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": []})
+
+    github_issues_intake.run_github_issues_intake(1000.0)
+
+    manifest = intake_env["records"].get_manifest("default", "gh-widget-12")
+    assert "guidance" not in manifest
+    assert notices == []
+    assert fake.label_writes() == [[PLANNED]]
+    assert "waiting for team lead approval" in fake.comment_bodies[0][2]
+
+
+def test_refused_guidance_leaves_a_normally_planned_issue(
+    intake_env, monkeypatch, notices
+):
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeGitHub({WIDGET_PATH: [_issue(12)]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+    monkeypatch.setattr(
+        github_issues_intake,
+        "raise_guidance",
+        lambda *args: {"ok": False, "error": "already_needed"},
+    )
+
+    counts = github_issues_intake.run_github_issues_intake(1000.0)
+
+    assert counts["planned"] == 1
+    assert fake.label_writes() == [[PLANNED]]
+    assert "waiting for team lead approval" in fake.comment_bodies[0][2]

@@ -31,6 +31,8 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.comments: list[dict] = []
         self.labels: list[str] = []
+        self.issue_labels: list[str] = []
+        self.removed: list[str] = []
         self.failures: dict[str, BaseException] = {}
         self.posted: list[str] = []
         self._next_id = 100
@@ -59,6 +61,15 @@ class FakeGitHub:
     def add_labels(self, number: int, labels: list[str]) -> None:
         self._check("add_labels")
         self.labels.extend(labels)
+
+    def get_issue(self, number: int) -> dict:
+        self._check("get_issue")
+        return {"labels": [{"name": name} for name in self.issue_labels]}
+
+    def remove_label(self, number: int, label: str) -> None:
+        self._check("remove_label")
+        self.removed.append(label)
+        self.issue_labels.remove(label)
 
     def marker_bodies(self) -> list[str]:
         return [c["body"] for c in self.comments if c["body"].startswith(MARKER)]
@@ -366,3 +377,72 @@ def test_failure_on_a_parked_comment_never_propagates(world, client):
     client.failures["add_comment"] = RuntimeError("boom")
 
     assert github_issues_sync.sync_event(_event("parked", "S1")) is None
+
+
+# ---------------------------------------------------------------------------
+# plan_guidance_resolved: the guidance label comes off, one comment goes on
+# ---------------------------------------------------------------------------
+
+GUIDANCE_LABEL = "fagan-needs-guidance"
+RESOLVED = "Questions answered in Fagan. The plan is waiting for approval."
+
+
+def _resolved(plan: str = PLAN) -> dict:
+    return {
+        "type": "plan_guidance_resolved",
+        "plan": plan,
+        "payload": {"status": "resolved"},
+    }
+
+
+def test_resolved_guidance_removes_the_label_and_comments_once(world, client):
+    client.issue_labels = ["fagan", "fagan-planned", GUIDANCE_LABEL]
+
+    github_issues_sync.sync_event(_resolved())
+
+    assert client.removed == [GUIDANCE_LABEL]
+    assert client.posted == [RESOLVED]
+
+
+def test_replayed_resolution_posts_no_second_comment(world, client):
+    client.issue_labels = [GUIDANCE_LABEL]
+
+    github_issues_sync.sync_event(_resolved())
+    github_issues_sync.sync_event(_resolved())
+
+    assert client.posted == [RESOLVED]
+    assert client.removed == [GUIDANCE_LABEL]
+
+
+def test_resolution_without_the_label_still_comments(world, client):
+    client.issue_labels = ["fagan-planned"]
+
+    github_issues_sync.sync_event(_resolved())
+
+    assert client.removed == []
+    assert client.posted == [RESOLVED]
+
+
+def test_resolution_for_an_unrelated_plan_is_ignored(world, client):
+    client.issue_labels = [GUIDANCE_LABEL]
+
+    github_issues_sync.sync_event(_resolved(plan="jira-abc-12"))
+    github_issues_sync.sync_event(_resolved(plan="plain-plan"))
+
+    assert client.posted == []
+    assert client.removed == []
+
+
+def test_comment_failure_is_swallowed_and_logged_by_kind_only(world, client, caplog):
+    client.issue_labels = [GUIDANCE_LABEL]
+    client.failures["add_comment"] = GitHubIssuesError("unavailable", 503)
+    caplog.set_level(logging.WARNING)
+
+    github_issues_sync.sync_event(_resolved())
+
+    failures = [
+        r for r in caplog.records if r.getMessage() == "github issues sync failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].error_kind == "unavailable"
+    assert RESOLVED not in caplog.text

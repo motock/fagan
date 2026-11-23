@@ -87,6 +87,7 @@ class FakeJira:
         self.requests: list[httpx.Request] = []
         self.missing_statuses: set[str] = set()
         self.search_status: int | None = None
+        self.comment_status: int | None = None
         self._next = 100
 
     def _reachable(self) -> list[str]:
@@ -131,9 +132,15 @@ class FakeJira:
             self.moves.append((issue, name))
             return httpx.Response(204)
         if path.endswith("/comment") and request.method == "POST":
+            if self.comment_status is not None:
+                return httpx.Response(self.comment_status)
             issue = parts[5]
             self.comments.setdefault(issue, []).append(json.loads(request.content))
             return httpx.Response(201, json={"id": "1"})
+        if request.method == "GET" and len(parts) == 6 and parts[4] == "issue":
+            bodies = [entry["body"] for entry in self.comments.get(parts[5], [])]
+            comments = [{"body": body} for body in bodies]
+            return httpx.Response(200, json={"key": parts[5], "fields": {"comment": {"comments": comments}}})
         return httpx.Response(404)
 
     def issue_requests(self) -> list[httpx.Request]:
@@ -452,3 +459,47 @@ def test_build_bus_subscribes_nothing_new_unless_exactly_one(monkeypatch, value)
     for handlers in bus._handlers.values():
         assert jira_sync.sync_event not in handlers
 
+
+
+# ---------------------------------------------------------------------------
+# plan_guidance_resolved: one comment on the parent issue, replay-safe
+# ---------------------------------------------------------------------------
+
+RESOLVED = "Questions answered in Fagan. The plan is waiting for approval."
+
+
+def _resolved(plan: str = PLAN) -> dict:
+    return _event("plan_guidance_resolved", plan=plan)
+
+
+def test_resolved_guidance_comments_once_on_the_parent_issue(jira, world):
+    jira_sync.sync_event(_resolved())
+
+    assert len(jira.comments[PARENT]) == 1
+    assert RESOLVED in _comment_text(jira.comments[PARENT][0]["body"])
+
+
+def test_replayed_resolution_posts_no_second_comment(jira, world):
+    jira_sync.sync_event(_resolved())
+    jira_sync.sync_event(_resolved())
+
+    assert len(jira.comments[PARENT]) == 1
+
+
+def test_resolution_for_an_unrelated_plan_makes_no_request(jira, world):
+    jira_sync.sync_event(_resolved(plan="gh-widget-12"))
+    jira_sync.sync_event(_resolved(plan="plain-plan"))
+
+    assert jira.requests == []
+
+
+def test_comment_failure_is_logged_by_kind_and_not_raised(jira, world, caplog):
+    jira.comment_status = 503
+    caplog.set_level(logging.WARNING)
+
+    jira_sync.sync_event(_resolved())
+
+    failures = [r for r in caplog.records if r.getMessage() == "jira guidance comment failed"]
+    assert len(failures) == 1
+    assert failures[0].error_kind == "unavailable"
+    assert RESOLVED not in caplog.text

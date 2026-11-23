@@ -630,3 +630,261 @@ def test_search_asks_for_no_more_issues_than_the_per_run_cap(intake_env, monkeyp
 
     body = json.loads(fake.requests[0].content)
     assert body["maxResults"] == jira_intake.MAX_ISSUES_PER_RUN == 5
+
+
+# ---------------------------------------------------------------------------
+# open questions from the decomposer: guidance instead of a plain plan
+# ---------------------------------------------------------------------------
+
+QUESTION_TEXT = "Which payment provider should refunds use?"
+
+
+def _decompose_with(monkeypatch, plan_extra):
+    """Stub the decomposer to return PLAN_JSON plus extra top-level keys."""
+
+    def _decompose(request_text, repo_root=None, layer_routing=None):
+        return json.dumps({**PLAN_JSON, **plan_extra}), None
+
+    monkeypatch.setattr(service, "_run_decompose_detailed", _decompose)
+
+
+@pytest.fixture()
+def notices(monkeypatch, intake_env):
+    """Record every notice, and make a successful ingest write the manifest.
+
+    The real notifier is never invoked. The ingest stub writes the plan's
+    manifest the way a real ingest does, so ``raise_guidance`` finds the plan.
+    """
+    records: list[dict] = []
+
+    def recorder(plan_name, message, **_kwargs):
+        records.append(
+            {"plan": plan_name, "message": message, "event": _kwargs.get("event")}
+        )
+
+    def _ingest_writes_manifest(name, only_epics=None, overwrite=False):
+        intake_env["ingested"].append(name)
+        saved = json.loads((server.PLAN_DIR / f"{name}.json").read_text())
+        intake_env["records"].put_manifest("default", name, saved)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_notify_user", recorder)
+    monkeypatch.setattr(service, "_ingest_plan_impl", _ingest_writes_manifest)
+    return records
+
+
+def test_plan_with_open_questions_is_saved_without_the_key_and_needs_guidance(
+    intake_env, monkeypatch, notices
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(
+        monkeypatch, {"open_questions": [QUESTION_TEXT, "Who approves refunds?"]}
+    )
+
+    counts = jira_intake.run_jira_intake(1000.0)
+
+    assert counts["planned"] == 1
+    saved = json.loads((server.PLAN_DIR / "jira-abc-123.json").read_text())
+    assert "open_questions" not in saved
+    manifest = intake_env["records"].get_manifest("default", "jira-abc-123")
+    guidance = manifest["guidance"]
+    assert guidance["status"] == "needed"
+    assert guidance["questions"] == [QUESTION_TEXT, "Who approves refunds?"]
+    assert guidance["source"] == {"kind": "jira", "ref": "ABC-123"}
+    assert [n["event"] for n in notices] == ["plan_needs_guidance"]
+
+
+def test_guidance_comment_replaces_the_planned_comment_and_the_label_is_kept(
+    intake_env, monkeypatch, notices
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+
+    jira_intake.run_jira_intake(1000.0)
+
+    assert [(r.method, r.url.path) for r in fake.writes()] == [
+        ("PUT", "/rest/api/3/issue/ABC-123"),
+        ("POST", "/rest/api/3/issue/ABC-123/transitions"),
+        ("POST", "/rest/api/3/issue/ABC-123/comment"),
+    ]
+    assert json.loads(fake.writes()[0].content) == {
+        "update": {"labels": [{"add": "fagan-planned"}]}
+    }
+    comment = fake.comments()[0]
+    assert (
+        "Fagan drafted this story into 2 stories and has 1 questions "
+        "before it can be approved. Answer them in Fagan."
+    ) in comment
+    assert "waiting for team lead approval" not in comment
+    assert f"{LINK_ORIGIN}/?plan=jira-abc-123" in comment
+    assert QUESTION_TEXT not in comment
+
+
+def test_plan_without_questions_takes_todays_path_byte_for_byte(
+    intake_env, monkeypatch, notices
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": []})
+
+    jira_intake.run_jira_intake(1000.0)
+
+    manifest = intake_env["records"].get_manifest("default", "jira-abc-123")
+    assert "guidance" not in manifest
+    assert notices == []
+    link = f"{LINK_ORIGIN}/?plan=jira-abc-123"
+    assert json.loads(fake.comments()[0]) == {
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Fagan planned this story into 2 stories. "
+                            "It is waiting for team lead approval.",
+                        }
+                    ],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": link,
+                            "marks": [{"type": "link", "attrs": {"href": link}}],
+                        }
+                    ],
+                },
+            ],
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    ["Which provider?", {"question": "Which provider?"}, [1, 2, 3]],
+)
+def test_malformed_open_questions_is_ignored_and_the_issue_is_planned_normally(
+    intake_env, monkeypatch, notices, bad_value
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": bad_value})
+
+    counts = jira_intake.run_jira_intake(1000.0)
+
+    assert counts["planned"] == 1
+    assert counts["failed"] == 0
+    assert intake_env["ingested"] == ["jira-abc-123"]
+    manifest = intake_env["records"].get_manifest("default", "jira-abc-123")
+    assert "guidance" not in manifest
+    assert notices == []
+    assert "Fagan planned this story into 2 stories" in fake.comments()[0]
+
+
+def test_nine_questions_are_capped_to_five_in_the_guidance_record(
+    intake_env, monkeypatch, notices
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-123")]}))
+    questions = [f"Question {n}?" for n in range(9)]
+    _decompose_with(monkeypatch, {"open_questions": questions})
+
+    jira_intake.run_jira_intake(1000.0)
+
+    manifest = intake_env["records"].get_manifest("default", "jira-abc-123")
+    assert manifest["guidance"]["questions"] == questions[:5]
+
+
+def test_overlong_question_is_truncated_and_the_plan_still_needs_guidance(
+    intake_env, monkeypatch, notices
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-123")]}))
+    _decompose_with(monkeypatch, {"open_questions": ["q" * 1000]})
+
+    jira_intake.run_jira_intake(1000.0)
+
+    manifest = intake_env["records"].get_manifest("default", "jira-abc-123")
+    assert manifest["guidance"]["questions"] == ["q" * 300]
+
+
+def test_refused_guidance_leaves_a_normally_planned_issue(
+    intake_env, monkeypatch, notices, caplog
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+    monkeypatch.setattr(
+        jira_intake,
+        "raise_guidance",
+        lambda *args: {"ok": False, "error": "already_needed"},
+    )
+    caplog.set_level(logging.WARNING)
+
+    counts = jira_intake.run_jira_intake(1000.0)
+
+    assert counts["planned"] == 1
+    assert counts["failed"] == 0
+    assert "Fagan planned this story into 2 stories" in fake.comments()[0]
+    assert "Answer them in Fagan" not in fake.comments()[0]
+    refusals = [
+        r.reason for r in caplog.records if r.getMessage() == "jira guidance not raised"
+    ]
+    assert refusals == ["already_needed"]
+
+
+def test_raising_guidance_leaves_a_normally_planned_issue_and_logs_no_text(
+    intake_env, monkeypatch, notices, caplog
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    fake = FakeJira({"ABC": [_issue("ABC-123")]})
+    _use_fake(monkeypatch, fake)
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+
+    def _explode(*args):
+        raise RuntimeError(f"store leaked {QUESTION_TEXT}")
+
+    monkeypatch.setattr(jira_intake, "raise_guidance", _explode)
+    caplog.set_level(logging.DEBUG)
+
+    counts = jira_intake.run_jira_intake(1000.0)
+
+    assert counts["planned"] == 1
+    assert counts["failed"] == 0
+    assert intake_env["ingested"] == ["jira-abc-123"]
+    assert "Fagan planned this story into 2 stories" in fake.comments()[0]
+    assert QUESTION_TEXT not in caplog.text
+
+
+def test_question_text_and_excerpt_reach_no_log_record(
+    intake_env, monkeypatch, notices, caplog
+):
+    _seed_org(intake_env["records"])
+    _seed_team(intake_env["records"], "alpha")
+    _use_fake(monkeypatch, FakeJira({"ABC": [_issue("ABC-123", "Refund flow")]}))
+    _decompose_with(monkeypatch, {"open_questions": [QUESTION_TEXT]})
+    caplog.set_level(logging.DEBUG)
+
+    jira_intake.run_jira_intake(1000.0)
+
+    assert QUESTION_TEXT not in caplog.text
+    assert "Refund flow" not in caplog.text

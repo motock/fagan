@@ -23,9 +23,11 @@ from urllib.parse import quote
 
 from pipeline import notification_links
 from pipeline.actor import bind_namespace, current_namespace
+from pipeline.intake_guidance import take_questions
 from pipeline.jira_client import JiraClient, JiraError, adf_to_text
 from pipeline.live_ref import LiveRef
 from pipeline.plan_approval import approval_enabled
+from pipeline.plan_guidance import raise_guidance
 from pipeline.secret_refs import SecretRefError, parse_ref
 from pipeline.service import PipelineService
 from pipeline.settings_registry import PROJECT_KEY_RE, SITE_RE
@@ -47,6 +49,11 @@ PLANNED_COMMENT = (
     "Fagan planned this story into {count} stories. "
     "It is waiting for team lead approval."
 )
+GUIDANCE_COMMENT = (
+    "Fagan drafted this story into {count} stories and has {questions} questions "
+    "before it can be approved. Answer them in Fagan."
+)
+MAX_EXCERPT_CHARS = 2000
 FAILED_COMMENT = (
     "Fagan could not plan this story. A team member can fix the story and "
     "remove the label fagan-intake-failed to retry."
@@ -267,7 +274,9 @@ def _intake_issue(
     summary = fields.get("summary") if isinstance(fields.get("summary"), str) else ""
     request_text = f"Jira {key}: {summary}\n\n{adf_to_text(fields.get('description'))}"
     try:
-        story_count = _plan_story(plan_name, request_text, team, board["repo_url"])
+        story_count, questions = _plan_story(
+            plan_name, request_text, team, board["repo_url"]
+        )
     except Exception as exc:  # noqa: BLE001 - any decompose/save/ingest failure parks the story
         logger.warning(
             "jira story could not be planned",
@@ -278,29 +287,63 @@ def _intake_issue(
         counts["failed"] += 1
         return
 
+    needs_guidance = bool(questions) and _raise_guidance(
+        plan_name, key, questions, request_text
+    )
     client.add_labels(key, [PLANNED_LABEL])
     client.transition_to(key, board["status"]["in_progress"])
-    client.add_comment(
-        key,
-        PLANNED_COMMENT.format(count=story_count),
-        link=_plan_link(plan_name),
-    )
+    if needs_guidance:
+        comment = GUIDANCE_COMMENT.format(count=story_count, questions=len(questions))
+    else:
+        comment = PLANNED_COMMENT.format(count=story_count)
+    client.add_comment(key, comment, link=_plan_link(plan_name))
     counts["planned"] += 1
 
 
-def _plan_story(plan_name: str, request_text: str, team: str, repo_url: str) -> int:
-    """Decompose, save and ingest one plan. Returns its story count."""
+def _plan_story(
+    plan_name: str, request_text: str, team: str, repo_url: str
+) -> tuple[int, list[str]]:
+    """Decompose, save and ingest one plan. Returns its story count and open questions."""
     service = PipelineService()
     decomposed = service.decompose_plan(request_text, repo_url=repo_url)
     if not decomposed.get("ok"):
         raise _PlanFailed("decompose")
     plan = decomposed["plan"]
+    questions = take_questions(plan)
     plan["team"] = team
     if not service.save_plan(plan_name, json.dumps(plan)).get("ok"):
         raise _PlanFailed("save")
     if not service.ingest_plan(plan_name).get("ok"):
         raise _PlanFailed("ingest")
-    return sum(len(epic.get("stories", [])) for epic in plan["epics"])
+    story_count = sum(len(epic.get("stories", [])) for epic in plan["epics"])
+    return story_count, questions
+
+
+def _raise_guidance(
+    plan_name: str, key: str, questions: list[str], request_text: str
+) -> bool:
+    """Mark the planned ``plan_name`` as needing guidance. ``False`` when it did not.
+
+    A refusal or a failure is logged with its reason token only and the issue is
+    planned normally: the questions and the request text never reach a log.
+    """
+    try:
+        result = raise_guidance(
+            plan_name, questions, "jira", key, request_text[:MAX_EXCERPT_CHARS]
+        )
+    except Exception as exc:  # noqa: BLE001 - a guidance failure never fails the intake
+        logger.warning(
+            "jira guidance not raised",
+            extra={"issue": key, "error_type": type(exc).__name__},
+        )
+        return False
+    if result.get("ok") is True:
+        return True
+    logger.warning(
+        "jira guidance not raised",
+        extra={"issue": key, "reason": result.get("error")},
+    )
+    return False
 
 
 def _plan_link(plan_name: str) -> str | None:

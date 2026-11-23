@@ -419,7 +419,7 @@ tenant's endpoint.
 
 ## OpenAI (direct)
 
-Provider `openai` calls OpenAI's Responses API at https://api.openai.com. The host is fixed and not configurable.
+Provider `openai` calls OpenAI's Responses API at https://api.openai.com. The host is fixed for every team. An operator can replace it for the whole deployment with `PIPELINE_OPENAI_BASE_URL`, a test switch (for example a local Ollama at `http://localhost:11434` for a free smoke test). **Setting it sends every team's OpenAI key to that host.** Plans, stories, routing and requests cannot set it. The variable is listed in REFERENCE.md.
 
 - List models under `providers.openai.models` in `model_registry.json`, by OpenAI's model id (for example `gpt-6.1-terra`, `gpt-6.2-sol`).
 - The API key is the per-namespace credential `openai_api_key` (purpose `model`). The default namespace falls back to `OPENAI_API_KEY`.

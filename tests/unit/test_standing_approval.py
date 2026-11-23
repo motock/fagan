@@ -483,6 +483,58 @@ def test_should_refuse_when_policy_denies_plan_approve_to_the_scheduler(
     assert records[0]["outcome"] == "denied"
 
 
+# -- plan guidance ----------------------------------------------------------
+
+
+def _guide(plan_dir, guidance):
+    """Attach a guidance record; guidance is outside the approval digest."""
+    manifest = _read_manifest(plan_dir)
+    manifest["guidance"] = guidance
+    _write_manifest(plan_dir, manifest)
+
+
+_NEEDED = {
+    "status": "needed",
+    "questions": ["Which database?"],
+    "source": {"kind": "jira", "ref": "PROJ-1"},
+    "request_excerpt": "x",
+    "raised_at": "2026-11-23T00:00:00+00:00",
+}
+
+
+def test_should_refuse_a_plan_that_needs_guidance(plan, enabled):
+    _guide(plan, _NEEDED)
+    before = _manifest_bytes(plan)
+
+    result = _call(_digest(plan))
+
+    assert result == {
+        "ok": False,
+        "error": "plan needs guidance before it can be approved",
+        "reason": "guidance_needed",
+    }
+    _assert_refused(plan, before, "guidance_needed")
+
+
+def test_should_refuse_a_malformed_guidance_record(plan, enabled):
+    _guide(plan, "x")
+    before = _manifest_bytes(plan)
+
+    result = _call(_digest(plan))
+
+    assert result["reason"] == "guidance_needed"
+    _assert_refused(plan, before, "guidance_needed")
+
+
+def test_should_approve_a_plan_whose_guidance_is_resolved(plan, enabled):
+    _guide(plan, {**_NEEDED, "status": "resolved", "note": "use postgres"})
+
+    result = _call(_digest(plan))
+
+    assert result["ok"] is True
+    assert _read_manifest(plan)["approval"]["status"] == "approved"
+
+
 # -- exposure ---------------------------------------------------------------
 
 

@@ -15,7 +15,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import access_hooks, bound_records, merge_local_checks, merge_reverify
+from . import (
+    access_hooks,
+    bound_records,
+    external_merge,
+    merge_local_checks,
+    merge_reverify,
+)
 from .ci import SettingsContext, gate_record, settings_for_plan
 from .concurrency import _released_plan_lock
 from .host_state import build_host_state
@@ -341,6 +347,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # refreshes the snapshot. ``decision`` is None when the story was not
         # re-adjudicated (or the gather failed), and the pr_open path then
         # runs the gate itself as before.
+        # A parked story whose PR a person merged on the forge is completed here.
+        if external_merge.finish_if_merged_outside(plan_name, key, story, manifest, summary):
+            continue
         decision = _readjudicate_parked_merge_hold(plan_name, key, story)
         if decision is None and story["status"] != "pr_open":
             continue

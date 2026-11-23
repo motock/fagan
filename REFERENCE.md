@@ -445,6 +445,16 @@ point (`rebind_after_pipeline_push`). A re-bind only ever moves an existing
 approval, and the check always runs first, so a human push is refused before any
 re-bind could bless it.
 
+A `parked` story that has a `pr_url` is also checked on each advance: when the
+forge reports its pull request as merged, the story is completed on that
+advance exactly as a pipeline merge completes it (`done`, worktree and branch
+removed, dependants unblocked) and a `story_merged_outside_pipeline`
+notification says so. This is how a story parked because the pipeline's access
+grant does not allow merging finishes after a person merges its pull request on
+the forge. An open, closed-unmerged or unreadable pull request leaves the story
+parked with its reason intact, and the forge is asked about a given story at
+most once every 60 seconds.
+
 ---
 
 ## Status lifecycle

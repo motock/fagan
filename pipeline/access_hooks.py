@@ -1,6 +1,7 @@
-"""Consult the repository access hook before a dispatch, a merge and a read.
+"""Consult the repository access hook before a dispatch, a merge, a read and a plan.
 
-``refuse_dispatch`` runs once a story is known and before any worktree or git
+``plan_refusal`` runs when a plan naming a ``repo_url`` is saved, drafted or
+ingested, before anything is cloned. ``refuse_dispatch`` runs once a story is known and before any worktree or git
 work. ``merge_decision`` wraps the merge gate's decision so a refused story is
 parked before that decision is computed. ``pipeline.repo_read_access`` asks the
 same hook before a repository read. With ``PIPELINE_REPO_ACCESS_PLUGIN`` unset
@@ -46,6 +47,7 @@ _HOOK_ERROR = "hook_error"
 _NO_REFERENCE_PLUGIN = "no_reference_plugin"
 _REFERENCE_DENIED = "reference_denied"
 _UNSPECIFIED = "unspecified"
+REPOSITORY_UNIDENTIFIED = "repository_unidentified"
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
@@ -97,6 +99,26 @@ def merge_refusal(plan_name: str, story: dict[str, Any]) -> dict[str, str] | Non
     if reason is None:
         return None
     return {"ok": False, "error": REFUSAL_PREFIX + reason}
+
+
+def plan_refusal(repo: str) -> str | None:
+    """Return the refusal reason token for a plan naming ``repo``, else None.
+
+    The question is whether the bound namespace could dispatch into ``repo``, so
+    the existing ``dispatch`` action answers it and no hook needs a new one.
+    """
+    return _refusal_reason("dispatch", {"risk": "low"}, lambda: repo)
+
+
+def unidentified_plan_refusal() -> str | None:
+    """Return the refusal for a plan whose repository identity cannot be derived.
+
+    Only a configured hook refuses. With none, the clone path reports the bad
+    URL as it always has.
+    """
+    if plugin_spec(_SEAM) is None:
+        return None
+    return _record_refusal("dispatch", REPOSITORY_UNIDENTIFIED)
 
 
 def _refusal_reason(

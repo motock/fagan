@@ -32,7 +32,7 @@ from typing import Any
 
 from app.identity import LOCAL_OPERATOR, SYSTEM_AUTH_METHOD
 
-from . import repo_clone
+from . import access_hooks, repo_clone
 
 #: The refusal returned to a remote caller who named no plan. A remote caller
 #: must say which plan it is asking about; there is no "the" plan for it.
@@ -168,6 +168,9 @@ def resolve_repo_url(plan: dict) -> dict | None:
     err = _invalid_repo_url(url)
     if err is not None:
         return err
+    err = _plan_access_refusal(url)
+    if err is not None:
+        return err
     path, err = _ensure_clone(url)
     if err is not None:
         return err
@@ -175,19 +178,28 @@ def resolve_repo_url(plan: dict) -> dict | None:
     return None
 
 
-def clone_root_for(url: Any) -> tuple[str | None, dict | None]:
+def clone_root_for(url: Any, *, checked: bool = False) -> tuple[str | None, dict | None]:
     """Clone or refresh *url* and return its managed path, for a decompose.
 
     Returns ``(path, None)`` on success or ``(None, error_dict)`` on refusal.
     It is the same allow-listed path :func:`resolve_repo_url` takes: the URL
-    is checked by ``_invalid_repo_url`` and cloned by ``_ensure_clone`` (which
-    runs ``repo_clone.ensure_clone``, so ``parse_repo_url`` and
+    is checked by ``_invalid_repo_url``, asked of the access hook for
+    ``dispatch`` by ``_plan_access_refusal``, and cloned by ``_ensure_clone``
+    (which runs ``repo_clone.ensure_clone``, so ``parse_repo_url`` and
     ``PIPELINE_REPO_URL_HOSTS`` decide what is cloned). A refusal runs no
     model, so the caller returns it without any decompose call.
+
+    ``checked=True`` skips the ``dispatch`` question. Only a caller that has
+    already asked the hook a question that covers the clone may pass it: the
+    first-read clone in ``pipeline.repo_read_access`` asks for ``read``.
     """
     err = _invalid_repo_url(url)
     if err is not None:
         return None, err
+    if not checked:
+        err = _plan_access_refusal(url)
+        if err is not None:
+            return None, err
     path, err = _ensure_clone(url)
     if err is not None:
         return None, err
@@ -212,8 +224,30 @@ def refresh_plan_clone(plan: dict | None) -> dict | None:
     err = _invalid_repo_url(url)
     if err is not None:
         return err
+    err = _plan_access_refusal(url)
+    if err is not None:
+        return err
     _, err = _ensure_clone(url)
     return err
+
+
+def _plan_access_refusal(url: str) -> dict | None:
+    """Return the refusal when the access hook refuses a plan naming *url*, else None.
+
+    The hook is asked for ``dispatch``, against the ``host/owner/name`` form of
+    the repository, before anything is cloned or fetched. A URL whose identity
+    cannot be derived is refused as unidentified when a hook is configured. The
+    error carries only the reason token, never the URL or the hook's free text.
+    """
+    try:
+        host, owner, name = repo_clone.parse_repo_url(url)
+    except repo_clone.RepoUrlError:
+        reason = access_hooks.unidentified_plan_refusal()
+    else:
+        reason = access_hooks.plan_refusal(f"{host}/{owner}/{name}")
+    if reason is None:
+        return None
+    return {"ok": False, "error": access_hooks.REFUSAL_PREFIX + reason}
 
 
 def _ensure_clone(url: str) -> tuple[Any, dict | None]:

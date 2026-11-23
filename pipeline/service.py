@@ -437,7 +437,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if error is not None:
             return error
         try:
-            resolved = _workspace_fs.resolve_within_workspace(active, relative_path)
+            resolved = _workspace_fs.resolve_within_workspace(active, relative_path, hide_git=root is not None)
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
         if not os.path.isfile(resolved):
@@ -477,7 +477,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         resolve_spelling = '.' if relative_path == '' else relative_path
         try:
             resolved = _workspace_fs.resolve_within_workspace(
-                active, resolve_spelling
+                active, resolve_spelling, hide_git=root is not None
             )
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
@@ -488,6 +488,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         entries = []
         with os.scandir(resolved) as scan:
             for entry in scan:
+                if root is not None and _workspace_fs.names_git_dir(entry.name):
+                    continue
                 entries.append(
                     {
                         'name': entry.name,
@@ -516,13 +518,16 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return error
         if not isinstance(pattern, str) or '\x00' in pattern or pattern == '':
             return {'ok': False, 'error': 'invalid pattern'}
+        # A managed clone's .git is skipped whatever its case; the active
+        # workspace keeps the exact-case exclusion it always had.
+        git_dir_glob = _workspace_fs.GIT_DIR_GLOB_ANY_CASE if root is not None else '.git'
         try:
             result = subprocess.run(
                 [
                     'grep',
                     '-rn',
                     '-I',
-                    '--exclude-dir=.git',
+                    f'--exclude-dir={git_dir_glob}',
                     '-e',
                     pattern,
                     '--',

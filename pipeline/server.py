@@ -673,6 +673,22 @@ def list_plans() -> list[str]:
     """
     return _service.list_plans()
 
+
+@mcp.tool()
+def list_repositories() -> dict:
+    """
+    List the repositories the caller may work with, in its namespace. No
+    parameters: the answer is always the namespace bound to this call.
+
+    Returns {"ok": true, "repositories": [{"repo": "host/owner/name",
+    "level": ..., "state": ...}]} sorted by repo, at most 500 items
+    ("truncated": true when cut). Without a deployment listing plugin the
+    repositories are those of the plans list_plans shows you, and level and
+    state are null. A failure returns {"ok": false, "reason":
+    "repositories_unavailable", "correlation_id": ...}.
+    """
+    return _service.list_repositories()
+
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,
 # review_verdict, journal, ...) is pipeline-owned runtime state and must

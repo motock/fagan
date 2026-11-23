@@ -650,7 +650,8 @@ def test_list_directory_execute_passes_path_through_verbatim(raw_path):
 # --------------------------------------------------------------------------- #
 _SEARCH_CODE_DESCRIPTION = (
     "Search for a text pattern (grep-style) and return "
-    "matching lines with file and line number."
+    "matching lines with file and line number. "
+    "File paths are relative to the repository root."
 )
 
 _SEARCH_CODE_CANNED = {

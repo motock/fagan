@@ -23,12 +23,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import pipeline.namespace_access as access_module
 import pipeline.server  # noqa: F401  (import cycle: pipeline.server first)
 from app import auth, oidc_login
 from app import dashboard as d
 from app.dashboard_routes_metrics import router
 from app.identity import ROLE_ADMIN, Principal
 from app.oidc import OidcProvider, OidcSettings
+from pipeline.namespace_access import NAMESPACE_ERROR
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 _PATH = "/api/metrics"
 _HEADER = "X-Pipeline-Api-Key"
@@ -286,3 +289,90 @@ def test_post_is_still_405_for_a_metrics_read_caller(
     _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
     response = TestClient(d.app).post(_PATH, headers={"Authorization": "Bearer good"})
     assert response.status_code == 405
+
+
+class _NoMembershipResolver:
+    """A namespace resolver answering that the principal reaches no namespace."""
+
+    def accesses(self, principal):
+        return ()
+
+
+@pytest.fixture
+def no_membership(monkeypatch):
+    """Route namespace binding through a resolver with no namespace for anyone.
+
+    The denial audit append is stubbed so a refused request never touches the
+    real host audit chain.
+    """
+    monkeypatch.setattr(
+        access_module, "active_namespace_resolver", lambda: _NoMembershipResolver()
+    )
+    monkeypatch.setattr(access_module, "append_host_audit", lambda **kwargs: None)
+
+
+def test_scope_only_caller_with_no_namespace_is_served_on_metrics(
+    key_file, oidc_identity, stub_exposition, no_membership, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 200
+    assert response.text == _BODY
+
+
+def test_admin_with_no_namespace_is_served_on_metrics(
+    key_file, oidc_identity, stub_exposition, no_membership, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal((), roles=frozenset({ROLE_ADMIN})))
+    response = TestClient(d.app).get(_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 200
+    assert response.text == _BODY
+
+
+def test_scope_only_caller_with_no_namespace_is_still_refused_at_binding_on_plans(
+    key_file, oidc_identity, stub_exposition, no_membership, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    response = TestClient(d.app).get(_PLAN_PATH, headers={"Authorization": "Bearer good"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
+
+
+def test_scope_only_caller_with_no_namespace_is_still_refused_at_binding_on_mcp(
+    key_file, oidc_identity, stub_exposition, no_membership, monkeypatch
+) -> None:
+    _use_principal(monkeypatch, _oidc_principal(("metrics-read",)))
+    response = TestClient(d.app).get("/mcp/metrics", headers={"Authorization": "Bearer good"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == NAMESPACE_ERROR
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/metrics/", "/api/metrics/extra"], ids=["trailing-slash", "subpath"]
+)
+def test_metrics_prefix_and_subpaths_still_serve_tenant_data(path) -> None:
+    assert d._serves_tenant_data(path) is True
+
+
+def test_metrics_exact_path_does_not_serve_tenant_data() -> None:
+    assert d._serves_tenant_data(_PATH) is False
+
+
+def test_no_credential_is_refused_with_the_middleware_401_without_a_namespace(
+    key_file, oidc_identity, no_membership
+) -> None:
+    response = TestClient(d.app).get(_PATH)
+    assert response.status_code == 401
+
+
+def test_namespace_member_without_the_scope_gets_the_fixed_403(
+    key_file, oidc_identity, stub_exposition, monkeypatch
+) -> None:
+    # The default resolver binds the default namespace, so this caller has one.
+    _use_principal(monkeypatch, _oidc_principal(()))
+    response = TestClient(d.app).get(
+        _PATH,
+        headers={"Authorization": "Bearer good", "x-fagan-namespace": DEFAULT_NAMESPACE},
+    )
+    assert response.status_code == 403
+    assert response.json() == _NOT_AUTHORIZED

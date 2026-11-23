@@ -3561,6 +3561,8 @@ the caller must hold the `admin` role. A caller whose token carries the scope
 `403` with the fixed body `{"detail": "not authorized: operator"}`, and a
 missing credential gets exactly what the middleware returns (`401`).
 
+The route is served without a bound namespace, so a scrape client needs no team membership.
+
 The endpoint is deliberately **not** served at `/livez` or `/readyz`: those
 probes are unauthenticated because an orchestrator has no credential, and this
 payload is operator data.

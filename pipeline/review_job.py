@@ -45,6 +45,7 @@ from pipeline.actor import (
     current_namespace,
     new_correlation_id,
 )
+from pipeline.job_dirs import job_dir_under, make_job_dir
 from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
 
@@ -91,20 +92,20 @@ def _source_root() -> Path:
 _INVALID_JOB_DIR = "invalid review job directory"
 
 
-def _checked_review_job_dir(state_root: Path | str, story_key: str) -> Path:
-    """Resolve the job directory under *state_root* and refuse a path escape.
+def _checked_review_job_dir(state_root: Path | str, story_key: str, namespace: str) -> Path:
+    """Resolve the job directory for *story_key* in *namespace* under *state_root*.
 
-    Defense in depth behind ``_validate_key``: should that rule ever be
-    loosened, ``"."`` resolves to the shared ``review_job`` root and ``".."`` to
-    the state root itself - both outside the one directory a review job owns.
-    Only a direct child of ``<state_root>/review_job`` is accepted. The error
-    never echoes a path.
+    The directory is ``<state_root>/review_job/<story_key>`` in the default
+    namespace and ``<state_root>/review_job/_ns/<ns>/<story_key>`` in a team
+    namespace, so two namespaces that hold the same key never share a verdict.
+    Defense in depth behind ``_validate_key``: whatever the key, the directory
+    must lie strictly inside ``<state_root>/review_job``. The error never echoes
+    a path.
     """
-    review_root = (Path(state_root) / "review_job").resolve()
-    job_dir = (review_root / story_key).resolve()
-    if job_dir.parent != review_root:
-        raise ValueError(_INVALID_JOB_DIR)
-    return job_dir
+    try:
+        return job_dir_under(Path(state_root) / "review_job", story_key, namespace)
+    except ValueError:
+        raise ValueError(_INVALID_JOB_DIR) from None
 
 
 def _checked_story_key(story_key: str) -> None:
@@ -138,12 +139,10 @@ def start_review_job(plan_name: str, story_key: str, state_root: Path) -> dict:
     except ValueError:
         raise ValueError("invalid story_key") from None
 
-    job_dir = _checked_review_job_dir(state_root, story_key)
-    job_dir.mkdir(parents=True, exist_ok=True)
-    # mkdir's mode is filtered by the process umask and does not re-tighten an
-    # existing directory, so chmod it explicitly: the result and the log carry
-    # story status and review output.
-    os.chmod(job_dir, 0o700)
+    review_root = (Path(state_root) / "review_job").resolve()
+    job_dir = _checked_review_job_dir(state_root, story_key, current_namespace())
+    # The result and the log carry story status and review output.
+    make_job_dir(review_root, job_dir)
     result_path = job_dir / "result.json"
     log_path = job_dir / "job.log"
     # Delete any previous result BEFORE the child starts: a stale verdict left

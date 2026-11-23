@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
 from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
 from app.chat_errors import ChatBackendError, is_chat_refusal, refuse
+from app.chat_guidance import RESOLVE_TOOL, guidance_context
 from pipeline import server as _server
 from pipeline.actor import current_correlation_id
 from pipeline.repo_clone import RepoUrlError, parse_repo_url
@@ -273,6 +274,7 @@ TOOLS: dict[str, dict] = {
         "params": {"plan_name": "str", "story_key": "str", "fields": "dict"},
         "execute": _patch_story_execute,
     },
+    "resolve_plan_guidance": RESOLVE_TOOL,
     "review_story": {
         "description": "Review a story.",
         "params": {"plan_name": "str", "story_key": "str"},
@@ -756,6 +758,7 @@ class ChatService:
                 )
             if plan_name:
                 system_prompt += _selected_plan_sentence(plan_name)
+                system_prompt += guidance_context(plan_name, self._http_client, self._api_base_url)
             try:
                 response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             except Exception as exc:

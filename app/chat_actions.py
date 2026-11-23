@@ -26,6 +26,7 @@ ACTION_TOOLS: frozenset[str] = frozenset({
     "resume_plan",
     "answer_decision",
     "choose_park_option",
+    "resolve_plan_guidance",
 })
 
 # Actions the chat may only ever propose. They are deliberately NOT in the chat's

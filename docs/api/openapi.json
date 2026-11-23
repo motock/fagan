@@ -1590,7 +1590,7 @@
   },
   "/api/metrics": {
    "get": {
-    "description": "Return the metrics exposition to an operator, or a fixed 403.",
+    "description": "Return the metrics exposition to an operator or a ``metrics-read`` caller, or a fixed 403.",
     "operationId": "get_metrics_api_metrics_get",
     "responses": {
      "200": {

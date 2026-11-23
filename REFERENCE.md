@@ -3556,7 +3556,8 @@ Prometheus (or any compatible) scrape. It is **operator-only**: the caller must
 authenticate through the dashboard's middleware — the shared-secret key, an
 OIDC session or a bearer token — and then be an operator. Under the
 shared-secret provider the local operator *is* the administrator; under OIDC
-the caller must hold the `admin` role. Any other authenticated caller gets
+the caller must hold the `admin` role. A caller whose token carries the scope
+`metrics-read` is also admitted; that scope grants nothing else. Any other authenticated caller gets
 `403` with the fixed body `{"detail": "not authorized: operator"}`, and a
 missing credential gets exactly what the middleware returns (`401`).
 

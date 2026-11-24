@@ -76,6 +76,7 @@ _SYSTEM_PROMPT_PREFIX = (
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
 _DEFERRED_NUDGE_CAP = 2
+_EMPTY_REPLY_TEXT = "The model returned no answer. Try sending the message again."
 _DEFERRED_NUDGE_PHRASES = (
     "let me check", "let me look", "let me find", "i'll check", "i will check",
     "i'll look", "i will look", "checking now", "one moment", "hold on",
@@ -744,6 +745,7 @@ class ChatService:
         proposals: list[dict] = []
         turns = 0
         deferred_nudges = 0
+        empty_reply_nudged = False
         while turns < self._max_turns:
             turns += 1
             # cwd=tempfile.gettempdir() keeps this repo's own CLAUDE.md from auto-discovering and silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy, without the --bare flag's side effect of disabling OAuth/keychain auth (see ClaudeCliDriver.complete's --bare handling)
@@ -793,6 +795,29 @@ class ChatService:
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
                     continue
+                if not response.strip():
+                    # An empty answer is not a reply. Spend one iteration asking
+                    # for the answer in prose; a second empty answer, or no turn
+                    # left to ask in, ends the turn with a fixed explanation.
+                    if not empty_reply_nudged and turns < self._max_turns:
+                        empty_reply_nudged = True
+                        current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
+                            "Your previous response contained no text. Answer the person now "
+                            "in plain language, using the tool results you already have. "
+                            "Do not call another tool."
+                        )
+                        continue
+                    logging.getLogger("pipeline").warning(
+                        "chat reply empty",
+                        extra={
+                            "provider": self._resolved_provider or type(driver).__name__,
+                            "model": model_tag,
+                            "turns": turns,
+                        },
+                    )
+                    yield {"type": "reply", "data": {"text": _EMPTY_REPLY_TEXT}}
+                    yield {"type": "result", "data": _turn_record(_EMPTY_REPLY_TEXT, tool_calls_made, turns, proposals)}
+                    return
                 yield {"type": "reply", "data": {"text": response}}
                 yield {"type": "result", "data": _turn_record(response, tool_calls_made, turns, proposals)}
                 return

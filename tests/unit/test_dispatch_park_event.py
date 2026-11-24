@@ -215,6 +215,7 @@ def _dispatch_resumed(
                     "status": "interrupted", "dependencies": [],
                     "worktree": str(worktree_path)},
     }, repo_root=repo)
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
     monkeypatch.setattr(p, "_default_branch", lambda: branch)
     monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))

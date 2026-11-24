@@ -5,10 +5,17 @@
 the merge gate's rebase conflicts. ``parse_unresolved`` makes the
 ``REBASE-CONFLICT-UNRESOLVED:`` marker machine-readable for a later story.
 """
+import pytest
+
+from pipeline import advance_merge
 from pipeline.rebase_conflict_feedback import (
+    CONFLICT_REWORK_MAX_DEFAULT,
+    _conflict_rework_max,
+    _merge_ci_rework_feedback,
     conflict_rework_feedback,
     parse_conflict_files,
     parse_unresolved,
+    route_resumed_conflict,
 )
 
 MULTI_FILE_ERROR = """Auto-merging src/app.py
@@ -139,3 +146,85 @@ def test_handoff_pending_is_false_when_the_marker_is_false():
 def test_handoff_pending_rejects_a_truthy_non_bool_marker():
     assert conflict_handoff_pending({"conflict_handoff": "yes"}) is False
     assert conflict_handoff_pending({"conflict_handoff": 1}) is False
+
+
+# ---------- RC-02: budget helpers moved here from pipeline.advance_merge ----------
+
+
+def test_advance_merge_still_exposes_conflict_rework_max():
+    assert advance_merge._conflict_rework_max is _conflict_rework_max
+    assert advance_merge.CONFLICT_REWORK_MAX_DEFAULT == CONFLICT_REWORK_MAX_DEFAULT
+
+
+def test_conflict_rework_max_defaults_to_two_when_unset(monkeypatch):
+    monkeypatch.delenv("PIPELINE_CONFLICT_REWORK_MAX", raising=False)
+    assert _conflict_rework_max() == 2
+
+
+def test_conflict_rework_max_reads_an_explicit_value(monkeypatch):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "5")
+    assert _conflict_rework_max() == 5
+
+
+def test_conflict_rework_max_zero_is_a_valid_never_route(monkeypatch):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
+    assert _conflict_rework_max() == 0
+
+
+@pytest.mark.parametrize("raw", ["abc", "-1", "1.5", ""])
+def test_conflict_rework_max_falls_back_to_default_on_bad_input(monkeypatch, raw):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", raw)
+    assert _conflict_rework_max() == CONFLICT_REWORK_MAX_DEFAULT
+
+
+def test_merge_ci_rework_feedback_is_the_same_function_in_both_modules():
+    assert advance_merge._merge_ci_rework_feedback is _merge_ci_rework_feedback
+
+
+def test_merge_ci_rework_feedback_returns_ci_text_when_nothing_is_prior():
+    assert _merge_ci_rework_feedback(None, "CI broke") == "CI broke"
+
+
+# ---------- RC-02: route_resumed_conflict ----------
+
+_ERROR = "CONFLICT (content): Merge conflict in src/app.py"
+
+
+def test_route_resumed_conflict_counts_and_briefs_when_budget_remains(monkeypatch):
+    monkeypatch.delenv("PIPELINE_CONFLICT_REWORK_MAX", raising=False)
+    monkeypatch.delenv("PIPELINE_REWORK_ON_CONFLICT", raising=False)
+    story = {"conflict_reworks": 0, "review_feedback": "Keep the cache."}
+
+    assert route_resumed_conflict(story, _ERROR, "master") is True
+
+    assert story["conflict_reworks"] == 1
+    assert story["ci_rework"] is True
+    assert "conflict_handoff" not in story
+    assert "REBASE CONFLICT - attempt 1/2" in story["review_feedback"]
+    assert "src/app.py" in story["review_feedback"]
+    assert story["review_feedback"].startswith("Earlier review feedback")
+    assert "Keep the cache." in story["review_feedback"]
+
+
+def test_route_resumed_conflict_leaves_the_story_alone_when_spent(monkeypatch):
+    monkeypatch.delenv("PIPELINE_CONFLICT_REWORK_MAX", raising=False)
+    story = {"conflict_reworks": 2}
+
+    assert route_resumed_conflict(story, _ERROR, "master") is False
+    assert story == {"conflict_reworks": 2}
+
+
+def test_route_resumed_conflict_leaves_the_story_alone_when_disabled(monkeypatch):
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CONFLICT", "0")
+    story = {}
+
+    assert route_resumed_conflict(story, _ERROR, "master") is False
+    assert story == {}
+
+
+def test_route_resumed_conflict_does_not_count_a_pending_handoff(monkeypatch):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
+    story = {"conflict_handoff": True, "conflict_reworks": 1}
+
+    assert route_resumed_conflict(story, _ERROR, "master") is True
+    assert story == {"conflict_handoff": True, "conflict_reworks": 1}

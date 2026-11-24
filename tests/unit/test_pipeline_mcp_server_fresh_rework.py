@@ -413,6 +413,7 @@ def test_resume_and_rebase_conflict_parks(
     a clear parked_reason naming the rebase conflict and that the worktree is
     still behind origin/main; a notification is emitted; the agent is NOT
     dispatched on the stale base (fail-secure)."""
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
     wt, notes, rebase_calls = _resume_rebase_harness(
         monkeypatch, plan_dir, worktree_root, behind=3,
         rebase_result={"ok": False, "conflict": True,

@@ -10,6 +10,7 @@ Everything here is pure: no git, no filesystem, no logging.
 """
 from __future__ import annotations
 
+import os
 import re
 
 # git prints one of these per conflicted path, e.g.
@@ -32,6 +33,20 @@ _OVERFLOW_RESERVE = 60
 
 # Cap on the machine-readable unresolved reason.
 _MAX_UNRESOLVED_CHARS = 300
+
+# RC-02: default cap on rebase-conflict rework rounds. Overridable with
+# PIPELINE_CONFLICT_REWORK_MAX; an unparseable/negative value falls back to
+# this default rather than silently disabling the route.
+CONFLICT_REWORK_MAX_DEFAULT = 2
+
+# Header this module prepends when it carries an earlier feedback round
+# forward across a CI-fail rework (see _merge_ci_rework_feedback).
+_PRIOR_FEEDBACK_HEADER = (
+    "Earlier review feedback on this branch (still relevant - address it too):"
+)
+# First line of every _ci_rework_feedback string; used to drop a stale CI block
+# from the carried-forward text so repeat rounds do not stack.
+_CI_FEEDBACK_MARKER = "The merge-gate CI check failed on your submitted branch"
 
 
 def _has_control_char(text: str) -> bool:
@@ -173,3 +188,75 @@ def conflict_handoff_notice(story_key: str, default_branch: str) -> str:
         f"story {story_key} rebase conflict against origin/{default_branch} "
         "handed to the agent to resolve; not parked"
     )
+
+
+def _conflict_rework_max() -> int:
+    """Return the conflict-rework cap (default 2).
+
+    ``PIPELINE_CONFLICT_REWORK_MAX`` is read at call time so an operator can
+    change it without a restart. An unparseable or negative value falls back
+    to the default rather than silently disabling the route; ``0`` is a valid
+    explicit "never route" setting.
+    """
+    raw = os.environ.get("PIPELINE_CONFLICT_REWORK_MAX", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return CONFLICT_REWORK_MAX_DEFAULT
+    if value < 0:
+        return CONFLICT_REWORK_MAX_DEFAULT
+    return value
+
+
+def _merge_ci_rework_feedback(prior: str | None, ci_feedback: str) -> str:
+    """Return ``ci_feedback`` with any earlier review feedback preserved.
+
+    The merge-gate CI-fail rework used to replace ``review_feedback`` outright,
+    discarding findings from an earlier review round (Mode 50, root cause 3):
+    the implementer then fixed only the CI error and could re-break what the
+    reviewer had asked for. Keep the prior text in front of the CI failure,
+    unless the prior text is itself only a previous CI block (stale - its gate
+    error is superseded by this one) or empty.
+    """
+    prior = (prior or "").strip()
+    if not prior:
+        return ci_feedback
+    marker_at = prior.find(_CI_FEEDBACK_MARKER)
+    if marker_at != -1:
+        prior = prior[:marker_at].rstrip()
+    if prior.startswith(_PRIOR_FEEDBACK_HEADER):
+        prior = prior[len(_PRIOR_FEEDBACK_HEADER):].strip()
+    if not prior:
+        return ci_feedback
+    return f"{_PRIOR_FEEDBACK_HEADER}\n{prior}\n\n{ci_feedback}"
+
+
+def route_resumed_conflict(story: dict, error: str, default_branch: str) -> bool:
+    """Hand a resumed story's pre-dispatch rebase conflict to the agent.
+
+    A pending ``conflict_handoff`` (merge gate or overlord triage) is already a
+    handoff, so it returns True without counting a second round. Otherwise,
+    while ``PIPELINE_REWORK_ON_CONFLICT`` is not ``0`` and ``conflict_reworks``
+    is below the cap, it counts the round the same way the merge gate does
+    (``conflict_reworks``, ``ci_rework``, a REBASE CONFLICT brief merged into
+    ``review_feedback``) and returns True. Otherwise it leaves the story
+    untouched and returns False, so the caller parks it.
+
+    It never sets ``conflict_handoff``: this route is its own handoff.
+    """
+    if conflict_handoff_pending(story):
+        return True
+    if os.environ.get("PIPELINE_REWORK_ON_CONFLICT", "1") == "0":
+        return False
+    max_attempts = _conflict_rework_max()
+    used = story.get("conflict_reworks", 0)
+    if used >= max_attempts:
+        return False
+    attempt = used + 1
+    story["conflict_reworks"] = attempt
+    story["ci_rework"] = True
+    story["review_feedback"] = _merge_ci_rework_feedback(
+        story.get("review_feedback"),
+        conflict_rework_feedback(error, attempt, max_attempts, default_branch),
+    )
+    return True

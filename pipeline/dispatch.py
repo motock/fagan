@@ -40,7 +40,7 @@ from .dispatch_routing import (
     _resolve_dispatch_target,
 )
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
-from .rebase_conflict_feedback import conflict_handoff_notice, conflict_handoff_pending
+from .rebase_conflict_feedback import conflict_handoff_notice, route_resumed_conflict
 from .role_routing_scope import layer_routing_for_plan
 from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
@@ -286,7 +286,9 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                         "open): %s",
                                         story_key, _sync.get("error"),
                                     )
-                            elif result["conflict"] and not conflict_handoff_pending(story):
+                            elif result["conflict"] and not route_resumed_conflict(
+                                story, result["error"], _default_branch()
+                            ):
                                 # Fail-secure: never dispatch an agent on a
                                 # base that would revert merged work. Park the
                                 # story for human resolution; a later resume

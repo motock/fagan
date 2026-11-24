@@ -177,7 +177,7 @@ _CONFLICT_ERROR = "CONFLICT (content): merge conflict in README.md"
 def _dispatch(
     plan_dir, worktree_root, agents_dir, monkeypatch, plan_name, story_key,
     repo, branch, *, status, marker=None, notify_calls=None, launched=None,
-    keep_manifest=False,
+    keep_manifest=False, **story_fields,
 ):
     """Dispatch a story against a REAL repo and worktree.
 
@@ -194,6 +194,7 @@ def _dispatch(
     }
     if marker is not None:
         story["conflict_handoff"] = marker
+    story.update(story_fields)
     if not keep_manifest:
         _write_manifest(plan_dir, plan_name, {story_key: story}, repo_root=repo)
     monkeypatch.setattr(p, "_default_branch", lambda: branch)
@@ -311,6 +312,7 @@ def test_should_park_the_next_resume_after_the_handoff_was_consumed(
     assert len(launched) == 1
 
     _set_story_fields(plan_dir, "hoff4", "S1", status="interrupted")
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
     notify_calls = []
     result = _dispatch(
         plan_dir, worktree_root, agents_dir, monkeypatch,
@@ -335,6 +337,7 @@ def test_should_still_park_a_resumed_conflict_without_a_handoff(
     repo_pair = _make_origin_and_repo(tmp_path)
     repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
     notify_calls, launched = [], []
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
 
     result = _dispatch(
         plan_dir, worktree_root, agents_dir, monkeypatch,
@@ -346,6 +349,7 @@ def test_should_still_park_a_resumed_conflict_without_a_handoff(
     assert _read_story(plan_dir, "park_nohand", "S1")["status"] == "parked"
     assert _events(notify_calls, "story_parked")
     assert launched == []
+    assert _read_story(plan_dir, "park_nohand", "S1").get("conflict_reworks", 0) == 0  # budget 0: nothing was routed to the agent
 
 
 @pytest.mark.parametrize("marker", ["yes", 1])
@@ -355,6 +359,7 @@ def test_should_still_park_when_the_marker_is_not_exactly_true(
     repo_pair = _make_origin_and_repo(tmp_path)
     repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
     launched = []
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
 
     result = _dispatch(
         plan_dir, worktree_root, agents_dir, monkeypatch,
@@ -364,3 +369,130 @@ def test_should_still_park_when_the_marker_is_not_exactly_true(
 
     assert result["status"] == "parked"
     assert launched == []
+
+
+# ---------------------------------------------------------------------------
+# (3) RC-02: a resumed conflict is handed to the agent while the conflict-
+#     rework budget remains, and parks once it is spent or routing is off.
+# ---------------------------------------------------------------------------
+
+
+def test_should_hand_a_resumed_conflict_to_the_agent_when_budget_remains(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    notify_calls, launched = [], []
+
+    _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route1", "S1", repo, branch,
+        status="changes_requested", conflict_reworks=0,
+        review_feedback="Rename foo to bar.",
+        notify_calls=notify_calls, launched=launched,
+    )
+
+    assert len(launched) == 1, "the agent backend must be launched"
+    story = _read_story(plan_dir, "route1", "S1")
+    assert story["conflict_reworks"] == 1
+    assert "REBASE CONFLICT - attempt 1/2" in story["review_feedback"]
+    assert "Rename foo to bar." in story["review_feedback"]
+    assert "conflict_handoff" not in story
+    assert _events(notify_calls, "story_conflict_handed_to_agent")
+
+
+def test_should_park_a_resumed_conflict_when_the_budget_is_spent(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    notify_calls, launched = [], []
+
+    result = _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route2", "S1", repo, branch,
+        status="changes_requested", conflict_reworks=2,
+        notify_calls=notify_calls, launched=launched,
+    )
+
+    assert result["status"] == "parked"
+    assert launched == [], "the agent must not be launched once the budget is spent"
+    story = _read_story(plan_dir, "route2", "S1")
+    assert story["status"] == "parked"
+    assert story["conflict_reworks"] == 2
+    assert _events(notify_calls, "story_parked")
+
+
+def test_should_park_when_conflict_rework_max_is_zero(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    launched = []
+
+    result = _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route3", "S1", repo, branch,
+        status="changes_requested", conflict_reworks=0, launched=launched,
+    )
+
+    assert result["status"] == "parked"
+    assert launched == []
+    assert _read_story(plan_dir, "route3", "S1")["conflict_reworks"] == 0
+
+
+def test_should_park_when_rework_on_conflict_is_disabled(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CONFLICT", "0")
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    launched = []
+
+    result = _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route4", "S1", repo, branch,
+        status="changes_requested", conflict_reworks=0, launched=launched,
+    )
+
+    assert result["status"] == "parked"
+    assert launched == []
+    assert _read_story(plan_dir, "route4", "S1")["conflict_reworks"] == 0
+
+
+def test_should_not_double_count_a_pending_handoff(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    launched = []
+
+    _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route5", "S1", repo, branch,
+        status="changes_requested", marker=True, conflict_reworks=1,
+        launched=launched,
+    )
+
+    assert len(launched) == 1
+    assert _read_story(plan_dir, "route5", "S1")["conflict_reworks"] == 1
+
+
+@pytest.mark.parametrize("raw", ["abc", "-1"])
+def test_should_use_the_default_max_when_conflict_rework_max_is_malformed(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path, raw,
+):
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", raw)
+    repo_pair = _make_origin_and_repo(tmp_path)
+    repo, branch = _setup_behind_origin(tmp_path, worktree_root, repo_pair)
+    launched = []
+
+    _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch,
+        "route6", "S1", repo, branch,
+        status="changes_requested", conflict_reworks=1, launched=launched,
+    )
+
+    assert len(launched) == 1, "the default cap of 2 leaves room after one round"
+    assert _read_story(plan_dir, "route6", "S1")["conflict_reworks"] == 2

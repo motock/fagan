@@ -248,6 +248,7 @@ def test_parked_manifest_write_goes_through_the_store(tmp_path, monkeypatch, sto
     """A resume whose rebase conflicts parks the story and persists that
     status through the store (and nothing is launched)."""
     plans, wts = _dispatch_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _resume_setup(
         plans,

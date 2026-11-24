@@ -67,7 +67,7 @@ services:
       # Caddy's internal CA and trusted through the bundle the proxy publishes in
       # `ca-public` (SSL_CERT_FILE).
       PIPELINE_IDENTITY_PROVIDER: oidc
-      PIPELINE_OIDC_ISSUER: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/realms/pipeline
+      PIPELINE_OIDC_ISSUER: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}/realms/pipeline
       PIPELINE_OIDC_AUDIENCE: ${PIPELINE_OIDC_AUDIENCE:-pipeline-mcp}
       PIPELINE_OIDC_JWKS_URL: https://proxy:8443/realms/pipeline/protocol/openid-connect/certs
       PIPELINE_OIDC_ALLOW_PRIVATE_JWKS: "1"
@@ -80,7 +80,7 @@ services:
       # The dashboard login client. Its secret is read from the oidc_client_secret
       # secret file (the entrypoint default for PIPELINE_OIDC_CLIENT_SECRET_FILE).
       PIPELINE_OIDC_CLIENT_ID: pipeline-dashboard
-      PIPELINE_OIDC_REDIRECT_URI: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/auth/callback
+      PIPELINE_OIDC_REDIRECT_URI: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}/auth/callback
 
       # Public origin. Hosts the MCP transport and the dashboard accept; the
       # resource URL is the RFC 9728 identifier clients are told to request.
@@ -90,8 +90,8 @@ services:
       # it takes the bare hostname.
       PIPELINE_MCP_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*
       PIPELINE_DASHBOARD_ALLOWED_HOSTS: ${PUBLIC_HOSTNAME}
-      PIPELINE_MCP_RESOURCE_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}/mcp
-      PIPELINE_DASHBOARD_PUBLIC_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}
+      PIPELINE_MCP_RESOURCE_URL: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}/mcp
+      PIPELINE_DASHBOARD_PUBLIC_URL: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}
 
       # Code hosts the pipeline may clone from. Hosts only, no scheme.
       PIPELINE_REPO_URL_HOSTS: ${PIPELINE_REPO_URL_HOSTS:-github.com}
@@ -149,7 +149,7 @@ services:
       # Keycloak serves plain HTTP on the compose network and trusts the
       # proxy's X-Forwarded-* headers. KC_HOSTNAME pins the issuer to the
       # origin callers use, so `iss` matches PIPELINE_OIDC_ISSUER exactly.
-      KC_HOSTNAME: https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}:${PUBLIC_PORT:-8443}
+      KC_HOSTNAME: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}:${PUBLIC_PORT:-8443}}
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
       # Bootstrap admin only; created on first start, then managed in the console.

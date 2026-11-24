@@ -673,6 +673,15 @@ fi
 if [ -f "$ENV_FILE" ]; then
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
+# One public origin for every URL the pipeline builds. Keycloak drops the default
+# HTTPS port from its issuer and the pipeline compares issuers exactly, so port
+# 443 is written without the port; every other port keeps it.
+if [ "$PORT" = "443" ]; then
+  PUBLIC_ORIGIN="https://$HOSTNAME"
+else
+  PUBLIC_ORIGIN="https://$HOSTNAME:$PORT"
+fi
+
 cat >"$ENV_FILE" <<EOF
 # Written by deploy/install.sh (SA-16). Re-running the installer keeps existing
 # values. This file holds generated client secrets: keep it out of git (it is
@@ -682,6 +691,7 @@ cat >"$ENV_FILE" <<EOF
 
 PUBLIC_HOSTNAME=$HOSTNAME
 PUBLIC_PORT=$PORT
+PUBLIC_ORIGIN=$PUBLIC_ORIGIN
 CADDY_TLS=internal
 
 # ---- Code hosts and models ------------------------------------------------
@@ -724,7 +734,7 @@ log "install.sh: PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL: when on, an ingested pla
 # Keycloak. Export this run's resolved values and render the template here: an
 # import that saw a literal placeholder would produce dead redirect URIs and
 # client secrets, so a rendering failure aborts before Docker is touched.
-PIPELINE_PUBLIC_URL="https://$HOSTNAME:$PORT"
+PIPELINE_PUBLIC_URL="$PUBLIC_ORIGIN"
 PIPELINE_CLI_CALLBACK_PORT="$CALLBACK_PORT"
 PIPELINE_OIDC_AUDIENCE="$MCP_AUDIENCE"
 PIPELINE_DASHBOARD_CLIENT_SECRET="$DASHBOARD_CLIENT_SECRET"
@@ -772,8 +782,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
   log "install.sh: dry run; state written, Docker not touched"
   printf 'STANDALONE_REALM_FILE=%s docker compose -f %s up -d --build --wait\n' \
     "$RENDERED_REALM_FILE" "$COMPOSE_REL"
-  printf '# then poll https://%s:%s/realms/%s/.well-known/openid-configuration\n' \
-    "$HOSTNAME" "$PORT" "$REALM"
+  printf '# then poll %s/realms/%s/.well-known/openid-configuration\n' \
+    "$PUBLIC_ORIGIN" "$REALM"
   exit 0
 fi
 
@@ -802,7 +812,7 @@ export STANDALONE_REALM_FILE="$RENDERED_REALM_FILE"
 export STANDALONE_NOTIFY_CONFIG="$NOTIFY_CONFIG_FILE"
 compose up -d --build --wait
 
-ready_url="https://$HOSTNAME:$PORT/realms/$REALM/.well-known/openid-configuration"
+ready_url="$PUBLIC_ORIGIN/realms/$REALM/.well-known/openid-configuration"
 log "install.sh: waiting for $ready_url"
 deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
 ready=0
@@ -915,8 +925,8 @@ if [ -n "$FIRST_USER" ]; then
   # mcp-token refuses a group/other-readable file; write then lock down.
   (
     umask 077
-    printf '{\n  "token_url": "https://%s:%s/realms/%s/protocol/openid-connect/token",\n  "client_id": "%s",\n  "client_secret": "%s"\n}\n' \
-      "$HOSTNAME" "$PORT" "$REALM" "$user_client" "$client_secret" >"$CLIENT_CONFIG"
+    printf '{\n  "token_url": "%s/realms/%s/protocol/openid-connect/token",\n  "client_id": "%s",\n  "client_secret": "%s"\n}\n' \
+      "$PUBLIC_ORIGIN" "$REALM" "$user_client" "$client_secret" >"$CLIENT_CONFIG"
   )
   chmod 600 "$CLIENT_CONFIG"
   unset client_secret
@@ -939,7 +949,7 @@ compose cp proxy:/data/caddy/pki/authorities/local/root.crt "$CA_FILE" >/dev/nul
   fail "could not copy Caddy's root CA out of the proxy container; is CADDY_TLS=internal?"
 chmod 644 "$CA_FILE"
 
-MCP_URL="https://$HOSTNAME:$PORT/mcp"
+MCP_URL="$PUBLIC_ORIGIN/mcp"
 HELPER="$REPO_ROOT/deploy/standalone/mcp-token"
 
 cat <<EOF
@@ -979,6 +989,6 @@ OpenCode (~/.config/opencode/opencode.json):
   }
 
 Plan approval: PIPELINE_PLAN_APPROVAL=$PLAN_APPROVAL$APPROVAL_NOTE
-Dashboard: https://$HOSTNAME:$PORT/ (Keycloak admin console under /realms/master)
+Dashboard: $PUBLIC_ORIGIN/ (Keycloak admin console under /realms/master)
 Logs:      docker compose -f $COMPOSE_REL logs -f
 EOF

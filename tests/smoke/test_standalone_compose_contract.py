@@ -12,6 +12,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STANDALONE = REPO_ROOT / "deploy" / "standalone"
 COMPOSE = STANDALONE / "compose.yaml"
+PUBLIC_ORIGIN = "${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}"
+PUBLIC_ORIGIN_KEYCLOAK = (
+    "${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}:${PUBLIC_PORT:-8443}}"
+)
 CADDYFILE = STANDALONE / "Caddyfile"
 ENV_EXAMPLE = STANDALONE / ".env.example"
 SMOKE_COMPOSE = REPO_ROOT / "deploy" / "compose.yaml"
@@ -187,7 +191,7 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
     ):
         assert name in block, name
     assert "${PUBLIC_HOSTNAME}" in block
-    assert "${PUBLIC_PORT:-8443}" in block
+    assert PUBLIC_ORIGIN in block
     assert "${PIPELINE_REPO_URL_HOSTS:-github.com}" in block
     assert re.search(
         r"^\s*PIPELINE_MCP_ALLOWED_HOSTS:\s*\$\{PUBLIC_HOSTNAME\},\$\{PUBLIC_HOSTNAME\}:\*\s*$",
@@ -200,6 +204,24 @@ def test_pipeline_environment_is_derived_from_the_public_hostname() -> None:
         "default 443) and the `:*` entry covers an explicit port; either entry "
         "alone leaves the other form at 421 Misdirected Request"
     )
+
+
+def test_every_public_origin_line_builds_from_public_origin() -> None:
+    # PUBLIC_ORIGIN is the installer's one origin (`https://host`, no default
+    # port on 443). Existing .env files lack it, so the old host:port form stays
+    # as its fallback and a pre-existing stack keeps its values unchanged.
+    text = _text(COMPOSE)
+    expected = {
+        "PIPELINE_OIDC_ISSUER": f"{PUBLIC_ORIGIN}/realms/pipeline",
+        "PIPELINE_OIDC_REDIRECT_URI": f"{PUBLIC_ORIGIN}/auth/callback",
+        "PIPELINE_MCP_RESOURCE_URL": f"{PUBLIC_ORIGIN}/mcp",
+        "PIPELINE_DASHBOARD_PUBLIC_URL": PUBLIC_ORIGIN,
+        "KC_HOSTNAME": PUBLIC_ORIGIN_KEYCLOAK,
+    }
+    values = dict(re.findall(r"^\s+(\w+): (.+?)\s*$", text, re.MULTILINE))
+
+    for name, value in expected.items():
+        assert values.get(name) == value, name
 
 
 def test_every_secret_is_a_file_under_secrets_dir() -> None:

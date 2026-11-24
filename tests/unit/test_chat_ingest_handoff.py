@@ -16,15 +16,15 @@ renders into the prompt.
 Assertions here are membership / absence / single-occurrence only: the prompt
 and the tools sentence are cumulative artifacts that later stories extend.
 """
+import json
 import re
 from pathlib import Path
 
 import app.chat as chat_module
 
-# The two -- and only two -- tools whose backing routes call refuse_chat_origin:
-# POST /api/workspace (set_workspace) and POST /api/plans/{plan_name}/ingest
-# (ingest_plan). Those are the only two call sites in app/dashboard.py.
-CHAT_REFUSED_TOOLS = {"ingest_plan", "set_workspace"}
+# cpa-02: ingest_plan is now a proposal the person runs, not a refused chat call,
+# so only set_workspace is still refused from a chat origin (POST /api/workspace).
+CHAT_REFUSED_TOOLS = {"set_workspace"}
 
 STAGE_SENTENCE = "When satisfied, call save_plan to stage the plan."
 # cpa-02: the ingest sentence now proposes ingest_plan instead of forbidding a direct call.
@@ -34,9 +34,9 @@ NO_FALSE_CLAIM_SENTENCE = "Never tell the user a plan is ingested when it is not
 HANDOFF_TAIL = "offer to propose ingest_plan."
 
 INGEST_DESCRIPTION = (
-    "Ingest a plan's epics and stories. UI-ONLY: this endpoint refuses calls "
-    "from a chat session's origin and answers 'origin not permitted'; only the "
-    "dashboard UI or an operator's MCP session can ingest."
+    "Propose ingesting a plan's epics and stories. Proposed only: the user sees "
+    "a Run button and must press Run to ingest. Propose it after save_plan when "
+    "the person is happy with the draft."
 )
 SET_WORKSPACE_DESCRIPTION = (
     "Set the current workspace. UI-ONLY: this endpoint refuses calls from a "
@@ -225,3 +225,58 @@ def test_marked_tools_keep_their_params():
         "path": "str",
         "create": "bool",
     }
+
+
+# ---------------------------------------------------------------------------
+# cpa-02 handoff: ingest_plan is a proposal the person runs, not a refused call
+# ---------------------------------------------------------------------------
+
+def test_ingest_plan_description_tells_the_person_to_press_run():
+    assert "Run" in chat_module.TOOLS["ingest_plan"]["description"]
+
+
+def test_ingest_plan_description_does_not_claim_the_origin_refusal():
+    description = chat_module.TOOLS["ingest_plan"]["description"]
+    assert "UI-ONLY" not in description
+    assert "origin not permitted" not in description
+
+
+def test_the_derived_tool_sentence_renders_ingest_plan_without_the_marker():
+    sentence = chat_module._available_tools_sentence()
+    assert re.search(r"ingest_plan \([^)]*UI-ONLY[^)]*args: ", sentence) is None
+
+
+class _ScriptedDriver:
+    model = "fake-model"
+
+    def __init__(self, *replies: str) -> None:
+        self._replies = list(replies)
+
+    def complete(self, *, prompt, system, model, cwd=None, **kwargs) -> str:
+        return self._replies.pop(0)
+
+
+class _ForbiddenHttp:
+    def __init__(self) -> None:
+        self.headers: dict = {}
+
+    def post(self, url, **kwargs):
+        raise AssertionError(f"no HTTP request expected, got POST {url}")
+
+    def get(self, url, **kwargs):
+        raise AssertionError(f"no HTTP request expected, got GET {url}")
+
+
+def test_a_chat_call_to_ingest_plan_is_proposed_and_makes_no_http_call():
+    call = "[TOOL_CALL]" + json.dumps({"name": "ingest_plan", "args": {"plan_name": "demo"}}) + "[/TOOL_CALL]"
+    service = chat_module.ChatService(
+        driver=_ScriptedDriver(call, "Understood."),
+        http_client=_ForbiddenHttp(),
+        api_base_url="http://127.0.0.1:8000",
+    )
+
+    out = service.execute_turn("ingest demo")
+
+    assert out["proposed_actions"] == [
+        {"id": "pa-1", "name": "ingest_plan", "args": {"plan_name": "demo"}}
+    ]

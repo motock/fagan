@@ -248,7 +248,7 @@ TOOLS: dict[str, dict] = {
         ),
     },
     "ingest_plan": {
-        "description": "Ingest a plan's epics and stories. UI-ONLY: this endpoint refuses calls from a chat session's origin and answers 'origin not permitted'; only the dashboard UI or an operator's MCP session can ingest.",
+        "description": "Propose ingesting a plan's epics and stories. Proposed only: the user sees a Run button and must press Run to ingest. Propose it after save_plan when the person is happy with the draft.",
         "params": {"plan_name": "str", "only_epics": "list[str] | None", "overwrite": "bool"},
         "execute": lambda http_client, api_base_url, plan_name, only_epics=None, overwrite=False, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/ingest"),

@@ -119,3 +119,23 @@ def test_parse_unresolved_caps_and_strips_control():
     assert result == "src/a.py :: why"
     assert "\x07" not in result
     assert not result.endswith(" ")
+
+
+from pipeline.rebase_conflict_feedback import conflict_handoff_pending
+
+
+def test_handoff_pending_is_true_when_the_marker_is_true():
+    assert conflict_handoff_pending({"conflict_handoff": True}) is True
+
+
+def test_handoff_pending_is_false_when_the_marker_is_missing():
+    assert conflict_handoff_pending({"status": "changes_requested"}) is False
+
+
+def test_handoff_pending_is_false_when_the_marker_is_false():
+    assert conflict_handoff_pending({"conflict_handoff": False}) is False
+
+
+def test_handoff_pending_rejects_a_truthy_non_bool_marker():
+    assert conflict_handoff_pending({"conflict_handoff": "yes"}) is False
+    assert conflict_handoff_pending({"conflict_handoff": 1}) is False

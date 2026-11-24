@@ -680,3 +680,13 @@ def test_resolve_rebase_parks_a_plan_without_a_usable_repo_root_and_never_falls_
     assert story["parked_reason"].startswith("resolve_rebase declined: ")
     assert "repo_root" in story["parked_reason"]
     assert "rebase_attempts" not in story
+
+
+def test_resolve_marks_the_conflict_as_handed_to_the_agent(execute_mode, live, notices):
+    live["paths"] = ["pipeline/x.py"]
+    story = _story()
+
+    assert _resolve(story, live) == "resolve_rebase"
+
+    assert story["status"] == "todo"
+    assert story["conflict_handoff"] is True

@@ -371,3 +371,18 @@ def test_conflict_reworked_high_risk_story_is_not_auto_merged(
     assert merged == [], "a high-risk story must never be auto-merged"
     assert story["status"] == "parked"
     assert "high risk" in story["parked_reason"]
+
+
+def test_conflict_rework_marks_the_conflict_as_handed_to_the_agent(
+    plan_dir,  # noqa: F811
+    monkeypatch,
+):
+    """The dispatcher honours only this explicit marker, never brief text."""
+    _stub_tick(monkeypatch)
+    _write_manifest(plan_dir, "rc_handoff_on", {"P1": _pr_open_story()})
+
+    p.advance_pipeline("rc_handoff_on")
+
+    story = _read_manifest(plan_dir, "rc_handoff_on")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story["conflict_handoff"] is True

@@ -261,6 +261,7 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
     history.append({"ts": stamp, "class": park.name, "text": task})
     story["triage_diagnosis"] = history[-DIAGNOSIS_HISTORY:]
     story.pop("parked_reason", None)
+    story["conflict_handoff"] = True
     story["status"] = "todo"
     _notify(plan_name, story_key, story,
             f"{story_key} rebase conflict handed to a worker: {', '.join(live['paths'])}",

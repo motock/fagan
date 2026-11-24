@@ -29,6 +29,7 @@ SUBJECT_LABELS = {
     "agent_gave_up": "story failed",
     "story_stalled": "story stalled",
     "merge_conflict_rework": "merge rework",
+    "story_conflict_handed_to_agent": "conflict handed to agent",
     "usage_paused": "usage paused",
     "usage_resumed": "usage resumed",
     # Plan-approval events are plan-level: they carry the plan's name and
@@ -57,6 +58,7 @@ STORY_LEVEL_EVENTS = frozenset({
     "agent_gave_up",
     "story_stalled",
     "merge_conflict_rework",
+    "story_conflict_handed_to_agent",
 })
 
 

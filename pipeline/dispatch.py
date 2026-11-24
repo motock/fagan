@@ -40,6 +40,7 @@ from .dispatch_routing import (
     _resolve_dispatch_target,
 )
 from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
+from .rebase_conflict_feedback import conflict_handoff_notice, conflict_handoff_pending
 from .role_routing_scope import layer_routing_for_plan
 from .service import _ServerRef
 from .store_records import InvalidRecordKeyError
@@ -285,7 +286,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                         "open): %s",
                                         story_key, _sync.get("error"),
                                     )
-                            elif result["conflict"]:
+                            elif result["conflict"] and not conflict_handoff_pending(story):
                                 # Fail-secure: never dispatch an agent on a
                                 # base that would revert merged work. Park the
                                 # story for human resolution; a later resume
@@ -321,6 +322,10 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                     "reason": "rebase_conflict",
                                     "parked_reason": story["parked_reason"],
                                 }
+                            elif result["conflict"]:
+                                # Handed to the agent, which runs the rebase itself.
+                                _notify_user(plan_name, conflict_handoff_notice(story_key, _default_branch()),
+                                             event="story_conflict_handed_to_agent", story_key=story_key)
                             else:
                                 # Fail open on a non-conflict git/infra failure
                                 # (e.g. git fetch timeout): notify and proceed
@@ -940,6 +945,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 os.environ["PIPELINE_CORRELATION_ID"] = prev_correlation_env
 
         story["status"] = "in_progress"
+        story.pop("conflict_handoff", None)
         story["pid"] = handle.pid
         story["dispatched_at"] = datetime.now(UTC).isoformat()
         story["worktree"] = str(worktree_path)

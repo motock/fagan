@@ -72,7 +72,6 @@ in practice.
 
 - The standalone installer writes the public origin as `https://<host>` when `--port` is 443, so the OIDC issuer, redirect URI, resource URL, dashboard origin and Keycloak hostname match the bare origin Keycloak puts in its discovery document. Logins on port 443 were refused with `OIDC login unavailable`. Other ports keep `https://<host>:<port>`. Existing `.env` files without `PUBLIC_ORIGIN` keep their current values.
 
-
 ### Security
 
 - Email delivery to a host that resolves to a loopback, private, link-local or other non-public address is now refused. An install that sends through an internal relay (for example a postfix container) must list that host in `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` or its email stops after upgrading.

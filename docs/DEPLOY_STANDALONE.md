@@ -441,10 +441,11 @@ breaks when the value is wrong.
 | Variable | Purpose | Default | Example | Effect when wrong |
 | --- | --- | --- | --- | --- |
 | `PUBLIC_HOSTNAME` | The name every client uses | none — required, else compose refuses to start | `pipeline.example.com` | Baked into the OIDC issuer, both redirect URIs and the certificate. Changing it later invalidates every issued token and session. |
-| `PUBLIC_PORT` | The TLS port clients reach | `8443` | `8443` | Published as `${PUBLIC_PORT}:8443` and interpolated into the issuer and resource URL. A port that does not match what clients dial is a 401 (§8), not a redirect. |
+| `PUBLIC_PORT` | The TLS port clients reach | `8443` | `8443` | Published as `${PUBLIC_PORT}:8443`. It is part of the origin only through the fallback when `PUBLIC_ORIGIN` is unset. A port that does not match what clients dial is a 401 (§8), not a redirect. |
+| `PUBLIC_ORIGIN` | The one public origin every public URL is built from | written by `install.sh`: `https://${PUBLIC_HOSTNAME}` for `--port 443`, otherwise `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT}` | `https://pipeline.example.com:8443` | Interpolated into the OIDC issuer, redirect URI, MCP resource URL, dashboard URL and `KC_HOSTNAME`. Compose falls back to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}` when it is unset, so an `.env` without it keeps today's values. Keycloak drops the default port from its issuer and the pipeline compares issuers exactly, so a `:443` written here is refused (login returns 503). |
 | `PIPELINE_DASHBOARD_ALLOWED_HOSTS` | `Host` header allowlist for the dashboard | set by compose to `${PUBLIC_HOSTNAME}` | `pipeline.example.com,pipeline.internal` | Comma-separated. A `Host` not on the list is refused; an empty list disables the check. |
 | `PIPELINE_MCP_ALLOWED_HOSTS` | `Host` header allowlist for the MCP transport (DNS-rebinding protection) | set by compose to `${PUBLIC_HOSTNAME},${PUBLIC_HOSTNAME}:*`; unset means the SDK default | `pipeline.example.com,pipeline.example.com:*` | A request whose `Host` is not listed gets **421 Invalid Host** (§8). Setting `PUBLIC_HOSTNAME` alone is not enough if you override this list and leave the host out. |
-| `PIPELINE_MCP_RESOURCE_URL` | The RFC 9728 identifier for this MCP server | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT}/mcp` | `https://pipeline.example.com:8443/mcp` | Must be absolute `https://`, with no userinfo, query or fragment, or the transport refuses to start. It is what a 401 challenge advertises as `resource_metadata`; a mismatch leaves clients unable to start a login flow (§8). |
+| `PIPELINE_MCP_RESOURCE_URL` | The RFC 9728 identifier for this MCP server | set by compose to `${PUBLIC_ORIGIN}/mcp` (falls back to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT}/mcp`) | `https://pipeline.example.com:8443/mcp` | Must be absolute `https://`, with no userinfo, query or fragment, or the transport refuses to start. It is what a 401 challenge advertises as `resource_metadata`; a mismatch leaves clients unable to start a login flow (§8). |
 | `PIPELINE_REPO_URL_HOSTS` | Hosts the pipeline may clone from | `github.com` | `github.com,git.example.com` | Comma-separated, hosts only, no scheme. A plan naming any other host is refused at clone time. Only `https://` URLs are accepted. |
 | `PIPELINE_REPOS_ROOT` | Root of the managed clone volume | `/var/lib/pipeline/repos` (image default, on `pipeline-state`) | `/var/lib/pipeline/repos` | Where `https://<host>/<owner>/<repo>` is cloned. Must be a real directory, not a symlink; an explicit value that cannot be created is fatal. |
 | `PIPELINE_ALLOWED_REPO_ROOTS` | Allowlist confining any workspace the server resolves or validates | the value of `PIPELINE_REPOS_ROOT`; a no-op when unset or blank | `/var/lib/pipeline/repos` | Comma-separated roots, matched component-wise on resolved paths. A workspace outside every root is denied. |
@@ -452,7 +453,7 @@ breaks when the value is wrong.
 | `OLLAMA_ENDPOINT` | Base URL of a local model server | `http://host.docker.internal:11434` | `http://host.docker.internal:11434` | Passed to the container as `PIPELINE_LOCAL_ENDPOINT_OLLAMA`. `host.docker.internal` resolves on Linux too, via the `host-gateway` extra host. |
 | `PIPELINE_CLI_CALLBACK_PORT` | Local port a CLI client's browser flow returns to | `33418` | `33418` | Substituted into the realm's `pipeline-cli` redirect URI as `http://localhost:<port>/callback`, so it must match `--callback-port` on the client (§5). Change it and the realm must be re-imported (§8). |
 | `PIPELINE_PLAN_APPROVAL` | Gate that requires a plan to be approved before it can be dispatched | `1` (fresh install) | `PIPELINE_PLAN_APPROVAL=0` | An unrecognised value makes ingest fail closed with an error naming the variable (§6) |
-| `PIPELINE_DASHBOARD_PUBLIC_URL` | Origin the review link in an approval notification is built from | set by compose to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}` | `https://pipeline.example.com:8443` | No trailing slash and no path: it is an origin, and the path comes from the next row (§6) |
+| `PIPELINE_DASHBOARD_PUBLIC_URL` | Origin the review link in an approval notification is built from | set by compose to `${PUBLIC_ORIGIN}` (falls back to `https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}`) | `https://pipeline.example.com:8443` | No trailing slash and no path: it is an origin, and the path comes from the next row (§6) |
 | `PIPELINE_APPROVAL_LINK_PATH` | Path appended to that origin in an approval notification's review link | `/` | `/ext/approvals/` | A plain path only — no scheme, query or `..`. An invalid value falls back to `/` rather than failing a notification |
 | `PIPELINE_DASHBOARD_PLUGINS` | Dashboard extensions to mount, in `module:attr` form | unset — no extension is mounted, and no approval page exists | `approvals_app:plugin` | Comma-separated. A bad entry stops dashboard startup instead of being skipped, and whoever sets it runs code in the server (§6) |
 | `PIPELINE_TENANT_DATA_EXEMPT_PATHS` | Dashboard-extension paths served without a bound namespace, for an extension that must answer a caller who has several teams or none yet | unset — every `/api/` request is bound to a namespace | `/api/ext/console/me` | Comma-separated, at most 16, each under `/api/ext/` with lower-case segments and no trailing slash. A malformed value stops dashboard startup. Callers must still authenticate. Nothing is bound on a listed path, so its handler must not read namespace-scoped data. |
@@ -493,19 +494,19 @@ loopback IP literals stay on-device, any other hostname counts as remote.
 
 ### The public origin, worked through
 
-`PUBLIC_HOSTNAME`, `PUBLIC_PORT` and `PIPELINE_MCP_RESOURCE_URL` are one value
-seen three ways, and the port is part of the identifier — not decoration.
+`PUBLIC_HOSTNAME`, `PUBLIC_PORT`, `PUBLIC_ORIGIN` and `PIPELINE_MCP_RESOURCE_URL`
+are one value seen three ways, and the port is part of the identifier — not
+decoration. The installer writes `PUBLIC_ORIGIN` once, and compose builds every
+public URL from it.
 
 - `PUBLIC_HOSTNAME=pipeline.example.com`, `PUBLIC_PORT=8443` →
-  the MCP endpoint is `https://pipeline.example.com:8443/mcp` and the dashboard
-  is `https://pipeline.example.com:8443/`. This is the default install.
-- `PUBLIC_HOSTNAME=pipeline.example.com`, `PUBLIC_PORT=443` → clients use
-  `https://pipeline.example.com/mcp` (the default HTTPS port is not written).
-  The compose file interpolates the port verbatim, so the value it computes is
-  `https://pipeline.example.com:443/mcp`. Those are different identifiers to an
-  RFC 9728 client: if your clients dial the bare name, set
-  `PIPELINE_MCP_RESOURCE_URL=https://pipeline.example.com/mcp` in a compose
-  override as well.
+  `PUBLIC_ORIGIN=https://pipeline.example.com:8443`, the MCP endpoint is
+  `https://pipeline.example.com:8443/mcp` and the dashboard is
+  `https://pipeline.example.com:8443/`. This is the default install.
+- `PUBLIC_HOSTNAME=pipeline.example.com`, `PUBLIC_PORT=443` →
+  `PUBLIC_ORIGIN=https://pipeline.example.com`, with no port in any URL. The MCP
+  endpoint is `https://pipeline.example.com/mcp`, which is what clients dial. No
+  compose override is needed: the origin is already the bare name.
 
 The mistake to avoid is hard-coding `443` into prose or a client config while
 the deployment is actually on `8443` — or writing `:443` into a URL that clients
@@ -803,7 +804,7 @@ Each notice carries identifiers (the plan name and the content digest), the stor
 counts with a risk summary, a warning count, and a review link — never the plan's
 brief text, filesystem paths or any secret. The link is built from
 `PIPELINE_DASHBOARD_PUBLIC_URL` (the compose file sets it to
-`https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}`) and
+`${PUBLIC_ORIGIN}`) and
 `PIPELINE_APPROVAL_LINK_PATH` (default `/`). The link never approves anything: it
 opens whatever review UI you run at that path, and the decision is still made
 there or through the tool or API below.

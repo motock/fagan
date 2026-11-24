@@ -130,3 +130,23 @@ def test_installer_builds_the_origin_from_host_and_port_in_one_place() -> None:
     assert "https://%s:%s" not in text
     assert '"token_url": "%s/realms/%s/protocol/openid-connect/token"' in text
     assert '"$PUBLIC_ORIGIN" "$REALM"' in text
+
+
+DEPLOY_DOC = REPO_ROOT / "docs" / "DEPLOY_STANDALONE.md"
+
+
+def test_deploy_doc_says_port_443_is_written_without_the_port() -> None:
+    # Operator-facing: the doc must state the 443 rule in the form the installer
+    # actually writes, so an operator reading it expects `https://<host>`.
+    text = DEPLOY_DOC.read_text(encoding="utf-8")
+
+    assert "`--port 443` is written without the port" in text
+    assert "`https://<host>`" in text
+
+
+def test_deploy_doc_does_not_describe_a_443_origin_with_its_port() -> None:
+    # Negative: no worked example may still show the `:443` form the installer
+    # no longer writes (the pipeline compares issuers exactly).
+    text = DEPLOY_DOC.read_text(encoding="utf-8")
+
+    assert f"{HOST}:443" not in text

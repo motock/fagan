@@ -71,6 +71,7 @@ in practice.
 ### Fixed
 
 - The chat's `ingest_plan` tool description now says calling it proposes the ingest for the person to press Run, instead of claiming the call is refused from a chat origin; the model no longer tells the person that ingest is impossible.
+- A chat turn whose model answers with no text is nudged once to answer in plain language from the tool results it already has; if the answer is still empty, or no turn is left, the turn ends with "The model returned no answer. Try sending the message again." instead of an empty reply. Each such turn logs one `chat reply empty` warning with the provider, model and turn count only.
 - The standalone installer writes the public origin as `https://<host>` when `--port` is 443, so the OIDC issuer, redirect URI, resource URL, dashboard origin and Keycloak hostname match the bare origin Keycloak puts in its discovery document. Logins on port 443 were refused with `OIDC login unavailable`. Other ports keep `https://<host>:<port>`. Existing `.env` files without `PUBLIC_ORIGIN` keep their current values.
 
 ### Security

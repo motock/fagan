@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
 from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
+from app.chat_empty_reply import EMPTY_REPLY_NUDGE, EMPTY_REPLY_TEXT, log_empty_reply
 from app.chat_errors import ChatBackendError, is_chat_refusal, refuse
 from app.chat_guidance import RESOLVE_TOOL, guidance_context
 from pipeline import server as _server
@@ -744,6 +745,7 @@ class ChatService:
         proposals: list[dict] = []
         turns = 0
         deferred_nudges = 0
+        empty_reply_nudged = False
         while turns < self._max_turns:
             turns += 1
             # cwd=tempfile.gettempdir() keeps this repo's own CLAUDE.md from auto-discovering and silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy, without the --bare flag's side effect of disabling OAuth/keychain auth (see ClaudeCliDriver.complete's --bare handling)
@@ -793,6 +795,16 @@ class ChatService:
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
                     continue
+                if not response.strip():
+                    # An empty answer is not a reply; see app/chat_empty_reply.py.
+                    if not empty_reply_nudged and turns < self._max_turns:
+                        empty_reply_nudged = True
+                        current_prompt = current_prompt + "\nassistant: " + response + "\n" + EMPTY_REPLY_NUDGE
+                        continue
+                    log_empty_reply(self._resolved_provider or type(driver).__name__, model_tag, turns)
+                    yield {"type": "reply", "data": {"text": EMPTY_REPLY_TEXT}}
+                    yield {"type": "result", "data": _turn_record(EMPTY_REPLY_TEXT, tool_calls_made, turns, proposals)}
+                    return
                 yield {"type": "reply", "data": {"text": response}}
                 yield {"type": "result", "data": _turn_record(response, tool_calls_made, turns, proposals)}
                 return

@@ -70,6 +70,7 @@ in practice.
 
 ### Fixed
 
+- The chat's `ingest_plan` tool description now says calling it proposes the ingest for the person to press Run, instead of claiming the call is refused from a chat origin; the model no longer tells the person that ingest is impossible.
 - The standalone installer writes the public origin as `https://<host>` when `--port` is 443, so the OIDC issuer, redirect URI, resource URL, dashboard origin and Keycloak hostname match the bare origin Keycloak puts in its discovery document. Logins on port 443 were refused with `OIDC login unavailable`. Other ports keep `https://<host>:<port>`. Existing `.env` files without `PUBLIC_ORIGIN` keep their current values.
 
 ### Security

@@ -91,6 +91,12 @@ bash deploy/install.sh --non-interactive \
   --first-user-password-file ~/keys/alice-password
 ```
 
+`--port 443` is written without the port: the public origin is `https://<host>`,
+not `https://<host>:443`. Keycloak drops the default HTTPS port from its issuer, and
+the pipeline compares the configured issuer with the discovery document exactly, so
+an origin that spells out `:443` would never match and login would be refused. Any
+other port, including `8443`, keeps its port in every URL.
+
 `--dry-run` writes the state directory and prints the compose command without
 touching Docker — the fastest way to see exactly what the rest of this section
 produces.

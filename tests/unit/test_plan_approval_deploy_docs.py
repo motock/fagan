@@ -17,7 +17,7 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 def test_compose_sets_dashboard_public_url() -> None:
     text = COMPOSE.read_text(encoding="utf-8")
     assert (
-        "PIPELINE_DASHBOARD_PUBLIC_URL: https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}"
+        "PIPELINE_DASHBOARD_PUBLIC_URL: ${PUBLIC_ORIGIN:-https://${PUBLIC_HOSTNAME}:${PUBLIC_PORT:-8443}}"
         in text
     )
 

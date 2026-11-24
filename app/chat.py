@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
 from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
+from app.chat_empty_reply import EMPTY_REPLY_NUDGE, EMPTY_REPLY_TEXT, log_empty_reply
 from app.chat_errors import ChatBackendError, is_chat_refusal, refuse
 from app.chat_guidance import RESOLVE_TOOL, guidance_context
 from pipeline import server as _server
@@ -76,7 +77,6 @@ _SYSTEM_PROMPT_PREFIX = (
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
 _DEFERRED_NUDGE_CAP = 2
-_EMPTY_REPLY_TEXT = "The model returned no answer. Try sending the message again."
 _DEFERRED_NUDGE_PHRASES = (
     "let me check", "let me look", "let me find", "i'll check", "i will check",
     "i'll look", "i will look", "checking now", "one moment", "hold on",
@@ -796,27 +796,14 @@ class ChatService:
                     )
                     continue
                 if not response.strip():
-                    # An empty answer is not a reply. Spend one iteration asking
-                    # for the answer in prose; a second empty answer, or no turn
-                    # left to ask in, ends the turn with a fixed explanation.
+                    # An empty answer is not a reply; see app/chat_empty_reply.py.
                     if not empty_reply_nudged and turns < self._max_turns:
                         empty_reply_nudged = True
-                        current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
-                            "Your previous response contained no text. Answer the person now "
-                            "in plain language, using the tool results you already have. "
-                            "Do not call another tool."
-                        )
+                        current_prompt = current_prompt + "\nassistant: " + response + "\n" + EMPTY_REPLY_NUDGE
                         continue
-                    logging.getLogger("pipeline").warning(
-                        "chat reply empty",
-                        extra={
-                            "provider": self._resolved_provider or type(driver).__name__,
-                            "model": model_tag,
-                            "turns": turns,
-                        },
-                    )
-                    yield {"type": "reply", "data": {"text": _EMPTY_REPLY_TEXT}}
-                    yield {"type": "result", "data": _turn_record(_EMPTY_REPLY_TEXT, tool_calls_made, turns, proposals)}
+                    log_empty_reply(self._resolved_provider or type(driver).__name__, model_tag, turns)
+                    yield {"type": "reply", "data": {"text": EMPTY_REPLY_TEXT}}
+                    yield {"type": "result", "data": _turn_record(EMPTY_REPLY_TEXT, tool_calls_made, turns, proposals)}
                     return
                 yield {"type": "reply", "data": {"text": response}}
                 yield {"type": "result", "data": _turn_record(response, tool_calls_made, turns, proposals)}

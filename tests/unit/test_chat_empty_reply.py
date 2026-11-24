@@ -19,7 +19,8 @@ import logging
 import pytest
 
 import app.chat as chat_module
-from app.chat import _EMPTY_REPLY_TEXT, ChatService
+from app.chat import ChatService
+from app.chat_empty_reply import EMPTY_REPLY_TEXT as _EMPTY_REPLY_TEXT
 
 _TOOL_NAME = "list_plans"
 _TOOL_RESULT = {"plans": ["SECRET-RESULT-abc"]}

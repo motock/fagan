@@ -91,11 +91,8 @@ bash deploy/install.sh --non-interactive \
   --first-user-password-file ~/keys/alice-password
 ```
 
-`--port 443` is written without the port: the public origin is `https://<host>`,
-not `https://<host>:443`. Keycloak drops the default HTTPS port from its issuer, and
-the pipeline compares the configured issuer with the discovery document exactly, so
-an origin that spells out `:443` would never match and login would be refused. Any
-other port, including `8443`, keeps its port in every URL.
+`--port 443` is written without the port, as `https://<host>`: Keycloak drops the
+default HTTPS port from its issuer, and the pipeline compares issuers exactly.
 
 `--dry-run` writes the state directory and prints the compose command without
 touching Docker — the fastest way to see exactly what the rest of this section
@@ -495,18 +492,14 @@ loopback IP literals stay on-device, any other hostname counts as remote.
 ### The public origin, worked through
 
 `PUBLIC_HOSTNAME`, `PUBLIC_PORT`, `PUBLIC_ORIGIN` and `PIPELINE_MCP_RESOURCE_URL`
-are one value seen three ways, and the port is part of the identifier — not
-decoration. The installer writes `PUBLIC_ORIGIN` once, and compose builds every
-public URL from it.
+are one value seen four ways, and the port is part of the identifier. The installer
+writes `PUBLIC_ORIGIN` once, and compose builds every public URL from it, with
+`PUBLIC_HOSTNAME=pipeline.example.com`:
 
-- `PUBLIC_HOSTNAME=pipeline.example.com`, `PUBLIC_PORT=8443` →
-  `PUBLIC_ORIGIN=https://pipeline.example.com:8443`, the MCP endpoint is
-  `https://pipeline.example.com:8443/mcp` and the dashboard is
-  `https://pipeline.example.com:8443/`. This is the default install.
-- `PUBLIC_HOSTNAME=pipeline.example.com`, `PUBLIC_PORT=443` →
-  `PUBLIC_ORIGIN=https://pipeline.example.com`, with no port in any URL. The MCP
-  endpoint is `https://pipeline.example.com/mcp`, which is what clients dial. No
-  compose override is needed: the origin is already the bare name.
+- `PUBLIC_PORT=8443` (the default install) → `PUBLIC_ORIGIN=https://pipeline.example.com:8443`;
+  the MCP endpoint is `https://pipeline.example.com:8443/mcp`.
+- `PUBLIC_PORT=443` → `PUBLIC_ORIGIN=https://pipeline.example.com`, with no port in any
+  URL; the MCP endpoint is `https://pipeline.example.com/mcp`, which is what clients dial.
 
 The mistake to avoid is hard-coding `443` into prose or a client config while
 the deployment is actually on `8443` — or writing `:443` into a URL that clients

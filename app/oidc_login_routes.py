@@ -150,19 +150,20 @@ def _begin_login(config: core.OidcLoginConfig, request: Request) -> Response:
         )
 
     core.logger.info("OIDC login started")
-    location = _with_query(
-        endpoints["authorization_endpoint"],
-        {
-            "response_type": "code",
-            "client_id": config.client_id,
-            "redirect_uri": config.redirect_uri,
-            "scope": core.LOGIN_SCOPE,
-            "state": state,
-            "nonce": nonce,
-            "code_challenge": core.pkce_challenge(verifier),
-            "code_challenge_method": "S256",
-        },
-    )
+    params = {
+        "response_type": "code",
+        "client_id": config.client_id,
+        "redirect_uri": config.redirect_uri,
+        "scope": core.LOGIN_SCOPE,
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": core.pkce_challenge(verifier),
+        "code_challenge_method": "S256",
+    }
+    if config.idp_hint:
+        # The operator's value only: the request is never a source for this.
+        params["kc_idp_hint"] = config.idp_hint
+    location = _with_query(endpoints["authorization_endpoint"], params)
     response = RedirectResponse(location, status_code=302)
     _set_login_state_cookie(response, state)
     return response

@@ -4208,6 +4208,7 @@ install, and `requirements.txt` gains nothing.
 | `PIPELINE_TENANT_DATA_EXEMPT_PATHS` | unset (none exempt) | Comma-separated extension paths under `/api/ext/` that run without a bound namespace; requests to them still authenticate. At most 16 entries; each must be unique and well-formed, or the whole value is refused. |
 | `PIPELINE_OIDC_CLIENT_ID` | unset | OIDC client ID for dashboard sign-in. Sign-in switches on only when `PIPELINE_OIDC_CLIENT_ID`, `PIPELINE_OIDC_CLIENT_SECRET_FILE` and `PIPELINE_OIDC_REDIRECT_URI` are all set. See the "OIDC identity verification" section. |
 | `PIPELINE_OIDC_CLIENT_SECRET_FILE` | unset | Path to a file holding the OIDC client secret. The secret is read from the file, never from the environment. |
+| `PIPELINE_OIDC_IDP_HINT` | unset | Alias of an identity provider in the sign-in realm (for example `google`). When set, `/auth/login` adds `kc_idp_hint` so Keycloak sends the browser straight to that provider instead of showing its own login page. Must match `^[a-z0-9][a-z0-9_-]{0,63}$`; any other value stops startup with an error naming the variable. |
 | `PIPELINE_OIDC_REDIRECT_URI` | unset | Callback URL registered with the identity provider. Required, together with the other two sign-in variables, to switch sign-in on. |
 | `PIPELINE_OIDC_INTERNAL_BASE_URL` | unset | Optional in-network origin the server uses for discovery and the token exchange. The browser still uses the public issuer. Set it when the identity provider is reachable from the browser but not from the server. |
 

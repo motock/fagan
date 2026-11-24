@@ -38,18 +38,18 @@ from .merge_reverify import (
     start_merge_reverify,
 )
 from .module_ref import _ModuleRef
-from .rebase_conflict_feedback import (
+from .rebase_conflict_feedback import (  # re-exported: _conflict_rework_max etc. are used by callers and tests
+    _CI_FEEDBACK_MARKER,  # noqa: F401
+    _PRIOR_FEEDBACK_HEADER,  # noqa: F401
+    CONFLICT_REWORK_MAX_DEFAULT,  # noqa: F401
+    _conflict_rework_max,
+    _merge_ci_rework_feedback,
     conflict_rework_feedback,
     parse_conflict_files,
 )
 from .telemetry import record_merge_result
 
 MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
-
-# RC-02: default cap on merge-gate rebase-conflict rework rounds. Overridable
-# with PIPELINE_CONFLICT_REWORK_MAX; an unparseable/negative value falls back
-# to this default rather than silently disabling the route.
-CONFLICT_REWORK_MAX_DEFAULT = 2
 
 # The verdicts the detached re-verify job can report (see
 # ``pipeline.merge_reverify``); anything else fails closed.
@@ -155,57 +155,6 @@ PIPELINE_AUTONOMY = _ModuleRef("pipeline.advance", "PIPELINE_AUTONOMY")
 _merge_decision = _ModuleRef("pipeline.advance", "_merge_decision")
 _merge_mod = _ModuleRef("pipeline.advance", "_merge_mod")
 merge_adjudication_plan = _ModuleRef("pipeline.advance", "merge_adjudication_plan")
-
-
-# Header this module prepends when it carries an earlier feedback round
-# forward across a CI-fail rework (see _merge_ci_rework_feedback).
-_PRIOR_FEEDBACK_HEADER = (
-    "Earlier review feedback on this branch (still relevant - address it too):"
-)
-# First line of every _ci_rework_feedback string; used to drop a stale CI block
-# from the carried-forward text so repeat rounds do not stack.
-_CI_FEEDBACK_MARKER = "The merge-gate CI check failed on your submitted branch"
-
-
-def _conflict_rework_max() -> int:
-    """Return the merge-gate conflict-rework cap (default 2).
-
-    ``PIPELINE_CONFLICT_REWORK_MAX`` is read at call time so an operator can
-    change it without a restart. An unparseable or negative value falls back
-    to the default rather than silently disabling the route; ``0`` is a valid
-    explicit "never route" setting.
-    """
-    raw = os.environ.get("PIPELINE_CONFLICT_REWORK_MAX", "")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return CONFLICT_REWORK_MAX_DEFAULT
-    if value < 0:
-        return CONFLICT_REWORK_MAX_DEFAULT
-    return value
-
-
-def _merge_ci_rework_feedback(prior: str | None, ci_feedback: str) -> str:
-    """Return ``ci_feedback`` with any earlier review feedback preserved.
-
-    The merge-gate CI-fail rework used to replace ``review_feedback`` outright,
-    discarding findings from an earlier review round (Mode 50, root cause 3):
-    the implementer then fixed only the CI error and could re-break what the
-    reviewer had asked for. Keep the prior text in front of the CI failure,
-    unless the prior text is itself only a previous CI block (stale - its gate
-    error is superseded by this one) or empty.
-    """
-    prior = (prior or "").strip()
-    if not prior:
-        return ci_feedback
-    marker_at = prior.find(_CI_FEEDBACK_MARKER)
-    if marker_at != -1:
-        prior = prior[:marker_at].rstrip()
-    if prior.startswith(_PRIOR_FEEDBACK_HEADER):
-        prior = prior[len(_PRIOR_FEEDBACK_HEADER):].strip()
-    if not prior:
-        return ci_feedback
-    return f"{_PRIOR_FEEDBACK_HEADER}\n{prior}\n\n{ci_feedback}"
 
 
 def _merge_reverify_gate(

@@ -164,6 +164,7 @@ def test_resume_rebase_conflict_parks_without_sync(tmp_path, monkeypatch):
     """NEGATIVE CONTROL: a rebase conflict parks the story and
     _sync_branch_remote is NOT called (the park returns first)."""
     plans, wts, _agents = _dispatch_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("PIPELINE_CONFLICT_REWORK_MAX", "0")
     _wt, _notes, _rebase_calls = _resume_rebase_harness(
         monkeypatch, plans, wts, behind=3,
         rebase_result={"ok": False, "conflict": True,

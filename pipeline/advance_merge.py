@@ -647,6 +647,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             if conflict_ok:
                 conflict_attempt = story.get("conflict_reworks", 0) + 1
                 story["conflict_reworks"] = conflict_attempt
+                story["conflict_handoff"] = True
                 story["ci_rework"] = True
                 # Strip the gate's own "rebase: " label: git's output starts
                 # with the first "CONFLICT (...)" line, and the brief's parser

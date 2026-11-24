@@ -155,3 +155,21 @@ def parse_unresolved(summary: str) -> str | None:
     if not cleaned:
         return None
     return cleaned[:_MAX_UNRESOLVED_CHARS]
+
+
+def conflict_handoff_pending(story: dict) -> bool:
+    """True when a rebase conflict was explicitly handed to the implementer.
+
+    Both handoff sites (the merge gate and overlord triage) set the marker to
+    the literal ``True``. Anything else - a missing key, or a truthy non-bool -
+    is not a handoff, so a resumed conflict still parks.
+    """
+    return story.get("conflict_handoff") is True
+
+
+def conflict_handoff_notice(story_key: str, default_branch: str) -> str:
+    """The notification text for a conflict handed to the implementer."""
+    return (
+        f"story {story_key} rebase conflict against origin/{default_branch} "
+        "handed to the agent to resolve; not parked"
+    )

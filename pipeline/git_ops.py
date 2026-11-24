@@ -314,6 +314,19 @@ def _resolve_base_branch(worktree: Path, base_branch: str) -> str:
         return base_branch
 
 
+def _upstream_exclusion(worktree: Path, base_branch: str) -> list[str]:
+    """``["^origin/<base>"]`` when that ref resolves here, else ``[]``.
+
+    A stale local base would otherwise count commits already merged upstream
+    as the story's own: ``resolve_base`` never moves a local ref, so ``<base>``
+    can lag ``origin/<base>`` for good (live 2026-11-24, rch-02: a branch with
+    zero commits of its own reached review and could not open its PR).
+    """
+    if not _rev_sha(worktree, f"origin/{base_branch}"):
+        return []
+    return [f"^origin/{base_branch}"]
+
+
 def _worktree_new_commits(worktree: Path, story_key: str, base_branch: str) -> tuple[str, str]:
     """``(state, base)`` for commits on the agent branch beyond ``base``.
 
@@ -330,8 +343,10 @@ def _worktree_new_commits(worktree: Path, story_key: str, base_branch: str) -> t
     if not base:
         return "unknown", ""
     branch = story_branch(story_key)
+    # Exclude origin/<base> too: a stale local base would count commits
+    # already merged upstream as this story's own.
     r = subprocess.run(
-        ["git", "log", f"{base}..{branch}", "--oneline"],
+        ["git", "log", f"{base}..{branch}", *_upstream_exclusion(worktree, base), "--oneline"],
         check=False, cwd=str(worktree), capture_output=True, text=True,
     )
     if r.returncode != 0:
@@ -383,7 +398,8 @@ def _worktree_has_non_wip_commits(
     branch = story_branch(story_key)
     prefix = f"wip({story_key}):".lower()
     r = subprocess.run(
-        ["git", "log", f"{base_branch}..{branch}", "--format=%s"],
+        ["git", "log", f"{base_branch}..{branch}",
+         *_upstream_exclusion(worktree, base_branch), "--format=%s"],
         check=False, cwd=str(worktree), capture_output=True, text=True,
     )
     if r.returncode != 0:

@@ -47,11 +47,12 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+from .actor import current_namespace
 from .authority_matrix import FileLayerSource
 from .module_ref import _ModuleRef
 from .overlord_class_mode import matrix_tier
 from .store_namespaces import namespaces_with_plans
-from .store_records import DEFAULT_NAMESPACE, InvalidRecordKeyError, validate_plan_name
+from .store_records import InvalidRecordKeyError, validate_plan_name
 from .triage_outcomes import HIGH_RISK_MERGE_CLASS
 from .triage_park_classes import ALLOWED_ACTIONS
 
@@ -516,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: invalid plan name", file=sys.stderr)
         return 1
     try:
-        plans = _read_namespaced_plans() if args.all else [(DEFAULT_NAMESPACE, n, _read_decisions(n)) for n in names]
+        plans = _read_namespaced_plans() if args.all else [(current_namespace(), n, _read_decisions(n)) for n in names]
     except (OSError, TypeError, ValueError):
         print("error: a decisions log could not be read", file=sys.stderr)
         return 1

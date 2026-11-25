@@ -4294,7 +4294,7 @@ install, and `requirements.txt` gains nothing.
 | `PIPELINE_ENV_FILE` | `<repo root>/.pipeline.env` | Env file to load instead of the default. A named file that does not exist loads nothing; there is no fallback to the default file. |
 | `PIPELINE_SKIP_ENV_FILE` | unset | `1` skips loading any env file at startup. |
 
-**Internal variables (set by the pipeline, not by operators).** `PIPELINE_CORRELATION_ID` is set by the dispatcher in the environment of a dispatched agent, carrying the story's correlation ID when it has one, and restored afterward (`pipeline/dispatch.py`). `PIPELINE_TRANSPORT_NUM_CTX` and `PIPELINE_TRANSPORT_TEMPERATURE` are written by the Ollama driver into the environment of the local-agent transport it launches (`app/backend_ollama.py`). Do not set any of these by hand.
+**Internal variables (set by the pipeline, not by operators).** `PIPELINE_CORRELATION_ID` is set by the dispatcher in the environment of a dispatched agent, carrying the story's correlation ID when it has one, and restored afterward (`pipeline/dispatch.py`). `PIPELINE_TRANSPORT_NUM_CTX` and `PIPELINE_TRANSPORT_TEMPERATURE` are written by the Ollama driver into the environment of the local-agent transport it launches (`app/backend_ollama.py`). Do not set any of these by hand. A process that carries `PIPELINE_CORRELATION_ID` does not log the transport-only variable warning, because the dispatcher set those variables itself.
 
 ---
 

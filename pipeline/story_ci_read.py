@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from .actor import current_correlation_id
+from .branch_names import story_branch
 from .ci import _aggregate_ci_states, _scoped_repo_cwd
 from .forge import FAIL, NONE, PENDING, get_forge
 from .module_ref import _ModuleRef
@@ -92,7 +93,7 @@ def get_story_ci(plan_name: str, story_key: str) -> dict[str, Any]:
     if not pr_url:
         return {"available": False, "reason": "no_pull_request"}
 
-    branch = f"agent/{story_key}"
+    branch = story_branch(story_key, story.get("branch"))
     try:
         with _scoped_repo_root(plan_name):
             repo_root = _scoped_repo_cwd()

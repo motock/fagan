@@ -138,7 +138,7 @@ def test_should_report_none_for_an_empty_snapshot_when_ci_is_not_configured(forg
 def test_should_ask_the_forge_for_one_snapshot_of_the_branch_head(forge):
     forge.snapshot = {"test": PASS}
     story_ci_read.get_story_ci(PLAN, KEY)
-    assert forge.snapshot_calls == [(f"agent/{KEY}", "")]
+    assert forge.snapshot_calls == [(f"agent/{KEY.lower()}", "")]
 
 
 # --- no pull request -------------------------------------------------------
@@ -247,7 +247,7 @@ def test_should_refuse_an_invalid_key_before_any_store_read(store, forge, plan, 
 def test_should_pass_exactly_the_story_branch_to_the_forge(forge):
     forge.snapshot = {"test": PASS}
     story_ci_read.get_story_ci(PLAN, KEY)
-    assert forge.snapshot_calls[0][0] == "agent/S-1"
+    assert forge.snapshot_calls[0][0] == "agent/s-1"
 
 
 def test_should_take_only_plan_name_and_story_key_parameters():

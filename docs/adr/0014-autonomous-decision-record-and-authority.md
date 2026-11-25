@@ -256,3 +256,16 @@ decisions and the rules.**
   (tenancy) - owns that; core ships a file source and does not decide it.
 - **The final field names.** They are fixed in the record-format story; the fields
   in decision 1 are the required content, not the final spelling.
+
+## Amendment, 2026-11-25: thresholds are judged per class across a scope
+
+Decision 8's thresholds (the minimum paired decisions and the false-park rate) apply
+to each park class across the scope the readiness report is run over, not to each
+plan alone. A class is promoted per decision class, and the authority matrix tiers a
+class, not a plan, so judging it plan by plan could not reach the threshold with
+normal-sized plans. `python -m pipeline.triage_readiness --all` now pools every
+plan's decisions (`--scope deployment`, the default), `--scope team` pools the plans
+of each namespace, and `--scope plan` keeps the per-plan report. Each scope scores
+each class once. Pairing still happens inside a plan, so a ruling never pairs with a
+resolution from another plan. The thresholds, the definitions and any false proceed
+are unchanged: one false proceed in any plan blocks the class at deployment scope.

@@ -28,7 +28,9 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "jira_board",
         "github_issues",
         "dispatch_hold",
+        "overlord_precedent_limit",
     }
+    assert "overlord_precedent_limit" in REGISTRY
 
 
 def test_registry_entries_are_named_after_their_keys():
@@ -97,6 +99,7 @@ def test_legacy_env_names_are_the_plan_names():
         "jira_board": "",
         "github_issues": "",
         "dispatch_hold": "",
+        "overlord_precedent_limit": "",
     }
     assert REGISTRY["dispatch_hold"].legacy_env == ""
 

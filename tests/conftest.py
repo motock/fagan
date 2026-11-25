@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -139,6 +140,26 @@ def _reset_notification_breakers():
     notification_channels.reset_breakers()
     yield
     notification_channels.reset_breakers()
+
+
+@pytest.fixture(autouse=True)
+def _forget_precedent_reads():
+    """Clear the overlord precedent cache around every test.
+
+    The precedent read is cached per process for a minute and keyed on the
+    store object. The file store is one object shared by a whole xdist worker,
+    so a read taken while one test's plan directory was live would otherwise
+    be served to the next test. Only touches the module when it is loaded.
+    """
+
+    def _clear():
+        precedent = sys.modules.get("pipeline.overlord_precedent")
+        if precedent is not None:
+            precedent.clear_cache()
+
+    _clear()
+    yield
+    _clear()
 
 
 @pytest.fixture

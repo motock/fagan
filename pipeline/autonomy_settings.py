@@ -31,6 +31,7 @@ RESTRICTIVE = {
     "autonomy": "dry-run",
     "auto_merge": False,
     "triage_mode": "shadow",
+    "overlord_precedent_limit": 0,
 }
 
 _WARNING = "autonomy setting unreadable; using the restrictive value"

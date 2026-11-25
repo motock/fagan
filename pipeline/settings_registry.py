@@ -455,6 +455,17 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             bounds=(2, 5),
         ),
         SettingKey(
+            # How many recent human answers to the same park class the overlord
+            # sees as precedent when it rules; 0 turns the block off.
+            name="overlord_precedent_limit",
+            type="int",
+            kind="pref",
+            safe_value=8,
+            allowed_layers=_ALL_LAYERS,
+            legacy_env="",
+            bounds=(0, 50),
+        ),
+        SettingKey(
             # The Jira Cloud site and its service account. Org layer only: the
             # token reference is a tenant credential, not a team preference.
             name="jira_site",

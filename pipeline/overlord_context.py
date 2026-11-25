@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from . import bound_records
+from . import bound_records, overlord_precedent
 from . import context_sources as ctxsrc
 from .review import _read_recorded_snapshot
 
@@ -28,25 +28,58 @@ def overlord_context(plan_name: str, story_key: str, phase: str) -> tuple[str, l
 
     ``block`` is "" or a rendered block that starts and ends with a newline,
     so callers can splice it between existing prompt lines. ``digests`` are
-    the digests of the sources the block rendered, in render order. Any
-    failure (manifest unreadable, nothing rendered) returns ``("", [])`` and
-    logs one WARNING naming the plan, story and phase, never the exception
-    message: the ruling must still happen.
+    the digests of the sources the block rendered, in render order, then the
+    digest of the precedent block when one was shown. Any failure (manifest
+    unreadable, nothing rendered) returns ``("", [])`` and logs one WARNING
+    naming the plan, story and phase, never the exception message: the ruling
+    must still happen.
     """
     if phase not in OVERLORD_PHASES:
         raise ValueError(f"unsupported overlord context phase {phase!r}")
     try:
         from .server import _store
 
-        manifest = bound_records.get_manifest(_store, plan_name)
-        body, digests = _render(manifest or {}, story_key, phase)
+        manifest = bound_records.get_manifest(_store, plan_name) or {}
     except Exception as exc:  # noqa: BLE001 - the ruling must still happen
         _warn_unavailable(plan_name, story_key, phase, type(exc).__name__)
         return "", []
-    if not body:
+    try:
+        body, digests = _render(manifest, story_key, phase)
+    except Exception as exc:  # noqa: BLE001 - precedent below does not depend on the recorded sources
+        _warn_unavailable(plan_name, story_key, phase, type(exc).__name__)
+        body, digests = "", []
+    precedent, precedent_digest = _precedent(plan_name, story_key, phase, manifest)
+    parts = [part.strip("\n") for part in (body, precedent) if part]
+    if not parts:
         _warn_unavailable(plan_name, story_key, phase, "EmptyContextBlock")
         return "", []
-    return "\n" + body.strip("\n") + "\n", digests
+    if precedent_digest is not None:
+        digests = [*digests, precedent_digest]
+    return "\n" + "\n".join(parts) + "\n", digests
+
+
+def _precedent(plan_name: str, story_key: str, phase: str, manifest: dict) -> tuple[str, str | None]:
+    """Return ``(block, digest)`` of the human answers shown as precedent, or ``("", None)``.
+
+    Advisory: a failure logs one WARNING and the ruling proceeds without it.
+    """
+    try:
+        story = (manifest.get("stories") or {}).get(story_key)
+        if not isinstance(story, dict):
+            return "", None
+        park_class = overlord_precedent.class_for_phase(phase, story)
+        return overlord_precedent.precedent_block(
+            park_class, overlord_precedent.configured_limit(manifest)
+        )
+    except Exception as exc:  # noqa: BLE001 - precedent is advisory; the authority matrix is the control
+        logging.getLogger("pipeline").warning(
+            "overlord precedent unavailable: plan=%s story=%s phase=%s reason=%s",
+            plan_name,
+            story_key,
+            phase,
+            type(exc).__name__,
+        )
+        return "", None
 
 
 def _render(manifest: dict, story_key: str, phase: str) -> tuple[str, list[str]]:

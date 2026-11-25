@@ -117,6 +117,9 @@ def test_high_risk_merge_prompt_shows_paired_merge_answers_as_precedent(store, m
         return "RULING: proceed\nRATIONALE: ok"
 
     monkeypatch.setattr(overlord_mod, "_invoke_overlord", fake_invoke)
+    # Pin the CI read: unstubbed, the gather asks the host's gh, and a pending
+    # or unreadable read defers the ruling before the overlord is called.
+    monkeypatch.setattr(server, "_ci_status_once", lambda branch, **_: {"state": "pass", "error": ""})
     merge_mod._adjudicate_high_risk_merge(dict(MERGE_STORY), PLAN)
     assert "the rollback note was missing" in captured["prompt"]
     assert "PRECEDENT" in captured["prompt"]

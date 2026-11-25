@@ -360,6 +360,7 @@ when no ruling is on record:
 | `patch_story` with a changed `agent_instructions` | `rebrief` (with `brief_changed: true`) | the story is `parked` and the text differs from the stored brief |
 | `dispatch_story` that launches | `retry` | the story was `parked`, the launch returned `ok` and was not `skipped` (`new_status` is the status after the launch) |
 | `interrupt_story` that stops a running agent | `other` | the story was `parked` (`new_status` `interrupted`) |
+| `approve_merge` that merges the story | `merge_held` | the merge succeeded; any `parked` or `pr_open` origin counts, including a park that did not come from the merge gate (`new_status` `done`). A refused merge records nothing |
 | `record_decision` with `plan_name` and `story_key` | the decision class mapped to an action, otherwise `other` (see below) | the story has a ruling and the record was written |
 
 `unpark` and `unblock_story` continue to record through the unblock itself, as

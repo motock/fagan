@@ -253,3 +253,55 @@ def test_dispatch_of_an_unknown_plan_keeps_its_refusal(plan_dir, monkeypatch) ->
 
     assert result["ok"] is False
     assert _resolutions() == []
+
+
+# --------------------------------------------------------------------------
+# approve_merge: a human merge of a parked story is recorded as merge_held
+# --------------------------------------------------------------------------
+
+
+def _approve_mocks(monkeypatch) -> None:
+    monkeypatch.setattr(p, "_rebase_onto_master", lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+
+def _approvable_parked(**extra) -> dict:
+    return _parked(review_verdict="APPROVE", review_verdict_sha="stub-head", risk="low", worktree="/x", **extra)
+
+
+def test_approve_merge_of_parked_story_records_one_merge_held(plan_dir, monkeypatch) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _approvable_parked()})
+    _seed_ruling()
+    _approve_mocks(monkeypatch)
+
+    result = p.approve_merge(PLAN, KEY)
+
+    assert result["ok"] is True
+    resolutions = _resolutions()
+    assert len(resolutions) == 1
+    assert resolutions[0]["human_action"] == "merge_held"
+    assert resolutions[0]["new_status"] == "done"
+    assert resolutions[0]["ruling_ref"] == DECIDED
+
+
+def test_refused_approve_merge_of_parked_story_records_nothing(plan_dir, monkeypatch) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _parked()})
+    _seed_ruling()
+    _approve_mocks(monkeypatch)
+
+    result = p.approve_merge(PLAN, KEY)
+
+    assert result["ok"] is False
+    assert _resolutions() == []
+
+
+def test_approve_merge_of_parked_story_without_a_ruling_records_nothing(plan_dir, monkeypatch) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _approvable_parked()})
+    _approve_mocks(monkeypatch)
+
+    result = p.approve_merge(PLAN, KEY)
+
+    assert result["ok"] is True
+    assert _resolutions() == []

@@ -201,6 +201,25 @@ services:
           cat /etc/ssl/certs/ca-certificates.crt "$$cert" > "$$bundle"
         else
           cp /etc/ssl/certs/ca-certificates.crt "$$bundle"
+          # Caddy creates its local root after startup, so the bundle published
+          # above gains it once it appears. The temp file sits beside the bundle
+          # so the mv is an atomic rename; a missing root leaves the system roots.
+          (
+            cert=/data/caddy/pki/authorities/local/root.crt
+            i=0
+            while [ ! -f "$$cert" ]; do
+              i=$$((i + 1))
+              if [ "$$i" -gt 60 ]; then
+                echo "the local CA root did not appear within 60s; the published bundle has the system roots only" >&2
+                exit 0
+              fi
+              sleep 1
+            done
+            tmp="$$bundle.tmp"
+            cat /etc/ssl/certs/ca-certificates.crt "$$cert" > "$$tmp"
+            chmod 0644 "$$tmp"
+            mv "$$tmp" "$$bundle"
+          ) &
         fi
         chmod 0644 "$$bundle"
         # A forwarded signal ends the first wait early, while Caddy is still

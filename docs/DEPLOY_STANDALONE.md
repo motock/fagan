@@ -19,7 +19,7 @@ Only one of them publishes a port on the host.
 
 | Service | Image | Listens (inside) | Published on the host | Persistent state |
 | --- | --- | --- | --- | --- |
-| `proxy` | `caddy:2.8.4-alpine` | `8443` (TLS), plus the in-network site `proxy:8443` | `${PUBLIC_PORT}` → `8443` | `caddy-data` (internal CA and its private keys), `ca-public` (CA bundle, public material) |
+| `proxy` | `caddy:2.8.4-alpine` | `8443` (TLS), plus the in-network site `proxy:8443` | `${PUBLIC_PORT}` → `8443` | `caddy-data` (internal CA and its private keys), `ca-public` (CA bundle, public material: with `CADDY_TLS=internal` the system roots plus Caddy's local root; with an ACME email the bundle starts as the system roots and gains Caddy's local root once Caddy creates it, within 60 s, which in-network clients of `https://proxy:8443` need) |
 | `keycloak` | `quay.io/keycloak/keycloak:26.0.7` | `8080` | none | `keycloak-data` (users, sessions, realm) |
 | `pipeline` | built from `deploy/Dockerfile`, tag `${PIPELINE_IMAGE:-pipeline-standalone:local}` | `8000` (dashboard and OIDC login), `8080` (remote MCP) | none | `pipeline-state` at `/var/lib/pipeline` (plans, manifests, worktrees, the audit chain) |
 | `nats` | `nats:2.10.22` | `4222` (JetStream) | none — it shares the `pipeline` container's network namespace, so the broker is loopback-only | `nats-data` (streams and consumer state) |

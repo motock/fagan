@@ -71,8 +71,24 @@ def worktree_dirty_impl(origin) -> bool:
     return bool(origin["git"]("status", "--porcelain").stdout.strip())
 
 
+_NEVER_COMMITTED = (
+    ".agent_checkpoint",
+    ".agent_checkpoint.claimed",
+    ":(glob).agent_checkpoint.*.tmp",
+    ".agent_checkpoint.tmp",
+    ":(glob)**/.agent_scratchpad*.md",
+    ".agent_scratchpad.md",
+    "agent.log",
+    ".agent_transcript.json",
+)
+
+
 def auto_wip_commit_impl(origin, reason: str) -> None:
     origin["git"]("add", "-A")
+    # Unstage the agent's bookkeeping files: a repository that does not ignore
+    # them would otherwise commit and push them. The exit code is ignored: a
+    # path with nothing staged is not an error.
+    origin["git"]("reset", "-q", "--", *_NEVER_COMMITTED)
     origin["git"]("commit", "-m", f"WIP ({reason})")
 
 

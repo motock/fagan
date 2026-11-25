@@ -34,6 +34,7 @@ import subprocess
 from pathlib import Path
 
 from pipeline.test_scope_run import agent_scoped_test_argv
+from scripts.local_agent_git import _NEVER_COMMITTED
 
 
 def git_impl(origin, *args):
@@ -76,6 +77,7 @@ def worktree_dirty_impl(origin) -> bool:
 
 def auto_commit_impl(origin, reason: str) -> None:
     origin["git"]("add", "-A")
+    origin["git"]("reset", "-q", "--", *_NEVER_COMMITTED)
     origin["git"]("commit", "-m", reason)
 
 

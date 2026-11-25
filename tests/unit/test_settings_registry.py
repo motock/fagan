@@ -27,6 +27,7 @@ def test_registry_holds_exactly_the_eight_plan_keys():
         "jira_site",
         "jira_board",
         "github_issues",
+        "dispatch_hold",
     }
 
 
@@ -95,7 +96,9 @@ def test_legacy_env_names_are_the_plan_names():
         "jira_site": "",
         "jira_board": "",
         "github_issues": "",
+        "dispatch_hold": "",
     }
+    assert REGISTRY["dispatch_hold"].legacy_env == ""
 
 
 def test_test_scope_full_is_tighter_than_scoped():

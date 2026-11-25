@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- Two read-only MCP tools list and read a plan's stories without a known key: `list_plan_stories(plan_name)` returns every story in manifest order with its status, risk, dependencies, blocked_by, PR URL, parked and failure reasons, and whether it is ready to dispatch, plus counts by status; `get_story(plan_name, story_key)` returns one story's brief and the same state fields. Both are plan-scoped, mask secret values, and never return the log, worktree, pid or other runtime fields.
 - A GitHub issue the decomposer cannot plan without questions is planned and labelled `fagan-needs-guidance`, with the same guidance record and approval refusal as a Jira story; its comment asks for the answers in Fagan. When the questions are resolved the label is removed and the issue gets one comment saying the plan awaits approval, and a Jira parent gets the same comment. A replayed resolution posts nothing twice, and a failed comment is logged by its error kind only.
 - A Jira story the decomposer cannot plan without questions is still planned, but its plan is marked as needing guidance: the analyst's `open_questions` (at most 5, each 1 to 300 characters) are kept in the plan's guidance record, the approval is refused until they are resolved in Fagan, and the Jira comment asks for the answers instead of waiting for approval. A malformed `open_questions` is ignored and the story is planned normally; no question text reaches a log.
 - A repository read refreshes an existing managed clone once it is a minute old: the clone fetches the default branch and fast-forwards its checkout only when it sits on the default branch with a clean tree and the fetch is a fast-forward. Other checkouts are left alone, a failed refresh still answers the read, and a read is at most one minute behind the default branch.
@@ -70,6 +71,8 @@ in practice.
 
 ### Fixed
 
+- A dispatched agent's log no longer opens with false warnings that `PIPELINE_TRANSPORT_NUM_CTX`, `PIPELINE_TRANSPORT_TEMPERATURE` and `PIPELINE_TRANSPORT_MAX_STEPS` are set in the environment: the dispatcher set them itself, so a process carrying `PIPELINE_CORRELATION_ID` skips the transport-only warning, while a long-lived operator process still warns.
+- The off-task guard ignores version numbers, paths outside the worktree and the agent's own `.agent_*` files, and the agent's automatic commits never include those files.
 - `export_plan` reads the plan from the namespace bound to the call; it used to read the default namespace only, so a team's plan answered `Plan not found`.
 - The chat's `ingest_plan` tool description now says calling it proposes the ingest for the person to press Run, instead of claiming the call is refused from a chat origin; the model no longer tells the person that ingest is impossible.
 - A chat turn whose model answers with no text is nudged once to answer in plain language from the tool results it already has; if the answer is still empty, or no turn is left, the turn ends with "The model returned no answer. Try sending the message again." instead of an empty reply. Each such turn logs one `chat reply empty` warning with the provider, model and turn count only.

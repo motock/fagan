@@ -302,6 +302,18 @@ caller bound to another namespace sees its ingested manifests and no drafts.
   story's `review_feedback`, `parked_reason`, `failure_reason` and
   `last_inconclusive_output_excerpt` (masked, at most 4,000 characters) are
   returned alongside when present.
+- `list_plan_stories(plan_name)` — every story of the plan in manifest order,
+  each `{"key", "summary", "status", "risk", "dependencies", "blocked_by",
+  "pr_url", "parked_reason", "failure_reason", "ready"}`, with `counts` by
+  status over the whole plan. `ready` is true for the stories
+  `list_ready_stories` returns. At most 500 stories, `truncated: true` when cut;
+  the summary and reasons are masked and cut to 300 characters. No brief: use
+  `get_story` for that.
+- `get_story(plan_name, story_key)` — one story's brief and state:
+  `key`, `summary`, `status`, `risk`, `persona`, `dependencies`, `blocked_by`,
+  `files`, `pr_url`, `attempts`, `parked_reason`, `failure_reason` and
+  `agent_instructions`. The brief is masked and cut to 60,000 characters with
+  `agent_instructions_truncated: true` when cut. No log, worktree or pid is returned.
 - `list_repositories()` — the repositories the bound namespace may work with,
   as sorted `host/owner/name` items, each `{"repo", "level", "state"}`. It takes
   no namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the items are
@@ -4315,7 +4327,7 @@ install, and `requirements.txt` gains nothing.
 | `PIPELINE_ENV_FILE` | `<repo root>/.pipeline.env` | Env file to load instead of the default. A named file that does not exist loads nothing; there is no fallback to the default file. |
 | `PIPELINE_SKIP_ENV_FILE` | unset | `1` skips loading any env file at startup. |
 
-**Internal variables (set by the pipeline, not by operators).** `PIPELINE_CORRELATION_ID` is set by the dispatcher in the environment of a dispatched agent, carrying the story's correlation ID when it has one, and restored afterward (`pipeline/dispatch.py`). `PIPELINE_TRANSPORT_NUM_CTX` and `PIPELINE_TRANSPORT_TEMPERATURE` are written by the Ollama driver into the environment of the local-agent transport it launches (`app/backend_ollama.py`). Do not set any of these by hand.
+**Internal variables (set by the pipeline, not by operators).** `PIPELINE_CORRELATION_ID` is set by the dispatcher in the environment of a dispatched agent, carrying the story's correlation ID when it has one, and restored afterward (`pipeline/dispatch.py`). `PIPELINE_TRANSPORT_NUM_CTX` and `PIPELINE_TRANSPORT_TEMPERATURE` are written by the Ollama driver into the environment of the local-agent transport it launches (`app/backend_ollama.py`). Do not set any of these by hand. A process that carries `PIPELINE_CORRELATION_ID` does not log the transport-only variable warning, because the dispatcher set those variables itself.
 
 ---
 
@@ -4352,6 +4364,7 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `test_scope` | ceiling, `full` \| `scoped` | `full` | `set_setting` |
 | `tenant_test_policy_locked` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
 | `host_tests_skipped` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
+| `dispatch_hold` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
 | `merge_ci_timeout_s` | pref, integer seconds | `900` | `set_setting` |
 | `merge_readiness_timeout_s` | pref, integer seconds | `180` | `set_setting` |
 | `rework_on_ci_fail` | pref, boolean | `off` | `set_setting` |
@@ -4364,6 +4377,8 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
 
 `tenant_test_policy_locked` is a deployment-only lock. When the deployment layer sets it to `true`, the deployment layer's `test_scope` is final for every team, plan, story and env request (a request for `full` against a `scoped` deployment resolves to `scoped` and is listed as a lock rejection), and the deployment's `reverify_full_suite` value replaces the org, team and team-repo values. Any other value leaves these keys as described above.
+
+`dispatch_hold` is a deployment-only lock that stops new agent dispatch on every plan. When the deployment layer sets it to `true`, the scheduler dispatches no new story and redispatches no interrupted or `changes_requested` story; review, CI polling and merges continue, and running agents are not interrupted. A value that cannot be read, or is not a boolean, counts as `true` and logs a WARNING. Read it with `GET /api/operator/dispatch`, described below.
 
 `host_tests_skipped` is a deployment-only lock for hosts whose CI gates every merge. When the deployment layer sets it to `true` and a story resolves `scoped`, the pipeline host runs no test command for that story: its `test_scope_resolution` records `host_tests: skipped`, the grade is recorded with `no_tests: true` and `host_tests: skipped`, and the pre-dispatch baseline is not run. It applies only to a story that resolved `scoped`. A story degraded to `full` (for example because merge CI is off or the repo has no CI config) still runs its tests on the host, and gets no `host_tests` field. Any other value, including a non-boolean, leaves the host tests running.
 
@@ -4405,6 +4420,48 @@ PIPELINE_MERGE_CI_GATE is retired; set merge_ci_gate with set_setting (or run py
 ```
 
 If the check itself fails, the process also refuses to start. The migration order is in the CHANGELOG entry and in "Seeding settings from the environment" below.
+
+### Operator dispatch hold and running agents (`/api/operator/dispatch`)
+
+`GET /api/operator/dispatch` is the operator-only read of the deployment-wide
+dispatch hold (the `dispatch_hold` setting above) and of how many agents are
+running. It is **operator-only** and follows the same rule as `/api/metrics`:
+the caller authenticates through the dashboard middleware, then must be the
+local operator (shared-secret provider) or hold the `admin` role. Any other
+authenticated caller gets `403` with `{"detail": "not authorized: operator"}`.
+
+The body:
+
+```json
+{
+  "hold": false,
+  "running": 2,
+  "stories": [{"plan": "plan-a", "story": "S1"}, {"plan": "plan-b", "story": "S9"}],
+  "scope": "all_namespaces"
+}
+```
+
+- `hold` is the deployment `dispatch_hold` value. A value that cannot be read,
+  or is not a boolean, reports `true` (fail closed), and the scheduler logs a
+  WARNING.
+- `running` is the number of stories whose agent process is alive: a story
+  with status `in_progress` and a live `pid`, or a live detached test-author
+  phase. `stories` lists exactly those stories, and `running` equals its length.
+- `scope` is `all_namespaces` when the store can list its namespaces, and every
+  namespace is counted. It is `default_namespace` when the store cannot list
+  them, and only the default namespace is counted.
+
+Setting or clearing the hold is not a route. It is written with the audited
+`set_setting` tool at the `deployment` scope (`scope: "deployment"`,
+`scope_id: ""`, `repo: ""`, `key: "dispatch_hold"`, `value: true` or `false`).
+Each write appends one `settings:set` host audit record with the old and new
+values.
+
+While the hold is `true`, the scheduler dispatches no new story and redispatches
+no `todo`, `interrupted` or `changes_requested` story on any plan. Review, CI
+polling and merges of stories already past dispatch continue, and no running
+agent is interrupted by the hold. `advance_pipeline`'s result reports
+`dispatch_paused: true`, `paused: true` and `dispatch_pause_reason: "dispatch_hold"`.
 
 ## Seeding settings from the environment
 

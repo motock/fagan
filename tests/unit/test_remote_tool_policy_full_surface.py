@@ -255,3 +255,28 @@ def test_get_effective_config_with_a_visible_plan_reaches_the_handler() -> None:
     _, recorder = _call({"name": "get_effective_config", "arguments": arguments}, ALICE)
     assert recorder.calls == 1
 
+
+# --- story listing and single-story read ----------------------------------
+
+STORY_READ_TOOLS = ("list_plan_stories", "get_story")
+
+
+@pytest.mark.parametrize("name", STORY_READ_TOOLS)
+def test_remote_tool_allowed_for_each_story_read_tool(name: str) -> None:
+    assert remote_tool_allowed(name) is True
+
+
+@pytest.mark.parametrize("name", STORY_READ_TOOLS)
+def test_story_read_tool_for_a_hidden_plan_is_refused_before_the_handler(name: str) -> None:
+    _write_plan("theirs", owner=BOB.subject)
+    arguments = {"plan_name": "theirs", "story_key": "S-1"}
+    result, recorder = _call({"name": name, "arguments": arguments}, ALICE)
+    assert (result["isError"], recorder.calls) == (True, 0)
+
+
+@pytest.mark.parametrize("name", STORY_READ_TOOLS)
+def test_story_read_tool_for_a_visible_plan_reaches_the_handler(name: str) -> None:
+    _write_plan("mine", owner=ALICE.subject)
+    arguments = {"plan_name": "mine", "story_key": "S-1"}
+    _, recorder = _call({"name": name, "arguments": arguments}, ALICE)
+    assert recorder.calls == 1

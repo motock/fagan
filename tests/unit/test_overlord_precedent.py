@@ -270,6 +270,19 @@ def test_should_read_again_once_the_cache_window_has_passed(store, monkeypatch):
         assert len(precedent.precedent_entries(CLASS, 8)) == 2
 
 
+def test_should_not_serve_a_cached_read_taken_from_a_different_store(monkeypatch):
+    first = InMemoryRecordStore()
+    _seed(first, "tenant-a", PLAN, [_ruling("S-1", "park_for_human", "t1"), _answer("S-1", "t1", "retry")])
+    monkeypatch.setattr(server, "_store", SimpleNamespace(records=lambda: first))
+    with bind_namespace("tenant-a"):
+        assert [e["story_key"] for e in precedent.precedent_entries(CLASS, 8)] == ["S-1"]
+    second = InMemoryRecordStore()
+    _seed(second, "tenant-a", PLAN, [_ruling("S-2", "park_for_human", "t2"), _answer("S-2", "t2", "retry")])
+    monkeypatch.setattr(server, "_store", SimpleNamespace(records=lambda: second))
+    with bind_namespace("tenant-a"):
+        assert [e["story_key"] for e in precedent.precedent_entries(CLASS, 8)] == ["S-2"]
+
+
 # ---------------------------------------------------------------------------
 # rendering: labelled as guidance, one line per entry
 # ---------------------------------------------------------------------------

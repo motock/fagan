@@ -54,8 +54,8 @@ _GUIDANCE_HEADER = (
 )
 
 _clock = time.monotonic
-#: Namespace -> (read at, paired rulings newest first). One read per window.
-_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+#: Namespace -> (store read from, read at, paired rulings newest first). One read per window.
+_cache: dict[str, tuple[Any, float, list[dict[str, Any]]]] = {}
 
 
 def clear_cache() -> None:
@@ -201,28 +201,38 @@ def _supplied_input(resolution: dict[str, Any]) -> bool:
 
 
 def _namespace_pairs(namespace: str) -> list[dict[str, Any]]:
-    """Return every paired ruling in ``namespace``, newest first, reusing a read inside the window."""
+    """Return every paired ruling in ``namespace``, newest first, reusing a read inside the window.
+
+    A read is reused only while the store it was taken from is still the
+    active one, so a swapped store is never answered from the old store's rows.
+    """
+    store = _active_store()
     now = _clock()
     cached = _cache.get(namespace)
-    if cached is not None and now - cached[0] < PRECEDENT_CACHE_SECONDS:
-        return cached[1]
+    if cached is not None and cached[0] is store and now - cached[1] < PRECEDENT_CACHE_SECONDS:
+        return cached[2]
     pairs: list[dict[str, Any]] = []
-    for plan_name, records in _plan_decisions():
+    for plan_name, records in _plan_decisions(store):
         pairs.extend(pair_rulings(plan_name, records))
     pairs.sort(key=lambda pair: pair["decided_at"], reverse=True)
-    _cache[namespace] = (now, pairs)
+    _cache[namespace] = (store, now, pairs)
     return pairs
 
 
-def _plan_decisions() -> list[tuple[str, list[dict[str, Any]]]]:
-    """Return ``(plan, decision records)`` for every plan in the bound namespace."""
+def _active_store() -> Any:
+    """Return the server's configured record store."""
     # Imported here: server loads the modules that call this one.
     from .server import _store
 
+    return _store
+
+
+def _plan_decisions(store: Any) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Return ``(plan, decision records)`` for every plan in the bound namespace."""
     if decision_log.store_owns_records():
-        plans = bound_records.list_plans(_store)
-        return [(plan, bound_records.get_decisions(_store, plan) or []) for plan in plans]
+        plans = bound_records.list_plans(store)
+        return [(plan, bound_records.get_decisions(store, plan) or []) for plan in plans]
     # The file layout holds only the default namespace.
     if current_namespace() != DEFAULT_NAMESPACE:
         return []
-    return [(plan, decision_log.read_decisions(plan)) for plan in _store.list_manifests()]
+    return [(plan, decision_log.read_decisions(plan)) for plan in store.list_manifests()]

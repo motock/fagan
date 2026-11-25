@@ -129,6 +129,10 @@ def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
+# Only a missing plan or story answers 404. Every other refusal is a conflict
+# with the current state and answers 409 with a fixed reason code and message;
+# the raw service error is logged, not returned. The docstring is kept as the
+# OpenAPI operation description, so the contract lives here as a comment.
 def approve_merge_route(
     plan_name: str,
     story_key: str,
@@ -136,11 +140,10 @@ def approve_merge_route(
 ) -> dict[str, Any]:
     """Delegates to _service.approve_merge(plan_name, story_key).
 
-    Only a missing plan or story answers 404. Every other refusal is a
-    conflict with the current state and answers 409 with a fixed reason code
-    and message; the raw service error is logged, not returned. The chat model
-    may propose a merge approval but never send one: the chat origin is
-    refused here, so only the person's own Run click gets through.
+    A retriable refusal (the plan stayed busy past the lock wait) is a
+    conflict with the current state, not a missing story, so it answers 409.
+    The chat model may propose a merge approval but never send one: the chat
+    origin is refused here, so only the person's own Run click gets through.
     """
     refuse_chat_origin(x_pipeline_origin)
     try:

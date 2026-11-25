@@ -71,6 +71,7 @@ in practice.
 
 ### Fixed
 
+- The off-task guard ignores version numbers, paths outside the worktree and the agent's own `.agent_*` files, and the agent's automatic commits never include those files.
 - `export_plan` reads the plan from the namespace bound to the call; it used to read the default namespace only, so a team's plan answered `Plan not found`.
 - The chat's `ingest_plan` tool description now says calling it proposes the ingest for the person to press Run, instead of claiming the call is refused from a chat origin; the model no longer tells the person that ingest is impossible.
 - A chat turn whose model answers with no text is nudged once to answer in plain language from the tool results it already has; if the answer is still empty, or no turn is left, the turn ends with "The model returned no answer. Try sending the message again." instead of an empty reply. Each such turn logs one `chat reply empty` warning with the provider, model and turn count only.

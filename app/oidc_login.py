@@ -62,6 +62,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 import threading
@@ -83,6 +84,14 @@ ENV_CLIENT_ID = "PIPELINE_OIDC_CLIENT_ID"
 ENV_CLIENT_SECRET_FILE = "PIPELINE_OIDC_CLIENT_SECRET_FILE"
 ENV_REDIRECT_URI = "PIPELINE_OIDC_REDIRECT_URI"
 ENV_ISSUER = "PIPELINE_OIDC_ISSUER"
+
+#: Optional alias of an upstream identity provider in the realm. When set,
+#: ``/auth/login`` adds ``kc_idp_hint`` so Keycloak skips its own login page.
+ENV_IDP_HINT = "PIPELINE_OIDC_IDP_HINT"
+
+#: Keycloak's identity-provider alias shape. ``fullmatch`` rather than ``$``,
+#: so a trailing newline can never pass as part of the alias.
+_IDP_HINT_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 #: Optional in-network origin used only for server-side fetches (discovery and
 #: the token exchange). The browser still redirects to the public issuer; the
@@ -205,6 +214,9 @@ class OidcLoginConfig:
     issuer: str = ""
     internal_base_url: str = ""
     allow_private: bool = False
+    #: The operator's identity-provider alias, sent as ``kc_idp_hint``. Never
+    #: taken from a request.
+    idp_hint: str = ""
 
 
 @dataclass
@@ -337,6 +349,15 @@ def load_config(env: Mapping[str, str] | None = None) -> OidcLoginConfig:
             f"OIDC login misconfigured: {ENV_CLIENT_SECRET_FILE} {problem}"
         )
 
+    idp_hint = (source.get(ENV_IDP_HINT) or "").strip()
+    if idp_hint and _IDP_HINT_PATTERN.fullmatch(idp_hint) is None:
+        # The value itself is never echoed: it is operator input, and an
+        # error message is not the place to repeat it.
+        raise OidcLoginConfigError(
+            f"OIDC login misconfigured: {ENV_IDP_HINT} must be a lowercase "
+            "identity-provider alias of 1-64 letters, digits, '-' or '_'"
+        )
+
     return OidcLoginConfig(
         enabled=True,
         client_id=values[ENV_CLIENT_ID],
@@ -345,6 +366,7 @@ def load_config(env: Mapping[str, str] | None = None) -> OidcLoginConfig:
         issuer=issuer.rstrip("/"),
         internal_base_url=internal_base,
         allow_private=allow_private,
+        idp_hint=idp_hint,
     )
 
 

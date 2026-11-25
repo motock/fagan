@@ -29,6 +29,55 @@ def _human_action_for_status(status: str) -> str:
     return "other"
 
 
+def _story_status(plan_name: str, story_key: str) -> str | None:
+    """The story's status as stored now, or ``None`` when it is not there.
+
+    Callers validate the plan and story keys first: this reads the manifest by
+    name. A missing plan reads as ``None`` rather than raising, so the caller's
+    own refusal, not this read, answers an unknown plan.
+    """
+    manifest = _store.get_manifest_or_none(plan_name) or {}
+    story = manifest.get("stories", {}).get(story_key)
+    return story.get("status") if isinstance(story, dict) else None
+
+
+def _prior_dispatch_status(plan_name: str, story_key: str) -> str | None:
+    """The status a story has before a dispatch, validating the keys first.
+
+    Validation runs here because the read is by name; a malformed key raises
+    ``ValueError`` exactly as the dispatch itself does.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    return _story_status(plan_name, story_key)
+
+
+def _record_dispatch_resolution(
+    plan_name: str, story_key: str, prior_status: str | None, result: dict[str, Any]
+) -> None:
+    """Relaunching a parked story is the operator's answer to its ruling."""
+    if prior_status == "parked" and result.get("ok") is True and not result.get("skipped"):
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action="retry",
+            new_status=_story_status(plan_name, story_key) or "",
+            principal=actor_id(),
+        )
+
+
+def _record_interrupt_resolution(plan_name: str, story_key: str, was_parked: bool) -> None:
+    """Stopping a parked story's agent is an answer the ruling did not foresee."""
+    if was_parked:
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action="other",
+            new_status="interrupted",
+            principal=actor_id(),
+        )
+
+
 def _set_story_status_impl(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)

@@ -126,6 +126,16 @@ def test_a_rejected_patch_records_nothing(plan_dir) -> None:  # noqa: F811
     assert _resolutions() == []
 
 
+def test_patch_of_a_field_outside_the_brief_records_nothing(plan_dir) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _parked()})
+    _seed_ruling()
+
+    result = p.patch_story(PLAN, KEY, {"risk": "high"})
+
+    assert result["ok"] is True
+    assert _resolutions() == []
+
+
 # --------------------------------------------------------------------------
 # dispatch_story: relaunching a parked story is a retry
 # --------------------------------------------------------------------------

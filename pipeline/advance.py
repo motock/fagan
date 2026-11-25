@@ -36,6 +36,7 @@ from .concurrency import (
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
+from .dispatch_hold import dispatch_held, filter_ready, pause_reason
 from .dispatch_lease import claim_dispatch_lease
 from .park_options import run_park_options_sweep
 from .rebrief import (
@@ -427,6 +428,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         and not cross_plan.blocked_by_gaps(v, neighbours)
     ]
 
+    # The deployment hold stops new dispatch only: review and merge still run,
+    # and dispatch_ok is untouched so an in-flight agent is never interrupted.
+    held = dispatch_held(_store)
+    ready = filter_ready(ready, held)
+
     _warn_file_overlaps(plan_name, stories, ready, neighbours)
 
     # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (comparisons
@@ -441,8 +447,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             "dry_run": True,
             "autonomy": autonomy,
             # "paused" kept for back-compat = dispatch gated.
-            "paused": not dispatch_ok,
-            "dispatch_paused": not dispatch_ok,
+            "paused": not dispatch_ok or held,
+            "dispatch_paused": not dispatch_ok or held,
+            **pause_reason(held),
             "review_paused": not review_ok,
             "would_dispatch": ready if dispatch_ok else [],
             "would_merge_decisions": {
@@ -454,8 +461,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
 
     summary: dict[str, Any] = {
         "autonomy": autonomy,
-        "paused": not dispatch_ok,
-        "dispatch_paused": not dispatch_ok,
+        "paused": not dispatch_ok or held,
+        "dispatch_paused": not dispatch_ok or held,
+        **pause_reason(held),
         "review_paused": not review_ok,
         "dispatched": [],
         "advanced": [],

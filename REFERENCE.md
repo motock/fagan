@@ -3585,6 +3585,48 @@ the split is load-bearing, not cosmetic.
 | `PIPELINE_CONSUMER_STALL_SECONDS` | `300` | How long a JetStream durable may sit with a non-empty backlog and no subscriber before one `consumer_stalled` notice is emitted, and one `consumer_recovered` when it clears. Re-read on every tick, so an operator can tune it without a restart. Missing, non-integer (`abc`, `3.5`, empty) and non-positive (`0`, `-5`) values all fall back to `300`, so a typo can never turn every tick into a notice. |
 | `PIPELINE_OUTBOX_STALE_SECONDS` | `900` | How old the oldest undelivered outbox record must be before `/api/health` reports `outbox_stale` and `/readyz` fails (`/livez` keeps answering — a stale spool is not a reason to restart). Read on every call. Malformed, non-finite and non-positive values fall back to `900`; a positive fractional value is rounded up (`0.5` becomes `1`) rather than truncated to `0`, which would make every non-empty outbox stale. |
 
+### Operator dispatch hold and running agents (`/api/operator/dispatch`)
+
+`GET /api/operator/dispatch` is the operator-only read of the deployment-wide
+dispatch hold (the `dispatch_hold` setting below) and of how many agents are
+running. It is **operator-only** and follows the same rule as `/api/metrics`:
+the caller authenticates through the dashboard middleware, then must be the
+local operator (shared-secret provider) or hold the `admin` role. Any other
+authenticated caller gets `403` with `{"detail": "not authorized: operator"}`.
+
+The body:
+
+```json
+{
+  "hold": false,
+  "running": 2,
+  "stories": [{"plan": "plan-a", "story": "S1"}, {"plan": "plan-b", "story": "S9"}],
+  "scope": "all_namespaces"
+}
+```
+
+- `hold` is the deployment `dispatch_hold` value. A value that cannot be read,
+  or is not a boolean, reports `true` (fail closed), and the scheduler logs a
+  WARNING.
+- `running` is the number of stories whose agent process is alive: a story
+  with status `in_progress` and a live `pid`, or a live detached test-author
+  phase. `stories` lists exactly those stories, and `running` equals its length.
+- `scope` is `all_namespaces` when the store can list its namespaces, and every
+  namespace is counted. It is `default_namespace` when the store cannot list
+  them, and only the default namespace is counted.
+
+Setting or clearing the hold is not a route. It is written with the audited
+`set_setting` tool at the `deployment` scope (`scope: "deployment"`,
+`scope_id: ""`, `repo: ""`, `key: "dispatch_hold"`, `value: true` or `false`).
+Each write appends one `settings:set` host audit record with the old and new
+values.
+
+While the hold is `true`, the scheduler dispatches no new story and redispatches
+no `todo`, `interrupted` or `changes_requested` story on any plan. Review, CI
+polling and merges of stories already past dispatch continue, and no running
+agent is interrupted by the hold. `advance_pipeline`'s result reports
+`dispatch_paused: true`, `paused: true` and `dispatch_pause_reason: "dispatch_hold"`.
+
 ### Metrics scrape endpoint (`/api/metrics`)
 
 `GET /api/metrics` serves the pipeline's own signals in Prometheus text
@@ -4319,6 +4361,7 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `test_scope` | ceiling, `full` \| `scoped` | `full` | `set_setting` |
 | `tenant_test_policy_locked` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
 | `host_tests_skipped` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
+| `dispatch_hold` | lock, boolean (deployment layer only) | `off` | `set_setting` at `deployment` |
 | `merge_ci_timeout_s` | pref, integer seconds | `900` | `set_setting` |
 | `merge_readiness_timeout_s` | pref, integer seconds | `180` | `set_setting` |
 | `rework_on_ci_fail` | pref, boolean | `off` | `set_setting` |
@@ -4331,6 +4374,8 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
 
 `tenant_test_policy_locked` is a deployment-only lock. When the deployment layer sets it to `true`, the deployment layer's `test_scope` is final for every team, plan, story and env request (a request for `full` against a `scoped` deployment resolves to `scoped` and is listed as a lock rejection), and the deployment's `reverify_full_suite` value replaces the org, team and team-repo values. Any other value leaves these keys as described above.
+
+`dispatch_hold` is a deployment-only lock that stops new agent dispatch on every plan. When the deployment layer sets it to `true`, the scheduler dispatches no new story and redispatches no interrupted or `changes_requested` story; review, CI polling and merges continue, and running agents are not interrupted. A value that cannot be read, or is not a boolean, counts as `true` and logs a WARNING. Read it with `GET /api/operator/dispatch`, described above.
 
 `host_tests_skipped` is a deployment-only lock for hosts whose CI gates every merge. When the deployment layer sets it to `true` and a story resolves `scoped`, the pipeline host runs no test command for that story: its `test_scope_resolution` records `host_tests: skipped`, the grade is recorded with `no_tests: true` and `host_tests: skipped`, and the pre-dispatch baseline is not run. It applies only to a story that resolved `scoped`. A story degraded to `full` (for example because merge CI is off or the repo has no CI config) still runs its tests on the host, and gets no `host_tests` field. Any other value, including a non-boolean, leaves the host tests running.
 

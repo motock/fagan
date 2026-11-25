@@ -18,7 +18,14 @@ import os
 import re
 from typing import Any
 
-from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
+from . import (
+    access_hooks,
+    bound_records,
+    cross_plan,
+    dispatch_hold,
+    plan_approval,
+    review_job,
+)
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -427,6 +434,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         and not cross_plan.blocked_by_gaps(v, neighbours)
     ]
 
+    # The deployment hold stops new dispatch only: review and merge still run,
+    # and dispatch_ok is untouched so an in-flight agent is never interrupted.
+    held = dispatch_hold.dispatch_held(_store)
+    ready = dispatch_hold.filter_ready(ready, held)
+
     _warn_file_overlaps(plan_name, stories, ready, neighbours)
 
     # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (comparisons
@@ -441,8 +453,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             "dry_run": True,
             "autonomy": autonomy,
             # "paused" kept for back-compat = dispatch gated.
-            "paused": not dispatch_ok,
-            "dispatch_paused": not dispatch_ok,
+            "paused": not dispatch_ok or held,
+            "dispatch_paused": not dispatch_ok or held,
+            **dispatch_hold.pause_reason(held),
             "review_paused": not review_ok,
             "would_dispatch": ready if dispatch_ok else [],
             "would_merge_decisions": {
@@ -454,8 +467,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
 
     summary: dict[str, Any] = {
         "autonomy": autonomy,
-        "paused": not dispatch_ok,
-        "dispatch_paused": not dispatch_ok,
+        "paused": not dispatch_ok or held,
+        "dispatch_paused": not dispatch_ok or held,
+        **dispatch_hold.pause_reason(held),
         "review_paused": not review_ok,
         "dispatched": [],
         "advanced": [],

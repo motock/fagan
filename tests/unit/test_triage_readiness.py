@@ -213,6 +213,23 @@ def test_ruling_without_park_class_is_bucketed_as_unknown() -> None:
 # --- CLI, read-only ---------------------------------------------------------
 
 
+class _FakeRecords:
+    """Namespaced view of the store: every stub plan sits in the default namespace."""
+
+    def __init__(self, store: _FakeStore) -> None:
+        self._store = store
+
+    def list_namespaces(self) -> list[str]:
+        return ["default"]
+
+    def list_plans(self, namespace: str) -> list[str]:
+        return sorted(self._store._plans)
+
+    def get_decisions(self, namespace: str, plan_name: str) -> list[dict]:
+        self._store.reads.append(plan_name)
+        return self._store._plans.get(plan_name, [])
+
+
 class _FakeStore:
     """Stands in for the configured Store: plan name -> decision records."""
 
@@ -229,6 +246,9 @@ class _FakeStore:
         if self._fail is not None:
             raise self._fail
         return self._plans.get(plan_name, [])
+
+    def records(self) -> _FakeRecords:
+        return _FakeRecords(self)
 
 
 @pytest.fixture
@@ -257,8 +277,19 @@ def test_cli_all_reads_every_manifest_from_the_store(store, capsys) -> None:
 
     report = json.loads(capsys.readouterr().out)
     assert code == 0
-    assert set(report) == {"alpha", "beta"}
+    assert set(report) == {"deployment"}
     assert store.reads == ["alpha", "beta"]
+
+
+def test_cli_all_with_plan_scope_keeps_one_entry_per_plan(store, capsys) -> None:
+    store._plans["alpha"] = _paired_park_agree(3)
+    store._plans["beta"] = _paired_park_agree(2)
+
+    code = tr.main(["--all", "--scope", "plan", "--json"])
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert set(report) == {"alpha", "beta"}
 
 
 def test_cli_table_output_names_each_class(store, capsys) -> None:

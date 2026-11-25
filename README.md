@@ -420,8 +420,8 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
   the plan list scopes to the active repository. The same diagnosis is
   reachable over MCP: `get_story_log`, `get_story_journal`, `get_story_worktree`
   and `get_story_events`, `list_plan_stories` and `get_story` are plan-scoped
-  reads that redact secret values before returning them, and none of them takes a path argument, because the plan name
-  and story key name the story. `unblock_story` is the matching mutation, held
+  reads that redact secret values before returning them, and none of them
+  takes a path argument, because the plan name and story key name the story. `unblock_story` is the matching mutation, held
   to the plan's owner or a delegate, and it resets plan approval when it changes
   the story's brief or files.
 - **Cross-plan coordination.** A story can wait on a story in another plan

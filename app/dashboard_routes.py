@@ -30,7 +30,7 @@ from app.dashboard_helpers import (
     _story_last_activity,
 )
 from app.story_replay import build_replay_events
-from pipeline import config_provenance, remote_scope
+from pipeline import config_provenance, remote_scope, repo_listing_hooks
 from pipeline.actor import current_principal
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 from pipeline.workspace_reader import LocalWorkspaceReader
@@ -466,3 +466,13 @@ def config_providers() -> dict[str, Any]:
     except role_registry.RoleRegistryError:
         registry = {}
     return {"providers": registry.get("providers", {})}
+
+
+def list_repositories_route() -> dict[str, Any]:
+    """The repositories the bound namespace may work with, as the chat's list_repositories tool sees them.
+
+    Takes no parameter: the namespace is the one bound to the request, never a
+    query value. The listing and its failure answer are built by
+    pipeline.repo_listing_hooks, which fails closed.
+    """
+    return repo_listing_hooks.list_repositories_result(_store._value())

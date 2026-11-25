@@ -2215,6 +2215,48 @@ the scope gate will park the story.
 
 ---
 
+## Overlord precedent
+
+Before the overlord rules a parked story (failure triage) or a high-risk merge
+(merge adjudication), its prompt carries a `PRECEDENT` block: the most recent
+human answers to the same kind of decision, read back from the decisions log.
+It is guidance only. The policy, the authority matrix and the allowed actions
+still decide what is permitted, and nothing in the block grants an action.
+
+- **What is paired:** each overlord ruling (a `failure triage` record that did
+  not fail open, or a `high-risk merge adjudication` with a `proceed` or `park`
+  ruling) is paired with the latest `human resolution` for the same story whose
+  `ruling_ref` is that ruling's `decided_at`. An unanswered ruling is not shown.
+- **Class:** a park-class ruling shows precedent for the story's observed park
+  class (the same classification triage uses). A merge adjudication shows
+  precedent for `high_risk_merge`.
+- **Agreement:** an entry is `agree` or `disagree` by the rule
+  `triage_readiness` scores with. A park the human answered with `park`, or with
+  input the machine did not have (`amend_scope`, `rebrief`, `approve_test_edit`,
+  added files, or a changed brief), agrees; any other answer to a park
+  disagrees. A proceed the human answered with `merge_held` agrees; a park the
+  human answered with `merge_held` disagrees.
+- **Selection and order:** the newest `overlord_precedent_limit` paired rulings
+  of the class are chosen. Disagreements are listed first, then agreements, each
+  group newest first. A rationale is cut to 500 characters and its line breaks
+  are collapsed.
+- **Setting:** `overlord_precedent_limit`, an integer from 0 to 50, default 8,
+  settable on every layer. `0` turns the block off and reads nothing. It has no
+  environment variable.
+- **Namespace:** only the namespace bound for the ruling is read. A plan in
+  another namespace never appears in a prompt.
+- **Cost:** the store's decision reads are per plan and take no limit, so the
+  paired rulings of a namespace are read once and kept for 60 seconds. Every
+  ruling inside that window reuses the one read.
+- **Replay:** when a block is shown, its digest (`sha256:` of the rendered text)
+  is appended to the ruling's `input.context_digests`, and the text is stored
+  as a context snapshot under that digest, so replay can load what the overlord
+  was shown. A block with nothing to show is omitted and adds no digest.
+- **Failure:** a read that fails logs one `WARNING` (`overlord precedent
+  unavailable`, naming the plan, story, phase and exception type, never its
+  message) and the ruling proceeds without precedent. A settings record that
+  cannot be read counts as `0` for that ruling, so no block is shown.
+
 ## Park options
 
 When failure triage is enabled (`PIPELINE_AUTO_TRIAGE`), each scheduler tick prepares options for at most one parked story that has none for its current `parked_reason`. The overlord is asked for exactly `park_option_count` options, one marked recommended. Nothing is executed; a person chooses.
@@ -4385,6 +4427,7 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 | `autonomy` | ceiling, `dry-run` \| `gated` \| `full` (dry-run is tightest) | `gated` | `set_setting` |
 | `auto_merge` | ceiling, boolean (off is tighter) | `on` | `set_setting` |
 | `triage_mode` | ceiling, `shadow` \| `execute` (shadow is tighter) | `shadow` | `set_setting` |
+| `overlord_precedent_limit` | pref, integer 0 to 50 (`0` turns precedent off) | `8` (`0` when the Store cannot be read) | `set_setting` |
 | `notification_routes` | pref, channel instances and routes | `{}` | `set_setting` (not the `deployment` layer) |
 | `role_routing` | pref, per-role provider/model pins | `{}` | `set_setting` (not the `deployment` layer) |
 

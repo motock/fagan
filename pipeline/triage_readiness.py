@@ -25,6 +25,18 @@ A person's park option choice (``park_option_chosen``) is not a ruling, so it
 never enters the pairing or the verdict. It is reported beside the verdict as
 ``park_option_choices`` (every choice in the class) and
 ``park_option_agreements`` (choices of the overlord's recommended option).
+
+Scope decides which decisions are pooled before a class is judged. A ruling is
+always paired inside its own plan, so pooling never pairs a ruling with another
+plan's resolution. The scopes are:
+
+- ``plan``: each plan is judged on its own decisions.
+- ``team``: the plans of one namespace are pooled; the report is keyed by namespace.
+- ``deployment``: every plan is pooled; the report is keyed by ``deployment``.
+
+Pooling sums the per-plan counts, so the thresholds and the verdict are the
+same ones a single plan is judged against. A promotion is per decision class,
+and a class is tiered by the authority matrix, not by a plan.
 """
 
 from __future__ import annotations
@@ -35,9 +47,11 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+from .actor import current_namespace
 from .authority_matrix import FileLayerSource
 from .module_ref import _ModuleRef
 from .overlord_class_mode import matrix_tier
+from .store_namespaces import namespaces_with_plans
 from .store_records import InvalidRecordKeyError, validate_plan_name
 from .triage_outcomes import HIGH_RISK_MERGE_CLASS
 from .triage_park_classes import ALLOWED_ACTIONS
@@ -46,7 +60,15 @@ from .triage_park_classes import ALLOWED_ACTIONS
 #: (ADR 0012), so the report sees the same store the server writes to.
 _store = _ModuleRef("pipeline.server", "_store")
 
-__all__ = ["MAX_FALSE_PARK_PERCENT", "MIN_PAIRED_DECISIONS", "PARK_ACTION", "main", "readiness"]
+__all__ = [
+    "MAX_FALSE_PARK_PERCENT",
+    "MIN_PAIRED_DECISIONS",
+    "PARK_ACTION",
+    "SCOPES",
+    "main",
+    "readiness",
+    "scoped_readiness",
+]
 
 #: The ruling action that parks a story for a human.
 PARK_ACTION = "park_for_human"
@@ -65,6 +87,12 @@ MAX_FALSE_PARK_PERCENT = 10
 #: Authority-matrix rule ids that an organization may tighten (tighten-only).
 _MIN_PAIRED_RULE = "readiness.min_paired"
 _RATE_RULE = "readiness.max_false_park_percent"
+
+#: The scopes a readiness report can be judged over, and the key a deployment report uses.
+SCOPE_PLAN = "plan"
+SCOPE_TEAM = "team"
+SCOPE_DEPLOYMENT = "deployment"
+SCOPES = (SCOPE_DEPLOYMENT, SCOPE_TEAM, SCOPE_PLAN)
 
 #: The tier label for a park class the authority matrix does not name.
 _NOT_GOVERNED = "not governed"
@@ -256,20 +284,15 @@ def _verdict(tally: dict[str, int], limits: dict[str, Any], tier: str) -> dict[s
     }
 
 
-def readiness(
-    decisions: Iterable[dict[str, Any]], limits: dict[str, Any] | None = None
-) -> dict[str, dict[str, Any]]:
-    """Return the promotion readiness of each park class in ``decisions``.
+_Counts = tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]
 
-    Every class in :data:`pipeline.triage_park_classes.ALLOWED_ACTIONS` is
-    reported, even with no decisions, so an empty input yields a denial for
-    each class, and so is ``high_risk_merge``. A class seen only in the data is
-    reported too. Each verdict lists its ``blockers``, the ``thresholds`` it was
-    judged against and the class's matrix ``tier``; an ineligible class always
-    names at least one blocker. ``limits`` defaults to :func:`thresholds`.
+
+def _classify(decisions: Iterable[dict[str, Any]]) -> _Counts:
+    """Count one set of decisions: the per-class tallies and the park option choices.
+
+    Pairing happens here, inside the set given, so a set is always one plan or
+    one pooled scope of plans that each paired within themselves.
     """
-    if limits is None:
-        limits = thresholds()
     records = list(decisions)
     resolutions = _latest_resolutions(records)
     choices = _count_choices(records)
@@ -292,12 +315,88 @@ def readiness(
             continue
         tally["paired_count"] += 1
         _score(tally, ruling.get("action"), resolution.get("human_action"), resolution)
+    return tallies, choices
+
+
+def _pool(parts: Iterable[_Counts]) -> _Counts:
+    """Sum counts from several sets of decisions, class by class.
+
+    The result always names every class in ``ALLOWED_ACTIONS``, even with no
+    parts, so an empty scope is still a denial for each class.
+    """
+    tallies, choices = _classify([])
+    for part_tallies, part_choices in parts:
+        for name, tally in part_tallies.items():
+            pooled = tallies.setdefault(name, _tally())
+            for key, value in tally.items():
+                pooled[key] += value
+        for name, count in part_choices.items():
+            pooled_choices = choices.setdefault(name, _choice_tally())
+            for key, value in count.items():
+                pooled_choices[key] += value
+    return tallies, choices
+
+
+def _verdicts(counts: _Counts, limits: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    tallies, choices = counts
     report = {}
     for name, tally in tallies.items():
         verdict = _verdict(tally, limits, _tier_label(name))
         verdict.update(choices.get(name, _choice_tally()))
         report[name] = verdict
     return report
+
+
+def readiness(
+    decisions: Iterable[dict[str, Any]], limits: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Return the promotion readiness of each park class in ``decisions``.
+
+    Every class in :data:`pipeline.triage_park_classes.ALLOWED_ACTIONS` is
+    reported, even with no decisions, so an empty input yields a denial for
+    each class, and so is ``high_risk_merge``. A class seen only in the data is
+    reported too. Each verdict lists its ``blockers``, the ``thresholds`` it was
+    judged against and the class's matrix ``tier``; an ineligible class always
+    names at least one blocker. ``limits`` defaults to :func:`thresholds`.
+    """
+    if limits is None:
+        limits = thresholds()
+    return _verdicts(_classify(decisions), limits)
+
+
+def scoped_readiness(
+    plans: Iterable[tuple[str, str, Iterable[dict[str, Any]]]],
+    scope: str,
+    limits: dict[str, Any] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return the readiness report of ``plans`` judged over ``scope``.
+
+    ``plans`` holds one ``(namespace, plan, decisions)`` triple per plan. The
+    report has the shape :func:`readiness` returns, keyed by the scope's name:
+    the plan name for ``plan``, the namespace for ``team`` and ``deployment`` for
+    ``deployment``. Pooling sums each plan's own counts, so no ruling pairs with
+    a resolution from another plan. A plan name that appears in more than one
+    namespace has no unique key at ``plan`` scope, so that scope refuses it.
+    An unknown scope is refused.
+    """
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope: {scope!r}")
+    if limits is None:
+        limits = thresholds()
+    counted = [(namespace, plan, _classify(decisions)) for namespace, plan, decisions in plans]
+    if scope == SCOPE_PLAN:
+        report: dict[str, dict[str, dict[str, Any]]] = {}
+        for _, plan, counts in counted:
+            if plan in report:
+                raise ValueError(f"plan {plan!r} is held in more than one namespace")
+            report[plan] = _verdicts(counts, limits)
+        return report
+    if scope == SCOPE_DEPLOYMENT:
+        return {SCOPE_DEPLOYMENT: _verdicts(_pool(counts for _, _, counts in counted), limits)}
+    by_namespace: dict[str, list[_Counts]] = {}
+    for namespace, _, counts in counted:
+        by_namespace.setdefault(namespace, []).append(counts)
+    return {namespace: _verdicts(_pool(parts), limits) for namespace, parts in by_namespace.items()}
 
 
 def _paired_resolution(
@@ -342,11 +441,28 @@ def _tally_adjudication(
     _score_merge(tally, merge_ruling, resolution.get("human_action"))
 
 
-def _read_decisions(plan: str) -> list[dict[str, Any]]:
-    records = _store.get_decisions(plan)
+def _checked(records: Any) -> list[dict[str, Any]]:
     if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
         raise TypeError("decisions are not a list of records")
     return records
+
+
+def _read_decisions(plan: str) -> list[dict[str, Any]]:
+    return _checked(_store.get_decisions(plan))
+
+
+def _read_namespaced_plans() -> list[tuple[str, str, list[dict[str, Any]]]]:
+    """Read every plan in every namespace the store holds, with its decisions.
+
+    The namespaced record view is the only read that tells which namespace a
+    plan is bound to, so team and deployment scope both go through it.
+    """
+    records = _store.records()
+    plans = []
+    for namespace in namespaces_with_plans(records):
+        for plan in records.list_plans(namespace):
+            plans.append((namespace, plan, _checked(records.get_decisions(namespace, plan))))
+    return plans
 
 
 def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
@@ -360,12 +476,12 @@ def _print_table(report: dict[str, dict[str, dict[str, Any]]]) -> None:
         f"{'choices':>9}{'chose-rec':>10}  eligible  tier"
     )
     print(header)
-    for plan, classes in report.items():
+    for scope_key, classes in report.items():
         for name, cls in classes.items():
             rate = "-" if cls["false_park_rate"] is None else f"{cls['false_park_rate']:.0%}"
             eligible = "yes" if cls["eligible"] else "no"
             print(
-                f"{plan:<24}{name:<28}{cls['shadow_count']:>7}{cls['paired_count']:>8}"
+                f"{scope_key:<24}{name:<28}{cls['shadow_count']:>7}{cls['paired_count']:>8}"
                 f"{cls['agree']:>7}{cls['false_proceed']:>7}{cls['false_park']:>7}{rate:>7}"
                 f"{cls['park_option_choices']:>9}{cls['park_option_agreements']:>10}  "
                 f"{eligible:<8}  {cls['tier']}"
@@ -378,21 +494,37 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m pipeline.triage_readiness",
         description="Report per park class whether its shadow rulings meet ADR 0014 decision 8.",
     )
-    scope = parser.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--plan", nargs="+", metavar="PLAN", help="plan name(s) to report")
-    scope.add_argument("--all", action="store_true", help="every plan the store lists")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan", nargs="+", metavar="PLAN", help="plan name(s) to report; implies --scope plan")
+    source.add_argument("--all", action="store_true", help="every plan in every namespace the store lists")
+    parser.add_argument(
+        "--scope",
+        choices=SCOPES,
+        help=(
+            "pool decisions over this scope before judging each class: deployment (every plan, "
+            "the default for --all), team (plans grouped by namespace) or plan (each plan alone)"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     args = parser.parse_args(argv)
+    if args.plan is not None and args.scope not in (None, SCOPE_PLAN):
+        parser.error("--plan reports each plan on its own; drop --scope or use --all for a pooled scope")
+    scope = args.scope or (SCOPE_DEPLOYMENT if args.all else SCOPE_PLAN)
 
     try:
-        plans = sorted(_store.list_manifests()) if args.all else [validate_plan_name(p) for p in args.plan]
+        names = None if args.all else [validate_plan_name(p) for p in args.plan]
     except InvalidRecordKeyError:
         print("error: invalid plan name", file=sys.stderr)
         return 1
     try:
-        report = {plan: readiness(_read_decisions(plan)) for plan in plans}
+        plans = _read_namespaced_plans() if args.all else [(current_namespace(), n, _read_decisions(n)) for n in names]
     except (OSError, TypeError, ValueError):
         print("error: a decisions log could not be read", file=sys.stderr)
+        return 1
+    try:
+        report = scoped_readiness(plans, scope)
+    except ValueError:
+        print("error: a plan name is held in more than one namespace; use --scope team or deployment", file=sys.stderr)
         return 1
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

@@ -204,15 +204,11 @@ def test_gather_failure_renders_unreadable_and_fails_closed(monkeypatch):
     decision = h.decide(story)  # must not raise
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
+    assert h.invocations == [], "a failed gather defers: the overlord is not asked"
+    assert h.decisions == [], "a failed gather defers: no decision record is written"
     assert not story.get("pr_checks"), "a failed gather must leave pr_checks unset"
     assert story["pr_checks_error"].startswith("RuntimeError")
     assert "gh exploded" in story["pr_checks_error"]
-    assert "PR CHECKS: (unreadable" in h.prompt
-    assert "PR CHECKS: (none)" not in h.prompt, (
-        "an unreadable CI status is not evidence of absence and must never be "
-        "rendered as (none)"
-    )
-    assert "RuntimeError" in h.pr_checks_line()
 
 
 def test_gather_failure_logs_a_warning_naming_the_story_key(monkeypatch, caplog):
@@ -247,7 +243,8 @@ def test_import_failure_still_logs_and_records_without_raising(monkeypatch, capl
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
     assert story["pr_checks_error"].startswith("ImportError")
-    assert "PR CHECKS: (unreadable" in h.prompt
+    assert h.invocations == [], "an unreadable gather defers: no overlord call"
+    assert h.decisions == [], "an unreadable gather defers: no decision record"
     messages = _pipeline_warnings(caplog)
     assert any(story["key"] in message for message in messages), (
         f"the handler must log the story key even when the import raised; "
@@ -328,7 +325,7 @@ def test_pending_state_defers_the_ruling_without_a_prompt(monkeypatch):
 
 
 def test_never_gathered_story_still_renders_none(monkeypatch):
-    """The gate did not run the gather: no state, no error -> ``(none)``."""
+    """The gate did not run the gather: no state, no error -> defer, no record."""
     h = _Harness(monkeypatch, ruling=PARK_REPLY)
     monkeypatch.setattr(merge_mod, "_populate_pr_checks_once", lambda story: None)
     story = _story()
@@ -337,7 +334,8 @@ def test_never_gathered_story_still_renders_none(monkeypatch):
         decision = merge_mod._adjudicate_high_risk_merge(story, PLAN)
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
-    assert h.pr_checks_line() == "PR CHECKS: (none)"
+    assert h.invocations == [], "a never-gathered CI read defers: no overlord call"
+    assert h.decisions == []
     assert "pr_checks" not in story
     assert "pr_checks_error" not in story
 
@@ -346,11 +344,12 @@ def test_gather_returning_none_renders_none_without_error(monkeypatch):
     h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=None)
     story = _story()
 
-    h.decide(story)
+    assert h.decide(story) == {"action": "park", "reason": HOLD_REASON}
 
+    assert h.invocations == [], "a gather that returns no state defers"
+    assert h.decisions == []
     assert "pr_checks" not in story
     assert "pr_checks_error" not in story
-    assert h.pr_checks_line() == "PR CHECKS: (none)"
 
 
 def test_no_gather_outside_full_autonomy_records_no_error(monkeypatch):
@@ -412,7 +411,7 @@ def test_recovered_gather_renders_fresh_state_when_pr_checks_already_set(
     caller has already written the fresh state, so ``_populate_pr_checks_once``
     early-returns and must still clear the stale error.
     """
-    green = {"state": "success", "checks": [{"name": "ci", "conclusion": "SUCCESS"}]}
+    green = {"state": "pass", "checks": [{"name": "ci", "conclusion": "SUCCESS"}]}
     h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=PASS_STATE)
     story = _story(pr_checks=green, pr_checks_error="RuntimeError: gh: transient")
 

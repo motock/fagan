@@ -88,7 +88,7 @@ def _story(worktree, **overrides):
         "risk": "high",
         "pr_url": "https://example.test/pr/1",
         # Present, so the overlord prompt does not shell out to gh.
-        "pr_checks": {"ci": "pass"},
+        "pr_checks": {"state": "pass", "error": "", "ci": "pass"},
         "worktree": str(worktree),
     }
     base.update(overrides)

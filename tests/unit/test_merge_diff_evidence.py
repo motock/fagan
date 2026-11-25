@@ -279,6 +279,8 @@ def test_git_timeout_or_oserror_renders_exactly_unavailable(monkeypatch, repo, e
 
 def _adjudicate(monkeypatch, story):
     """Run the high-risk adjudication once and return the prompt it sent."""
+    # A concluded CI read, so the ruling is made rather than deferred.
+    story = {"pr_checks": {"state": "pass", "error": ""}, **story}
     sent = []
 
     def _overlord(prompt, plan_role_config=None):

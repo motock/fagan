@@ -4333,7 +4333,7 @@ These keys are tenant settings (ADR 0015). Each is stored in the settings Store 
 
 `tenant_test_policy_locked` is a deployment-only lock. When the deployment layer sets it to `true`, the deployment layer's `test_scope` is final for every team, plan, story and env request (a request for `full` against a `scoped` deployment resolves to `scoped` and is listed as a lock rejection), and the deployment's `reverify_full_suite` value replaces the org, team and team-repo values. Any other value leaves these keys as described above.
 
-`dispatch_hold` is a deployment-only lock that stops new agent dispatch on every plan. When the deployment layer sets it to `true`, the scheduler dispatches no new story and redispatches no interrupted or `changes_requested` story; review, CI polling and merges continue, and running agents are not interrupted. A value that cannot be read, or is not a boolean, counts as `true` and logs a WARNING. Read it with `GET /api/operator/dispatch`, described above.
+`dispatch_hold` is a deployment-only lock that stops new agent dispatch on every plan. When the deployment layer sets it to `true`, the scheduler dispatches no new story and redispatches no interrupted or `changes_requested` story; review, CI polling and merges continue, and running agents are not interrupted. A value that cannot be read, or is not a boolean, counts as `true` and logs a WARNING. Read it with `GET /api/operator/dispatch`, described below.
 
 `host_tests_skipped` is a deployment-only lock for hosts whose CI gates every merge. When the deployment layer sets it to `true` and a story resolves `scoped`, the pipeline host runs no test command for that story: its `test_scope_resolution` records `host_tests: skipped`, the grade is recorded with `no_tests: true` and `host_tests: skipped`, and the pre-dispatch baseline is not run. It applies only to a story that resolved `scoped`. A story degraded to `full` (for example because merge CI is off or the repo has no CI config) still runs its tests on the host, and gets no `host_tests` field. Any other value, including a non-boolean, leaves the host tests running.
 
@@ -4374,10 +4374,12 @@ The legacy names of these keys are no longer read at runtime: `PIPELINE_MERGE_CI
 PIPELINE_MERGE_CI_GATE is retired; set merge_ci_gate with set_setting (or run python -m pipeline.settings_seed first). See ADR 0015.
 ```
 
+If the check itself fails, the process also refuses to start. The migration order is in the CHANGELOG entry and in "Seeding settings from the environment" below.
+
 ### Operator dispatch hold and running agents (`/api/operator/dispatch`)
 
 `GET /api/operator/dispatch` is the operator-only read of the deployment-wide
-dispatch hold (the `dispatch_hold` setting below) and of how many agents are
+dispatch hold (the `dispatch_hold` setting above) and of how many agents are
 running. It is **operator-only** and follows the same rule as `/api/metrics`:
 the caller authenticates through the dashboard middleware, then must be the
 local operator (shared-secret provider) or hold the `admin` role. Any other
@@ -4415,8 +4417,6 @@ no `todo`, `interrupted` or `changes_requested` story on any plan. Review, CI
 polling and merges of stories already past dispatch continue, and no running
 agent is interrupted by the hold. `advance_pipeline`'s result reports
 `dispatch_paused: true`, `paused: true` and `dispatch_pause_reason: "dispatch_hold"`.
-
-If the check itself fails, the process also refuses to start. The migration order is in the CHANGELOG entry and in "Seeding settings from the environment" below.
 
 ## Seeding settings from the environment
 

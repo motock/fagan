@@ -5,20 +5,30 @@ Graded here:
 * the operator gets 200 with ``hold``, ``running``, ``stories`` and ``scope``;
 * the running count and the story list are exact;
 * an authenticated non-operator is refused with 403 and a fixed body;
-* a POST is 405 (the route is read-only; the hold is written through set_setting).
+* a POST is 405 (the route is read-only; the hold is written through set_setting);
+* a request with no principal is refused with 403 by the handler itself;
+* the route is served when the namespace resolver reaches no namespace, so the
+  operator is not refused at namespace binding.
 """
 
 from __future__ import annotations
 
+import uuid
+from types import SimpleNamespace
+
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import pipeline.namespace_resolver as resolver_module
 import pipeline.server  # noqa: F401  (import cycle: pipeline.server first)
 from app import auth, oidc_login
 from app import dashboard as d
 from app import dashboard_routes_operator as route
 from app.identity import Principal
 from app.oidc import OidcProvider, OidcSettings
+from app.plugin_loader import ALLOWLIST_ENV
+from pipeline.namespace_resolver import NAMESPACE_RESOLVER_PLUGIN_ENV
 
 _PATH = "/api/operator/dispatch"
 _HEADER = "X-Pipeline-Api-Key"
@@ -41,10 +51,6 @@ class _StubOidcProvider(OidcProvider):
 
 class _FakeStore:
     """Only the seam the route reads: the store's records."""
-
-    def __init__(self, hold, running):
-        self._hold = hold
-        self._running = running
 
     def records(self):
         return self
@@ -69,7 +75,7 @@ def key_file(tmp_path, monkeypatch):
 
 @pytest.fixture
 def read_snapshot(monkeypatch):
-    monkeypatch.setattr(route, "build_store", lambda: _FakeStore(True, []))
+    monkeypatch.setattr(route, "build_store", lambda: _FakeStore())
     monkeypatch.setattr(route, "dispatch_snapshot", lambda store: dict(_SNAPSHOT))
 
 
@@ -146,3 +152,41 @@ def test_authenticated_non_operator_is_refused_with_403(read_snapshot, oidc_iden
 
 def test_post_is_not_allowed(operator_client):
     assert operator_client.post(_PATH).status_code == 405
+
+
+def test_a_request_without_a_principal_is_refused_with_403():
+    request = SimpleNamespace(state=SimpleNamespace())
+    with pytest.raises(HTTPException) as refused:
+        route.get_operator_dispatch(request)
+    assert refused.value.status_code == 403
+    assert refused.value.detail == _NOT_AUTHORIZED["detail"]
+
+
+def test_operator_is_served_when_the_resolver_reaches_no_namespace(
+    read_snapshot, key_file, tmp_path, monkeypatch
+):
+    """The route is served without a bound namespace, as /api/metrics is."""
+    name = "operator_empty_nsr_" + uuid.uuid4().hex
+    (tmp_path / f"{name}.py").write_text(
+        "from pipeline.namespace_resolver import NamespaceAccess\n"
+        "\n"
+        "\n"
+        "class StubResolver:\n"
+        "    def accesses(self, principal):\n"
+        "        return ()\n"
+        "\n"
+        "def build():\n"
+        "    return StubResolver()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(resolver_module, "_PLUGIN_RESOLVERS", {})
+    monkeypatch.setenv(NAMESPACE_RESOLVER_PLUGIN_ENV, f"{name}:build")
+    monkeypatch.setenv(ALLOWLIST_ENV, name)
+    client = TestClient(d.app)
+    client.headers[_HEADER] = key_file.read_text().strip()
+
+    response = client.get(_PATH)
+
+    assert response.status_code == 200
+    assert response.json() == _SNAPSHOT

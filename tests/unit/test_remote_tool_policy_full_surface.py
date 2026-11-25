@@ -280,3 +280,24 @@ def test_story_read_tool_for_a_visible_plan_reaches_the_handler(name: str) -> No
     arguments = {"plan_name": "mine", "story_key": "S-1"}
     _, recorder = _call({"name": name, "arguments": arguments}, ALICE)
     assert recorder.calls == 1
+
+
+# --- story CI read ----------------------------------------------------------
+
+
+def test_remote_tool_allowed_for_get_story_ci() -> None:
+    assert remote_tool_allowed("get_story_ci") is True
+
+
+def test_get_story_ci_for_a_hidden_plan_is_refused_before_the_handler() -> None:
+    _write_plan("theirs", owner=BOB.subject)
+    arguments = {"plan_name": "theirs", "story_key": "S-1"}
+    result, recorder = _call({"name": "get_story_ci", "arguments": arguments}, ALICE)
+    assert (result["isError"], recorder.calls) == (True, 0)
+
+
+def test_get_story_ci_for_an_unauthenticated_caller_is_refused_before_the_handler() -> None:
+    _write_plan("mine", owner=ALICE.subject)
+    arguments = {"plan_name": "mine", "story_key": "S-1"}
+    result, recorder = _call({"name": "get_story_ci", "arguments": arguments}, principal=None)
+    assert (result["isError"], recorder.calls) == (True, 0)

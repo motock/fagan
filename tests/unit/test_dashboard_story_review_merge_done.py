@@ -168,11 +168,11 @@ def test_approve_merge_route_takes_no_body(client, plan_dir, fake_service):
     assert fake_service.calls == [("approve_merge", "demo", "S1")]
 
 
-def test_approve_merge_route_404_when_not_reviewer_approved(
+def test_approve_merge_route_answers_409_not_reviewed_when_not_reviewer_approved(
     client, plan_dir, fake_service
 ):
     """approve_merge on a story that hasn't passed review surfaces the
-    service's ok:False result as an HTTP 404 with the service's message."""
+    service's ok:False result as an HTTP 409 with the fixed not_reviewed reason."""
     _write_manifest(plan_dir, "demo", {
         "S1": {"summary": "a story", "status": "todo", "dependencies": []},
     })
@@ -183,8 +183,11 @@ def test_approve_merge_route_404_when_not_reviewer_approved(
 
     res = client.post("/api/plans/demo/stories/S1/approve_merge")
 
-    assert res.status_code == 404
-    assert res.json()["detail"] == "Story was never reviewer-approved"
+    assert res.status_code == 409
+    assert res.json()["detail"] == {
+        "reason": "not_reviewed",
+        "message": "The story was never approved by review.",
+    }
     assert fake_service.calls == [("approve_merge", "demo", "S1")]
 
 

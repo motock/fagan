@@ -10,6 +10,7 @@ imported lazily to avoid a cycle.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import Any
 
 from fastapi import Header, HTTPException
@@ -18,6 +19,25 @@ from fastapi.responses import JSONResponse
 from app.auth import refuse_chat_origin
 from app.dashboard_models import StoryPatchBody, StoryStatusBody
 from app.dashboard_refusal import raise_if_forbidden
+from pipeline.actor import current_correlation_id
+
+logger = logging.getLogger("app.dashboard_routes_story")
+
+# A refused merge answers 409 with one of these codes and its fixed message.
+# The raw service error text is logged, never returned. Prefixes follow the
+# wording pipeline/merge.py _approve_merge_impl emits for each refusal.
+_MERGE_REFUSAL_REASONS: tuple[tuple[str, str, str], ...] = (
+    ("Story was never reviewer-approved", "not_reviewed", "The story was never approved by review."),
+    ("rebase failed:", "rebase_failed", "The branch could not be rebased onto the default branch."),
+    ("CI failing:", "ci_failing", "CI is failing on the pull request."),
+    ("CI still pending:", "ci_pending", "CI is still running on the pull request."),
+    ("ci unreadable:", "ci_unreadable", "CI status could not be read."),
+    ("acceptance reverify fail:", "acceptance_failed", "The acceptance checks failed after the rebase."),
+)
+_BUSY_REASON = ("busy", "The plan is busy; try again in a moment.")
+_NOT_MERGEABLE_REASON = ("not_mergeable", "The story cannot be merged in its current state.")
+# merge.py's missing-story answer; the story key is the caller's own input.
+_MISSING_STORY_PREFIX = "No such story "
 
 
 def _dashboard():
@@ -116,21 +136,51 @@ def approve_merge_route(
 ) -> dict[str, Any]:
     """Delegates to _service.approve_merge(plan_name, story_key).
 
-    A retriable refusal (the plan stayed busy past the lock wait) is a
-    conflict with the current state, not a missing story, so it answers 409.
-    The chat model may propose a merge approval but never send one: the chat
-    origin is refused here, so only the person's own Run click gets through.
+    Only a missing plan or story answers 404. Every other refusal is a
+    conflict with the current state and answers 409 with a fixed reason code
+    and message; the raw service error is logged, not returned. The chat model
+    may propose a merge approval but never send one: the chat origin is
+    refused here, so only the person's own Run click gets through.
     """
     refuse_chat_origin(x_pipeline_origin)
-    result = _service.approve_merge(plan_name, story_key)
+    try:
+        result = _service.approve_merge(plan_name, story_key)
+    except FileNotFoundError:
+        # The plan's manifest is missing; the path it names stays out of the response.
+        logger.warning(
+            "approve_merge plan not found",
+            extra={"plan_name": plan_name, "story_key": story_key, "correlation_id": current_correlation_id()},
+        )
+        raise HTTPException(status_code=404, detail="Not found") from None
     raise_if_forbidden(result)
     if not result.get("ok"):
-        status_code = 409 if result.get("retriable") is True else 404
-        raise HTTPException(
-            status_code=status_code,
-            detail=result.get("error", "Unknown error during approve_merge"),
+        error = result.get("error") or "Unknown error during approve_merge"
+        if result.get("retriable") is not True and error.startswith(_MISSING_STORY_PREFIX):
+            raise HTTPException(status_code=404, detail=error)
+        reason, message = _merge_refusal_reason(result)
+        logger.warning(
+            "approve_merge refused",
+            extra={
+                "plan_name": plan_name,
+                "story_key": story_key,
+                "reason": reason,
+                "correlation_id": current_correlation_id(),
+                "error": error,
+            },
         )
+        raise HTTPException(status_code=409, detail={"reason": reason, "message": message})
     return result
+
+
+def _merge_refusal_reason(result: dict[str, Any]) -> tuple[str, str]:
+    """Map a refused approve_merge result to its fixed (reason, message) pair."""
+    if result.get("retriable") is True:
+        return _BUSY_REASON
+    error = result.get("error") or ""
+    for prefix, reason, message in _MERGE_REFUSAL_REASONS:
+        if error.startswith(prefix):
+            return reason, message
+    return _NOT_MERGEABLE_REASON
 
 
 def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:

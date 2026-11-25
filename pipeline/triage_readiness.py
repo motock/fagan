@@ -21,6 +21,11 @@ Definitions, from a paired ruling and the human's ``human_action``:
 - ``false_park_rate`` is false parks over paired decisions. Unpaired rulings
   count toward ``shadow_count`` only.
 
+An inferred pairing (a resolution with ``inferred: true``, written by
+:mod:`pipeline.triage_backfill`) is reported under its ``_inferred`` keys. It
+counts toward the verdict only when ``include_inferred`` is set, so promotion
+never rests on inferred evidence unless the operator chose that.
+
 A person's park option choice (``park_option_chosen``) is not a ruling, so it
 never enters the pairing or the verdict. It is reported beside the verdict as
 ``park_option_choices`` (every choice in the class) and
@@ -117,16 +122,45 @@ _HUMAN_MERGE_HELD = "merge_held"
 _HUMAN_INPUT_ACTIONS = frozenset({"amend_scope", "rebrief", "approve_test_edit"})
 
 
+#: The outcomes one scored pairing can add to a class.
+_OUTCOMES = ("agree", "false_proceed", "false_park", "park_needed_input")
+
+
 def _tally() -> dict[str, int]:
-    return {
+    tally = {
         "shadow_count": 0,
         "paired_count": 0,
-        "agree": 0,
-        "false_proceed": 0,
-        "false_park": 0,
-        "park_needed_input": 0,
         "incomplete_evidence": 0,
+        "paired_inferred": 0,
     }
+    tally.update(dict.fromkeys(_OUTCOMES, 0))
+    tally.update({f"{key}_inferred": 0 for key in _OUTCOMES})
+    return tally
+
+
+def _count_pair(
+    tally: dict[str, int],
+    resolution: dict[str, Any],
+    scored: dict[str, int],
+    include_inferred: bool,
+) -> None:
+    """Add one scored pairing to ``tally``.
+
+    ``scored`` holds the pairing's outcome alone (see :func:`_tally`). A pairing
+    whose resolution the backfill inferred is always reported under its
+    ``_inferred`` keys. It enters the verdict's counts only when
+    ``include_inferred`` is set, so promotion never rests on inferred evidence
+    unless the operator chose that.
+    """
+    if resolution.get("inferred") is True:
+        tally["paired_inferred"] += 1
+        for key in _OUTCOMES:
+            tally[f"{key}_inferred"] += scored[key]
+        if not include_inferred:
+            return
+    tally["paired_count"] += 1
+    for key in _OUTCOMES:
+        tally[key] += scored[key]
 
 
 def _latest_resolutions(records: list[dict[str, Any]]) -> dict[tuple[Any, Any], dict[str, Any]]:
@@ -287,11 +321,12 @@ def _verdict(tally: dict[str, int], limits: dict[str, Any], tier: str) -> dict[s
 _Counts = tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]
 
 
-def _classify(decisions: Iterable[dict[str, Any]]) -> _Counts:
+def _classify(decisions: Iterable[dict[str, Any]], include_inferred: bool = False) -> _Counts:
     """Count one set of decisions: the per-class tallies and the park option choices.
 
     Pairing happens here, inside the set given, so a set is always one plan or
     one pooled scope of plans that each paired within themselves.
+    ``include_inferred`` decides whether inferred pairings enter the counts.
     """
     records = list(decisions)
     resolutions = _latest_resolutions(records)
@@ -303,7 +338,7 @@ def _classify(decisions: Iterable[dict[str, Any]]) -> _Counts:
     for ruling in records:
         question = ruling.get("question")
         if question == _ADJUDICATION_QUESTION:
-            _tally_adjudication(tallies, resolutions, ruling)
+            _tally_adjudication(tallies, resolutions, ruling, include_inferred)
             continue
         if question != _RULING_QUESTION:
             continue
@@ -313,8 +348,9 @@ def _classify(decisions: Iterable[dict[str, Any]]) -> _Counts:
         resolution = _paired_resolution(resolutions, ruling)
         if resolution is None:
             continue
-        tally["paired_count"] += 1
-        _score(tally, ruling.get("action"), resolution.get("human_action"), resolution)
+        scored = _tally()
+        _score(scored, ruling.get("action"), resolution.get("human_action"), resolution)
+        _count_pair(tally, resolution, scored, include_inferred)
     return tallies, choices
 
 
@@ -348,7 +384,9 @@ def _verdicts(counts: _Counts, limits: dict[str, Any]) -> dict[str, dict[str, An
 
 
 def readiness(
-    decisions: Iterable[dict[str, Any]], limits: dict[str, Any] | None = None
+    decisions: Iterable[dict[str, Any]],
+    limits: dict[str, Any] | None = None,
+    include_inferred: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Return the promotion readiness of each park class in ``decisions``.
 
@@ -358,16 +396,18 @@ def readiness(
     reported too. Each verdict lists its ``blockers``, the ``thresholds`` it was
     judged against and the class's matrix ``tier``; an ineligible class always
     names at least one blocker. ``limits`` defaults to :func:`thresholds`.
+    Inferred pairings are reported apart; ``include_inferred`` counts them too.
     """
     if limits is None:
         limits = thresholds()
-    return _verdicts(_classify(decisions), limits)
+    return _verdicts(_classify(decisions, include_inferred), limits)
 
 
 def scoped_readiness(
     plans: Iterable[tuple[str, str, Iterable[dict[str, Any]]]],
     scope: str,
     limits: dict[str, Any] | None = None,
+    include_inferred: bool = False,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Return the readiness report of ``plans`` judged over ``scope``.
 
@@ -383,7 +423,10 @@ def scoped_readiness(
         raise ValueError(f"unknown scope: {scope!r}")
     if limits is None:
         limits = thresholds()
-    counted = [(namespace, plan, _classify(decisions)) for namespace, plan, decisions in plans]
+    counted = [
+        (namespace, plan, _classify(decisions, include_inferred))
+        for namespace, plan, decisions in plans
+    ]
     if scope == SCOPE_PLAN:
         report: dict[str, dict[str, dict[str, Any]]] = {}
         for _, plan, counts in counted:
@@ -417,6 +460,7 @@ def _tally_adjudication(
     tallies: dict[str, dict[str, int]],
     resolutions: dict[tuple[Any, Any], dict[str, Any]],
     ruling: dict[str, Any],
+    include_inferred: bool = False,
 ) -> None:
     """Count one high-risk merge adjudication in its own class.
 
@@ -437,8 +481,9 @@ def _tally_adjudication(
     resolution = _paired_resolution(resolutions, ruling)
     if resolution is None:
         return
-    tally["paired_count"] += 1
-    _score_merge(tally, merge_ruling, resolution.get("human_action"))
+    scored = _tally()
+    _score_merge(scored, merge_ruling, resolution.get("human_action"))
+    _count_pair(tally, resolution, scored, include_inferred)
 
 
 def _checked(records: Any) -> list[dict[str, Any]]:
@@ -505,6 +550,11 @@ def main(argv: list[str] | None = None) -> int:
             "the default for --all), team (plans grouped by namespace) or plan (each plan alone)"
         ),
     )
+    parser.add_argument(
+        "--include-inferred",
+        action="store_true",
+        help="count pairings the backfill inferred from story history toward the thresholds",
+    )
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     args = parser.parse_args(argv)
     if args.plan is not None and args.scope not in (None, SCOPE_PLAN):
@@ -522,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: a decisions log could not be read", file=sys.stderr)
         return 1
     try:
-        report = scoped_readiness(plans, scope)
+        report = scoped_readiness(plans, scope, include_inferred=args.include_inferred)
     except ValueError:
         print("error: a plan name is held in more than one namespace; use --scope team or deployment", file=sys.stderr)
         return 1

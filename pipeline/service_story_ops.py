@@ -4,6 +4,7 @@ and delegate here. Server-owned names are _ServerRef bindings, exactly as in
 pipeline.service, so tests patching pipeline.server still land.
 """
 
+import logging
 from typing import Any
 
 from pipeline import worktree_diff
@@ -11,6 +12,8 @@ from pipeline.actor import actor_id
 from pipeline.concurrency import command_lock_wait_seconds
 from pipeline.plan_approval import approval_enabled, reset_if_changed
 from pipeline.triage_outcomes import record_resolution_if_ruled
+
+logger = logging.getLogger(__name__)
 
 #: The new statuses that mean the machine parked the story again.
 _PARK_STATUSES = frozenset({"failed", "blocked", "parked"})
@@ -34,9 +37,18 @@ def _story_status(plan_name: str, story_key: str) -> str | None:
 
     Callers validate the plan and story keys first: this reads the manifest by
     name. A missing plan reads as ``None`` rather than raising, so the caller's
-    own refusal, not this read, answers an unknown plan.
+    own refusal, not this read, answers an unknown plan. A store that cannot be
+    read also reads as ``None``: the status only decides an audit record, and a
+    dispatch must not fail because its record could not be written.
     """
-    manifest = _store.get_manifest_or_none(plan_name) or {}
+    try:
+        manifest = _store.get_manifest_or_none(plan_name) or {}
+    except Exception:  # noqa: BLE001 - the status feeds an audit record only
+        logger.warning(
+            "could not read the story status for the human resolution",
+            extra={"plan_name": plan_name, "story_key": story_key},
+        )
+        return None
     story = manifest.get("stories", {}).get(story_key)
     return story.get("status") if isinstance(story, dict) else None
 

@@ -328,3 +328,44 @@ def test_second_unblock_against_the_same_ruling_adds_no_resolution(plan_dir, qui
     p.unblock_story(PLAN, KEY, ["rework_attempts"])
 
     assert len(_resolutions()) == 1
+
+
+# --------------------------------------------------------------------------
+# dispatch_story: the audit record never decides whether a dispatch runs
+# --------------------------------------------------------------------------
+
+
+def _store_reads_fail_after(monkeypatch, reads_allowed: int) -> None:
+    real = p._store.get_manifest_or_none
+    seen = {"reads": 0}
+
+    def flaky(plan_name):
+        seen["reads"] += 1
+        if seen["reads"] > reads_allowed:
+            raise OSError("store unreadable")
+        return real(plan_name)
+
+    monkeypatch.setattr(p._store, "get_manifest_or_none", flaky)
+
+
+def test_unreadable_store_before_dispatch_does_not_fail_the_dispatch(plan_dir, monkeypatch) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _parked()})
+    _seed_ruling()
+    _fake_dispatch(plan_dir, monkeypatch, {"ok": True, "story_key": KEY})
+    _store_reads_fail_after(monkeypatch, reads_allowed=0)
+
+    result = p.dispatch_story(PLAN, KEY)
+
+    assert result["ok"] is True
+    assert _resolutions() == []
+
+
+def test_unreadable_store_after_dispatch_does_not_fail_the_dispatch(plan_dir, monkeypatch) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _parked()})
+    _seed_ruling()
+    _fake_dispatch(plan_dir, monkeypatch, {"ok": True, "story_key": KEY})
+    _store_reads_fail_after(monkeypatch, reads_allowed=1)
+
+    result = p.dispatch_story(PLAN, KEY)
+
+    assert result == {"ok": True, "story_key": KEY}

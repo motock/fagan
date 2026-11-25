@@ -30,10 +30,10 @@ _HOLD_LAYER = "deployment"
 
 def dispatch_held(store: Any) -> bool:
     """True when the deployment layer holds dispatch, or the hold cannot be read."""
-    records = store.records() if callable(getattr(store, "records", None)) else None
-    if getattr(records, "get_settings", None) is None:
-        return False
     try:
+        records = store.records() if callable(getattr(store, "records", None)) else None
+        if getattr(records, "get_settings", None) is None:
+            return False
         record = records.get_settings(DEFAULT_NAMESPACE, _HOLD_LAYER, "", "")
         value = (record["values"] if record else {}).get(HOLD_KEY, False)
     except Exception as exc:  # noqa: BLE001 - a hold that cannot be read is a held hold

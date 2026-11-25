@@ -60,8 +60,10 @@ _SNAPSHOT = {
 
 @pytest.fixture
 def key_file(tmp_path, monkeypatch):
+    """A throwaway key file, created here so the test never depends on who else creates it."""
     path = tmp_path / ".dashboard_api_key"
     monkeypatch.setattr(auth, "API_KEY_PATH", path)
+    auth.get_or_create_api_key()
     return path
 
 

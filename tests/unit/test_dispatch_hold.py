@@ -16,8 +16,6 @@ Graded here:
 
 import logging
 import os
-import subprocess
-import sys
 
 import pytest
 
@@ -33,13 +31,11 @@ HUMAN = Principal("user:alice", auth_method="oidc")
 OTHER_NAMESPACE = "env-b"
 
 
-def _dead_pid():
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
-
-
 LIVE_PID = os.getpid()
+# No live process can hold this pid: pid_t is a signed 32-bit int and Linux caps
+# pid_max far below it, so kill(pid, 0) reports ESRCH. A spawned-and-reaped child
+# would also be dead, but its pid can be recycled before the liveness check runs.
+DEAD_PID = 2**31 - 1
 
 
 class _Records:
@@ -154,6 +150,20 @@ def test_a_store_that_raises_on_read_is_held_and_warns_once(caplog):
     assert len(warnings) == 1
 
 
+class _UnreadableViewStore:
+    """A store whose record view itself cannot be opened."""
+
+    def records(self):
+        raise OSError("record view unavailable")
+
+
+def test_a_store_whose_record_view_raises_is_held_and_warns_once(caplog):
+    with caplog.at_level(logging.WARNING, logger="pipeline.dispatch_hold"):
+        assert dh.dispatch_held(_UnreadableViewStore()) is True
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
 @pytest.mark.parametrize("stored", ["yes", 1, None, ["true"]])
 def test_a_non_bool_stored_value_is_held_and_warns(caplog, stored):
     store = _Store(_Records(_record(**{KEY: stored})))
@@ -185,10 +195,9 @@ def test_filter_ready_empties_the_list_when_held():
 
 
 def test_running_count_lists_only_live_in_progress_stories_across_namespaces():
-    dead = _dead_pid()
     manifests = {
         DEFAULT_NAMESPACE: {
-            "plan-a": {"stories": {"S1": _story("in_progress", LIVE_PID), "S2": _story("in_progress", dead)}},
+            "plan-a": {"stories": {"S1": _story("in_progress", LIVE_PID), "S2": _story("in_progress", DEAD_PID)}},
         },
         OTHER_NAMESPACE: {
             "plan-b": {"stories": {"S9": _story("in_progress", LIVE_PID), "S10": _story("todo")}},

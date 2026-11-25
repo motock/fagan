@@ -30,7 +30,7 @@ MERGE_STORY = {
     "risk": "high",
     "review_verdict": "APPROVE",
     "security_review_verdict": "APPROVE",
-    "pr_checks": {"ci": "pass"},
+    "pr_checks": {"ci": "pass", "state": "pass", "error": ""},
     "worktree": "",
 }
 TRIAGE_STORY = {"key": KEY, "status": "parked", "parked_reason": "lint failed"}

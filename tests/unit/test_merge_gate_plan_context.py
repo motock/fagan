@@ -31,7 +31,12 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
 )
 
 APPROVED = {"review_verdict": "APPROVE", "risk": "low"}
-HIGH_RISK_APPROVED = {"key": "JCC-02", "review_verdict": "APPROVE", "risk": "high"}
+HIGH_RISK_APPROVED = {
+    "key": "JCC-02",
+    "review_verdict": "APPROVE",
+    "risk": "high",
+    "pr_checks": {"ci": "pass", "lint": "pass", "state": "pass", "error": ""},
+}
 HOLD_REASON = "high risk held for human review"
 PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin to merge unattended"
 

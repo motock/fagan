@@ -66,8 +66,8 @@ BRANCH = "agent/MERGEPARK-2-STORY-2"
 PROCEED_REPLY = "RULING: proceed\nRATIONALE: checks are green and the change is contained"
 PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin to merge unattended"
 
-PENDING_CHECKS = {"ci": "pending", "lint": "pass"}
-GREEN_CHECKS = {"ci": "pass", "lint": "pass"}
+PENDING_CHECKS = {"ci": "pending", "lint": "pass", "state": "pending", "error": ""}
+GREEN_CHECKS = {"ci": "pass", "lint": "pass", "state": "pass", "error": ""}
 
 ADVANCE_PATH = Path(__file__).resolve().parents[2] / "pipeline" / "advance.py"
 # The re-adjudication pass lives in advance_merge.py; the source-level guards

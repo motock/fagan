@@ -369,3 +369,28 @@ def test_unreadable_store_after_dispatch_does_not_fail_the_dispatch(plan_dir, mo
     result = p.dispatch_story(PLAN, KEY)
 
     assert result == {"ok": True, "story_key": KEY}
+
+
+def test_patch_of_description_on_parked_story_is_refused_and_records_nothing(plan_dir) -> None:  # noqa: F811
+    # description is not a patchable story field, so the patch is refused before
+    # any brief comparison: no rebrief, and the stored description is untouched.
+    _write_manifest(plan_dir, PLAN, {KEY: _parked(description="Old.")})
+    _seed_ruling()
+
+    result = p.patch_story(PLAN, KEY, {"description": "New."})
+
+    assert result["ok"] is False
+    assert "cannot patch field" in result["error"]
+    assert _resolutions() == []
+
+
+def test_patch_of_files_on_parked_story_is_refused_and_records_nothing(plan_dir) -> None:  # noqa: F811
+    # files is not a patchable story field either: a refused patch writes nothing.
+    _write_manifest(plan_dir, PLAN, {KEY: _parked(files=["pipeline/a.py"])})
+    _seed_ruling()
+
+    result = p.patch_story(PLAN, KEY, {"files": ["pipeline/b.py"]})
+
+    assert result["ok"] is False
+    assert "cannot patch field" in result["error"]
+    assert _resolutions() == []

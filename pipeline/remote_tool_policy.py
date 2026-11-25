@@ -24,7 +24,7 @@ Read tools are scoped to the plans a remote principal may see -- the plans it
 owns or is a delegate of, per ``app.policy.can_view``:
 
 * the plan-scoped read tools (``check_story_status``, ``export_plan``,
-  ``get_effective_config``, ``get_story``, ``get_story_diff``,
+  ``get_effective_config``, ``get_story``, ``get_story_ci``, ``get_story_diff``,
   ``list_decisions``, ``list_plan_stories``, ``list_ready_stories``) refuse
   *before* the handler runs when their ``plan_name`` argument is missing, not
   a string, not a safe plan key (the same ``[A-Za-z0-9._-]`` rule the tools'
@@ -123,6 +123,7 @@ REMOTE_READ = frozenset(
         "export_plan",
         "get_effective_config",
         "get_story",
+        "get_story_ci",
         "get_story_diff",
         "get_story_events",
         "get_story_journal",
@@ -165,6 +166,7 @@ PLAN_SCOPED_READ = frozenset(
         "export_plan",
         "get_effective_config",
         "get_story",
+        "get_story_ci",
         "get_story_diff",
         "get_story_events",
         "get_story_journal",

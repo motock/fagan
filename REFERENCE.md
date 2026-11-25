@@ -314,6 +314,16 @@ caller bound to another namespace sees its ingested manifests and no drafts.
   `files`, `pr_url`, `attempts`, `parked_reason`, `failure_reason` and
   `agent_instructions`. The brief is masked and cut to 60,000 characters with
   `agent_instructions_truncated: true` when cut. No log, worktree or pid is returned.
+- `get_story_ci(plan_name, story_key)` — the CI result of the story's pull request:
+  `available`, `pr_url`, the aggregate `state` (`pass`, `fail`, `pending`,
+  `cancelled`, `unreadable` or `none`), and `checks` as `{name, state}` sorted by
+  name (at most 100, `truncated: true` when cut). `failure_excerpt` is the masked
+  failing-log excerpt, cut to 4,000 characters, and is returned only when the state
+  is `fail`. The branch is always `agent/<story_key>` in the plan's own repository;
+  there is no branch, sha, repository or path argument. It reports CI even when
+  `merge_ci_gate` is off. A story with no pull request is `{"available": false,
+  "reason": "no_pull_request"}`; CI that cannot be read is `{"available": false,
+  "reason": "ci_unreadable", "correlation_id"}`.
 - `list_repositories()` — the repositories the bound namespace may work with,
   as sorted `host/owner/name` items, each `{"repo", "level", "state"}`. It takes
   no namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the items are

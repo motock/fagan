@@ -16,6 +16,7 @@ from .audit import append_host_audit
 from .module_ref import _ModuleRef
 from .plan_story_read import get_story, list_plan_stories
 from .repo_read_access import RepoReadRefused, RepoUrlNotAllowed, read_root_kwargs
+from .story_ci_read import get_story_ci
 from .story_evidence import (  # noqa: F401  (get_story_events is re-exported)
     REDACTED,
     get_story_events,
@@ -376,4 +377,5 @@ TOOLS = (
     search_repository,
     list_plan_stories,
     get_story,
+    get_story_ci,
 )

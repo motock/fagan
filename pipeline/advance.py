@@ -18,14 +18,7 @@ import os
 import re
 from typing import Any
 
-from . import (
-    access_hooks,
-    bound_records,
-    cross_plan,
-    dispatch_hold,
-    plan_approval,
-    review_job,
-)
+from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
@@ -43,6 +36,7 @@ from .concurrency import (
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
+from .dispatch_hold import dispatch_held, filter_ready, pause_reason
 from .dispatch_lease import claim_dispatch_lease
 from .park_options import run_park_options_sweep
 from .rebrief import (
@@ -436,8 +430,8 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
 
     # The deployment hold stops new dispatch only: review and merge still run,
     # and dispatch_ok is untouched so an in-flight agent is never interrupted.
-    held = dispatch_hold.dispatch_held(_store)
-    ready = dispatch_hold.filter_ready(ready, held)
+    held = dispatch_held(_store)
+    ready = filter_ready(ready, held)
 
     _warn_file_overlaps(plan_name, stories, ready, neighbours)
 
@@ -455,7 +449,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # "paused" kept for back-compat = dispatch gated.
             "paused": not dispatch_ok or held,
             "dispatch_paused": not dispatch_ok or held,
-            **dispatch_hold.pause_reason(held),
+            **pause_reason(held),
             "review_paused": not review_ok,
             "would_dispatch": ready if dispatch_ok else [],
             "would_merge_decisions": {
@@ -469,7 +463,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         "autonomy": autonomy,
         "paused": not dispatch_ok or held,
         "dispatch_paused": not dispatch_ok or held,
-        **dispatch_hold.pause_reason(held),
+        **pause_reason(held),
         "review_paused": not review_ok,
         "dispatched": [],
         "advanced": [],

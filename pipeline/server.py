@@ -739,7 +739,7 @@ def list_ready_stories(plan_name: str) -> list[dict]:
     Returns a list of {"key": ..., "summary": ...} — just enough to choose
     a story key for dispatch_story or check_story_status, not the full
     story record (agent_instructions, acceptance, etc. are omitted; use
-    check_story_status for those). A story already in_progress, parked, or
+    get_story for those, list_plan_stories for every story). A story already in_progress, parked, or
     done is never included, and neither is a "todo" story whose
     dependencies aren't all done yet — call this again after a dependency
     completes rather than assuming today's list stays valid.

@@ -302,6 +302,18 @@ caller bound to another namespace sees its ingested manifests and no drafts.
   story's `review_feedback`, `parked_reason`, `failure_reason` and
   `last_inconclusive_output_excerpt` (masked, at most 4,000 characters) are
   returned alongside when present.
+- `list_plan_stories(plan_name)` — every story of the plan in manifest order,
+  each `{"key", "summary", "status", "risk", "dependencies", "blocked_by",
+  "pr_url", "parked_reason", "failure_reason", "ready"}`, with `counts` by
+  status over the whole plan. `ready` is true for the stories
+  `list_ready_stories` returns. At most 500 stories, `truncated: true` when cut;
+  the summary and reasons are masked and cut to 300 characters. No brief: use
+  `get_story` for that.
+- `get_story(plan_name, story_key)` — one story's brief and state:
+  `key`, `summary`, `status`, `risk`, `persona`, `dependencies`, `blocked_by`,
+  `files`, `pr_url`, `attempts`, `parked_reason`, `failure_reason` and
+  `agent_instructions`. The brief is masked and cut to 60,000 characters with
+  `agent_instructions_truncated: true` when cut. No log, worktree or pid is returned.
 - `list_repositories()` — the repositories the bound namespace may work with,
   as sorted `host/owner/name` items, each `{"repo", "level", "state"}`. It takes
   no namespace argument. Without `PIPELINE_REPO_LISTING_PLUGIN` the items are

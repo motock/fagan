@@ -14,6 +14,7 @@ from . import repo_listing_hooks, story_worktree_status
 from .actor import current_correlation_id, current_principal
 from .audit import append_host_audit
 from .module_ref import _ModuleRef
+from .plan_story_read import get_story, list_plan_stories
 from .repo_read_access import RepoReadRefused, RepoUrlNotAllowed, read_root_kwargs
 from .story_evidence import (  # noqa: F401  (get_story_events is re-exported)
     REDACTED,
@@ -373,4 +374,6 @@ TOOLS = (
     read_repository_file,
     list_repository_directory,
     search_repository,
+    list_plan_stories,
+    get_story,
 )

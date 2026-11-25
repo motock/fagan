@@ -421,8 +421,8 @@ in [docs/DEMO.md](docs/DEMO.md#screenshots).
   reachable over MCP: `get_story_log`, `get_story_journal`, `get_story_worktree`
   and `get_story_events`, `list_plan_stories` and `get_story` are plan-scoped
   reads that redact secret values before returning them, and none of them
-  takes a path argument, because the plan name and story key name the story. `unblock_story` is the matching mutation, held
-  to the plan's owner or a delegate, and it resets plan approval when it changes
+  takes a path argument, because the plan name and story key name the story.
+  `unblock_story` is the matching mutation, held to the plan's owner or a delegate, and it resets plan approval when it changes
   the story's brief or files.
 - **Cross-plan coordination.** A story can wait on a story in another plan
   (`blocked_by`), and the pipeline warns when two plans' in-flight stories

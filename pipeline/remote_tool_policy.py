@@ -28,10 +28,10 @@ owns or is a delegate of, per ``app.policy.can_view``:
   ``list_decisions``, ``list_plan_stories``, ``list_ready_stories``) refuse
   *before* the handler runs when their ``plan_name`` argument is missing, not
   a string, not a safe plan key (the same ``[A-Za-z0-9._-]`` rule the tools'
-  own path building uses), or names a plan the caller may not see. The refusal is one fixed result,
-  identical for a plan that does not exist and a plan the caller may not see,
-  so the reply is no existence oracle; the refused call is recorded in the host
-  chain as ``tool:call`` with outcome ``hidden``;
+  own path building uses), or names a plan the caller may not see. The refusal
+  is one fixed result, identical for a plan that does not exist and a plan the
+  caller may not see, so the reply is no existence oracle; the refused call is
+  recorded in the host chain as ``tool:call`` with outcome ``hidden``;
 * ``list_plans`` still runs, and its stems are filtered afterwards to visible
   plans. A stem names a plan by the text before its first ``.``, so
   ``beta.manifest`` reports plan ``beta`` and is kept with it. A result shape

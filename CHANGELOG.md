@@ -88,6 +88,7 @@ in practice.
 
 ### Changed
 
+- The decompose prompt tells the analyst to keep a change with the existing tests it breaks: a story that changes a value, name, version or behaviour that existing tests assert must update those tests in the same story, so its pull request can pass the repository's CI on its own (cap-05). Measured 2026-11-25: a version bump in one story and its test update in the next left the first pull request unable to pass CI.
 - `GET /api/metrics` admits a caller whose token carries the scope `metrics-read`, so a machine scraper needs no admin role. The scope grants nothing else; every other caller still gets the same 403.
 - `GET /api/metrics` is served without a bound namespace, so a scrape caller needs no namespace membership; authentication and the operator check are unchanged.
 

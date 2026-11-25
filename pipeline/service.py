@@ -184,6 +184,9 @@ from .service_role_config import (
 from .service_story_ops import (
     _get_story_diff_impl,
     _patch_story_impl,
+    _prior_dispatch_status,
+    _record_dispatch_resolution,
+    _record_interrupt_resolution,
     _set_story_status_impl,
 )
 
@@ -676,6 +679,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 return {"ok": False, "error": f"No such story {story_key}"}
             if "pid" not in story:
                 return {"ok": False, "error": "Story not dispatched"}
+            was_parked = story.get("status") == "parked"
             sha = _terminate_and_checkpoint(
                 manifest,
                 plan_name,
@@ -685,7 +689,8 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 step="interrupted",
                 summary="Agent process terminated; checkpointed for resume.",
             )
-            return {"ok": True, "status": "interrupted", "commit": sha}
+        _record_interrupt_resolution(plan_name, story_key, was_parked)
+        return {"ok": True, "status": "interrupted", "commit": sha}
 
     def list_ready_stories(self, plan_name: str) -> list[dict]:
         _validate_key(plan_name)
@@ -912,6 +917,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     @scoped_story_call
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        prior_status = _prior_dispatch_status(plan_name, story_key)
         try:
             result = _dispatch_story_impl(plan_name, story_key)
         except ValueError:
@@ -936,6 +942,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # test-author phase, or a failure - never per enqueue plus per worker
         # callback. A ValueError above is malformed input, not an attempt.
         record_dispatch_attempt(result)
+        _record_dispatch_resolution(plan_name, story_key, prior_status, result)
         return result
 
     @scoped_story_call

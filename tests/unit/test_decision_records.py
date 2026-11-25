@@ -660,3 +660,40 @@ def test_colon_plan_audit_stream_does_not_alias_the_decisions_namespace(
     audit_anchor.anchor_heads()
     # The intact decisions chain is not falsely reported as tampered.
     assert audit_anchor.verify_against_anchor("decisions:p") is None
+
+
+# --------------------------------------------------------------------------
+# ruling_ref: the optional link to the overlord ruling a judgment answers
+# --------------------------------------------------------------------------
+
+RULING_REF = "2026-11-20T10:00:00+00:00"
+
+
+def test_ruling_ref_is_kept_when_the_caller_supplies_it(plan_dir: Path) -> None:
+    stored = _append(ruling_ref=RULING_REF)
+
+    assert stored["ruling_ref"] == RULING_REF
+
+
+def test_record_without_ruling_ref_stores_none(plan_dir: Path) -> None:
+    stored = _append()
+
+    assert "ruling_ref" not in stored
+
+
+@pytest.mark.parametrize(
+    "value, reason",
+    [
+        ("", "must not be empty"),
+        (42, "must be a string"),
+        (None, "must be a string"),
+        ("x" * (decision_records.MAX_REFERENCE + 1), "exceeds"),
+    ],
+)
+def test_malformed_ruling_ref_is_refused(plan_dir: Path, value: Any, reason: str) -> None:
+    with pytest.raises(decision_records.DecisionRecordError) as raised:
+        decision_records.append_decision_record("p", _record(ruling_ref=value))
+
+    assert "ruling_ref" in str(raised.value)
+    assert reason in str(raised.value)
+    assert not _chain_path(plan_dir).exists()

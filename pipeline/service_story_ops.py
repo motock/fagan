@@ -4,6 +4,7 @@ and delegate here. Server-owned names are _ServerRef bindings, exactly as in
 pipeline.service, so tests patching pipeline.server still land.
 """
 
+import logging
 from typing import Any
 
 from pipeline import worktree_diff
@@ -11,6 +12,8 @@ from pipeline.actor import actor_id
 from pipeline.concurrency import command_lock_wait_seconds
 from pipeline.plan_approval import approval_enabled, reset_if_changed
 from pipeline.triage_outcomes import record_resolution_if_ruled
+
+logger = logging.getLogger(__name__)
 
 #: The new statuses that mean the machine parked the story again.
 _PARK_STATUSES = frozenset({"failed", "blocked", "parked"})
@@ -27,6 +30,64 @@ def _human_action_for_status(status: str) -> str:
     if status in _RETRY_STATUSES:
         return "retry"
     return "other"
+
+
+def _story_status(plan_name: str, story_key: str) -> str | None:
+    """The story's status as stored now, or ``None`` when it is not there.
+
+    Callers validate the plan and story keys first: this reads the manifest by
+    name. A missing plan reads as ``None`` rather than raising, so the caller's
+    own refusal, not this read, answers an unknown plan. A store that cannot be
+    read also reads as ``None``: the status only decides an audit record, and a
+    dispatch must not fail because its record could not be written.
+    """
+    try:
+        manifest = _store.get_manifest_or_none(plan_name) or {}
+    except Exception:  # noqa: BLE001 - the status feeds an audit record only
+        logger.warning(
+            "could not read the story status for the human resolution",
+            extra={"plan_name": plan_name, "story_key": story_key},
+        )
+        return None
+    story = manifest.get("stories", {}).get(story_key)
+    return story.get("status") if isinstance(story, dict) else None
+
+
+def _prior_dispatch_status(plan_name: str, story_key: str) -> str | None:
+    """The status a story has before a dispatch, validating the keys first.
+
+    Validation runs here because the read is by name; a malformed key raises
+    ``ValueError`` exactly as the dispatch itself does.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    return _story_status(plan_name, story_key)
+
+
+def _record_dispatch_resolution(
+    plan_name: str, story_key: str, prior_status: str | None, result: dict[str, Any]
+) -> None:
+    """Relaunching a parked story is the operator's answer to its ruling."""
+    if prior_status == "parked" and result.get("ok") is True and not result.get("skipped"):
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action="retry",
+            new_status=_story_status(plan_name, story_key) or "",
+            principal=actor_id(),
+        )
+
+
+def _record_interrupt_resolution(plan_name: str, story_key: str, was_parked: bool) -> None:
+    """Stopping a parked story's agent is an answer the ruling did not foresee."""
+    if was_parked:
+        record_resolution_if_ruled(
+            plan_name,
+            story_key,
+            human_action="other",
+            new_status="interrupted",
+            principal=actor_id(),
+        )
 
 
 def _set_story_status_impl(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:
@@ -140,6 +201,7 @@ def _patch_story_impl(
         before = _store.get_manifest(plan_name).get("stories", {}).get(story_key)
         previous_instructions = before.get("agent_instructions") if before else None
         was_dispatched = bool(before and before.get("dispatched_at"))
+        was_parked = bool(before and before.get("status") == "parked")
         story = _store.update_story(plan_name, story_key, fields)
         if story is None:
             return {"ok": False, "error": f"No such story {story_key!r}"}
@@ -152,6 +214,10 @@ def _patch_story_impl(
                 _store.save_manifest(plan_name, manifest)
                 from pipeline.plan_approval_notice import notify_approval_event
                 notify_approval_event(plan_name, manifest, "plan_pending_approval")
+        brief_rewritten = (
+            "agent_instructions" in fields
+            and fields["agent_instructions"] != previous_instructions
+        )
         if (
             was_dispatched
             and "agent_instructions" in fields
@@ -169,7 +235,23 @@ def _patch_story_impl(
                     else {}
                 ),
             )
-        return {"ok": True, "story_key": story_key, "story": story}
+    if was_parked and brief_rewritten:
+        # Rewriting a parked story's brief answers its ruling with a rebrief.
+        # Written after the plan lock is released, as set_story_status does.
+        _record_rebrief_resolution(plan_name, story_key, story)
+    return {"ok": True, "story_key": story_key, "story": story}
+
+
+def _record_rebrief_resolution(plan_name: str, story_key: str, story: dict[str, Any]) -> None:
+    """A parked story's brief rewrite is the operator's rebrief of its ruling."""
+    record_resolution_if_ruled(
+        plan_name,
+        story_key,
+        human_action="rebrief",
+        new_status=story.get("status", "parked"),
+        principal=actor_id(),
+        brief_changed=True,
+    )
 
 
 # must follow the defs: service.py back-imports them, so defining them first

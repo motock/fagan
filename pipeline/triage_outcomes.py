@@ -32,6 +32,7 @@ __all__ = [
     "latest_failure_ruling",
     "record_human_resolution",
     "record_resolution_if_ruled",
+    "ruling_answered",
 ]
 
 #: What a human did to a parked story. A fixed set, so a resolution can be
@@ -51,6 +52,10 @@ HUMAN_ACTIONS: frozenset[str] = frozenset(
 
 _RULING_QUESTION = "failure triage"
 _ADJUDICATION_QUESTION = "high-risk merge adjudication"
+
+#: Longest operator rationale kept on a resolution. The reasoning is short by
+#: design: a resolution is a pointer to the answer, not a copy of the thread.
+RATIONALE_LIMIT = 500
 
 #: The park class a high-risk merge adjudication belongs to. The adjudication
 #: record carries a ``ruling`` and no park class of its own.
@@ -99,6 +104,7 @@ def record_human_resolution(
     principal: str,
     note: str = "",
     brief_changed: bool = False,
+    rationale: str = "",
 ) -> dict[str, Any]:
     """Append a ``human resolution`` record for one story and return it.
 
@@ -111,6 +117,10 @@ def record_human_resolution(
     ``brief_changed=True`` records that the human changed the story's brief
     (``agent_instructions``). The key is omitted otherwise; the brief's text
     is never written.
+
+    ``rationale`` is the operator's reasoning. It is redacted with the decisions
+    stream's secret redaction and capped at :data:`RATIONALE_LIMIT` characters;
+    the key is omitted when it is empty.
 
     Raises:
         ValueError: ``human_action`` is not in :data:`HUMAN_ACTIONS`. Raised
@@ -146,6 +156,12 @@ def record_human_resolution(
         record["note"] = note
     if brief_changed:
         record["brief_changed"] = True
+    if rationale.strip():
+        # Imported here: story_evidence reaches pipeline.service, which imports
+        # this module back, so a module-level import is a cycle.
+        from .story_evidence import redact
+
+        record["rationale"] = redact(rationale.strip())[:RATIONALE_LIMIT]
     # The file store keeps the one legacy writer, which existing callers patch
     # by name; any store with a record view owns the record instead.
     if decision_log.store_owns_records():
@@ -167,6 +183,18 @@ def _already_answered(plan_name: str, story_key: str, ruling_ref: Any) -> bool:
     return False
 
 
+def ruling_answered(plan_name: str, story_key: str) -> bool:
+    """True when the story's latest ruling already has a resolution.
+
+    A story with no ruling on record is never answered, so this is ``False``
+    for it: the caller decides what a resolution with no ruling means.
+    """
+    ruling = latest_failure_ruling(plan_name, story_key)
+    return ruling is not None and _already_answered(
+        plan_name, story_key, ruling.get("decided_at")
+    )
+
+
 def record_resolution_if_ruled(
     plan_name: str,
     story_key: str,
@@ -174,6 +202,8 @@ def record_resolution_if_ruled(
     human_action: str,
     new_status: str,
     principal: str,
+    rationale: str = "",
+    brief_changed: bool = False,
 ) -> dict[str, Any] | None:
     """Record a ``human resolution`` for a story with an unanswered ruling.
 
@@ -204,6 +234,8 @@ def record_resolution_if_ruled(
             human_action=human_action,
             new_status=new_status,
             principal=principal,
+            rationale=rationale,
+            brief_changed=brief_changed,
         )
     except Exception:  # noqa: BLE001 - a failed audit record must not fail the caller
         logger.warning(

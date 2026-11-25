@@ -351,6 +351,29 @@ once -- a repeat for the same ruling writes nothing, while a new ruling for the
 story is answered again. The record never fails the merge or the status change:
 a failed write is logged as a warning and the action still succeeds.
 
+The same rule covers the other operator paths that answer a parked story's
+ruling. Each records one `human resolution` for its ruling, and each is a no-op
+when no ruling is on record:
+
+| Operator path | `human_action` | Recorded only when |
+|---|---|---|
+| `patch_story` with a changed `agent_instructions` | `rebrief` (with `brief_changed: true`) | the story is `parked` and the text differs from the stored brief |
+| `dispatch_story` that launches | `retry` | the story was `parked`, the launch returned `ok` and was not `skipped` (`new_status` is the status after the launch) |
+| `interrupt_story` that stops a running agent | `other` | the story was `parked` (`new_status` `interrupted`) |
+| `approve_merge` that merges the story | `merge_held` | the merge succeeded; any `parked` or `pr_open` origin counts, including a park that did not come from the merge gate (`new_status` `done`). A refused merge records nothing |
+| `record_decision` with `plan_name` and `story_key` | the decision class mapped to an action, otherwise `other` (see below) | the story has a ruling and the record was written |
+
+`unpark` and `unblock_story` record through the unblock itself, as described
+above. A repeat unblock against the same ruling writes no second resolution.
+
+A resolution may carry `rationale`: the operator's reasoning from a
+`record_decision` call. It is redacted with the decisions stream's secret
+redaction (`pipeline.story_evidence.redact`), capped at 500 characters, and
+omitted when empty. It never holds file contents, diffs or a brief. `patch_story`
+has no reason field, so a rebrief resolution has no `rationale`. An `unblock_story`
+`note` is not carried as `rationale`: the existing contract keeps the note's text
+out of the decisions stream (`tests/unit/test_triage_outcomes_brief_changed.py`).
+
 **`POST /api/plans/{plan_name}/stories/{story_key}/approve_merge` answers.** A
 merge the pipeline refuses answers `409` with a fixed body, never the raw
 service error (which can carry paths, branch names or command output):
@@ -1475,6 +1498,16 @@ passed the checks above). A refusal dict carries exactly `recorded` and `error`
 plus `retry_after_seconds` for a rate limit. The check order is fixed —
 authorize, `ruling`, `rationale`, `evidence`, `decision_class`, `story_key`,
 rate limit — so the code a caller sees is deterministic.
+
+When `plan_name` and `story_key` name a story with an overlord ruling, the record
+also carries `ruling_ref`: the `decided_at` of the latest ruling for that story.
+The field is optional in the v2 validator and absent for a story with no ruling.
+That same call then records one `human resolution` beside the ruling (once per
+ruling; a later judgment on the same ruling writes none), with `rationale` set to
+the judgment's rationale (redacted, capped at 500 characters) and `human_action`
+from the decision class: `scope_widen` is `amend_scope`, `existing_test_edit` is
+`approve_test_edit`, `high_risk_merge` is `merge_held`, and every other class,
+including the free-text ones, is `other`.
 
 The rate limit is `PIPELINE_RECORD_DECISION_PER_MINUTE` calls per minute per
 principal *subject*, default 30; a missing, malformed (`"abc"`) or non-positive

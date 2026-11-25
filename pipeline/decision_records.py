@@ -96,7 +96,8 @@ SERVER_FIELDS = (
     "correlation_id",
 )
 
-#: The caller's fields: exactly these, all required, nothing else.
+#: The caller's required fields. ``OPTIONAL_CALLER_FIELDS`` may also be supplied;
+#: any other field is refused.
 CALLER_FIELDS = (
     "decision_id",
     "class",
@@ -109,6 +110,11 @@ CALLER_FIELDS = (
     "reversible",
     "outcome",
 )
+
+#: Caller fields the record may omit. ``ruling_ref`` links a judgment made on a
+#: story with an overlord ruling to that ruling's ``decided_at``; a record
+#: written before the link existed simply has none.
+OPTIONAL_CALLER_FIELDS = ("ruling_ref",)
 
 SUBJECT_FIELDS = ("plan", "story", "pr", "sha")
 EVIDENCE_FIELDS = ("kind", "ref", "sha256")
@@ -430,7 +436,7 @@ def _validated(record: Any) -> dict[str, Any]:
 
     _reject_forbidden(record, "")
 
-    unknown = sorted(set(record) - set(CALLER_FIELDS))
+    unknown = sorted(set(record) - set(CALLER_FIELDS) - set(OPTIONAL_CALLER_FIELDS))
     if unknown:
         raise DecisionRecordError(f"{unknown[0]}: unknown field")
 
@@ -471,7 +477,7 @@ def _validated(record: Any) -> dict[str, Any]:
     if not isinstance(record["reversible"], bool):
         raise DecisionRecordError("reversible: must be a boolean")
 
-    return {
+    validated: dict[str, Any] = {
         "decision_id": decision_id,
         "class": decision_class,
         "subject": _validated_subject(record["subject"]),
@@ -485,6 +491,11 @@ def _validated(record: Any) -> dict[str, Any]:
             record["outcome"], "outcome", limit=MAX_STRING, allow_empty=True
         ),
     }
+    if "ruling_ref" in record:
+        validated["ruling_ref"] = _bounded_string(
+            record["ruling_ref"], "ruling_ref", limit=MAX_REFERENCE, allow_empty=False
+        )
+    return validated
 
 
 def _bounded_string(value: Any, field: str, *, limit: int, allow_empty: bool) -> str:

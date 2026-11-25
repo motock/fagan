@@ -183,6 +183,9 @@ services:
       - |
         caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
         pid=$$!
+        # This shell is PID 1, which ignores signals it has no handler for. Forward
+        # docker stop's SIGTERM to Caddy so it shuts down gracefully, and wait below.
+        trap 'kill -TERM "$$pid" 2>/dev/null' TERM INT
         bundle=/ca-public/root.crt
         if [ "$$CADDY_TLS" = internal ]; then
           cert=/data/caddy/pki/authorities/local/root.crt
@@ -200,7 +203,15 @@ services:
           cp /etc/ssl/certs/ca-certificates.crt "$$bundle"
         fi
         chmod 0644 "$$bundle"
+        # A forwarded signal ends the first wait early, while Caddy is still
+        # shutting down. Keep waiting until it exits, and exit with its status.
         wait "$$pid"
+        status=$$?
+        while kill -0 "$$pid" 2>/dev/null; do
+          wait "$$pid"
+          status=$$?
+        done
+        exit "$$status"
     environment:
       PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}
       CADDY_TLS: ${CADDY_TLS:-internal}

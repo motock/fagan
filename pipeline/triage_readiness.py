@@ -97,6 +97,7 @@ def _tally() -> dict[str, int]:
         "false_proceed": 0,
         "false_park": 0,
         "park_needed_input": 0,
+        "incomplete_evidence": 0,
     }
 
 
@@ -322,11 +323,17 @@ def _tally_adjudication(
 
     An adjudication with an empty ``ruling`` is the fail-closed record of an
     unparseable reply: it ruled nothing, so it is not a shadow decision here.
+    One with ``evidence_complete`` false was ruled before CI concluded: it is
+    reported as ``incomplete_evidence`` and left out of every other count. A
+    record without the field is history and is counted as before.
     """
     merge_ruling = ruling.get("ruling")
     if not merge_ruling:
         return
     tally = tallies.setdefault(HIGH_RISK_MERGE_CLASS, _tally())
+    if ruling.get("evidence_complete") is False:
+        tally["incomplete_evidence"] += 1
+        return
     tally["shadow_count"] += 1
     resolution = _paired_resolution(resolutions, ruling)
     if resolution is None:

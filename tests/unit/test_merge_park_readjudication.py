@@ -66,8 +66,8 @@ BRANCH = "agent/MERGEPARK-2-STORY-2"
 PROCEED_REPLY = "RULING: proceed\nRATIONALE: checks are green and the change is contained"
 PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin to merge unattended"
 
-PENDING_CHECKS = {"ci": "pending", "lint": "pass"}
-GREEN_CHECKS = {"ci": "pass", "lint": "pass"}
+PENDING_CHECKS = {"ci": "pending", "lint": "pass", "state": "pending", "error": ""}
+GREEN_CHECKS = {"ci": "pass", "lint": "pass", "state": "pass", "error": ""}
 
 ADVANCE_PATH = Path(__file__).resolve().parents[2] / "pipeline" / "advance.py"
 # The re-adjudication pass lives in advance_merge.py; the source-level guards
@@ -343,7 +343,10 @@ def test_full_autonomy_park_records_the_pr_checks_evidence(monkeypatch, plan_dir
     parked = h.story()
     assert parked["status"] == "parked"
     assert parked["parked_reason"] == HOLD_REASON
-    assert parked["merge_park_evidence"] == {"pr_checks": PENDING_CHECKS}
+    assert parked["merge_park_evidence"] == {"pr_checks": parked["pr_checks"]}
+    assert parked["pr_checks"]["state"] == "pass", (
+        "the ruling is made on the re-gathered concluded snapshot, not the stale pending one"
+    )
     assert set(parked["merge_park_evidence"]) == {"pr_checks"}, (
         "the snapshot must carry exactly the pr_checks key"
     )

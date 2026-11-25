@@ -215,9 +215,12 @@ def test_a_deferred_hold_is_re_adjudicated_when_checks_pass(plan_dir, monkeypatc
 # --- every finished state is still adjudicated as before ----------------------
 
 
-@pytest.mark.parametrize("state", ["pass", "fail", "none", "unreadable"])
+@pytest.mark.parametrize(
+    "state, evidence_complete",
+    [("pass", True), ("fail", True), ("none", False)],
+)
 def test_a_finished_state_goes_to_the_overlord_and_is_recorded(
-    plan_dir, monkeypatch, state
+    plan_dir, monkeypatch, state, evidence_complete
 ):
     _full_autonomy(monkeypatch)
     _Forge(monkeypatch, value=_snapshot(state))
@@ -228,9 +231,10 @@ def test_a_finished_state_goes_to_the_overlord_and_is_recorded(
     assert len(overlord.prompts) == 1
     assert f"'state': '{state}'" in overlord.prompts[0]
     assert len(_records(plan_dir)) == 1
+    assert _records(plan_dir)[0]["evidence_complete"] is evidence_complete
 
 
-def test_an_unreadable_ci_read_goes_to_the_overlord_as_unreadable(
+def test_an_unreadable_ci_read_defers_without_going_to_the_overlord(
     plan_dir, monkeypatch
 ):
     _full_autonomy(monkeypatch)
@@ -240,11 +244,8 @@ def test_an_unreadable_ci_read_goes_to_the_overlord_as_unreadable(
     decision = _adjudicate(_high_risk_story())
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
-    assert len(overlord.prompts) == 1
-    assert (
-        "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
-    )
-    assert len(_records(plan_dir)) == 1
+    assert overlord.prompts == []
+    assert _records(plan_dir) == []
 
 
 # --- a cached snapshot is trusted only when it is terminal --------------------
@@ -284,8 +285,5 @@ def test_a_failed_refresh_of_a_cached_pending_snapshot_reports_unreadable(
     decision = _adjudicate(_high_risk_story(pr_checks=_snapshot("pending")))
 
     assert decision == {"action": "park", "reason": HOLD_REASON}
-    assert len(overlord.prompts) == 1
-    assert (
-        "PR CHECKS: (unreadable - RuntimeError: gh unavailable)" in overlord.prompts[0]
-    )
-    assert len(_records(plan_dir)) == 1
+    assert overlord.prompts == []
+    assert _records(plan_dir) == []

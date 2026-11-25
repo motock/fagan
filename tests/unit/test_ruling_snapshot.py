@@ -322,7 +322,7 @@ class _MergeHarness:
             "security_review_verdict": "APPROVE",
             "risk": "high",
             "summary": "Rewrite the auth token cache",
-            "pr_checks": {"ci": "pass", "lint": "pass"},
+            "pr_checks": {"ci": "pass", "lint": "pass", "state": "pass", "error": ""},
         }
         with merge_mod.merge_adjudication_plan("PLAN-1"):
             return merge_mod._merge_decision(story)

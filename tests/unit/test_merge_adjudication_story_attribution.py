@@ -136,14 +136,14 @@ def test_readjudication_record_names_the_story(plan_dir, monkeypatch):
     """``_readjudicate_parked_merge_hold`` binds the key it was handed.
 
     The CI gather returns a state that DIFFERS from the recorded snapshot
-    (``{"pr_checks": "success"}`` vs ``{"pr_checks": None}``), so the
+    (``{"state": "pass", "error": ""}`` vs ``{"pr_checks": None}``), so the
     re-adjudication actually proceeds and a record is appended. Stubbing the
     gather to the snapshot value would short-circuit on the flap guard and
     append nothing, failing this test for the wrong reason.
     """
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, PROCEED_REPLY)
-    _stub_ci_gather(monkeypatch, {"pr_checks": "success"})
+    _stub_ci_gather(monkeypatch, {"state": "pass", "error": ""})
     story = _parked_story()
 
     decision = advance_mod._readjudicate_parked_merge_hold(PLAN, "SOME-KEY", story)
@@ -178,7 +178,7 @@ def test_ordinary_pr_open_path_record_names_the_manifest_key(plan_dir, monkeypat
         "summary": "Rewrite the auth token cache",
         # Truthy, so ``_populate_pr_checks_once`` returns early instead of
         # probing a branch for a story that has no worktree.
-        "pr_checks": {"ci": "pass"},
+        "pr_checks": {"state": "pass", "error": "", "ci": "pass"},
         "worktree": "",
     }
     (plan_dir / f"{PLAN}.manifest.json").write_text(
@@ -204,7 +204,10 @@ def test_direct_call_without_binding_keeps_story_key_none(plan_dir, monkeypatch)
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, PROCEED_REPLY)
     monkeypatch.setattr(
-        server_mod, "_ci_status_once", lambda branch, sha="", settings=None: None, raising=False
+        server_mod,
+        "_ci_status_once",
+        lambda branch, sha="", settings=None: {"state": "pass", "error": ""},
+        raising=False,
     )
     captured = []
     monkeypatch.setattr(
@@ -232,7 +235,7 @@ def test_unparseable_reply_records_fail_closed_with_the_story_key(
 ):
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, UNPARSEABLE_REPLY)
-    _stub_ci_gather(monkeypatch, {"pr_checks": "success"})
+    _stub_ci_gather(monkeypatch, {"state": "pass", "error": ""})
     story = _parked_story()
 
     decision = advance_mod._readjudicate_parked_merge_hold(PLAN, "SOME-KEY", story)
@@ -285,7 +288,7 @@ def test_story_binding_restores_the_previous_value_on_exception():
 def test_overlord_failure_warning_names_the_story(plan_dir, monkeypatch, caplog):
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, exc=RuntimeError("overlord down"))
-    _stub_ci_gather(monkeypatch, {"pr_checks": "success"})
+    _stub_ci_gather(monkeypatch, {"state": "pass", "error": ""})
     story = _parked_story()
 
     with caplog.at_level(logging.WARNING, logger="pipeline"):
@@ -301,7 +304,7 @@ def test_overlord_failure_warning_names_the_story(plan_dir, monkeypatch, caplog)
 def test_append_failure_warning_names_the_story(plan_dir, monkeypatch, caplog):
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, PROCEED_REPLY)
-    _stub_ci_gather(monkeypatch, {"pr_checks": "success"})
+    _stub_ci_gather(monkeypatch, {"state": "pass", "error": ""})
 
     def boom(plan_name, record):
         raise OSError("disk full")

@@ -29,10 +29,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "HUMAN_ACTIONS",
+    "is_ruling",
     "latest_failure_ruling",
     "record_human_resolution",
     "record_resolution_if_ruled",
     "ruling_answered",
+    "ruling_resolved",
 ]
 
 #: What a human did to a parked story. A fixed set, so a resolution can be
@@ -66,7 +68,7 @@ def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
     return decision_log.read_decisions(plan_name)
 
 
-def _is_ruling(record: dict[str, Any]) -> bool:
+def is_ruling(record: dict[str, Any]) -> bool:
     """True when ``record`` is a ruling this module links a resolution to.
 
     A ``high-risk merge adjudication`` whose ``ruling`` is empty is the
@@ -89,7 +91,7 @@ def latest_failure_ruling(plan_name: str, story_key: str) -> dict[str, Any] | No
     """
     latest: dict[str, Any] | None = None
     for record in _read_decisions(plan_name):
-        if record.get("story_key") == story_key and _is_ruling(record):
+        if record.get("story_key") == story_key and is_ruling(record):
             latest = record
     return latest
 
@@ -105,12 +107,21 @@ def record_human_resolution(
     note: str = "",
     brief_changed: bool = False,
     rationale: str = "",
+    ruling: dict[str, Any] | None = None,
+    source: str | None = None,
+    inferred: bool = False,
 ) -> dict[str, Any]:
     """Append a ``human resolution`` record for one story and return it.
 
     ``ruling_ref`` is the ``decided_at`` of the latest ruling for the story, and
     ``ruling_action`` / ``park_class`` are copied from that ruling; all three
-    are ``None`` when the story has no ruling on record. For a
+    are ``None`` when the story has no ruling on record. ``ruling`` links the
+    resolution to a given ruling instead of the latest one, for a writer that
+    answers an older ruling.
+
+    ``inferred=True`` marks an answer read from the story's history rather than
+    given by a person; ``source`` names where it came from. Both keys are
+    written only then, so a human resolution keeps its existing shape. For a
     ``high-risk merge adjudication`` the ruling action is its ``ruling``
     (``proceed`` or ``park``) and the park class is ``high_risk_merge``.
 
@@ -133,7 +144,8 @@ def record_human_resolution(
             f"invalid human action {human_action!r}: must be one of {sorted(HUMAN_ACTIONS)}"
         )
 
-    ruling = latest_failure_ruling(plan_name, story_key) or {}
+    if ruling is None:
+        ruling = latest_failure_ruling(plan_name, story_key) or {}
     if ruling.get("question") == _ADJUDICATION_QUESTION:
         ruling_action = ruling.get("ruling")
         park_class = HIGH_RISK_MERGE_CLASS
@@ -156,6 +168,9 @@ def record_human_resolution(
         record["note"] = note
     if brief_changed:
         record["brief_changed"] = True
+    if inferred:
+        record["inferred"] = True
+        record["source"] = source or "inferred"
     if rationale.strip():
         # Imported here: story_evidence reaches pipeline.service, which imports
         # this module back, so a module-level import is a cycle.
@@ -181,6 +196,11 @@ def _already_answered(plan_name: str, story_key: str, ruling_ref: Any) -> bool:
         ):
             return True
     return False
+
+
+def ruling_resolved(plan_name: str, story_key: str, ruling: dict[str, Any]) -> bool:
+    """True when a resolution already answers this ruling, whichever ruling is latest."""
+    return _already_answered(plan_name, story_key, ruling.get("decided_at"))
 
 
 def ruling_answered(plan_name: str, story_key: str) -> bool:

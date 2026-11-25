@@ -218,16 +218,6 @@ def _patch_story_impl(
             "agent_instructions" in fields
             and fields["agent_instructions"] != previous_instructions
         )
-        if was_parked and brief_rewritten:
-            # Rewriting a parked story's brief answers its ruling with a rebrief.
-            record_resolution_if_ruled(
-                plan_name,
-                story_key,
-                human_action="rebrief",
-                new_status=story.get("status", "parked"),
-                principal=actor_id(),
-                brief_changed=True,
-            )
         if (
             was_dispatched
             and "agent_instructions" in fields
@@ -245,7 +235,23 @@ def _patch_story_impl(
                     else {}
                 ),
             )
-        return {"ok": True, "story_key": story_key, "story": story}
+    if was_parked and brief_rewritten:
+        # Rewriting a parked story's brief answers its ruling with a rebrief.
+        # Written after the plan lock is released, as set_story_status does.
+        _record_rebrief_resolution(plan_name, story_key, story)
+    return {"ok": True, "story_key": story_key, "story": story}
+
+
+def _record_rebrief_resolution(plan_name: str, story_key: str, story: dict[str, Any]) -> None:
+    """A parked story's brief rewrite is the operator's rebrief of its ruling."""
+    record_resolution_if_ruled(
+        plan_name,
+        story_key,
+        human_action="rebrief",
+        new_status=story.get("status", "parked"),
+        principal=actor_id(),
+        brief_changed=True,
+    )
 
 
 # must follow the defs: service.py back-imports them, so defining them first

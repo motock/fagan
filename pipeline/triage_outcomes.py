@@ -24,7 +24,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import decision_log, persistence
-from .story_evidence import redact
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,7 @@ __all__ = [
     "latest_failure_ruling",
     "record_human_resolution",
     "record_resolution_if_ruled",
+    "ruling_answered",
 ]
 
 #: What a human did to a parked story. A fixed set, so a resolution can be
@@ -157,6 +157,10 @@ def record_human_resolution(
     if brief_changed:
         record["brief_changed"] = True
     if rationale.strip():
+        # Imported here: story_evidence reaches pipeline.service, which imports
+        # this module back, so a module-level import is a cycle.
+        from .story_evidence import redact
+
         record["rationale"] = redact(rationale.strip())[:RATIONALE_LIMIT]
     # The file store keeps the one legacy writer, which existing callers patch
     # by name; any store with a record view owns the record instead.
@@ -177,6 +181,18 @@ def _already_answered(plan_name: str, story_key: str, ruling_ref: Any) -> bool:
         ):
             return True
     return False
+
+
+def ruling_answered(plan_name: str, story_key: str) -> bool:
+    """True when the story's latest ruling already has a resolution.
+
+    A story with no ruling on record is never answered, so this is ``False``
+    for it: the caller decides what a resolution with no ruling means.
+    """
+    ruling = latest_failure_ruling(plan_name, story_key)
+    return ruling is not None and _already_answered(
+        plan_name, story_key, ruling.get("decided_at")
+    )
 
 
 def record_resolution_if_ruled(

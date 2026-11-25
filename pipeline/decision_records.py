@@ -96,7 +96,8 @@ SERVER_FIELDS = (
     "correlation_id",
 )
 
-#: The caller's fields: exactly these, all required, nothing else.
+#: The caller's required fields. ``OPTIONAL_CALLER_FIELDS`` may also be supplied;
+#: any other field is refused.
 CALLER_FIELDS = (
     "decision_id",
     "class",

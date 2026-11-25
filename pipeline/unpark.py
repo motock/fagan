@@ -279,9 +279,13 @@ def _record_resolution(result: dict, principal: str, *, brief_changed: bool = Fa
 
     The unblock has already been saved and announced by the time this runs, so
     a failed record write is a warning, never a failed unpark. ``brief_changed``
-    is passed through to the record; the brief's text never is.
+    is passed through to the record; the brief's text never is. A ruling that
+    already has a resolution gets no second one, so repeated unblocks against
+    one ruling count once.
     """
     try:
+        if triage_outcomes.ruling_answered(result["plan"], result["story"]):
+            return
         triage_outcomes.record_human_resolution(
             result["plan"],
             result["story"],

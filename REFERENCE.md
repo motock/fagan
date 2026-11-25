@@ -363,14 +363,16 @@ when no ruling is on record:
 | `approve_merge` that merges the story | `merge_held` | the merge succeeded; any `parked` or `pr_open` origin counts, including a park that did not come from the merge gate (`new_status` `done`). A refused merge records nothing |
 | `record_decision` with `plan_name` and `story_key` | the decision class mapped to an action, otherwise `other` (see below) | the story has a ruling and the record was written |
 
-`unpark` and `unblock_story` continue to record through the unblock itself, as
-described above.
+`unpark` and `unblock_story` record through the unblock itself, as described
+above. A repeat unblock against the same ruling writes no second resolution.
 
 A resolution may carry `rationale`: the operator's reasoning from a
 `record_decision` call. It is redacted with the decisions stream's secret
 redaction (`pipeline.story_evidence.redact`), capped at 500 characters, and
 omitted when empty. It never holds file contents, diffs or a brief. `patch_story`
-has no reason field, so a rebrief resolution has no `rationale`.
+has no reason field, so a rebrief resolution has no `rationale`. An `unblock_story`
+`note` is not carried as `rationale`: the existing contract keeps the note's text
+out of the decisions stream (`tests/unit/test_triage_outcomes_brief_changed.py`).
 
 **`POST /api/plans/{plan_name}/stories/{story_key}/approve_merge` answers.** A
 merge the pipeline refuses answers `409` with a fixed body, never the raw

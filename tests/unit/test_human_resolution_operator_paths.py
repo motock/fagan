@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from pipeline import persistence as ppers
 from pipeline import server as p
+from pipeline import unpark as unpark_mod
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _write_manifest,
     plan_dir,
@@ -305,3 +308,23 @@ def test_approve_merge_of_parked_story_without_a_ruling_records_nothing(plan_dir
 
     assert result["ok"] is True
     assert _resolutions() == []
+
+
+# --------------------------------------------------------------------------
+# unblock_story: one answer per ruling, however many unblocks follow it
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def quiet_unblock(monkeypatch):
+    monkeypatch.setattr(unpark_mod, "_notify_user", lambda *a, **k: None)
+
+
+def test_second_unblock_against_the_same_ruling_adds_no_resolution(plan_dir, quiet_unblock) -> None:  # noqa: F811
+    _write_manifest(plan_dir, PLAN, {KEY: _parked()})
+    _seed_ruling()
+
+    p.unblock_story(PLAN, KEY, ["rework_attempts"])
+    p.unblock_story(PLAN, KEY, ["rework_attempts"])
+
+    assert len(_resolutions()) == 1

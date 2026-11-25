@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import bound_records
+
 #: The story fields the document carries, in document order. ``key`` is
 #: computed (plan key, else manifest key) and handled separately.
 _STORY_FIELDS = (
@@ -242,9 +244,7 @@ class PlanExportMixin:
         from . import server as server_module
 
         server_module._validate_key(plan_name)
-        manifest = server_module._store.records().get_manifest(
-            "default", plan_name
-        )
+        manifest = bound_records.get_manifest(server_module._store, plan_name)
         if manifest is None:
             return {"ok": False, "error": "Plan not found"}
         return {"ok": True, "plan": render_plan_document(manifest)}

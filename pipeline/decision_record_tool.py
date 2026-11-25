@@ -60,13 +60,14 @@ from typing import Any
 from app.policy import Action
 
 from . import authorization
-from .actor import current_principal
+from .actor import actor_id, current_principal
 from .audit import record_audit
 from .decision_records import (
     DECISION_CLASSES,
     DecisionRecordError,
     append_decision_record,
 )
+from .triage_outcomes import latest_failure_ruling, record_resolution_if_ruled
 
 logger = logging.getLogger("pipeline.decision_record_tool")
 
@@ -82,6 +83,15 @@ DEFAULT_PER_MINUTE = 30
 #: known to the server. ``rule.model`` must be a non-empty string in v2.
 MODEL_ENV = "PIPELINE_RECORD_DECISION_MODEL"
 UNKNOWN_MODEL = "unspecified"
+
+#: The human action a judgment of each decision class answers a ruling with.
+#: A class with no direct counterpart is ``other``, so a free-text class never
+#: invents an action the operator did not take.
+HUMAN_ACTION_BY_CLASS = {
+    "scope_widen": "amend_scope",
+    "existing_test_edit": "approve_test_edit",
+    "high_risk_merge": "merge_held",
+}
 
 #: Prefix that marks the rationale's home in ``alternatives``.
 RATIONALE_PREFIX = "rationale: "
@@ -347,6 +357,9 @@ def record_decision(
         _audit(plan_name, story, "refused", None)
         return limited
 
+    ruling_on_record = latest_failure_ruling(plan_name, story)
+    ruling_ref = ruling_on_record.get("decided_at") if ruling_on_record else None
+
     decision_id = uuid.uuid4().hex
     record: dict[str, Any] = {
         "decision_id": decision_id,
@@ -365,6 +378,8 @@ def record_decision(
         "reversible": reversible if isinstance(reversible, bool) else True,
         "outcome": "",
     }
+    if isinstance(ruling_ref, str) and ruling_ref:
+        record["ruling_ref"] = ruling_ref
 
     try:
         stored = append_decision_record(plan_name, record)
@@ -383,4 +398,15 @@ def record_decision(
     seq = stored.get("seq") if isinstance(stored, dict) else None
 
     _audit(plan_name, story, "recorded", returned_id)
+    if isinstance(ruling_ref, str) and ruling_ref:
+        # The judgment answers the ruling it links to, so the answer is written
+        # beside that ruling too. Once per ruling: a later judgment adds none.
+        record_resolution_if_ruled(
+            plan_name,
+            story,
+            human_action=HUMAN_ACTION_BY_CLASS.get(decision_class, "other"),
+            new_status=str(stories[story].get("status") or ""),
+            principal=actor_id(),
+            rationale=_text(rationale),
+        )
     return {"recorded": True, "decision_id": returned_id, "seq": seq}

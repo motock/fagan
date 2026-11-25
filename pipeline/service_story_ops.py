@@ -140,6 +140,7 @@ def _patch_story_impl(
         before = _store.get_manifest(plan_name).get("stories", {}).get(story_key)
         previous_instructions = before.get("agent_instructions") if before else None
         was_dispatched = bool(before and before.get("dispatched_at"))
+        was_parked = bool(before and before.get("status") == "parked")
         story = _store.update_story(plan_name, story_key, fields)
         if story is None:
             return {"ok": False, "error": f"No such story {story_key!r}"}
@@ -152,6 +153,20 @@ def _patch_story_impl(
                 _store.save_manifest(plan_name, manifest)
                 from pipeline.plan_approval_notice import notify_approval_event
                 notify_approval_event(plan_name, manifest, "plan_pending_approval")
+        brief_rewritten = (
+            "agent_instructions" in fields
+            and fields["agent_instructions"] != previous_instructions
+        )
+        if was_parked and brief_rewritten:
+            # Rewriting a parked story's brief answers its ruling with a rebrief.
+            record_resolution_if_ruled(
+                plan_name,
+                story_key,
+                human_action="rebrief",
+                new_status=story.get("status", "parked"),
+                principal=actor_id(),
+                brief_changed=True,
+            )
         if (
             was_dispatched
             and "agent_instructions" in fields

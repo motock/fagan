@@ -173,7 +173,7 @@ from . import (
     remote_scope,
     review_audit,
 )
-from .actor import current_namespace, current_principal
+from .actor import actor_id, current_namespace, current_principal
 from .concurrency import _plan_lock
 from .service_decisions import _request_decision_impl
 from .service_role_config import (
@@ -186,6 +186,19 @@ from .service_story_ops import (
     _patch_story_impl,
     _set_story_status_impl,
 )
+from .triage_outcomes import record_resolution_if_ruled
+
+
+def _story_status(plan_name: str, story_key: str) -> str | None:
+    """The story's status as stored now, or ``None`` when it is not there.
+
+    Callers validate the plan and story keys first: this reads the manifest by
+    name. A missing plan reads as ``None`` rather than raising, so the caller's
+    own refusal, not this read, answers an unknown plan.
+    """
+    manifest = _store.get_manifest_or_none(plan_name) or {}
+    story = manifest.get("stories", {}).get(story_key)
+    return story.get("status") if isinstance(story, dict) else None
 
 
 def _decompose_context_root(workspace: str | None) -> str | None:
@@ -676,6 +689,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 return {"ok": False, "error": f"No such story {story_key}"}
             if "pid" not in story:
                 return {"ok": False, "error": "Story not dispatched"}
+            was_parked = story.get("status") == "parked"
             sha = _terminate_and_checkpoint(
                 manifest,
                 plan_name,
@@ -685,7 +699,16 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 step="interrupted",
                 summary="Agent process terminated; checkpointed for resume.",
             )
-            return {"ok": True, "status": "interrupted", "commit": sha}
+        if was_parked:
+            # Stopping a parked story's agent is an answer the ruling did not foresee.
+            record_resolution_if_ruled(
+                plan_name,
+                story_key,
+                human_action="other",
+                new_status="interrupted",
+                principal=actor_id(),
+            )
+        return {"ok": True, "status": "interrupted", "commit": sha}
 
     def list_ready_stories(self, plan_name: str) -> list[dict]:
         _validate_key(plan_name)
@@ -912,6 +935,10 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
 
     @scoped_story_call
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        # Validate before reading the manifest by these names, as the impl does.
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        prior_status = _story_status(plan_name, story_key)
         try:
             result = _dispatch_story_impl(plan_name, story_key)
         except ValueError:
@@ -936,6 +963,15 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # test-author phase, or a failure - never per enqueue plus per worker
         # callback. A ValueError above is malformed input, not an attempt.
         record_dispatch_attempt(result)
+        if prior_status == "parked" and result.get("ok") is True and not result.get("skipped"):
+            # Relaunching a parked story is the operator's answer to its ruling.
+            record_resolution_if_ruled(
+                plan_name,
+                story_key,
+                human_action="retry",
+                new_status=_story_status(plan_name, story_key) or "",
+                principal=actor_id(),
+            )
         return result
 
     @scoped_story_call

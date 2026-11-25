@@ -101,12 +101,10 @@ def mount_routes(app) -> None:
     """
     from app.dashboard_routes_approval import router as approval_router
     from app.dashboard_routes_metrics import router as metrics_router
-    from app.dashboard_routes_operator import router as operator_router
     from app.plan_guidance_api import router as guidance_router
 
     app.include_router(approval_router, prefix="/api")
     app.include_router(metrics_router, prefix="/api")
-    app.include_router(operator_router, prefix="/api")
     app.include_router(guidance_router, prefix="/api")
     ctx = DashboardContext(app)
     registrars = load_plugin_list("dashboard")

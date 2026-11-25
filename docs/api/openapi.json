@@ -1623,27 +1623,6 @@
     "summary": "Get Metrics"
    }
   },
-  "/api/operator/dispatch": {
-   "get": {
-    "description": "Return the dispatch hold and running agents to an operator, or a fixed 403.",
-    "operationId": "get_operator_dispatch_api_operator_dispatch_get",
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "title": "Response Get Operator Dispatch Api Operator Dispatch Get",
-         "type": "object"
-        }
-       }
-      },
-      "description": "Successful Response"
-     }
-    },
-    "summary": "Get Operator Dispatch"
-   }
-  },
   "/api/plans": {
    "get": {
     "description": "List plan summaries across every namespace the caller's view scope allows.\n\nA scoped view (a team, an organization's teams, an active break-glass grant)\nis a roll-up: each plan is read from, and labelled with, its own namespace.\n``repo`` filters on the manifest's ``repo_root`` exactly as before, after\n``os.path.expanduser`` + ``os.path.realpath`` normalization on both sides; an\nunavailable namespace degrades that namespace only (``degraded`` in the\nresponse). The body lives in :mod:`app.dashboard_helpers` to keep this module\nunder its line budget.",

@@ -48,17 +48,14 @@ from app.inference_providers import (
 )
 from pipeline.config_provenance import IGNORED_ENV_VARS
 
-# Warn if operator mistakenly set transport-only env vars. A dispatched child
-# carries PIPELINE_CORRELATION_ID and gets these values from its dispatcher, so
-# it does not warn about them.
+# Warn if operator mistakenly set transport-only env vars
 _logger = logging.getLogger("pipeline")
-if "PIPELINE_CORRELATION_ID" not in os.environ:
-    for _var, _real in IGNORED_ENV_VARS:
-        if _var in os.environ:
-            _logger.warning(
-                f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "
-                f"set {_real} instead."
-            )
+for _var, _real in IGNORED_ENV_VARS:
+    if _var in os.environ:
+        _logger.warning(
+            f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "
+            f"set {_real} instead."
+        )
 class Backend(Protocol):
     def complete(
         self, prompt: str, *, system: str | None, model: str,

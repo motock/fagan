@@ -343,16 +343,6 @@ CORE_REGISTRY: dict[str, SettingKey] = {
             allowed_layers=("deployment",),
             legacy_env="",
         ),
-        # Deployment-only: when True, the scheduler dispatches no new story and
-        # redispatches no interrupted one on any plan (see pipeline.dispatch_hold).
-        SettingKey(
-            name="dispatch_hold",
-            type="bool",
-            kind="lock",
-            safe_value=False,
-            allowed_layers=("deployment",),
-            legacy_env="",
-        ),
         SettingKey(
             name="merge_ci_timeout_s",
             type="int",

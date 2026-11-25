@@ -24,14 +24,14 @@ Read tools are scoped to the plans a remote principal may see -- the plans it
 owns or is a delegate of, per ``app.policy.can_view``:
 
 * the plan-scoped read tools (``check_story_status``, ``export_plan``,
-  ``get_effective_config``, ``get_story``, ``get_story_diff``,
-  ``list_decisions``, ``list_plan_stories``, ``list_ready_stories``) refuse
-  *before* the handler runs when their ``plan_name`` argument is missing, not
-  a string, not a safe plan key (the same ``[A-Za-z0-9._-]`` rule the tools'
-  own path building uses), or names a plan the caller may not see. The refusal
-  is one fixed result, identical for a plan that does not exist and a plan the
-  caller may not see, so the reply is no existence oracle; the refused call is
-  recorded in the host chain as ``tool:call`` with outcome ``hidden``;
+  ``get_effective_config``, ``get_story_diff``, ``list_decisions``,
+  ``list_ready_stories``) refuse *before* the handler runs
+  when their ``plan_name`` argument is missing, not a string, not a safe plan
+  key (the same ``[A-Za-z0-9._-]`` rule the tools' own path building uses), or
+  names a plan the caller may not see. The refusal is one fixed result,
+  identical for a plan that does not exist and a plan the caller may not see,
+  so the reply is no existence oracle; the refused call is recorded in the host
+  chain as ``tool:call`` with outcome ``hidden``;
 * ``list_plans`` still runs, and its stems are filtered afterwards to visible
   plans. A stem names a plan by the text before its first ``.``, so
   ``beta.manifest`` reports plan ``beta`` and is kept with it. A result shape
@@ -122,14 +122,12 @@ REMOTE_READ = frozenset(
         "check_usage",
         "export_plan",
         "get_effective_config",
-        "get_story",
         "get_story_diff",
         "get_story_events",
         "get_story_journal",
         "get_story_log",
         "get_story_worktree",
         "list_decisions",
-        "list_plan_stories",
         "list_plans",
         "list_ready_stories",
         "list_repositories",
@@ -164,14 +162,12 @@ PLAN_SCOPED_READ = frozenset(
         "check_story_status",
         "export_plan",
         "get_effective_config",
-        "get_story",
         "get_story_diff",
         "get_story_events",
         "get_story_journal",
         "get_story_log",
         "get_story_worktree",
         "list_decisions",
-        "list_plan_stories",
         "list_ready_stories",
     }
 )

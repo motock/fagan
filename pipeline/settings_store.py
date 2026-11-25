@@ -25,14 +25,12 @@ from pipeline.policy_settings import (
 )
 from pipeline.settings_registry import REGISTRY
 from pipeline.settings_resolve import resolve
-from pipeline.store_records import DEFAULT_NAMESPACE, validate_namespace
+from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger("pipeline.settings_store")
 
 _store = LiveRef("_store")
 STORE_READ_ERROR = "settings_store_read_failed"
-# The deployment layer is one record, held in the default namespace.
-DEPLOYMENT_NAMESPACE = DEFAULT_NAMESPACE
 
 
 def _store_layer(records, namespace: str, scope: str, scope_id: str, repo: str):
@@ -65,7 +63,7 @@ def _read_layers(namespace: str, *, org: str, team: str, repo: str) -> dict:
     _add(
         layers,
         "deployment",
-        _store_layer(records, DEPLOYMENT_NAMESPACE, "deployment", "", ""),
+        _store_layer(records, DEFAULT_NAMESPACE, "deployment", "", ""),
     )
     # An empty repo names no repository, so there is no team_repo layer to read.
     if repo:
@@ -116,30 +114,6 @@ def effective_setting(
         raise KeyError(key)
     layers = _layers_or_error(namespace, org=org, team=team, repo=repo)
     return _with_context(resolve(key, layers, request=request), team, repo)
-
-
-def read_deployment_setting(records, key: str, default: Any) -> Any:
-    """The deployment-layer value of *key*, or *default* when it is not set.
-
-    ``records`` is the store's record view. Raises on a read failure: the
-    caller decides what an unreadable value means.
-    """
-    record = records.get_settings(DEPLOYMENT_NAMESPACE, "deployment", "", "")
-    if record is None:
-        return default
-    return record["values"].get(key, default)
-
-
-def deployment_wide_namespaces(records) -> tuple[str, list[str]]:
-    """The namespaces a deployment-wide read covers, with the scope it reports.
-
-    A store that lists its namespaces covers all of them. A store that does not
-    is read for the default namespace only.
-    """
-    list_namespaces = getattr(records, "list_namespaces", None)
-    if list_namespaces is None:
-        return "default_namespace", [DEPLOYMENT_NAMESPACE]
-    return "all_namespaces", sorted(validate_namespace(n) for n in list_namespaces())
 
 
 def effective_settings(namespace: str, team: str, repo: str, *, org: str = "") -> dict:

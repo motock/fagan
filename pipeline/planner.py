@@ -502,6 +502,16 @@ from .test_author import (  # noqa: F401
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
 
+# Appended for every tier: a story's pull request is gated by the repository's
+# own CI, so a story must leave the existing suite green by itself.
+_GREEN_ON_ITS_OWN_GUIDANCE = (
+    "\n\nEvery story must leave the repository's existing tests passing on "
+    "its own pull request. When a story changes a value, name, version or "
+    "behaviour that existing tests assert, the SAME story updates those "
+    "tests: never put the change in one story and the test update in a "
+    "later one. Name the tests to update in that story's agent_instructions."
+)
+
 # Guidance appended to the product-analyst's system prompt so it can
 # calibrate story splitting/detail to the implementer that will actually run
 # the stories. _run_decompose cannot ask (single complete() call, no user
@@ -639,7 +649,11 @@ def _run_decompose_detailed(
     tier = _dispatch_strength_tier(
         plan_role_config=plan_role_config, layer_routing=layer_routing
     )
-    system = _persona_body("product-analyst") + _STRENGTH_TIER_GUIDANCE[tier]
+    system = (
+        _persona_body("product-analyst")
+        + _STRENGTH_TIER_GUIDANCE[tier]
+        + _GREEN_ON_ITS_OWN_GUIDANCE
+    )
     try:
         text = backend.get_backend("decompose", name=resolution.provider).complete(
             request,

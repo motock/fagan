@@ -29,7 +29,6 @@ from . import context_sources as ctxsrc
 from .actor import current_namespace
 from .autonomy_settings import effective
 from .ci import context_from_manifest
-from .store_records import DEFAULT_NAMESPACE
 from .triage_lint_evidence import with_lint_evidence
 from .triage_outcomes import HIGH_RISK_MERGE_CLASS, RATIONALE_LIMIT
 from .triage_park_classes import classify_park
@@ -233,6 +232,6 @@ def _plan_decisions(store: Any) -> list[tuple[str, list[dict[str, Any]]]]:
         plans = bound_records.list_plans(store)
         return [(plan, bound_records.get_decisions(store, plan) or []) for plan in plans]
     # The file layout holds only the default namespace.
-    if current_namespace() != DEFAULT_NAMESPACE:
+    if bound_records.refuses_bound_namespace(store):
         return []
     return [(plan, decision_log.read_decisions(plan)) for plan in store.list_manifests()]

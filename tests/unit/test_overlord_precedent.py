@@ -9,7 +9,9 @@ import pytest
 import pipeline.server  # noqa: F401  (pre-existing import cycle: load server first)
 from pipeline import overlord_precedent as precedent
 from pipeline import server
+from pipeline import store as store_module
 from pipeline.actor import bind_namespace
+from pipeline.store import FileStore
 from pipeline.store_memory import InMemoryRecordStore
 from pipeline.triage_outcomes import HIGH_RISK_MERGE_CLASS
 
@@ -187,6 +189,14 @@ def test_should_read_only_the_bound_namespace(store):
 
 def test_should_return_no_entries_when_nothing_is_paired(store):
     _seed(store, "tenant-a", PLAN, [_ruling("S-1", "park_for_human", "t1")])
+    with bind_namespace("tenant-a"):
+        assert precedent.precedent_entries(CLASS, 8) == []
+
+
+def test_should_read_nothing_on_the_file_layout_outside_the_default_namespace(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_module, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(server, "_store", FileStore())
+    (tmp_path / f"{PLAN}.manifest.json").write_text("{}")
     with bind_namespace("tenant-a"):
         assert precedent.precedent_entries(CLASS, 8) == []
 

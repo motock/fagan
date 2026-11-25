@@ -37,6 +37,7 @@ from .ecosystem_detect import (
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
 )
+from .ingest_advisories import story_advisories
 from .ingest_manifest import (
     build_manifest,
     merge_descriptive_story_fields,
@@ -49,7 +50,6 @@ from .ownership import resolve_ownership
 from .plan_approval import approval_enabled, on_ingest
 from .plan_approval_notice import notify_approval_event, pending_notice_due
 from .repo_config import load_repo_config
-from .scope_headroom import scope_headroom_warning
 from .service import _ServerRef
 from .sizing_by_class import class_aware_sizing_warning
 from .sizing_class import needs_small_story_caps, sizing_applies
@@ -958,10 +958,9 @@ def _ingest_plan_impl(
                     warning += _AUTO_ROUTE_SKIPPED_SUFFIX
                 _notify_user(plan_name, f"{key}: {warning}", event="sizing_risk", story_key=key)
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
-            headroom = scope_headroom_warning(story, repo_root)
-            if headroom:
-                _notify_user(plan_name, f"{key}: {headroom}", event="scope_headroom", story_key=key)
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {headroom}")
+            for event, text in story_advisories(story, repo_root, final_manifest.get("repo_url"), _store):
+                _notify_user(plan_name, f"{key}: {text}", event=event, story_key=key)
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {text}")
             # Non-blocking authoring nudge: flag acceptance fixtures that
             # depend on macOS-only tooling. Dispatch, the done-bar and the
             # merge-gate reverify all run on macOS, but CI runs ubuntu-latest

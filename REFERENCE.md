@@ -2345,6 +2345,8 @@ at most once per process for each pair of stories. It never blocks
 dispatch; sequence the work with `blocked_by` or `dependencies` if the overlap
 matters. A story without `files` produces no advisory.
 
+**Cross-repository advisory (warning only).** When a story's brief names another repository the team has connected and the story has no `blocked_by`, `ingest_plan` emits a `cross_repo_unordered` notification naming the repositories. It never blocks ingest, approval or dispatch, and it is skipped when the repository list cannot be read.
+
 ---
 
 ## Agent-log scorecard

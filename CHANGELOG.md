@@ -71,6 +71,7 @@ in practice.
 
 ### Fixed
 
+- A dispatched agent's log no longer opens with false warnings that `PIPELINE_TRANSPORT_NUM_CTX`, `PIPELINE_TRANSPORT_TEMPERATURE` and `PIPELINE_TRANSPORT_MAX_STEPS` are set in the environment: the dispatcher set them itself, so a process carrying `PIPELINE_CORRELATION_ID` skips the transport-only warning, while a long-lived operator process still warns.
 - The off-task guard ignores version numbers, paths outside the worktree and the agent's own `.agent_*` files, and the agent's automatic commits never include those files.
 - `export_plan` reads the plan from the namespace bound to the call; it used to read the default namespace only, so a team's plan answered `Plan not found`.
 - The chat's `ingest_plan` tool description now says calling it proposes the ingest for the person to press Run, instead of claiming the call is refused from a chat origin; the model no longer tells the person that ingest is impossible.

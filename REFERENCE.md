@@ -3585,48 +3585,6 @@ the split is load-bearing, not cosmetic.
 | `PIPELINE_CONSUMER_STALL_SECONDS` | `300` | How long a JetStream durable may sit with a non-empty backlog and no subscriber before one `consumer_stalled` notice is emitted, and one `consumer_recovered` when it clears. Re-read on every tick, so an operator can tune it without a restart. Missing, non-integer (`abc`, `3.5`, empty) and non-positive (`0`, `-5`) values all fall back to `300`, so a typo can never turn every tick into a notice. |
 | `PIPELINE_OUTBOX_STALE_SECONDS` | `900` | How old the oldest undelivered outbox record must be before `/api/health` reports `outbox_stale` and `/readyz` fails (`/livez` keeps answering — a stale spool is not a reason to restart). Read on every call. Malformed, non-finite and non-positive values fall back to `900`; a positive fractional value is rounded up (`0.5` becomes `1`) rather than truncated to `0`, which would make every non-empty outbox stale. |
 
-### Operator dispatch hold and running agents (`/api/operator/dispatch`)
-
-`GET /api/operator/dispatch` is the operator-only read of the deployment-wide
-dispatch hold (the `dispatch_hold` setting below) and of how many agents are
-running. It is **operator-only** and follows the same rule as `/api/metrics`:
-the caller authenticates through the dashboard middleware, then must be the
-local operator (shared-secret provider) or hold the `admin` role. Any other
-authenticated caller gets `403` with `{"detail": "not authorized: operator"}`.
-
-The body:
-
-```json
-{
-  "hold": false,
-  "running": 2,
-  "stories": [{"plan": "plan-a", "story": "S1"}, {"plan": "plan-b", "story": "S9"}],
-  "scope": "all_namespaces"
-}
-```
-
-- `hold` is the deployment `dispatch_hold` value. A value that cannot be read,
-  or is not a boolean, reports `true` (fail closed), and the scheduler logs a
-  WARNING.
-- `running` is the number of stories whose agent process is alive: a story
-  with status `in_progress` and a live `pid`, or a live detached test-author
-  phase. `stories` lists exactly those stories, and `running` equals its length.
-- `scope` is `all_namespaces` when the store can list its namespaces, and every
-  namespace is counted. It is `default_namespace` when the store cannot list
-  them, and only the default namespace is counted.
-
-Setting or clearing the hold is not a route. It is written with the audited
-`set_setting` tool at the `deployment` scope (`scope: "deployment"`,
-`scope_id: ""`, `repo: ""`, `key: "dispatch_hold"`, `value: true` or `false`).
-Each write appends one `settings:set` host audit record with the old and new
-values.
-
-While the hold is `true`, the scheduler dispatches no new story and redispatches
-no `todo`, `interrupted` or `changes_requested` story on any plan. Review, CI
-polling and merges of stories already past dispatch continue, and no running
-agent is interrupted by the hold. `advance_pipeline`'s result reports
-`dispatch_paused: true`, `paused: true` and `dispatch_pause_reason: "dispatch_hold"`.
-
 ### Metrics scrape endpoint (`/api/metrics`)
 
 `GET /api/metrics` serves the pipeline's own signals in Prometheus text
@@ -4415,6 +4373,48 @@ The legacy names of these keys are no longer read at runtime: `PIPELINE_MERGE_CI
 ```
 PIPELINE_MERGE_CI_GATE is retired; set merge_ci_gate with set_setting (or run python -m pipeline.settings_seed first). See ADR 0015.
 ```
+
+### Operator dispatch hold and running agents (`/api/operator/dispatch`)
+
+`GET /api/operator/dispatch` is the operator-only read of the deployment-wide
+dispatch hold (the `dispatch_hold` setting below) and of how many agents are
+running. It is **operator-only** and follows the same rule as `/api/metrics`:
+the caller authenticates through the dashboard middleware, then must be the
+local operator (shared-secret provider) or hold the `admin` role. Any other
+authenticated caller gets `403` with `{"detail": "not authorized: operator"}`.
+
+The body:
+
+```json
+{
+  "hold": false,
+  "running": 2,
+  "stories": [{"plan": "plan-a", "story": "S1"}, {"plan": "plan-b", "story": "S9"}],
+  "scope": "all_namespaces"
+}
+```
+
+- `hold` is the deployment `dispatch_hold` value. A value that cannot be read,
+  or is not a boolean, reports `true` (fail closed), and the scheduler logs a
+  WARNING.
+- `running` is the number of stories whose agent process is alive: a story
+  with status `in_progress` and a live `pid`, or a live detached test-author
+  phase. `stories` lists exactly those stories, and `running` equals its length.
+- `scope` is `all_namespaces` when the store can list its namespaces, and every
+  namespace is counted. It is `default_namespace` when the store cannot list
+  them, and only the default namespace is counted.
+
+Setting or clearing the hold is not a route. It is written with the audited
+`set_setting` tool at the `deployment` scope (`scope: "deployment"`,
+`scope_id: ""`, `repo: ""`, `key: "dispatch_hold"`, `value: true` or `false`).
+Each write appends one `settings:set` host audit record with the old and new
+values.
+
+While the hold is `true`, the scheduler dispatches no new story and redispatches
+no `todo`, `interrupted` or `changes_requested` story on any plan. Review, CI
+polling and merges of stories already past dispatch continue, and no running
+agent is interrupted by the hold. `advance_pipeline`'s result reports
+`dispatch_paused: true`, `paused: true` and `dispatch_pause_reason: "dispatch_hold"`.
 
 If the check itself fails, the process also refuses to start. The migration order is in the CHANGELOG entry and in "Seeding settings from the environment" below.
 

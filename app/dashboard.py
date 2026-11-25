@@ -181,7 +181,7 @@ TENANT_DATA_PATHS = ("/api/", "/mcp/")
 #: Exact paths under TENANT_DATA_PATHS served without a bound namespace. These routes carry
 #: deployment aggregates, no tenant data, and authorize themselves in their handlers. Exact
 #: match only: a sub-path of one is still tenant data.
-PRE_TENANT_API_PATHS = frozenset({"/api/metrics"})
+PRE_TENANT_API_PATHS = frozenset({"/api/metrics", "/api/operator/dispatch"})
 #: Authenticated extension paths served without a bound namespace
 #: (PIPELINE_TENANT_DATA_EXEMPT_PATHS). Read once here: a malformed value raises at import,
 #: so the app refuses to start rather than run with a half-read list.

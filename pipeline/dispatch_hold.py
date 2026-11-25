@@ -18,14 +18,13 @@ import os
 from typing import Any
 
 from pipeline.concurrency import _has_live_test_author_phase
-from pipeline.store_records import DEFAULT_NAMESPACE, validate_namespace
+from pipeline.settings_store import deployment_wide_namespaces, read_deployment_setting
 
 logger = logging.getLogger("pipeline.dispatch_hold")
 
 HOLD_KEY = "dispatch_hold"
 #: The reason the scheduler reports when the hold stops dispatch.
 HOLD_REASON = "dispatch_hold"
-_HOLD_LAYER = "deployment"
 
 
 def dispatch_held(store: Any) -> bool:
@@ -34,8 +33,7 @@ def dispatch_held(store: Any) -> bool:
         records = store.records() if callable(getattr(store, "records", None)) else None
         if getattr(records, "get_settings", None) is None:
             return False
-        record = records.get_settings(DEFAULT_NAMESPACE, _HOLD_LAYER, "", "")
-        value = (record["values"] if record else {}).get(HOLD_KEY, False)
+        value = read_deployment_setting(records, HOLD_KEY, False)
     except Exception as exc:  # noqa: BLE001 - a hold that cannot be read is a held hold
         logger.warning(
             "dispatch hold unreadable; treating dispatch as held",
@@ -76,13 +74,6 @@ def _is_running(story: dict) -> bool:
     return story.get("status") == "in_progress" and _pid_alive(story.get("pid"))
 
 
-def _namespaces(records: Any) -> tuple[str, list[str]]:
-    list_namespaces = getattr(records, "list_namespaces", None)
-    if list_namespaces is None:
-        return "default_namespace", [DEFAULT_NAMESPACE]
-    return "all_namespaces", sorted(validate_namespace(n) for n in list_namespaces())
-
-
 def running_agents(store: Any) -> dict[str, Any]:
     """The stories whose agent process is running, across every namespace the store lists.
 
@@ -90,7 +81,7 @@ def running_agents(store: Any) -> dict[str, Any]:
     and ``scope`` says which was read.
     """
     records = store.records()
-    scope, namespaces = _namespaces(records)
+    scope, namespaces = deployment_wide_namespaces(records)
     stories = []
     for namespace in namespaces:
         for plan, manifest in records.get_manifests(namespace).items():

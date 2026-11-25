@@ -152,6 +152,12 @@ def list_repositories() -> dict[str, Any]:
     repositories are those of the plans list_plans shows you, and level and
     state are null. A failure returns {"ok": false, "reason":
     "repositories_unavailable", "correlation_id": ...}.
+
+    When planning a change to an interface, a version or a shared contract,
+    call this first and search the other repositories (search_repository) for
+    code that depends on it. A dependent repository needs its own plan: copy
+    the exact contract into that plan's story briefs, because its agents
+    cannot see this repository, and order the work with blocked_by.
     """
     return repo_listing_hooks.list_repositories_result(_store._value())
 

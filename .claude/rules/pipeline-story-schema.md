@@ -179,3 +179,23 @@ The marker file skips the always-on test-author phase, but the dispatch prompt a
 A story that parks mid-attempt usually leaves finished work uncommitted in its worktree. The cheap recovery is to keep it, not to redo it.
 
 **How to apply:** before writing the unblock note, look at the worktree (`git status`, the diff, and one run of the failing test). Then write a note that (1) says the work is in the worktree and must be kept, (2) names the ONE thing that stopped the attempt with the measured evidence (the failing test and its assertion, or the conflicted file), (3) gives the ruling as an exact edit, and (4) repeats the gates. Adding files or a note to an approved plan resets its approval: re-approve it and tell the plan's owner.
+
+## A change that crosses repositories
+
+A plan targets one repository and its agents see only that repository's
+checkout. Nothing infers a dependency between repositories; the author states
+it.
+
+- Before writing a plan that changes an interface, a version or a shared
+  contract, list the connected repositories and search each for code that
+  depends on it.
+- Write one plan per repository. Give the dependent repository's stories
+  `blocked_by: ["<plan>:<story_key>"]` naming the story that makes the change.
+- `blocked_by` releases when that story is merged. If the dependent repository
+  consumes a published artifact (a package version, an image tag), merged is
+  not published: say in the brief which version to wait for and how to check it.
+- Copy the contract into the dependent story's brief literally: the exact
+  signature, payload, version string or file path. A reference to "the new
+  API in the other repository" is not an instruction the agent can follow.
+- Read the other repository's default branch only as the state before the
+  change; the brief carries the state after it.

@@ -2333,7 +2333,7 @@ referenced story exists and is `done` or `merged`. A malformed reference, or
 one naming a plan or story that does not exist, counts as unsatisfied, so a
 typo holds the story rather than releasing it. `ingest_plan` validates only
 the shape, because the target plan may not be ingested yet. Set or change it
-with `patch_story` or by re-ingesting; omitting it on re-ingest clears it.
+with `patch_story` or by re-ingesting; omitting it on re-ingest clears it. The plans may target different repositories: this is how a change in one repository is ordered before the change that depends on it in another.
 
 **File-overlap advisory (warning only).** When a story declares `files` and
 another plan has an in-flight story (`in_progress`, `interrupted`,

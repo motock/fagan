@@ -256,7 +256,6 @@ def test_get_effective_config_with_a_visible_plan_reaches_the_handler() -> None:
     assert recorder.calls == 1
 
 
-
 # --- story listing and single-story read ----------------------------------
 
 STORY_READ_TOOLS = ("list_plan_stories", "get_story")

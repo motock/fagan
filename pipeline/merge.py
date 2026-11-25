@@ -37,6 +37,11 @@ from .ci import (
     settings_for_plan,
 )
 from .concurrency import _plan_lock, command_lock_wait_seconds
+from .merge_adjudication_evidence import (
+    ci_defers_ruling,
+    ci_evidence_note,
+    evidence_complete,
+)
 from .merge_diff_evidence import render_diff_evidence
 from .merge_local_checks import render_local_checks_line
 from .overlord_class_mode import class_mode, matrix_tier
@@ -242,10 +247,23 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
 
 
-def _pr_checks_pending(story: dict[str, Any]) -> bool:
-    """True when the story's gathered CI snapshot says checks are still running."""
-    checks = story.get("pr_checks")
-    return isinstance(checks, dict) and checks.get("state") == "pending"
+def _pr_checks_defer(story: dict[str, Any]) -> bool:
+    """True when the story's CI read is not one the overlord may rule on.
+
+    Pending, unreadable, a snapshot with no state, and no snapshot at all (a
+    failed gather) defer. ``pass``, ``fail``, ``none`` and ``cancelled`` rule
+    (see ``merge_adjudication_evidence``).
+    """
+    return ci_defers_ruling(story.get("pr_checks"))
+
+
+def _ci_note_line(story: dict[str, Any]) -> str:
+    """``CI NOTE:`` line for a ruling made on no-CI, cancelled or gate-off CI.
+
+    Empty (no line) when the CI read needs no explanation.
+    """
+    note = ci_evidence_note(story.get("pr_checks"))
+    return f"CI NOTE: {note}\n" if note else ""
 
 
 def _populate_pr_checks_once(story, story_key: str | None = None):
@@ -270,16 +288,16 @@ def _populate_pr_checks_once(story, story_key: str | None = None):
     would outrank the recovered state and keep a green story parked.
     """
     if story.get("pr_checks"):
-        if not _pr_checks_pending(story):
+        if not _pr_checks_defer(story):
             # Already gathered (e.g. advance._readjudicate_parked_merge_hold
             # wrote the fresh state before calling the gate): drop any stale
             # failure so the render cannot report a readable state as
             # unreadable.
             story.pop("pr_checks_error", None)
             return
-        # A cached pending snapshot is stale once CI may have finished: drop it
-        # and read the forge again, so the ruling never waits on a snapshot
-        # that nothing refreshes.
+        # A cached snapshot that has not concluded is stale once CI may have
+        # finished: drop it and read the forge again, so the ruling never waits
+        # on a snapshot that nothing refreshes.
         story.pop("pr_checks")
     # Hoisted ABOVE the try: the first statement inside it is an import, so a
     # key bound in there would be unbound exactly when the failure handler
@@ -460,13 +478,18 @@ def _adjudicate_high_risk_merge(
         plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
 
     hold = {"action": "park", "reason": "high risk held for human review"}
-    if _pr_checks_pending(story):
-        # A ruling made while CI runs is made on incomplete evidence. The hold
-        # stands, and the park branch's pending snapshot lets
-        # _readjudicate_parked_merge_hold rule once CI finishes.
+    if _pr_checks_defer(story):
+        # A ruling made while CI is still deciding is made on incomplete evidence.
+        # The hold stands and writes no record; the park branch snapshots this
+        # state so _readjudicate_parked_merge_hold rules once CI concludes.
+        checks = story.get("pr_checks")
         logging.getLogger("pipeline").info(
             "high-risk merge adjudication deferred: PR checks pending",
-            extra={"plan_name": plan_name, "story_key": story_key},
+            extra={
+                "plan_name": plan_name,
+                "story_key": story_key,
+                "ci_state": checks.get("state") if isinstance(checks, dict) else None,
+            },
         )
         return hold
 
@@ -490,6 +513,7 @@ def _adjudicate_high_risk_merge(
         f"SECURITY-REVIEW VERDICT: "
         f"{story.get('security_review_verdict') or '(none)'}\n"
         f"{_render_pr_checks_line(story)}\n"
+        f"{_ci_note_line(story)}"
         f"{render_local_checks_line(story)}\n"
         f"{render_diff_evidence(story)}\n"
         "Respond in this exact format:\n"
@@ -520,6 +544,7 @@ def _adjudicate_high_risk_merge(
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
             "decided_at": datetime.now(UTC).isoformat(),
+            "evidence_complete": evidence_complete(story),
         }
     else:
         record = {
@@ -532,6 +557,7 @@ def _adjudicate_high_risk_merge(
             "prior_parked_reason": prior_parked_reason,
             "decided_by": "overlord",
             "decided_at": datetime.now(UTC).isoformat(),
+            "evidence_complete": evidence_complete(story),
         }
     try:
         _append_adjudication_decision(plan_name, record)

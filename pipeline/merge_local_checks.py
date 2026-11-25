@@ -23,7 +23,9 @@ from typing import Any
 from . import merge_reverify
 from .ci import settings_for_plan
 from .host_state import build_host_state
+from .merge_adjudication_evidence import HOST_TESTS_SKIPPED_WORDING
 from .module_ref import _ModuleRef
+from .test_scope_run import host_tests_skipped
 
 # Default wall-clock budget for one detached check, overridable with
 # PIPELINE_MERGE_REVERIFY_TIMEOUT_SECONDS. Re-exported by pipeline.advance_merge.
@@ -122,8 +124,12 @@ def render_local_checks_line(story: dict[str, Any]) -> str:
         return "LOCAL CHECKS: not run"
     checks = result.get("checks") or {}
     sha = str(result.get("sha") or "")[:7]
+    tests = checks.get("tests", "skipped")
+    if tests == "skipped" and host_tests_skipped(story):
+        # Not missing evidence: the deployment chose PR CI as the test evidence.
+        tests = f"skipped ({HOST_TESTS_SKIPPED_WORDING})"
     return (
-        f"LOCAL CHECKS: tests {checks.get('tests', 'skipped')}"
+        f"LOCAL CHECKS: tests {tests}"
         f" / lint {checks.get('lint', 'skipped')}"
         f" / build {checks.get('build', 'skipped')} @ {sha}"
     )

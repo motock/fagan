@@ -250,7 +250,7 @@ def test_existing_pr_checks_are_never_gathered_or_overwritten(monkeypatch):
     h = _Harness(
         monkeypatch, ruling=PROCEED_REPLY, gather={"state": "fail", "error": "boom"}
     )
-    injected = {"ci": "pass", "lint": "fail"}
+    injected = {"ci": "pass", "lint": "fail", "state": "pass", "error": ""}
     story = _story(pr_checks=injected)
 
     h.decide(story)
@@ -289,9 +289,8 @@ def test_gather_failure_never_escapes_and_fails_closed(monkeypatch):
     assert not story.get("pr_checks"), (
         "a failed gather must leave pr_checks unset"
     )
-    assert "PR CHECKS: (unreadable" in h.prompt
-    assert "PR CHECKS: (none)" not in h.prompt
-    assert len(h.invocations) == 1
+    assert h.invocations == [], "a failed gather defers: no overlord call"
+    assert h.decisions == [], "a deferred ruling writes no decision record"
 
 
 def test_gather_failure_does_not_propagate_from_the_adjudicator(monkeypatch):
@@ -317,12 +316,11 @@ def test_gather_failure_still_records_the_ruling(monkeypatch):
     h = _Harness(monkeypatch, ruling=PARK_REPLY, gather_exc=RuntimeError("boom"))
     story = _story()
 
-    h.decide(story)
+    decision = h.decide(story)
 
-    assert len(h.decisions) == 1
-    _, record = h.decisions[0]
-    assert record["decided_by"] == "overlord"
-    assert record["ruling"] == "park"
+    assert decision == {"action": "park", "reason": HOLD_REASON}
+    assert h.invocations == [], "a failed gather defers: no overlord call"
+    assert h.decisions == [], "a deferred ruling writes no decision record"
 
 
 # --------------------------------------------------------------------------

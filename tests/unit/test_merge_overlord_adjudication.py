@@ -72,7 +72,7 @@ def _story(**overrides):
         "security_review_verdict": "APPROVE",
         "risk": "high",
         "summary": "Rewrite the auth token cache",
-        "pr_checks": {"ci": "pass", "lint": "pass"},
+        "pr_checks": {"state": "pass", "error": "", "ci": "pass", "lint": "pass"},
     }
     story.update(overrides)
     return story
@@ -184,7 +184,7 @@ def test_full_invocation_carries_merge_context_and_instruction(monkeypatch):
         risk="high",
         review_verdict="APPROVE",
         security_review_verdict="APPROVE_WITH_NOTES",
-        pr_checks={"ci": "pass", "lint": "fail"},
+        pr_checks={"state": "pass", "error": "", "ci": "pass", "lint": "fail"},
     )
     h.decide(story)
     prompt = h.prompt
@@ -406,7 +406,7 @@ def _e2e_story(**overrides):
         "security_review_verdict": "APPROVE",
         "risk": "high",
         "summary": "Rewrite the auth token cache",
-        "pr_checks": {"ci": "pass", "lint": "pass"},
+        "pr_checks": {"state": "pass", "error": "", "ci": "pass", "lint": "pass"},
         "worktree": "",
         "dependencies": [],
     }

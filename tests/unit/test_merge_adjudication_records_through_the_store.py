@@ -96,7 +96,7 @@ def _high_risk_story(**overrides):
         "summary": "Rewrite the auth token cache",
         # Truthy, so the CI gather returns early instead of probing a branch
         # for a story that has no worktree.
-        "pr_checks": {"ci": "pass"},
+        "pr_checks": {"state": "pass", "error": "", "ci": "pass"},
         "worktree": "",
     }
     story.update(overrides)

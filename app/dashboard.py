@@ -71,6 +71,7 @@ from app.dashboard_routes import (
     get_story_journal,
     get_story_log,
     get_story_replay,
+    list_repositories_route,
 )
 from app.dashboard_routes_plan import (
     advance_all_plans,
@@ -560,6 +561,7 @@ app.get("/api/plans/{plan_name}/stories/{story_key}/replay")(get_story_replay)
 app.get("/api/plans/{plan_name}/stories/{story_key}/diff", responses={200: {"model": dashboard_schemas.StoryDiffResponse}})(get_story_diff)
 app.get("/api/config")(effective_config)
 app.get("/api/config/providers")(config_providers)
+app.get("/api/repositories")(list_repositories_route)
 
 
 @app.get("/api/workspaces", responses={200: {"model": dashboard_schemas.WorkspacesResponse}})

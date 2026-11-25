@@ -484,6 +484,16 @@ Every call counts against `PIPELINE_REPO_READ_PER_MINUTE` per principal, refused
 calls included. Past the limit a call answers `{"ok": false, "reason":
 "rate_limited", "retry_after_seconds": n}`.
 
+The chat has four tools for the other repositories the team has connected:
+`list_repositories`, `read_repository_file`, `list_repository_directory` and
+`search_repository`. `list_repositories` is served by `GET /api/repositories`, and
+the three read tools by the workspace read routes (`/api/workspace/file`,
+`/api/workspace/files` and `/api/workspace/search`) with `repo_url` set to
+`https://` followed by the `repo` the model names. Each read goes through the same
+access check as above, under the caller's own credential. A plan saved from the chat
+still targets the repository the turn names; reading another repository does not
+change where `save_plan` writes.
+
 ---
 
 ## Overlord decision fail-open

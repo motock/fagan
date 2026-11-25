@@ -24,6 +24,7 @@ from app.chat_actions import ACTION_TOOLS, PROPOSAL_ONLY_TOOLS, propose
 from app.chat_empty_reply import EMPTY_REPLY_NUDGE, EMPTY_REPLY_TEXT, log_empty_reply
 from app.chat_errors import ChatBackendError, is_chat_refusal, refuse
 from app.chat_guidance import RESOLVE_TOOL, guidance_context
+from app.chat_repo_tools import OTHER_REPO_TOOLS, _repo_read_params
 from pipeline import server as _server
 from pipeline.actor import current_correlation_id
 from pipeline.repo_clone import RepoUrlError, parse_repo_url
@@ -371,17 +372,11 @@ TOOLS: dict[str, dict] = {
         ),
     },
 }
+TOOLS.update(OTHER_REPO_TOOLS)
 
 # Read tools that serve the repository the turn names. ``repo_url`` is not a
 # declared param: the server sets it per turn, so the model never picks one.
 _REPO_READ_TOOLS = ("read_file", "list_directory", "search_code")
-
-
-def _repo_read_params(params: dict, repo_url: str | None) -> dict:
-    """Return a read tool's query params, with repo_url only when the turn has one."""
-    if not repo_url:
-        return params
-    return {**params, "repo_url": repo_url}
 
 
 def _available_tools_sentence() -> str:

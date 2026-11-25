@@ -3353,6 +3353,27 @@
     "summary": "Unarchive Plan"
    }
   },
+  "/api/repositories": {
+   "get": {
+    "description": "The repositories the bound namespace may work with, as the chat's list_repositories tool sees them.\n\nTakes no parameter: the namespace is the one bound to the request, never a\nquery value. The listing and its failure answer are built by\npipeline.repo_listing_hooks, which fails closed.",
+    "operationId": "list_repositories_route_api_repositories_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Repositories Route Api Repositories Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Repositories Route"
+   }
+  },
   "/api/usage": {
    "get": {
     "description": "Surface the Claude usage gate's health, including whether it has gone\nblind (probe stale past the staleness window, so it's failing OPEN and\nspend is unguarded). The UI alerts on gate_blind so a silent CLI-output\nchange doesn't leave the cost gate quietly disabled.",

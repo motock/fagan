@@ -40,15 +40,18 @@ def overlord_context(plan_name: str, story_key: str, phase: str) -> tuple[str, l
         from .server import _store
 
         manifest = bound_records.get_manifest(_store, plan_name) or {}
-        body, digests = _render(manifest, story_key, phase)
     except Exception as exc:  # noqa: BLE001 - the ruling must still happen
         _warn_unavailable(plan_name, story_key, phase, type(exc).__name__)
         return "", []
-    if not body:
-        _warn_unavailable(plan_name, story_key, phase, "EmptyContextBlock")
+    try:
+        body, digests = _render(manifest, story_key, phase)
+    except Exception as exc:  # noqa: BLE001 - precedent below does not depend on the recorded sources
+        _warn_unavailable(plan_name, story_key, phase, type(exc).__name__)
+        body, digests = "", []
     precedent, precedent_digest = _precedent(plan_name, story_key, phase, manifest)
     parts = [part.strip("\n") for part in (body, precedent) if part]
     if not parts:
+        _warn_unavailable(plan_name, story_key, phase, "EmptyContextBlock")
         return "", []
     if precedent_digest is not None:
         digests = [*digests, precedent_digest]

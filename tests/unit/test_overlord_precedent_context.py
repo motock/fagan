@@ -11,6 +11,7 @@ import pytest
 import pipeline.server  # noqa: F401  (pre-existing import cycle: load server first)
 from pipeline import merge as merge_mod
 from pipeline import overlord as overlord_mod
+from pipeline import overlord_context as overlord_context_mod
 from pipeline import overlord_precedent as precedent
 from pipeline import persistence, server
 from pipeline import triage as triage_mod
@@ -185,3 +186,24 @@ def test_setting_is_a_tenant_int_preference_that_defaults_to_eight_and_accepts_z
     assert (key.kind, key.type, key.safe_value, key.bounds) == ("pref", "int", 8, (0, 50))
     assert key.accepts(0) and key.accepts(50)
     assert not key.accepts(-1) and not key.accepts(51) and not key.accepts(True)
+
+
+def test_precedent_still_reaches_the_ruling_when_the_context_render_fails(store, monkeypatch):
+    _seed_triage_pair(store)
+
+    def broken_render(manifest, story_key, phase):
+        raise OSError("snapshot store unreachable")
+
+    monkeypatch.setattr(overlord_context_mod, "_render", broken_render)
+    captured = _capture_triage(monkeypatch, [])
+    _rule()
+    assert "the lint job was flaky" in captured["prompt"]
+
+
+def test_empty_context_with_rendered_precedent_logs_no_unavailable_warning(store, monkeypatch, caplog):
+    _seed_triage_pair(store)
+    _capture_triage(monkeypatch, [])
+    with caplog.at_level(logging.WARNING, logger="pipeline"):
+        _rule()
+    unavailable = [r.getMessage() for r in caplog.records if "overlord context unavailable" in r.getMessage()]
+    assert unavailable == []

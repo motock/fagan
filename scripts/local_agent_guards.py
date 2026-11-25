@@ -87,6 +87,8 @@ def _is_off_task_path(path: str, expected: set[str]) -> bool:
     edit as off-task."""
     if not expected or not path:
         return False
+    if path.rsplit("/", 1)[-1].startswith(".agent_"):
+        return False
     norm = path.lstrip("./")
     name = norm.rsplit("/", 1)[-1]
     for e in expected:
@@ -139,6 +141,21 @@ _BASH_MUTATION_MARKERS = re.compile(
     r"\bblack\s|\bisort\s|\bautopep8\b|\bprettier\b|>>?\s*[\w./-]+\.\w+"
 )
 _BASH_PATH_TOKEN_RE = re.compile(r"[\w./-]+\.\w+")
+_BASH_VERSION_RE = re.compile(r"[0-9]+(\.[0-9]+)+")
+
+
+def _is_ignorable_bash_token(token: str) -> bool:
+    """True if a token the bash path scan found is not a project path the
+    guard should judge: a version number (`4.2.0`), an absolute or home path
+    (outside the worktree), or one of the agent's own `.agent_*` runtime
+    files (or agent.log). Checked on the RAW token, before lstrip, so the
+    leading dot of `.agent_checkpoint.tmp` still identifies it."""
+    if _BASH_VERSION_RE.fullmatch(token):
+        return True
+    if token.startswith(("/", "~")):
+        return True
+    name = token.rsplit("/", 1)[-1]
+    return name.startswith(".agent_") or name == "agent.log"
 
 
 def _bash_off_task_path(cmd: str, expected: set[str]) -> str | None:
@@ -148,6 +165,8 @@ def _bash_off_task_path(cmd: str, expected: set[str]) -> str | None:
     if not cmd or not _BASH_MUTATION_MARKERS.search(cmd):
         return None
     for token in _BASH_PATH_TOKEN_RE.findall(cmd):
+        if _is_ignorable_bash_token(token):
+            continue
         candidate = token.lstrip("./")
         if _is_off_task_path(candidate, expected):
             return candidate

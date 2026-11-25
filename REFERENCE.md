@@ -339,6 +339,31 @@ once -- a repeat for the same ruling writes nothing, while a new ruling for the
 story is answered again. The record never fails the merge or the status change:
 a failed write is logged as a warning and the action still succeeds.
 
+**`POST /api/plans/{plan_name}/stories/{story_key}/approve_merge` answers.** A
+merge the pipeline refuses answers `409` with a fixed body, never the raw
+service error (which can carry paths, branch names or command output):
+
+```json
+{"detail": {"reason": "ci_failing", "message": "CI is failing on the pull request."}}
+```
+
+| `reason` | Message | Cause |
+|---|---|---|
+| `not_reviewed` | `The story was never approved by review.` | The review verdict is not `APPROVE`. |
+| `rebase_failed` | `The branch could not be rebased onto the default branch.` | The rebase onto the default branch failed. |
+| `ci_failing` | `CI is failing on the pull request.` | The PR's CI checks failed or were cancelled. |
+| `ci_pending` | `CI is still running on the pull request.` | The PR's CI checks are still running. |
+| `ci_unreadable` | `CI status could not be read.` | The CI status could not be read from the forge. |
+| `acceptance_failed` | `The acceptance checks failed after the rebase.` | The acceptance re-verification failed. |
+| `busy` | `The plan is busy; try again in a moment.` | The plan lock was held past `PIPELINE_COMMAND_LOCK_WAIT_SECONDS`. Retriable. |
+| `not_mergeable` | `The story cannot be merged in its current state.` | Any other refusal, including a story not in `parked` or `pr_open`. |
+
+The raw error is logged server-side at `WARNING` with the plan, story, reason
+and correlation id. A missing story answers `404` with the service's
+`No such story <key>` detail, and a missing plan answers `404` with
+`Not found`. A forbidden result answers `403` as before. This 409 body is an
+additive contract change: the 404 answers for missing resources are unchanged.
+
 Plan approval can also be decided from the dashboard. The plan detail header's
 **Review** button opens a panel that shows the plan's approval status, its
 warnings and whether the stored digest still matches the plan on disk. An

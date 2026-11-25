@@ -121,18 +121,25 @@ def test_approve_merge_route_answers_409_when_the_plan_is_busy(client, monkeypat
     res = client.post("/api/plans/busy-plan/stories/P1/approve_merge")
 
     assert res.status_code == 409
-    assert res.json()["detail"] == BUSY_RESULT["error"]
+    assert res.json()["detail"] == {
+        "reason": "busy",
+        "message": "The plan is busy; try again in a moment.",
+    }
+    assert BUSY_RESULT["error"] not in res.text
 
 
-def test_approve_merge_route_still_answers_404_for_a_non_retriable_refusal(client, monkeypatch):
+def test_approve_merge_route_answers_409_not_reviewed_for_a_non_retriable_refusal(client, monkeypatch):
     monkeypatch.setattr(
         d, "_service", _FakeService({"ok": False, "error": "Story was never reviewer-approved"})
     )
 
     res = client.post("/api/plans/some-plan/stories/P1/approve_merge")
 
-    assert res.status_code == 404
-    assert res.json()["detail"] == "Story was never reviewer-approved"
+    assert res.status_code == 409
+    assert res.json()["detail"] == {
+        "reason": "not_reviewed",
+        "message": "The story was never approved by review.",
+    }
 
 
 # ---------- requirement 3: plan detail reports archived ----------

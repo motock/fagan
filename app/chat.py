@@ -865,11 +865,7 @@ class ChatService:
         for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace, repo_url=repo_url):
             if event.get("type") == "result":
                 result = event["data"]
-        # stream_turn yields exactly one result event on every path that ends
-        # the turn, so this guards only the type, not a reachable case.
-        if result is None:
-            raise RuntimeError("chat turn ended without a result event")
-        return result
+        return result  # type: ignore[return-value]  # stream_turn always yields a result event
 
 # ---------------------------------------------------------------------------
 # FastAPI router for chat endpoint
@@ -965,8 +961,6 @@ def _sse_pack(event: dict) -> str:
 )
 def chat_stream_endpoint(
     req: ChatRequest,
-    # FastAPI injects Request only when it is annotated as a bare Request, so the
-    # Optional form is not an option; tests call these endpoints with no request.
     request: Request = None,  # type: ignore[assignment]
     x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
 ):

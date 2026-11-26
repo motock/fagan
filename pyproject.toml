@@ -113,20 +113,6 @@ warn_unused_ignores = true
 # Baseline recorded 2026-11: modules that failed when the gate was added. Remove a module when it is clean; never add one.
 [[tool.mypy.overrides]]
 module = [
-    "app.backend",
-    "app.backend_claude",
-    "app.backend_ollama",
-    "app.chat",
-    "app.chat_guidance",
-    "app.credentials",
-    "app.dashboard",
-    "app.dashboard_helpers",
-    "app.dashboard_routes",
-    "app.oidc",
-    "app.ollama_prompt_utils",
-    "app.plan_guidance_api",
-    "app.plugin_loader",
-    "app.role_registry",
     "pipeline",
     "pipeline.access_hooks",
     "pipeline.advance_one",

@@ -46,7 +46,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 logger = logging.getLogger("app.plugin_loader")
 
@@ -102,7 +102,7 @@ def _check_module_permitted(env_name: str, module_name: str, env) -> None:
     ``PIPELINE_PLUGIN_MODULES`` allowlist narrows this further.
     """
     top_level = module_name.split(".")[0]
-    stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    stdlib: frozenset[str] = getattr(sys, "stdlib_module_names", frozenset())
     if top_level in stdlib or top_level in sys.builtin_module_names:
         raise PluginError(f"{env_name}: standard-library modules cannot be plugins")
     allowlist = _allowlist(env)
@@ -125,7 +125,7 @@ def plugin_env_name(seam: str) -> str:
     return "PIPELINE_" + seam.upper() + "_PLUGIN"
 
 
-def plugin_spec(seam: str, environ: dict[str, str] | None = None) -> str | None:
+def plugin_spec(seam: str, environ: Mapping[str, str] | None = None) -> str | None:
     """Return the stripped plugin spec for ``seam``, or None when unset/blank."""
     env = os.environ if environ is None else environ
     raw = env.get(plugin_env_name(seam), "")
@@ -133,7 +133,7 @@ def plugin_spec(seam: str, environ: dict[str, str] | None = None) -> str | None:
     return spec or None
 
 
-def require_allowlist(seam: str, environ: dict[str, str] | None = None) -> None:
+def require_allowlist(seam: str, environ: Mapping[str, str] | None = None) -> None:
     """Refuse ``seam``'s plugin unless the module allowlist is configured.
 
     The identity and authorizer seams are the security-sensitive pair, so an
@@ -188,7 +188,7 @@ def _resolve(env_name: str, spec: str, environ=None) -> Callable:
 
 def check_no_conflict(
     seam: str,
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
     *,
     selector: str,
     selector_default: str | None = None,
@@ -210,7 +210,7 @@ def check_no_conflict(
 
 def load_plugin(
     seam: str,
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
     *,
     selector: str | None = None,
     selector_default: str | None = None,
@@ -258,7 +258,7 @@ def load_plugin(
 
 def load_plugin_list(
     seam: str,
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
     *,
     selector: str | None = None,
     selector_default: str | None = None,

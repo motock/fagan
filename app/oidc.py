@@ -29,7 +29,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -633,7 +633,7 @@ class OidcProvider:
         return verify_token(credential, self._settings)
 
 
-def _oidc_settings_from_env(env: dict[str, str]) -> OidcSettings:
+def _oidc_settings_from_env(env: Mapping[str, str]) -> OidcSettings:
     """Build ``OidcSettings`` from ``env``, rejecting missing or malformed values.
 
     Only names are echoed on failure, never values: ``jwks_url`` can carry
@@ -690,7 +690,7 @@ def extra_claim_names(environ: dict[str, str] | None = None) -> tuple[str, ...]:
     return _extra_claim_names_from_env(source)
 
 
-def _extra_claim_names_from_env(env: dict[str, str]) -> tuple[str, ...]:
+def _extra_claim_names_from_env(env: Mapping[str, str]) -> tuple[str, ...]:
     """Parse ``PIPELINE_OIDC_EXTRA_CLAIMS``; refuse the whole list on any bad name.
 
     Blank entries are dropped and duplicates collapse to their first position.
@@ -705,7 +705,7 @@ def _extra_claim_names_from_env(env: dict[str, str]) -> tuple[str, ...]:
 
 def build_identity_provider(
     secret_reader: Callable[[], str],
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> IdentityProvider:
     """Return the configured provider, or raise on an unknown configuration.
 

@@ -520,8 +520,11 @@ def _save_plan_args_for_repo_url(args: dict, repo_url: str) -> dict:
     A plan that does not parse to a JSON object is returned unchanged:
     save_plan answers its own invalid-JSON refusal for it.
     """
+    raw_plan = args.get("plan_json")
+    if raw_plan is None:
+        return args
     try:
-        plan = json.loads(args.get("plan_json"))
+        plan = json.loads(raw_plan)
     except (TypeError, json.JSONDecodeError):
         return args
     if not isinstance(plan, dict):
@@ -688,15 +691,15 @@ class ChatService:
         if raw_max <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {raw_max}")
         self._max_turns = raw_max
-        self._resolved_driver = None
-        self._resolved_model = None
-        self._resolved_provider = None
+        self._resolved_driver: object | None = None
+        self._resolved_model: str | None = None
+        self._resolved_provider: str | None = None
 
     def _resolve_driver(self, repo_url: str | None = None) -> tuple[object, str]:
         if self._driver is not None:
             model_tag = getattr(self._driver, "model", "") or ""
             return self._driver, model_tag
-        if self._resolved_driver is not None:
+        if self._resolved_driver is not None and self._resolved_model is not None:
             return self._resolved_driver, self._resolved_model
         from app import backend, role_registry
 
@@ -858,11 +861,11 @@ class ChatService:
         ``result`` event's ``data`` -- byte-for-byte the dict this method
         returned before the refactor. Signature and return value unchanged.
         """
-        result = None
+        result: dict | None = None
         for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace, repo_url=repo_url):
             if event.get("type") == "result":
                 result = event["data"]
-        return result
+        return result  # type: ignore[return-value]  # stream_turn always emits a result event
 
 # ---------------------------------------------------------------------------
 # FastAPI router for chat endpoint
@@ -914,7 +917,9 @@ def _repo_url_kwargs(req: ChatRequest) -> dict:
 @chat_router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(
     req: ChatRequest,
-    request: Request = None,
+    # FastAPI injects Request only when it is annotated as a bare Request, so the
+    # Optional form is not an option; tests call these endpoints with no request.
+    request: Request = None,  # type: ignore[assignment]
     x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
 ) -> ChatResponse:
     if not req.message.strip():
@@ -956,7 +961,7 @@ def _sse_pack(event: dict) -> str:
 )
 def chat_stream_endpoint(
     req: ChatRequest,
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]
     x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
 ):
     if not req.message.strip():

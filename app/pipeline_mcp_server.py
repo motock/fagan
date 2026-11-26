@@ -12,6 +12,7 @@ and ``test_backend.py`` — keep working unchanged.
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Launched directly (`python3 app/pipeline_mcp_server.py`, the MCP command),
 # Python puts this file's own directory (app/) on sys.path[0], not the repo
@@ -24,6 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pipeline.server as _server
 from pipeline.log_format import configure_logging_from_env
 from pipeline.server import *
+
+if TYPE_CHECKING:
+    # Names the loop below copies in at import time, so mypy can see them too.
+    from pipeline.server import _heavy_lock, _is_heavy, _read_usage_state  # noqa: F401
 
 for _name in dir(_server):
     if not _name.startswith("__"):

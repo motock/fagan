@@ -56,7 +56,7 @@ def post_plan_guidance_resolve(plan_name: str, body: ResolveBody) -> dict[str, A
     result = plan_guidance.resolve_guidance(plan_name, body.note)
     dashboard_refusal.raise_if_forbidden(result)
     if result.get("ok") is not True:
-        status, detail = _REFUSALS.get(result.get("error"), (404, _NOT_FOUND_DETAIL))
+        status, detail = _REFUSALS.get(result.get("error") or "", (404, _NOT_FOUND_DETAIL))
         raise HTTPException(status_code=status, detail=detail)
 
     return {

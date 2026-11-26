@@ -257,7 +257,8 @@ def _plan_summary(
     """
     partition = namespace or current_namespace()
     stories = manifest.get("stories", {})
-    updated_at = _store.records().get_manifest_updated_at(partition, plan_name)
+    # The Store protocol omits records(); FileStore and SqliteStore both define it.
+    updated_at = _store.records().get_manifest_updated_at(partition, plan_name)  # type: ignore[attr-defined]
     # A manifest that vanished under a race with a concurrent write has no
     # timestamp - sort it last rather than 500ing the whole list over one
     # plan's timestamp.
@@ -435,17 +436,18 @@ def plan_list(include_archived: bool, repo: str | None) -> dict[str, Any]:
     visible = pipeline_view_scope.checked_visible(
         pipeline_view_scope.active_view_scope(), current_principal()
     )
-    if visible is pipeline_view_scope.ALL:
-        namespaces = [current_namespace()]
-        labelled = None
-    else:
+    if isinstance(visible, frozenset):
         namespaces = sorted(visible)
         cap = _plan_list_namespace_cap()
         if len(namespaces) > cap:
             namespaces = namespaces[:cap]
             degraded.append("namespace_cap")
         labelled = len(namespaces) > 1 or namespaces[0] != current_namespace()
-    records = _store.records()
+    else:
+        namespaces = [current_namespace()]
+        labelled = None
+    # The Store protocol omits records(); FileStore and SqliteStore both define it.
+    records = _store.records()  # type: ignore[attr-defined]
     for namespace in namespaces:
         try:
             names = records.list_plans(namespace)

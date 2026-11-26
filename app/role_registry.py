@@ -24,7 +24,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -225,8 +225,7 @@ def resolve_role(
     ignored in favor of model_fallback, rather than raising against a
     provider it was never paired with.
     """
-    if environ is None:
-        environ = os.environ
+    env: Mapping[str, str] = os.environ if environ is None else environ
     reg = registry if registry is not None else load_registry()
     plan_cfg = (plan_role_config or {}).get(role, {})
     layer_cfg = (layer_routing or {}).get(role, {})
@@ -236,7 +235,7 @@ def resolve_role(
         plan_cfg.get("provider")
         or layer_cfg.get("provider")
         or reg_role_cfg.get("provider")
-        or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
+        or env.get(f"PIPELINE_BACKEND_{role.upper()}")
         or default_provider
     ).strip().lower()
 

@@ -18,7 +18,7 @@ import subprocess  # noqa: F401 (re-exported: backend.subprocess, used by tests/
 import time  # noqa: F401 (re-exported: backend.time, used by tests/unit/test_backend.py)
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, overload
 
 import httpx  # noqa: F401 (re-exported: backend.httpx, used by tests/unit/test_backend.py)
 
@@ -151,7 +151,20 @@ _DRIVERS: dict[str, type | Callable[[], OllamaDriver]] = {
 }
 
 
-def get_backend(role: str | None = None, *, name: str | None = None) -> Backend:
+# role=None yields the Claude CLI driver alone: it serves only the usage probe
+# and resource gate, and does not implement the full Backend protocol (its
+# dispatch() has no acceptance/resume parameters), so it must not be typed as one.
+@overload
+def get_backend(role: None = None, *, name: str | None = None) -> ClaudeCliDriver: ...
+
+
+@overload
+def get_backend(role: str, *, name: str | None = None) -> Backend: ...
+
+
+def get_backend(
+    role: str | None = None, *, name: str | None = None
+) -> Backend | ClaudeCliDriver:
     """Resolve the active backend.
 
     role=None returns ClaudeCliDriver unconditionally - used only by the

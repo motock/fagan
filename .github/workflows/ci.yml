@@ -192,6 +192,11 @@ jobs:
       - name: Run ruff check
         run: ruff check .
 
+      - name: Run mypy
+        # Configured in pyproject.toml ([tool.mypy]); the baseline lists the
+        # modules that already failed when the gate was added and may only shrink.
+        run: mypy
+
       - name: Check file line limits
         run: python scripts/check_line_limit.py --mode warn
 

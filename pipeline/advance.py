@@ -20,6 +20,7 @@ from typing import Any
 
 from . import access_hooks, bound_records, cross_plan, plan_approval, review_job  # noqa: F401  (access_hooks re-exported)
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
+from .advance_failed_stories import poll_running_stories
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
     _adjudicate_merges,
@@ -41,10 +42,10 @@ from .dispatch_hold import dispatch_held, filter_ready, pause_reason
 from .dispatch_lease import claim_dispatch_lease  # noqa: F401  (re-exported for existing readers)
 from .park_options import run_park_options_sweep
 from .rebrief import (
-    collect_failure_evidence,
-    compose_rebriefed_instructions,
-    detect_unsatisfiable_signal,
-    diagnose_failure,
+    collect_failure_evidence,  # noqa: F401  (re-exported for existing readers)
+    compose_rebriefed_instructions,  # noqa: F401  (re-exported for existing readers)
+    detect_unsatisfiable_signal,  # noqa: F401  (re-exported for existing readers)
+    diagnose_failure,  # noqa: F401  (re-exported for existing readers)
 )
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
@@ -555,7 +556,6 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # pipeline/advance_ready_dispatch.py. Runs under this tick's plan lock.
         dispatch_ready_stories(plan_name, manifest, stories, ready, summary)
 
-
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate
         # above: a story this tick would interrupt (blanket gate down for a
@@ -567,200 +567,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # REVIEW backend (review_ok); merge (further below) is unconditional.
         manifest = _fresh_manifest(plan_name)
         stories = manifest["stories"]
-        for key, story in stories.items():
-            if story["status"] != "in_progress" or "pid" not in story:
-                continue
-            # Per-story poll gate — mirrors the interruption gate (lines above):
-            # poll only stories that survive this tick (were NOT interrupted).
-            # tag falls back to dispatched_model (see _story_dispatch_is_
-            # on_device): a story with no plan-authored `model` override
-            # still resolves to a concrete tag at dispatch time, and reading
-            # only `model` silently dropped every such :cloud dispatch into
-            # the blanket-gate branch below, starving it of polling whenever
-            # the blanket gate read down (live incident: PUB-01 finished and
-            # exited but was never re-polled, so its dead pid was never
-            # graded).
-            story_backend, _story_model = _resolve_dispatch_target(
-                story,
-                plan_role_config=manifest.get("role_config"),
-                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-            )
-            tag = story.get("model") or story.get("dispatched_model") or _story_model
-            if story_backend != "claude" and tag and tag.endswith(":cloud"):
-                pass  # :cloud is never interrupted by the local memory gate
-            elif story_backend == "claude" or not tag:
-                # Interrupted when the blanket gate is down for a non-memory
-                # reason; polled when the gate is up OR down for memory pressure.
-                if not (dispatch_ok or memory_pressure):
-                    continue
-            else:
-                # On-device with an explicit model tag: polled only when its own
-                # floor holds. Memory pressure alone no longer interrupts it, so do
-                # not infer interruption from a low floor here.
-                if not backend.get_backend("dispatch", name=story_backend).resource_status(
-                    model_tag=tag
-                ).get("ok", True):
-                    continue
-            check_result = check_story_status(plan_name, key)
-            status = check_result.get("status")
-            if status == "failed":
-                fallback_model = manifest.get("local_model_fallback")
-                # A-posteriori escalation: under auto dispatch, if the
-                # local agent failed and has NOT been escalated before,
-                # wipe its worktree and re-queue for Claude. A second
-                # failure (on Claude), or any failure under an explicit
-                # non-auto backend, is terminal.
-                if (
-                    _auto_escalation_enabled()
-                    and story.get("backend") in _LOCAL_BACKEND_NAMES
-                    and not story.get("escalated")
-                    and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
-                ):
-                    manifest = _fresh_manifest(plan_name)
-                    _escalate_to_claude(manifest, plan_name, key)
-                    _notify_user(
-                        plan_name,
-                        f"{key} local agent failed; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
-                        event="escalated",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["notify"].append(key)
-                elif (
-                    fallback_model
-                    and story.get("backend") in _LOCAL_BACKEND_NAMES
-                    and story.get("model") != fallback_model
-                    and not story.get("tried_fallback_model")
-                ):
-                    # Plan-scoped opt-in (manifest["local_model_fallback"]):
-                    # never escalates to Claude - just gives one other
-                    # local model a shot before the terminal park/fail
-                    # path below.
-                    manifest = _fresh_manifest(plan_name)
-                    failed_model = (
-                        story.get("dispatched_model")
-                        or story.get("model")
-                        or "default"
-                    )
-                    _escalate_to_local_fallback_model(
-                        manifest, plan_name, key, fallback_model
-                    )
-                    _notify_user(
-                        plan_name,
-                        f"{key} local agent failed on {failed_model}; retrying on "
-                        f"fallback model {fallback_model} before parking.",
-                        event="model_fallback",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["notify"].append(key)
-                elif check_result.get("failure_kind") == "give_up":
-                    # T6: the agent explicitly surrendered rather than
-                    # producing ordinary red tests. Point the human at
-                    # the story's scope/clarity instead of the generic
-                    # message - a missing/wrong API needs a fix to
-                    # agent_instructions, not another identical retry.
-                    _notify_user(
-                        plan_name,
-                        f"{key} agent gave up (explicit surrender, zero productive "
-                        f"progress) - likely under-specified (missing API, wrong "
-                        f"scope) rather than a model-capability gap; needs human "
-                        f"clarification before another dispatch.",
-                        event="agent_gave_up",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                    summary["notify"].append(key)
-                    # OA2-08: a surrender is the same "the brief, not the
-                    # model, is the problem" signal the step-cap path already
-                    # diagnoses (pipeline/story_status.py's
-                    # _rebrief_step_cap_struggle). Run the SAME rebrief
-                    # machinery here so the next dispatch carries a rewritten
-                    # brief instead of the identical one that just failed.
-                    # Fail-open: any error (unconfigured/raising diagnosis
-                    # role, unreadable manifest) degrades to the notify-only
-                    # behaviour above - a diagnosis must never crash the tick.
-                    try:
-                        previous_instructions = story.get("agent_instructions", "")
-                        evidence = collect_failure_evidence(
-                            story.get("worktree", ""), story
-                        )
-                        unsat_reason = detect_unsatisfiable_signal(evidence)
-                        if unsat_reason is not None:
-                            _notify_user(
-                                plan_name,
-                                f"Story may be unsatisfiable as specified: "
-                                f"{unsat_reason}. Story {key} may need "
-                                f"re-planning rather than another retry.",
-                                story_key=key,
-                            )
-                        diagnosis = diagnose_failure(
-                            evidence,
-                            story,
-                            manifest.get("role_config"),
-                            **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-                        )
-                        story["agent_instructions"] = compose_rebriefed_instructions(
-                            story.get("agent_instructions", ""), diagnosis
-                        )
-                        # Persist onto a FRESH read: check_story_status already
-                        # wrote this story's terminal status/failure_kind, so
-                        # writing the tick's stale top-of-loop `manifest` back
-                        # would revert it to in_progress. Only the rewritten
-                        # brief is carried over.
-                        fresh = _fresh_manifest(plan_name)
-                        fresh["stories"][key]["agent_instructions"] = story[
-                            "agent_instructions"
-                        ]
-                        bound_records.put_manifest(_store, plan_name, fresh)
-                        if story["agent_instructions"] != previous_instructions:
-                            _notify_user(
-                                plan_name,
-                                f"{key} brief rewritten from the give-up "
-                                f"diagnosis; the re-dispatch carries the "
-                                f"folded diagnosis.",
-                                story_key=key,
-                                event="give_up_rebrief",
-                                **(
-                                    {"correlation_id": story["correlation_id"]}
-                                    if story.get("correlation_id")
-                                    else {}
-                                ),
-                            )
-                    except Exception:  # fallback: notify-only, never crash the tick
-                        logging.getLogger("pipeline").debug(
-                            "give_up rebrief diagnosis failed for %s; "
-                            "falling back to notify-only",
-                            key,
-                            exc_info=True,
-                        )
-                else:
-                    _notify_user(
-                        plan_name,
-                        f"{key} tests failed",
-                        event="tests_failed",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                    summary["notify"].append(key)
+        poll_running_stories(
+            plan_name, manifest, stories, summary,
+            dispatch_ok=dispatch_ok, memory_pressure=memory_pressure,
+        )
 
         # Review every tests_passed story (incl. ones orphaned by a crashed
         # review on a prior tick - review_story is idempotent). Gated by the

@@ -28,7 +28,12 @@ from functools import lru_cache
 
 import pytest
 
-from pipeline import advance, advance_merge, advance_ready_dispatch
+from pipeline import (
+    advance,
+    advance_failed_stories,
+    advance_merge,
+    advance_ready_dispatch,
+)
 
 # --- the vocabulary (exact strings; the metrics story depends on them) -----
 
@@ -66,6 +71,8 @@ def _source() -> str:
         + inspect.getsource(advance_merge)
         + "\n"
         + inspect.getsource(advance_ready_dispatch)
+        + "\n"
+        + inspect.getsource(advance_failed_stories)
     )
 
 

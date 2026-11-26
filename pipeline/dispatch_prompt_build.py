@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .dispatch_routing import _resolve_dispatch_target
+from .role_routing_scope import layer_routing_for_plan
+
 
 @dataclass(frozen=True)
 class PromptBuild:
@@ -63,10 +66,10 @@ def build_prompt(
     # now come from role_registry.resolve_role via
     # _resolve_dispatch_target, so a registry-pinned roles.dispatch
     # model actually runs instead of the driver's env default.
-    dispatch_backend, dispatch_model = _home._resolve_dispatch_target(
+    dispatch_backend, dispatch_model = _resolve_dispatch_target(
         story,
         plan_role_config=_home._plan_role_config(plan_name),
-        layer_routing=_home.layer_routing_for_plan(plan_name),
+        layer_routing=layer_routing_for_plan(plan_name),
     )
     # Persist so check_story_status and escalation see which backend ran.
     story["backend"] = dispatch_backend

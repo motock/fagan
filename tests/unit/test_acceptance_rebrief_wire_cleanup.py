@@ -12,8 +12,7 @@ the pure helper) is the point: a helper nothing calls fixes nothing.
 """
 import inspect
 
-from pipeline import rebrief
-from pipeline import server as p
+from pipeline import rebrief, story_status_failures
 
 
 def test_append_cleanup_guidance_adds_the_header():
@@ -35,5 +34,5 @@ def test_append_cleanup_guidance_handles_empty_instructions():
 
 
 def test_check_story_status_step_cap_branch_calls_append_cleanup_guidance():
-    src = inspect.getsource(p.check_story_status)
+    src = inspect.getsource(story_status_failures.check_step_cap)
     assert "append_cleanup_guidance" in src

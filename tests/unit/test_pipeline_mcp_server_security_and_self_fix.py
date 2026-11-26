@@ -16,6 +16,12 @@ from pipeline import checkpoint as pcheckpoint
 from pipeline import concurrency as pcon
 from pipeline import server as p
 from pipeline import story_status as pstory_status
+from pipeline import (
+    story_status_failures,
+    story_status_liveness,
+    story_status_review_reuse,
+    story_status_tests,
+)
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _clear_caches,
     _hermetic_ollama_seams,
@@ -595,7 +601,10 @@ def test_check_story_status_watchdog_timeout_two_rebrief_call_sites(
     _rebrief_step_cap_struggle after this change - the pre-existing step-cap
     branch and the new watchdog branch - not one."""
     import re
-    src = Path(pstory_status.__file__).read_text()
+    src = "\n".join(
+        Path(m.__file__).read_text()
+        for m in (pstory_status, story_status_liveness, story_status_failures,
+                  story_status_tests, story_status_review_reuse))
     # Count call sites: occurrences of the helper name that are not the def
     # line and not a comment/docstring-only mention. The def line is
     # `def _rebrief_step_cap_struggle(`; call sites are bare invocations.

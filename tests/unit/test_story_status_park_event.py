@@ -293,7 +293,7 @@ def test_notify_failure_does_not_lose_the_park(plan_dir, monkeypatch):
 def test_park_notify_call_keeps_noqa_f821_marker():
     """The edited call reads `_notify_user` through server_bindings.server(),
     so no noqa F821 suppression remains anywhere in story_status."""
-    source = (Path(p.__file__).parent / "story_status.py").read_text()
+    source = (Path(p.__file__).parent / "story_status_review_reuse.py").read_text()
     anchor = "parked: no new commit after"
     idx = source.index(anchor)
     window = source[max(0, idx - 400):idx]
@@ -306,7 +306,7 @@ def test_park_notify_uses_a_bare_string_literal_event():
     pipeline/advance.py's existing stamped sites), not a shared constant or an
     enum: five stories in this plan stamp five different files in parallel, and
     a shared constant would make them collide on one artifact."""
-    source = (Path(p.__file__).parent / "story_status.py").read_text()
+    source = (Path(p.__file__).parent / "story_status_review_reuse.py").read_text()
     anchor = "parked: no new commit after"
     idx = source.index(anchor)
     window = source[max(0, idx - 400):idx + 300]

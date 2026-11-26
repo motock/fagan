@@ -41,6 +41,16 @@ from pipeline import dispatch
 from pipeline import server as p
 from pipeline import story_status as ss
 
+#: The check_story_status family: story_status.py and the phase modules it was
+#: split into. The grade body now lives in story_status_tests.py.
+STORY_STATUS_FAMILY_FILES = (
+    "story_status.py",
+    "story_status_liveness.py",
+    "story_status_failures.py",
+    "story_status_tests.py",
+    "story_status_review_reuse.py",
+)
+
 PLAN_NAME = "tge1"
 STORY_KEY = "S1"
 
@@ -304,7 +314,8 @@ def test_the_helper_is_module_level_and_above_the_grade_wrapper():
 def test_the_grade_body_calls_the_helper():
     """Edit 3d: the verdict consults the helper instead of trusting the bare
     returncode alone."""
-    src = Path(ss.__file__).read_text()
+    package = Path(ss.__file__).parent
+    src = "\n".join((package / name).read_text() for name in STORY_STATUS_FAMILY_FILES)
     assert "passed = test_result.returncode == 0" in src
     assert "_baseline_exempted_failures(story, test_result)" in src
 

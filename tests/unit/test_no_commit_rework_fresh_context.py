@@ -22,11 +22,12 @@ HEAD == ``last_reviewed_sha``) and stub only the diagnosis boundary
 (``pipeline.server.diagnose_failure``, which ``_rebrief_step_cap_struggle``
 reaches through its late-bound ``_ServerRef``).
 """
+import inspect
 import json
 from pathlib import Path
 
 from pipeline import persistence as ppers
-from pipeline import rebrief
+from pipeline import rebrief, story_status_review_reuse
 from pipeline import server as p
 from pipeline import story_status as pstory_status
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -298,9 +299,9 @@ def test_story_status_source_deletes_transcript_in_no_new_commit_branch():
     unlink and the rebrief call both sit between the cap branch's park reason
     and the branch's own return reason, and the rebrief call carries the same
     role_config kwarg the step-cap branch passes."""
-    src = Path(pstory_status.__file__).read_text()
+    src = inspect.getsource(story_status_review_reuse.check_no_new_commit_since_review)
 
-    cap_idx = src.index("no_new_commit_rework_budget_exhausted")
+    cap_idx = src.index("_no_commit_budget_exhausted(")
     reason_idx = src.index('"no_new_commit_since_last_review"')
     assert cap_idx < reason_idx, "unexpected source layout"
 

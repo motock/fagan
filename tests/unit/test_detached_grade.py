@@ -69,6 +69,17 @@ _COLLECT_TIMEOUT = 20.0  # generous; children here run well under 2s
 # ---------------------------------------------------------------- helpers
 
 
+#: The check_story_status family: story_status.py and the phase modules it was
+#: split into. Its record-store calls now live across all of them.
+STORY_STATUS_FAMILY_FILES = (
+    "story_status.py",
+    "story_status_liveness.py",
+    "story_status_failures.py",
+    "story_status_tests.py",
+    "story_status_review_reuse.py",
+)
+
+
 def _story_status_source() -> str:
     """Both modules: the detached-grade primitives (GRADE_WRAPPER,
     start_detached_grade, collect_detached_grade) moved verbatim out of
@@ -81,8 +92,9 @@ def _story_status_source() -> str:
     """
     from pipeline import detached_grade as dg
 
-    return (Path(ss.__file__).read_text() + "\n"
-            + Path(dg.__file__).read_text())
+    package = Path(ss.__file__).parent
+    sources = [(package / name).read_text() for name in STORY_STATUS_FAMILY_FILES]
+    return "\n".join(sources + [Path(dg.__file__).read_text()])
 
 
 def _wait_for_grade(pid: int, result_path, timeout: float = _COLLECT_TIMEOUT):

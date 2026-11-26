@@ -164,9 +164,26 @@ def store(monkeypatch, records: _RecordingRecords) -> _Store:
     return facade
 
 
+#: The check_story_status family: story_status.py and the phase modules it was
+#: split into. Its record-store calls now live across all of them.
+STORY_STATUS_FAMILY_FILES = (
+    "story_status.py",
+    "story_status_liveness.py",
+    "story_status_failures.py",
+    "story_status_tests.py",
+    "story_status_review_reuse.py",
+)
+
+
 def _module_source(module_name: str) -> str:
-    """Return the source of one module of the pipeline package."""
-    return (Path(story_status.__file__).parent / module_name).read_text()
+    """Return the source of one module of the pipeline package.
+
+    ``story_status.py`` names the whole check_story_status family, so its
+    source is read across the phase modules the body was split into.
+    """
+    package = Path(story_status.__file__).parent
+    names = STORY_STATUS_FAMILY_FILES if module_name == "story_status.py" else (module_name,)
+    return "\n".join((package / name).read_text() for name in names)
 
 
 # -- checkpoint: the journal entry ------------------------------------------

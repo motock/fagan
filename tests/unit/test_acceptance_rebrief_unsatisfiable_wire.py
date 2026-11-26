@@ -22,6 +22,7 @@ detector itself raises.
 import inspect
 
 from pipeline import server as p
+from pipeline import story_status_failures
 
 # ---------------------------------------------------------------------------
 # Wiring contract: the import and the call must exist.
@@ -219,8 +220,8 @@ def test_fail_open_detector_raises_still_completes(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_call_site_threads_plan_name_and_story_key():
-    """The call site in check_story_status must pass plan_name and story_key."""
-    src = inspect.getsource(p.check_story_status)
+    """The call site in check_step_cap must pass plan_name and story_key."""
+    src = inspect.getsource(story_status_failures.check_step_cap)
     assert "_rebrief_step_cap_struggle(" in src
     # The call must pass plan_name and story_key through (by keyword or position).
     assert "plan_name" in src, "call site must thread plan_name"

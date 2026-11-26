@@ -10,6 +10,7 @@ nothing. Mirrors test_acceptance_rebrief_wire_escalation.py.
 import inspect
 
 from pipeline import server as p
+from pipeline import story_status_failures
 
 
 def test_step_cap_helper_rebriefs_the_story():
@@ -18,7 +19,7 @@ def test_step_cap_helper_rebriefs_the_story():
 
 
 def test_check_story_status_calls_step_cap_rebrief():
-    src = inspect.getsource(p.check_story_status)
+    src = inspect.getsource(story_status_failures.check_step_cap)
     assert "_rebrief_step_cap_struggle" in src
 
 

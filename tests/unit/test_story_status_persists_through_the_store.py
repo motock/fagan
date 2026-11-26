@@ -391,11 +391,22 @@ def test_grading_transitions_are_written_through_the_store(plan_dir, monkeypatch
         assert plan == PLAN
 
 
+#: The check_story_status family: story_status.py and the phase modules it was
+#: split into. Its record-store calls now live across all of them.
+STORY_STATUS_FAMILY_FILES = (
+    "story_status.py",
+    "story_status_liveness.py",
+    "story_status_failures.py",
+    "story_status_tests.py",
+    "story_status_review_reuse.py",
+)
+
+
 def test_every_manifest_write_in_the_module_goes_through_the_store():
     """No direct file write survives: the module has no ``_atomic_write_json``
     left and its manifest writes are all ``bound_records.put_manifest`` calls."""
-    source = Path(__file__).resolve().parents[2] / "pipeline" / "story_status.py"
-    text = source.read_text()
+    package = Path(__file__).resolve().parents[2] / "pipeline"
+    text = "\n".join((package / name).read_text() for name in STORY_STATUS_FAMILY_FILES)
     assert "_atomic_write_json" not in text, (
         "story_status must persist through the store, not the atomic JSON writer"
     )

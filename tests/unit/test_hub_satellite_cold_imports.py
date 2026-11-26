@@ -61,8 +61,8 @@ _BOUND_TO_SERVER = (
     "fn = p.check_story_status; "
     "print(fn is s.check_story_status, fn.__globals__ is p.__dict__, "
     "p.mcp._tool_manager._tools['check_story_status'].fn is fn); "
-    "print(p._mark_story_done_impl is c._mark_story_done_impl, p._mark_story_done_impl.__globals__ is p.__dict__); "
-    "print(p._record_retro_pending is c._record_retro_pending, p._record_retro_pending.__globals__ is p.__dict__)"
+    "print(p._mark_story_done_impl is c._mark_story_done_impl, p._mark_story_done_impl.__globals__ is c.__dict__); "
+    "print(p._record_retro_pending is c._record_retro_pending, p._record_retro_pending.__globals__ is c.__dict__)"
 )
 _EXPECTED_BOUND = "True True True\nTrue True\nTrue True"
 

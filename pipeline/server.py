@@ -53,7 +53,6 @@ from mcp.server.mcpserver import MCPServer
 from app import backend, role_registry
 
 from . import bound_records, config_provenance, tenant_exec
-from . import ci as _ci_module
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -109,9 +108,6 @@ from .ci import (  # noqa: F401
     _reverify_acceptance,
     _reverify_build,
 )
-
-# Rebind the ci helpers that read server globals (see ci.bind_to_server).
-_ci_module.bind_to_server(sys.modules[__name__])
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR

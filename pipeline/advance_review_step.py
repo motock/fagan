@@ -8,16 +8,19 @@ why review is waiting. The tick calls this while it holds the plan lock; the
 the loop opened before the move.
 
 Names that tests monkeypatch on ``pipeline.advance`` are read as
-``_home.<name>`` at call time, so those patches keep landing here.
+``_advance().<name>`` at call time, so those patches keep landing here.
 """
 
+import importlib
 from typing import Any
 
 from . import review_job
-from .module_ref import _LazyModule
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
 
-_home = _LazyModule("pipeline.advance")
+
+def _advance():
+    """Return ``pipeline.advance`` at call time: it imports this module at load."""
+    return importlib.import_module("pipeline.advance")
 
 
 def run_review_step(
@@ -41,7 +44,7 @@ def run_review_step(
     # is on Claude and Claude is gated.
     if review_ok:
         clear_review_gate_notice(plan_name)
-        stories = _home._fresh_manifest(plan_name)["stories"]
+        stories = _advance()._fresh_manifest(plan_name)["stories"]
         _review_passed_stories(plan_name, stories, summary)
     else:
         # Only surface the review gate when there is tests_passed work
@@ -49,7 +52,7 @@ def run_review_step(
         # noise (e.g. all stories are already pr_open awaiting merge).
         if any(s["status"] == "tests_passed" for s in stories.values()):
             if should_notify_review_gate(plan_name):
-                _home._notify_user(
+                _advance()._notify_user(
                     plan_name,
                     f"Review backend gated ({review_reason}): deferring review.",
                     dedup_key=f"review_gate:{plan_name}:{review_reason}",
@@ -85,7 +88,7 @@ def _review_passed_stories(
     # consider is safe to snapshot; the status of each must be
     # re-read per iteration.
     for key in list(stories.keys()):
-        fresh_story = _home._fresh_manifest(plan_name)["stories"].get(key)
+        fresh_story = _advance()._fresh_manifest(plan_name)["stories"].get(key)
         if fresh_story is None:
             continue
         # The detached path also sees a story an operator moved out of
@@ -95,12 +98,12 @@ def _review_passed_stories(
         if review_job.detached_enabled() and (
             fresh_story["status"] == "tests_passed" or fresh_story.get("review_job")
         ):
-            _home.review_or_collect(plan_name, key, fresh_story, summary)
+            _advance().review_or_collect(plan_name, key, fresh_story, summary)
             continue
         if fresh_story["status"] != "tests_passed":
             continue
-        with _home._released_plan_lock(plan_name):
-            rv = _home.review_story(plan_name, key)
+        with _advance()._released_plan_lock(plan_name):
+            rv = _advance().review_story(plan_name, key)
         if rv.get("ok") is False or rv.get("skipped"):
             # ok:False - a concurrent re-ingest dropped the story
             # during the released window (review_story returns

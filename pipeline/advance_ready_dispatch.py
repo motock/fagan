@@ -7,9 +7,10 @@ is waiting" notice. The tick calls this while it holds the plan lock; the
 the loop opened before the move.
 
 Names that tests monkeypatch on ``pipeline.advance`` are read as
-``_home.<name>`` at call time, so those patches keep landing here.
+``_advance().<name>`` at call time, so those patches keep landing here.
 """
 
+import importlib
 from typing import Any
 
 from . import access_hooks, bound_records
@@ -17,10 +18,12 @@ from .concurrency import PlanLockReacquireTimeout, _has_live_test_author_phase
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
 from .dispatch_lease import claim_dispatch_lease
-from .module_ref import _LazyModule
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 
-_home = _LazyModule("pipeline.advance")
+
+def _advance():
+    """Return ``pipeline.advance`` at call time: it imports this module at load."""
+    return importlib.import_module("pipeline.advance")
 
 
 def dispatch_ready_stories(
@@ -46,9 +49,9 @@ def dispatch_ready_stories(
     # blind cross-plan semantics for its other callers
     # (pipeline/dispatch.py's concurrent-dispatch warning gates); only
     # this cap's slot math gets the on-device-aware count.
-    if _home.MAX_CONCURRENT_AGENTS > 0:
+    if _advance().MAX_CONCURRENT_AGENTS > 0:
         free_device_slots = max(
-            0, _home.MAX_CONCURRENT_AGENTS - _home._count_on_device_in_progress_agents()
+            0, _advance().MAX_CONCURRENT_AGENTS - _advance()._count_on_device_in_progress_agents()
         )
         capped = True
     else:
@@ -63,8 +66,8 @@ def dispatch_ready_stories(
     dispatched_this_tick = 0
     for key in ready:
         if (
-            _home.PIPELINE_MAX_DISPATCH_PER_TICK > 0
-            and dispatched_this_tick >= _home.PIPELINE_MAX_DISPATCH_PER_TICK
+            _advance().PIPELINE_MAX_DISPATCH_PER_TICK > 0
+            and dispatched_this_tick >= _advance().PIPELINE_MAX_DISPATCH_PER_TICK
         ):
             # Per-tick dispatch cap (LOCKSTARVE-A3): this plan has already
             # launched its budget for this tick. Leave the remaining
@@ -73,7 +76,7 @@ def dispatch_ready_stories(
             # gated, parked or failed and consume no dispatch attempt.
             break
         story = stories[key]
-        on_device = _home._story_dispatch_is_on_device(story)
+        on_device = _advance()._story_dispatch_is_on_device(story)
         # A story waiting on a detached test-author already occupies a
         # slot (it is counted above), so re-dispatching it to collect the
         # phase must neither be blocked by nor consume another slot.
@@ -89,7 +92,7 @@ def dispatch_ready_stories(
             continue
         # Persist the claim BEFORE releasing the lock: an unpersisted lease
         # protects nothing.
-        bound_records.put_manifest(_home._store, plan_name, claimed)
+        bound_records.put_manifest(_advance()._store, plan_name, claimed)
         if capped and on_device and not holds_slot:
             # Only a dispatch that actually launches on-device consumes
             # the slot; a cloud dispatch must not touch the counter.
@@ -110,12 +113,12 @@ def dispatch_ready_stories(
     # used only for interruptions, so a dead dispatch backend left stories
     # in todo with no notice at all. One notice per distinct reason per
     # gated episode (see _take_new_gate_reasons in pipeline.advance).
-    gate_groups = _home._group_gated_stories(gated)
+    gate_groups = _advance()._group_gated_stories(gated)
     if gate_groups:
         first_reason, first_keys = next(iter(gate_groups.items()))
         summary["dispatch_gated"] = {"reason": first_reason, "stories": first_keys}
-    for reason in _home._take_new_gate_reasons(plan_name, list(gate_groups)):
-        _home._notify_user(
+    for reason in _advance()._take_new_gate_reasons(plan_name, list(gate_groups)):
+        _advance()._notify_user(
             plan_name,
             f"dispatch is waiting: {reason}",
             event="dispatch_gated",
@@ -139,15 +142,15 @@ def _dispatch_gated(
     )
     if story_backend == "claude":
         # Gate on Claude's usage resource_status, NOT local memory.
-        status = _home.backend.get_backend("dispatch", name="claude").resource_status()
+        status = _advance().backend.get_backend("dispatch", name="claude").resource_status()
     else:
         tag = story.get("model") or _story_model
         if tag:
-            status = _home.backend.get_backend(
+            status = _advance().backend.get_backend(
                 "dispatch", name=story_backend
             ).resource_status(model_tag=tag)
         else:
-            status = _home.backend.get_backend(
+            status = _advance().backend.get_backend(
                 "dispatch", name=story_backend
             ).resource_status()
     if status.get("ok", True):
@@ -164,7 +167,7 @@ def _claim_for_dispatch(plan_name: str, key: str) -> dict[str, Any] | None:
     another owner may hold this story's lease - claiming stale would miss it
     and clobber it with our own.
     """
-    m = _home._fresh_manifest(plan_name)
+    m = _advance()._fresh_manifest(plan_name)
     fresh_story = m["stories"].get(key)
     if fresh_story is None:
         # A re-ingest during an earlier release window can drop this
@@ -176,7 +179,7 @@ def _claim_for_dispatch(plan_name: str, key: str) -> dict[str, Any] | None:
         # double-dispatch by a different route.
         return None
     if blocks_reclaim(fresh_story, fresh_story.get("worktree") or ""):
-        _home._notify_user(
+        _advance()._notify_user(
             plan_name,
             f"{key}: the previous dispatch's scheduler is gone but its "
             "worktree shows work in progress; waiting for the lease "
@@ -201,8 +204,8 @@ def _launch_claimed_story(plan_name: str, key: str, summary: dict[str, Any]) -> 
     returns False.
     """
     try:
-        with _home._released_plan_lock(plan_name):
-            result = _home.dispatch_story(plan_name, key)
+        with _advance()._released_plan_lock(plan_name):
+            result = _advance().dispatch_story(plan_name, key)
         if isinstance(result, dict) and result.get("ok") is False:
             # dispatch_story now returns a structured failure (e.g. a
             # git fetch/worktree-add error) instead of letting the
@@ -251,7 +254,7 @@ def _record_dispatch_failure(
     # bump the attempt counter there, and clear the lease from the
     # SAME fresh read: the lock was released above, so only a
     # freshly re-read copy may be written back (never a stale one).
-    m = _home._fresh_manifest(plan_name)
+    m = _advance()._fresh_manifest(plan_name)
     st = m["stories"][key]
     st.pop("dispatch_lease_expires_at", None)
     st.pop("dispatch_lease_owner_pid", None)
@@ -268,10 +271,10 @@ def _record_dispatch_failure(
         if st.get("correlation_id")
         else {}
     )
-    if attempts >= _home.DISPATCH_MAX_ATTEMPTS:
+    if attempts >= _advance().DISPATCH_MAX_ATTEMPTS:
         st["status"] = "failed"
         st["dispatch_error"] = str(e)
-        _home._notify_user(
+        _advance()._notify_user(
             plan_name,
             f"{key} dispatch failed {attempts}x "
             f"({e}); giving up - needs human intervention.",
@@ -282,20 +285,20 @@ def _record_dispatch_failure(
         summary["failed"].append(key)
     else:
         # leave status dispatch-eligible; the next tick retries.
-        _home._notify_user(
+        _advance()._notify_user(
             plan_name,
             f"{key} dispatch attempt {attempts}/"
-            f"{_home.DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
+            f"{_advance().DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
             **_cid_kwargs,
         )
     summary["notify"].append(key)
-    bound_records.put_manifest(_home._store, plan_name, m)
+    bound_records.put_manifest(_advance()._store, plan_name, m)
 
 
 def _clear_dispatch_lease(plan_name: str, key: str) -> None:
     """Drop the dispatch lease from a fresh read of the story."""
-    m = _home._fresh_manifest(plan_name)
+    m = _advance()._fresh_manifest(plan_name)
     st = m["stories"][key]
     st.pop("dispatch_lease_expires_at", None)
     st.pop("dispatch_lease_owner_pid", None)
-    bound_records.put_manifest(_home._store, plan_name, m)
+    bound_records.put_manifest(_advance()._store, plan_name, m)

@@ -7,18 +7,21 @@ rebriefed after a give-up, or reported as a failed test run. The tick calls
 this while it holds the plan lock.
 
 Names that tests monkeypatch on ``pipeline.advance`` are read as
-``_home.<name>`` at call time, so those patches keep landing here.
+``_advance().<name>`` at call time, so those patches keep landing here.
 """
 
+import importlib
 import logging
 from typing import Any
 
 from . import bound_records
 from .dispatch import _resolve_dispatch_target
-from .module_ref import _LazyModule
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 
-_home = _LazyModule("pipeline.advance")
+
+def _advance():
+    """Return ``pipeline.advance`` at call time: it imports this module at load."""
+    return importlib.import_module("pipeline.advance")
 
 
 def poll_running_stories(
@@ -46,7 +49,7 @@ def poll_running_stories(
             memory_pressure=memory_pressure,
         ):
             continue
-        check_result = _home.check_story_status(plan_name, key)
+        check_result = _advance().check_story_status(plan_name, key)
         status = check_result.get("status")
         if status == "failed":
             manifest = _handle_failed_story(
@@ -88,7 +91,7 @@ def _poll_gate_open(
     # On-device with an explicit model tag: polled only when its own
     # floor holds. Memory pressure alone no longer interrupts it, so do
     # not infer interruption from a low floor here.
-    status = _home.backend.get_backend("dispatch", name=story_backend).resource_status(
+    status = _advance().backend.get_backend("dispatch", name=story_backend).resource_status(
         model_tag=tag
     )
     return status.get("ok", True)
@@ -114,19 +117,19 @@ def _handle_failed_story(
     # failure (on Claude), or any failure under an explicit
     # non-auto backend, is terminal.
     if (
-        _home._auto_escalation_enabled()
-        and story.get("backend") in _home._LOCAL_BACKEND_NAMES
+        _advance()._auto_escalation_enabled()
+        and story.get("backend") in _advance()._LOCAL_BACKEND_NAMES
         and not story.get("escalated")
-        and _home._escalation_target(
+        and _advance()._escalation_target(
             **layer_routing_kwargs(layer_routing_for_manifest(manifest))
         )
         != (story.get("backend"), story.get("model"))
     ):
-        manifest = _home._fresh_manifest(plan_name)
-        _home._escalate_to_claude(manifest, plan_name, key)
-        _home._notify_user(
+        manifest = _advance()._fresh_manifest(plan_name)
+        _advance()._escalate_to_claude(manifest, plan_name, key)
+        _advance()._notify_user(
             plan_name,
-            f"{key} local agent failed; escalating to {_home._escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
+            f"{key} local agent failed; escalating to {_advance()._escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
             event="escalated",
             story_key=key,
             **(
@@ -138,7 +141,7 @@ def _handle_failed_story(
         summary["notify"].append(key)
     elif (
         fallback_model
-        and story.get("backend") in _home._LOCAL_BACKEND_NAMES
+        and story.get("backend") in _advance()._LOCAL_BACKEND_NAMES
         and story.get("model") != fallback_model
         and not story.get("tried_fallback_model")
     ):
@@ -146,12 +149,12 @@ def _handle_failed_story(
         # never escalates to Claude - just gives one other
         # local model a shot before the terminal park/fail
         # path below.
-        manifest = _home._fresh_manifest(plan_name)
+        manifest = _advance()._fresh_manifest(plan_name)
         failed_model = story.get("dispatched_model") or story.get("model") or "default"
-        _home._escalate_to_local_fallback_model(
+        _advance()._escalate_to_local_fallback_model(
             manifest, plan_name, key, fallback_model
         )
-        _home._notify_user(
+        _advance()._notify_user(
             plan_name,
             f"{key} local agent failed on {failed_model}; retrying on "
             f"fallback model {fallback_model} before parking.",
@@ -167,7 +170,7 @@ def _handle_failed_story(
     elif check_result.get("failure_kind") == "give_up":
         _handle_give_up(plan_name, key, story, manifest, summary)
     else:
-        _home._notify_user(
+        _advance()._notify_user(
             plan_name,
             f"{key} tests failed",
             event="tests_failed",
@@ -196,7 +199,7 @@ def _handle_give_up(
     # the story's scope/clarity instead of the generic
     # message - a missing/wrong API needs a fix to
     # agent_instructions, not another identical retry.
-    _home._notify_user(
+    _advance()._notify_user(
         plan_name,
         f"{key} agent gave up (explicit surrender, zero productive "
         f"progress) - likely under-specified (missing API, wrong "
@@ -233,23 +236,23 @@ def _rebrief_after_give_up(
     """
     try:
         previous_instructions = story.get("agent_instructions", "")
-        evidence = _home.collect_failure_evidence(story.get("worktree", ""), story)
-        unsat_reason = _home.detect_unsatisfiable_signal(evidence)
+        evidence = _advance().collect_failure_evidence(story.get("worktree", ""), story)
+        unsat_reason = _advance().detect_unsatisfiable_signal(evidence)
         if unsat_reason is not None:
-            _home._notify_user(
+            _advance()._notify_user(
                 plan_name,
                 f"Story may be unsatisfiable as specified: "
                 f"{unsat_reason}. Story {key} may need "
                 f"re-planning rather than another retry.",
                 story_key=key,
             )
-        diagnosis = _home.diagnose_failure(
+        diagnosis = _advance().diagnose_failure(
             evidence,
             story,
             manifest.get("role_config"),
             **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
         )
-        story["agent_instructions"] = _home.compose_rebriefed_instructions(
+        story["agent_instructions"] = _advance().compose_rebriefed_instructions(
             story.get("agent_instructions", ""), diagnosis
         )
         # Persist onto a FRESH read: check_story_status already
@@ -257,11 +260,11 @@ def _rebrief_after_give_up(
         # writing the tick's stale top-of-loop `manifest` back
         # would revert it to in_progress. Only the rewritten
         # brief is carried over.
-        fresh = _home._fresh_manifest(plan_name)
+        fresh = _advance()._fresh_manifest(plan_name)
         fresh["stories"][key]["agent_instructions"] = story["agent_instructions"]
-        bound_records.put_manifest(_home._store, plan_name, fresh)
+        bound_records.put_manifest(_advance()._store, plan_name, fresh)
         if story["agent_instructions"] != previous_instructions:
-            _home._notify_user(
+            _advance()._notify_user(
                 plan_name,
                 f"{key} brief rewritten from the give-up "
                 f"diagnosis; the re-dispatch carries the "

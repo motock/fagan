@@ -47,19 +47,3 @@ class _ModuleRef(_ServerRef):
 
     def __getitem__(self, key):
         return self._value()[key]
-
-class _LazyModule:
-    """Proxy for a whole module, imported at first attribute access.
-
-    WHY: a phase module split out of ``pipeline.advance`` reads that module's
-    names at call time. A module-level ``from . import advance`` would be
-    circular, because ``pipeline.advance`` imports the phase module at its own
-    module level. Resolving the module on every attribute read keeps the
-    ``monkeypatch.setattr(pipeline.advance, NAME, ...)`` patches visible.
-    """
-
-    def __init__(self, module_name: str):
-        self._module_name = module_name
-
-    def __getattr__(self, name):
-        return getattr(importlib.import_module(self._module_name), name)

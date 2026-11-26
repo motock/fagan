@@ -45,6 +45,14 @@ empty_parameter_set_mark = "skip"
 # Without it ruff infers a default that varies by release (0.17.0 -> py311).
 target-version = "py311"
 
+[tool.ruff.lint]
+# Function complexity ceiling (added 2026-11). It measures the function itself,
+# so a large function cannot be hidden by moving it into its own file.
+extend-select = ["C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 30
+
 [tool.ruff.lint.per-file-ignores]
 # Acceptance fixtures are read-only oracle content: their worktree bytes are
 # hashed against a dispatch-time digest (pipeline.oracle_gate.acceptance_digests)
@@ -58,8 +66,8 @@ target-version = "py311"
 # test_agent_done_marker.py), so the UP017 `timezone.utc` -> `UTC` rewrite would
 # break them. Exempt only that rule here rather than editing the pinned tests.
 "pipeline/execution.py" = ["UP017"]
-"scripts/local_agent.py" = ["UP017"]
-"scripts/local_agent_oracle.py" = ["UP017"]
+"scripts/local_agent.py" = ["UP017", "C901"]
+"scripts/local_agent_oracle.py" = ["UP017", "C901"]
 # pipeline/server.py re-exports many names for test monkeypatching and keeps
 # `import fcntl` (asserted verbatim by test_server_module_imports_hashlib) even
 # though the merge helpers that used it moved to pipeline/merge.py. F401 is
@@ -104,6 +112,14 @@ target-version = "py311"
 # tests/unit/_pipeline_mcp_server_test_helpers.py and uses it as a
 # test-function parameter.
 "tests/unit/test_advance_cloud_slot_exempt.py" = ["F811"]
+
+# Over the complexity ceiling when it was added (2026-11). Remove a file when its functions are under 30; never add one.
+"pipeline/advance_merge.py" = ["C901"]
+"pipeline/ingest.py" = ["C901"]
+"scripts/install_checks.py" = ["C901"]
+"scripts/local_agent_oracle_tools.py" = ["C901"]
+"scripts/local_agent_tools.py" = ["C901"]
+"tests/**" = ["C901"]
 
 [tool.mypy]
 files = ["pipeline", "app"]

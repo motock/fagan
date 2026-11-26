@@ -865,7 +865,7 @@ class ChatService:
         for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace, repo_url=repo_url):
             if event.get("type") == "result":
                 result = event["data"]
-        return result  # type: ignore[return-value]  # stream_turn always yields a result event
+        return result  # type: ignore[return-value]  # stream_turn always emits a result event
 
 # ---------------------------------------------------------------------------
 # FastAPI router for chat endpoint

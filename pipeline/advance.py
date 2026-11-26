@@ -18,34 +18,37 @@ import os
 import re
 from typing import Any
 
-from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
+from . import access_hooks, bound_records, cross_plan, plan_approval, review_job  # noqa: F401  (access_hooks re-exported)
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
+from .advance_failed_stories import poll_running_stories
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
     _adjudicate_merges,
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
-from .advance_review import review_or_collect
+from .advance_ready_dispatch import dispatch_ready_stories
+from .advance_review import review_or_collect  # noqa: F401  (re-exported for existing readers)
+from .advance_review_step import run_review_step
 from .autonomy_settings import effective_autonomy
 from .ci import context_from_manifest
 from .concurrency import (
-    PlanLockReacquireTimeout,
+    PlanLockReacquireTimeout,  # noqa: F401  (re-exported for existing readers)
     _has_live_test_author_phase,
-    _released_plan_lock,
+    _released_plan_lock,  # noqa: F401  (re-exported for existing readers)
 )
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
-from .dispatch_fence import blocks_reclaim
+from .dispatch_fence import blocks_reclaim  # noqa: F401  (re-exported for existing readers)
 from .dispatch_hold import dispatch_held, filter_ready, pause_reason
-from .dispatch_lease import claim_dispatch_lease
+from .dispatch_lease import claim_dispatch_lease  # noqa: F401  (re-exported for existing readers)
 from .park_options import run_park_options_sweep
 from .rebrief import (
-    collect_failure_evidence,
-    compose_rebriefed_instructions,
-    detect_unsatisfiable_signal,
-    diagnose_failure,
+    collect_failure_evidence,  # noqa: F401  (re-exported for existing readers)
+    compose_rebriefed_instructions,  # noqa: F401  (re-exported for existing readers)
+    detect_unsatisfiable_signal,  # noqa: F401  (re-exported for existing readers)
+    diagnose_failure,  # noqa: F401  (re-exported for existing readers)
 )
-from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
+from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate  # noqa: F401  (re-exported for existing readers)
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .stall_scan import run_stall_scan
 from .store_records import validate_plan_name
@@ -550,226 +553,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
 
-        # 1. Dispatch ready (and resumable-interrupted) stories, capped to
-        # the ON-DEVICE slots still free under MAX_CONCURRENT_AGENTS. <=0
-        # means no cap. Only on-device dispatch consumes a slot: cloud-backed
-        # dispatch (a :cloud-tagged model or a claude-routed story) has no
-        # on-device footprint to protect, so it bypasses the cap entirely —
-        # its spend is bounded by the usage pause thresholds in the per-story
-        # gate below instead. _count_in_progress_agents keeps its backend-
-        # blind cross-plan semantics for its other callers
-        # (pipeline/dispatch.py's concurrent-dispatch warning gates); only
-        # this cap's slot math gets the on-device-aware count.
-        if MAX_CONCURRENT_AGENTS > 0:
-            free_device_slots = max(
-                0, MAX_CONCURRENT_AGENTS - _count_on_device_in_progress_agents()
-            )
-            capped = True
-        else:
-            free_device_slots = 0
-            capped = False
-        # Per-story dispatch gate: only dispatch stories whose own backend+model
-        # passes its gate. A :cloud story dispatches even under local memory
-        # pressure; an on-device story is deferred when the floor is not met.
-        # Independent of the cap: a slot-exempt story still runs this gate,
-        # and gated stories are recorded exactly as before.
-        gated = []
-        dispatched_this_tick = 0
-        for key in ready:
-            if (
-                PIPELINE_MAX_DISPATCH_PER_TICK > 0
-                and dispatched_this_tick >= PIPELINE_MAX_DISPATCH_PER_TICK
-            ):
-                # Per-tick dispatch cap (LOCKSTARVE-A3): this plan has already
-                # launched its budget for this tick. Leave the remaining
-                # stories in their current dispatch-eligible status (todo /
-                # interrupted) so the NEXT tick picks them up; they are not
-                # gated, parked or failed and consume no dispatch attempt.
-                break
-            story = stories[key]
-            on_device = _story_dispatch_is_on_device(story)
-            # A story waiting on a detached test-author already occupies a
-            # slot (it is counted above), so re-dispatching it to collect the
-            # phase must neither be blocked by nor consume another slot.
-            holds_slot = _has_live_test_author_phase(story)
-            if capped and on_device and not holds_slot and free_device_slots <= 0:
-                # On-device slots are exhausted: defer this story until a
-                # slot frees up. Cloud dispatches never reach this branch.
-                continue
-            story_backend, _story_model = _resolve_dispatch_target(
-                story,
-                plan_role_config=manifest.get("role_config"),
-                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-            )
-            if story_backend == "claude":
-                # Gate on Claude's usage resource_status, NOT local memory.
-                status = backend.get_backend("dispatch", name="claude").resource_status()
-                if not status.get("ok", True):
-                    gated.append((key, status.get("reason")))
-                    continue
-            else:
-                tag = story.get("model") or _story_model
-                if tag:
-                    status = backend.get_backend("dispatch", name=story_backend).resource_status(
-                        model_tag=tag
-                    )
-                else:
-                    status = backend.get_backend("dispatch", name=story_backend).resource_status()
-                if not status.get("ok", True):
-                    gated.append((key, status.get("reason")))
-                    continue
-            # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch lease
-            # (LOCKSTARVE-B2) before releasing the plan lock around
-            # dispatch_story below. The check-then-set must run against a fresh
-            # read, not the top-of-tick `story`: an earlier iteration already
-            # released the lock, so another owner may hold this story's lease -
-            # claiming stale would miss it and clobber it with our own.
-            m = _fresh_manifest(plan_name)
-            fresh_story = m["stories"].get(key)
-            if fresh_story is None:
-                # A re-ingest during an earlier release window can drop this
-                # story entirely - skip it rather than KeyError the tick.
-                continue
-            if fresh_story["status"] not in ("todo", "interrupted", "changes_requested"):
-                # Another process already advanced this story during a
-                # release window; re-dispatching it would be the same
-                # double-dispatch by a different route.
-                continue
-            if blocks_reclaim(fresh_story, fresh_story.get("worktree") or ""):
-                _notify_user(
-                    plan_name,
-                    f"{key}: the previous dispatch's scheduler is gone but its "
-                    "worktree shows work in progress; waiting for the lease "
-                    "to expire.",
-                    event="dispatch_in_progress",
-                    story_key=key,
-                )
-                continue
-            if not access_hooks.admit_dispatch(fresh_story):
-                # Deferred for this tick only: no lease, no slot, not parked.
-                continue
-            if not claim_dispatch_lease(fresh_story):
-                continue
-            # Persist the claim BEFORE releasing the lock: an unpersisted lease
-            # protects nothing.
-            bound_records.put_manifest(_store, plan_name, m)
-            if capped and on_device and not holds_slot:
-                # Only a dispatch that actually launches on-device consumes
-                # the slot; a cloud dispatch must not touch the counter.
-                free_device_slots -= 1
-            try:
-                with _released_plan_lock(plan_name):
-                    result = dispatch_story(plan_name, key)
-                if isinstance(result, dict) and result.get("ok") is False:
-                    # dispatch_story now returns a structured failure (e.g. a
-                    # git fetch/worktree-add error) instead of letting the
-                    # underlying subprocess.CalledProcessError escape as an
-                    # unhandled exception - re-raise here so this loop's
-                    # existing attempt-counting/failed-status/notify-user
-                    # handling below (unchanged) still triggers exactly as
-                    # it did when dispatch_story used to raise directly.
-                    raise RuntimeError(result.get("error", "dispatch failed"))
-                # Only a dispatch that actually launched consumes this tick's
-                # cap budget. Every real dispatch_story result is a dict
-                # ({"ok": True, ...} on a launch, {"ok": False, ...} raised as
-                # RuntimeError above, {"ok": True, "skipped": ...} on store-lock
-                # contention — that last shape did NOT launch an agent but is
-                # still counted against the cap, since the tick paid the call),
-                # so in production this counts exactly the dispatches that did
-                # not return ok: False. A non-dict return (only possible from a
-                # stub) is not counted.
-                if isinstance(result, dict):
-                    dispatched_this_tick += 1
-                if isinstance(result, dict) and result.get("pending"):
-                    # Detached test-author still running: no executor launched.
-                    summary.setdefault("pending_phase", []).append(key)
-                elif not (isinstance(result, dict) and result.get("skipped")):
-                    summary["dispatched"].append(key)
-                else:
-                    summary.setdefault("skipped", []).append(key)
-            except PlanLockReacquireTimeout:
-                # The plan flock could not be re-acquired after the released
-                # window: this thread no longer holds it, so any further
-                # manifest mutation this tick makes would race whichever
-                # other thread/process took it over. Re-raise rather than
-                # letting the broad handler below treat this as an ordinary
-                # dispatch failure - that would bump dispatch_attempts and
-                # keep writing the manifest with no lock held, and (if the
-                # timeout fires after dispatch_story already launched the
-                # agent) misattribute a healthy in-progress story as a
-                # failed dispatch. Let the tick abort with this cause
-                # instead; the next tick starts clean.
-                raise
-            except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
-                # Re-read: dispatch_story only writes on a successful launch,
-                # so on a raise the recorded status is still todo/interrupted -
-                # bump the attempt counter there, and clear the lease from the
-                # SAME fresh read: the lock was released above, so only a
-                # freshly re-read copy may be written back (never a stale one).
-                m = _fresh_manifest(plan_name)
-                st = m["stories"][key]
-                st.pop("dispatch_lease_expires_at", None)
-                st.pop("dispatch_lease_owner_pid", None)
-                attempts = st.get("dispatch_attempts", 0) + 1
-                st["dispatch_attempts"] = attempts
-                # W4L-04: stamp the story's dispatch-failure notifications with
-                # its persisted correlation_id (omitted entirely for older
-                # manifests). The attempt counter is already in scope here.
-                _cid_kwargs = (
-                    {
-                        "correlation_id": st["correlation_id"],
-                        "attempt": st.get("dispatch_attempts", 0),
-                    }
-                    if st.get("correlation_id")
-                    else {}
-                )
-                if attempts >= DISPATCH_MAX_ATTEMPTS:
-                    st["status"] = "failed"
-                    st["dispatch_error"] = str(e)
-                    _notify_user(
-                        plan_name,
-                        f"{key} dispatch failed {attempts}x "
-                        f"({e}); giving up - needs human intervention.",
-                        event="dispatch_failed",
-                        story_key=key,
-                        **_cid_kwargs,
-                    )
-                    summary["failed"].append(key)
-                else:
-                    # leave status dispatch-eligible; the next tick retries.
-                    _notify_user(
-                        plan_name,
-                        f"{key} dispatch attempt {attempts}/"
-                        f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
-                        **_cid_kwargs,
-                    )
-                summary["notify"].append(key)
-                bound_records.put_manifest(_store, plan_name, m)
-            else:
-                # Dispatch succeeded (or was skipped on store-lock contention):
-                # clear the lease from a fresh read too, as in the except above.
-                m = _fresh_manifest(plan_name)
-                st = m["stories"][key]
-                st.pop("dispatch_lease_expires_at", None)
-                st.pop("dispatch_lease_owner_pid", None)
-                bound_records.put_manifest(_store, plan_name, m)
-
-        # Say why ready stories were held back: the gate reason is otherwise
-        # used only for interruptions, so a dead dispatch backend left stories
-        # in todo with no notice at all. One notice per distinct reason per
-        # gated episode (see _take_new_gate_reasons above).
-        gate_groups = _group_gated_stories(gated)
-        if gate_groups:
-            first_reason, first_keys = next(iter(gate_groups.items()))
-            summary["dispatch_gated"] = {"reason": first_reason, "stories": first_keys}
-        for reason in _take_new_gate_reasons(plan_name, list(gate_groups)):
-            _notify_user(
-                plan_name,
-                f"dispatch is waiting: {reason}",
-                event="dispatch_gated",
-                severity="warning",
-                dedup_key=f"dispatch_gated:{plan_name}:{reason}",
-            )
+        # 1. Dispatch ready (and resumable-interrupted) stories: see
+        # pipeline/advance_ready_dispatch.py. Runs under this tick's plan lock.
+        dispatch_ready_stories(plan_name, manifest, stories, ready, summary)
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate
@@ -782,281 +568,15 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # REVIEW backend (review_ok); merge (further below) is unconditional.
         manifest = _fresh_manifest(plan_name)
         stories = manifest["stories"]
-        for key, story in stories.items():
-            if story["status"] != "in_progress" or "pid" not in story:
-                continue
-            # Per-story poll gate — mirrors the interruption gate (lines above):
-            # poll only stories that survive this tick (were NOT interrupted).
-            # tag falls back to dispatched_model (see _story_dispatch_is_
-            # on_device): a story with no plan-authored `model` override
-            # still resolves to a concrete tag at dispatch time, and reading
-            # only `model` silently dropped every such :cloud dispatch into
-            # the blanket-gate branch below, starving it of polling whenever
-            # the blanket gate read down (live incident: PUB-01 finished and
-            # exited but was never re-polled, so its dead pid was never
-            # graded).
-            story_backend, _story_model = _resolve_dispatch_target(
-                story,
-                plan_role_config=manifest.get("role_config"),
-                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-            )
-            tag = story.get("model") or story.get("dispatched_model") or _story_model
-            if story_backend != "claude" and tag and tag.endswith(":cloud"):
-                pass  # :cloud is never interrupted by the local memory gate
-            elif story_backend == "claude" or not tag:
-                # Interrupted when the blanket gate is down for a non-memory
-                # reason; polled when the gate is up OR down for memory pressure.
-                if not (dispatch_ok or memory_pressure):
-                    continue
-            else:
-                # On-device with an explicit model tag: polled only when its own
-                # floor holds. Memory pressure alone no longer interrupts it, so do
-                # not infer interruption from a low floor here.
-                if not backend.get_backend("dispatch", name=story_backend).resource_status(
-                    model_tag=tag
-                ).get("ok", True):
-                    continue
-            check_result = check_story_status(plan_name, key)
-            status = check_result.get("status")
-            if status == "failed":
-                fallback_model = manifest.get("local_model_fallback")
-                # A-posteriori escalation: under auto dispatch, if the
-                # local agent failed and has NOT been escalated before,
-                # wipe its worktree and re-queue for Claude. A second
-                # failure (on Claude), or any failure under an explicit
-                # non-auto backend, is terminal.
-                if (
-                    _auto_escalation_enabled()
-                    and story.get("backend") in _LOCAL_BACKEND_NAMES
-                    and not story.get("escalated")
-                    and _escalation_target(**layer_routing_kwargs(layer_routing_for_manifest(manifest))) != (story.get("backend"), story.get("model"))
-                ):
-                    manifest = _fresh_manifest(plan_name)
-                    _escalate_to_claude(manifest, plan_name, key)
-                    _notify_user(
-                        plan_name,
-                        f"{key} local agent failed; escalating to {_escalation_label(**layer_routing_kwargs(layer_routing_for_manifest(manifest)))} and starting clean.",
-                        event="escalated",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["notify"].append(key)
-                elif (
-                    fallback_model
-                    and story.get("backend") in _LOCAL_BACKEND_NAMES
-                    and story.get("model") != fallback_model
-                    and not story.get("tried_fallback_model")
-                ):
-                    # Plan-scoped opt-in (manifest["local_model_fallback"]):
-                    # never escalates to Claude - just gives one other
-                    # local model a shot before the terminal park/fail
-                    # path below.
-                    manifest = _fresh_manifest(plan_name)
-                    failed_model = (
-                        story.get("dispatched_model")
-                        or story.get("model")
-                        or "default"
-                    )
-                    _escalate_to_local_fallback_model(
-                        manifest, plan_name, key, fallback_model
-                    )
-                    _notify_user(
-                        plan_name,
-                        f"{key} local agent failed on {failed_model}; retrying on "
-                        f"fallback model {fallback_model} before parking.",
-                        event="model_fallback",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["notify"].append(key)
-                elif check_result.get("failure_kind") == "give_up":
-                    # T6: the agent explicitly surrendered rather than
-                    # producing ordinary red tests. Point the human at
-                    # the story's scope/clarity instead of the generic
-                    # message - a missing/wrong API needs a fix to
-                    # agent_instructions, not another identical retry.
-                    _notify_user(
-                        plan_name,
-                        f"{key} agent gave up (explicit surrender, zero productive "
-                        f"progress) - likely under-specified (missing API, wrong "
-                        f"scope) rather than a model-capability gap; needs human "
-                        f"clarification before another dispatch.",
-                        event="agent_gave_up",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                    summary["notify"].append(key)
-                    # OA2-08: a surrender is the same "the brief, not the
-                    # model, is the problem" signal the step-cap path already
-                    # diagnoses (pipeline/story_status.py's
-                    # _rebrief_step_cap_struggle). Run the SAME rebrief
-                    # machinery here so the next dispatch carries a rewritten
-                    # brief instead of the identical one that just failed.
-                    # Fail-open: any error (unconfigured/raising diagnosis
-                    # role, unreadable manifest) degrades to the notify-only
-                    # behaviour above - a diagnosis must never crash the tick.
-                    try:
-                        previous_instructions = story.get("agent_instructions", "")
-                        evidence = collect_failure_evidence(
-                            story.get("worktree", ""), story
-                        )
-                        unsat_reason = detect_unsatisfiable_signal(evidence)
-                        if unsat_reason is not None:
-                            _notify_user(
-                                plan_name,
-                                f"Story may be unsatisfiable as specified: "
-                                f"{unsat_reason}. Story {key} may need "
-                                f"re-planning rather than another retry.",
-                                story_key=key,
-                            )
-                        diagnosis = diagnose_failure(
-                            evidence,
-                            story,
-                            manifest.get("role_config"),
-                            **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-                        )
-                        story["agent_instructions"] = compose_rebriefed_instructions(
-                            story.get("agent_instructions", ""), diagnosis
-                        )
-                        # Persist onto a FRESH read: check_story_status already
-                        # wrote this story's terminal status/failure_kind, so
-                        # writing the tick's stale top-of-loop `manifest` back
-                        # would revert it to in_progress. Only the rewritten
-                        # brief is carried over.
-                        fresh = _fresh_manifest(plan_name)
-                        fresh["stories"][key]["agent_instructions"] = story[
-                            "agent_instructions"
-                        ]
-                        bound_records.put_manifest(_store, plan_name, fresh)
-                        if story["agent_instructions"] != previous_instructions:
-                            _notify_user(
-                                plan_name,
-                                f"{key} brief rewritten from the give-up "
-                                f"diagnosis; the re-dispatch carries the "
-                                f"folded diagnosis.",
-                                story_key=key,
-                                event="give_up_rebrief",
-                                **(
-                                    {"correlation_id": story["correlation_id"]}
-                                    if story.get("correlation_id")
-                                    else {}
-                                ),
-                            )
-                    except Exception:  # fallback: notify-only, never crash the tick
-                        logging.getLogger("pipeline").debug(
-                            "give_up rebrief diagnosis failed for %s; "
-                            "falling back to notify-only",
-                            key,
-                            exc_info=True,
-                        )
-                else:
-                    _notify_user(
-                        plan_name,
-                        f"{key} tests failed",
-                        event="tests_failed",
-                        story_key=key,
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                    summary["notify"].append(key)
+        poll_running_stories(
+            plan_name, manifest, stories, summary,
+            dispatch_ok=dispatch_ok, memory_pressure=memory_pressure,
+        )
 
-        # Review every tests_passed story (incl. ones orphaned by a crashed
-        # review on a prior tick - review_story is idempotent). Gated by the
-        # REVIEW backend independently of dispatch: a Claude-dispatch pause no
-        # longer blocks reviewing already-finished work on a healthy review
-        # backend, and a local-dispatch run can still defer review if review
-        # is on Claude and Claude is gated.
-        if review_ok:
-            clear_review_gate_notice(plan_name)
-            stories = _fresh_manifest(plan_name)["stories"]
-            # LOCKSTARVE-B4: release the plan lock around review_story, the
-            # same synchronous model-call-heavy pattern LOCKSTARVE-B3 applied
-            # to dispatch_story. No dispatch lease is needed here -
-            # review_story (pipeline/review_orchestrator.py) re-reads the
-            # manifest itself and is a documented no-op skip for any story
-            # not in "tests_passed", so a second tick/process entering it
-            # concurrently cannot corrupt the manifest, and cannot
-            # sequentially double-review a story already advanced past
-            # tests_passed. It does not rule out two calls racing the
-            # SAME simultaneous check-pass window - review_story's own
-            # guard bounds that outcome, not this loop.
-            #
-            # But the per-iteration STATUS CHECK must still come from a
-            # FRESH on-disk read, never the snapshot taken before the loop -
-            # an earlier iteration's own released-lock window can let
-            # another actor already review and advance a later story in
-            # this same snapshot. Checking the stale in-memory status would
-            # call review_story on it again anyway: review_story's own guard
-            # makes that safe from a data-corruption standpoint, but it
-            # still emits a spurious "review skipped" notification and a
-            # misleading summary["advanced"] entry claiming this tick
-            # advanced a story it did not touch. Only the set of keys to
-            # consider is safe to snapshot; the status of each must be
-            # re-read per iteration.
-            for key in list(stories.keys()):
-                fresh_story = _fresh_manifest(plan_name)["stories"].get(key)
-                if fresh_story is None:
-                    continue
-                # The detached path also sees a story an operator moved out of
-                # tests_passed while its review job was live: that job must be
-                # cancelled. review_or_collect starts a job only for a
-                # tests_passed story, so passing a moved story on is safe.
-                if review_job.detached_enabled() and (
-                    fresh_story["status"] == "tests_passed"
-                    or fresh_story.get("review_job")
-                ):
-                    review_or_collect(plan_name, key, fresh_story, summary)
-                    continue
-                if fresh_story["status"] != "tests_passed":
-                    continue
-                with _released_plan_lock(plan_name):
-                    rv = review_story(plan_name, key)
-                if rv.get("ok") is False or rv.get("skipped"):
-                    # ok:False - a concurrent re-ingest dropped the story
-                    # during the released window (review_story returns
-                    # {"ok": False, "error": ...}, no "status" key).
-                    # skipped - review_story's own plan-flock guard
-                    # (_plan_lock) could not take the plan lock during the
-                    # window this loop deliberately opened (the {"ok": True,
-                    # "skipped": "locked"} shape, also no "status" key), so no
-                    # review ran. Either way there is no status to report and
-                    # rv["status"] would KeyError the whole tick; record the
-                    # skip and let a later tick retry - the story is still
-                    # tests_passed on disk. Same handling LOCKSTARVE-B3
-                    # applies to dispatch_story's contention return.
-                    summary.setdefault("skipped", []).append(key)
-                    continue
-                summary["advanced"].append({key: rv["status"]})
-                if rv.get("deferred") == "rate_limited":
-                    summary["review_deferred"].append(key)
-        else:
-            # Only surface the review gate when there is tests_passed work
-            # waiting to be reviewed this tick; otherwise the notification is
-            # noise (e.g. all stories are already pr_open awaiting merge).
-            if any(s["status"] == "tests_passed" for s in stories.values()):
-                if should_notify_review_gate(plan_name):
-                    _notify_user(
-                        plan_name,
-                        f"Review backend gated ({review_reason}): deferring review.",
-                        dedup_key=f"review_gate:{plan_name}:{review_reason}",
-                    )
-                summary["notify"].append("review_paused")
+        # 3. Review tests_passed stories (or surface the review gate): see
+        # pipeline/advance_review_step.py.
+        run_review_step(
+            plan_name, stories, summary, review_ok=review_ok, review_reason=review_reason
+        )
 
     return {"ok": True, **summary}

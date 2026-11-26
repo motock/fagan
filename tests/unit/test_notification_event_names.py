@@ -28,7 +28,13 @@ from functools import lru_cache
 
 import pytest
 
-from pipeline import advance, advance_merge
+from pipeline import (
+    advance,
+    advance_failed_stories,
+    advance_merge,
+    advance_ready_dispatch,
+    advance_review_step,
+)
 
 # --- the vocabulary (exact strings; the metrics story depends on them) -----
 
@@ -60,7 +66,17 @@ ALL_EVENTS = frozenset(
 
 @lru_cache(maxsize=1)
 def _source() -> str:
-    return inspect.getsource(advance) + "\n" + inspect.getsource(advance_merge)
+    return (
+        inspect.getsource(advance)
+        + "\n"
+        + inspect.getsource(advance_merge)
+        + "\n"
+        + inspect.getsource(advance_ready_dispatch)
+        + "\n"
+        + inspect.getsource(advance_failed_stories)
+        + "\n"
+        + inspect.getsource(advance_review_step)
+    )
 
 
 @lru_cache(maxsize=1)
@@ -593,7 +609,7 @@ class TestStoryKeyAttributionSourceLevel:
             'summary["notify"].append(key)',
         ):
             assert needle in merge_src, f"advance_merge.py lost {needle!r}"
-        assert "_cid_kwargs" in inspect.getsource(advance), (
+        assert "_cid_kwargs" in inspect.getsource(advance_ready_dispatch), (
             "pipeline/advance.py lost its _cid_kwargs helper"
         )
 

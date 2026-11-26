@@ -22,6 +22,8 @@ import pytest
 
 from pipeline import (
     advance,
+    advance_failed_stories,
+    advance_ready_dispatch,
     dispatch,
     dispatch_routing,
     escalation,
@@ -388,7 +390,11 @@ def test_dispatch_resolves_the_plan_routing_for_its_target():
 
 
 def test_advance_resolves_the_manifest_routing_for_its_targets():
-    calls = _layer_routing_keywords(advance, "_resolve_dispatch_target")
+    calls = [
+        kwargs
+        for module in (advance, advance_ready_dispatch, advance_failed_stories)
+        for kwargs in _layer_routing_keywords(module, "_resolve_dispatch_target")
+    ]
 
     assert len(calls) >= 3
     for kwargs in calls:

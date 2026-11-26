@@ -196,9 +196,11 @@ def test_review_story_passes_prior_feedback_to_reviewer(monkeypatch, tmp_path):
     isolation-only-fixture trap)."""
     import inspect
 
-    # review_story is wrapped by a re-entrancy guard (_original_review_story),
-    # so getsource on the public name returns the wrapper, not the real body.
-    src = inspect.getsource(p._original_review_story)
+    # The reviewer call moved out of review_story into
+    # pipeline/review_scope_gate.py (ohc-07).
+    from pipeline import review_scope_gate
+
+    src = inspect.getsource(review_scope_gate)
     assert "prior_feedback" in src, (
         "review_story must forward the story's stored review_feedback to "
         "_run_reviewer as prior_feedback"

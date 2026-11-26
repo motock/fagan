@@ -29,9 +29,23 @@ ro = sys.modules["pipeline.review_orchestrator"]
 
 def _notify_user_calls():
     """Every `_notify_user(...)` call in review_orchestrator's source."""
-    tree = ast.parse(inspect.getsource(ro))
+    # review_story's phases moved into their own modules (ohc-07).
+    from pipeline import (
+        review_approve_path,
+        review_high_risk,
+        review_scope_gate,
+        review_unknown_verdict,
+    )
+
+    trees = [
+        ast.parse(inspect.getsource(module))
+        for module in (
+            ro, review_scope_gate, review_unknown_verdict, review_high_risk,
+            review_approve_path,
+        )
+    ]
     calls = []
-    for node in ast.walk(tree):
+    for node in (n for tree in trees for n in ast.walk(tree)):
         if not isinstance(node, ast.Call):
             continue
         func = node.func

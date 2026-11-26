@@ -22,25 +22,37 @@ from datetime import UTC, datetime
 from pathlib import Path as _Path  # likewise; `Path` below is a _ServerRef
 from typing import Any
 
-from . import git_ops, parsers
+from . import (
+    git_ops,
+    parsers,
+    review_approve_path,
+    review_high_risk,
+    review_scope_gate,
+    review_unknown_verdict,
+)
 from .branch_names import story_branch
-from .ci import settings_for_plan
-from .parsers import _is_transient_backend_exception
+
+# The names below are not called here any more: the phase modules
+# (review_scope_gate, review_unknown_verdict, review_high_risk,
+# review_approve_path) read them back through this module at call time, so a
+# test that patches one of them on `pipeline.review_orchestrator` still lands.
+from .ci import settings_for_plan  # noqa: F401
+from .parsers import _is_transient_backend_exception  # noqa: F401
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
-from .review import _first_review_base, build_review_story_context
+from .review import _first_review_base, build_review_story_context  # noqa: F401
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
-from .review_deferral import park_rate_limited_review, review_defer_park_after
-from .review_logic import (
+from .review_deferral import park_rate_limited_review, review_defer_park_after  # noqa: F401
+from .review_logic import (  # noqa: F401
     REVIEW_LOGIC_FINGERPRINT_KEY,
     is_unchanged_since_review,
     review_logic_fingerprint,
 )
-from .review_open_pr import handle_open_pr_failure
-from .review_orchestrator_comments import _format_security_comment
+from .review_open_pr import handle_open_pr_failure  # noqa: F401
+from .review_orchestrator_comments import _format_security_comment  # noqa: F401
 from .review_refs import _ServerRef
 from .review_verdict_binding import bind_verdict
 from .role_routing_scope import layer_routing_for_plan, layer_routing_kwargs
-from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
+from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope  # noqa: F401
 from .story_commit import commit_story
 
 # Server-sourced names the moved body references as free variables. Each
@@ -210,258 +222,36 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             ).stdout.strip()
         except (subprocess.CalledProcessError, OSError):
             before_sha = None
-    # Mode 40: a story routed to review via acceptance_failed_review
-    # (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1) whose last recorded test run
-    # actually failed can't be meaningfully correctness-reviewed by the LLM
-    # reviewer - a live incident showed the reviewer's own principal finding
-    # was just restating the failing-test list check_story_status had
-    # already recorded. Skip the reviewer call entirely and synthesize
-    # REQUEST_CHANGES directly from that test output. Only fires when both
-    # the flag AND a genuinely failing last_test_check are present - a
-    # missing last_test_check, or one that passed (acceptance oracle failed
-    # while the detected test command itself passed), falls through to the
-    # normal reviewer call below.
-    last_test_check = story.get("last_test_check") or {}
-    # Staleness gate (2026-08-15): last_test_check records the worktree HEAD
-    # sha at the moment the check ran. If the worktree has since moved to a
-    # new commit (before_sha != recorded sha), the recorded failure may no
-    # longer exist - do NOT trust it. Only take the skip fast path when the
-    # recorded sha matches the current HEAD. A missing sha (stories written
-    # before this fix) also falls through to the real reviewer.
-    skip_llm_reviewer = (
-        story.get("acceptance_failed_review")
-        and last_test_check.get("returncode") not in (0, None)
-        and last_test_check.get("sha") == before_sha
+    first = review_scope_gate.first_review(
+        plan_name=plan_name, story_key=story_key, story=story, manifest=manifest,
+        worktree=worktree, branch=branch, plan_role_config=plan_role_config,
+        routing_kw=_routing_kw, cid_kwargs=_cid_kwargs,
+        before_sha=before_sha,
     )
-    # Invariant: a story that declares `files` is never LLM-reviewed while its
-    # branch changes production paths outside them.
-    _scope_violations = (
-        check_branch_scope(worktree, _first_review_base(worktree), story["files"])
-        if isinstance(story.get("files"), list) and worktree and os.path.isdir(worktree)
-        else []
-    )
-    if _scope_violations:
-        reviewer_output = (
-            SCOPE_GATE_HEADER + "\n"
-            + "\n".join(f"- Blocking: {v}" for v in _scope_violations)
-            + "\n" + SCOPE_GATE_REMEDY + "\n"
-            + "VERDICT: REQUEST_CHANGES"
-        )
-        _notify_user(
-            plan_name,
-            f"{story_key} scope gate: {len(_scope_violations)} out-of-scope path(s); sent back without an LLM review.",
-            event="scope_gate_failed",
-            story_key=story_key,
-            **_cid_kwargs,
-        )
-    elif skip_llm_reviewer:
-        reviewer_output = _synthesize_test_failure_feedback(last_test_check)
-    else:
-        # Mode 47: carry the prior cycle's findings into a RE-review so the
-        # reviewer must discharge each one individually. Passed as a kwarg
-        # only when there is actually prior feedback (a first review has
-        # none), so the common path's call signature is unchanged. The
-        # story's brief/sibling context rides in the same kwargs dict, so
-        # the call signature is likewise unchanged when a story has no
-        # brief.
-        _prior_fb = story.get("review_feedback")
-        prior_kw = {"prior_feedback": _prior_fb} if _prior_fb else {}
-        _story_context = build_review_story_context(story_key, manifest)
-        if _story_context:
-            # In-place key add, not a dict rebuild: every _run_reviewer call
-            # site below spreads this same dict, so it stays the single
-            # carrier of both kwargs.
-            prior_kw["story_context"] = _story_context
-        try:
-            # Once a story is escalated (see _escalate_review_to_claude below),
-            # every subsequent review must go to the escalation target
-            # regardless of the global PIPELINE_BACKEND_REVIEW setting - review
-            # backend is otherwise resolved purely from that env var with no
-            # per-story override, so this is the one seam that needs an explicit
-            # check. The target is Claude by default; PIPELINE_ESCALATION_BACKEND
-            # retargets it (e.g. to a non-Claude provider while Claude is capped).
-            _escalation_backend = _escalation_target()[0]
-            reviewer_output = (
-                _run_reviewer(
-                    worktree,
-                    branch,
-                    backend_name=_escalation_backend,
-                    plan_role_config=plan_role_config, **_routing_kw,
-                    since_sha=story.get("last_reviewed_sha"),
-                    risk=story.get("risk", "low"),
-                    **prior_kw,
-                )
-                if story.get("escalated")
-                else _run_reviewer(
-                    worktree,
-                    branch,
-                    plan_role_config=plan_role_config, **_routing_kw,
-                    since_sha=story.get("last_reviewed_sha"),
-                    risk=story.get("risk", "low"),
-                    **prior_kw,
-                )
-            )
-        except backend.RateLimitedError:
-            # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
-            # is an infrastructure event, not a real review cycle. Treat it the
-            # same as Claude's weekly-usage pause: defer and retry on the next
-            # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
-            # misclassified rate-limit would eventually park a correct impl.
-            story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-            _defer_limit = review_defer_park_after()
-            if 0 < _defer_limit <= story["review_deferred_count"]:
-                return park_rate_limited_review(
-                    plan_name, story_key, story, manifest, **_cid_kwargs
-                )
-            _notify_user(
-                plan_name,
-                f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-        except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
-            if _is_transient_backend_exception(e):
-                # A reviewer transport failure (timeout, refused or reset
-                # connection) is infrastructure, not a review outcome: defer
-                # like the rate-limit path and never charge
-                # review_inconclusive_count. Only the exception TYPE reaches
-                # logs and the notification; its text may carry sensitive detail.
-                logging.getLogger("pipeline").warning(
-                    "%s/%s review deferred: reviewer transport failure %s",
-                    plan_name, story_key, type(e).__name__,
-                )
-                story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-                _notify_user(
-                    plan_name,
-                    f"{story_key} review deferred: reviewer backend transport "
-                    f"failure ({type(e).__name__}); will retry next tick.",
-                    **_cid_kwargs,
-                )
-                commit_story(plan_name, story_key, story)
-                return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
-            # Defense in depth: a reviewer backend's own internal error (a bad
-            # tool-call shape, a malformed backend response, ...) must not crash
-            # the pipeline process. Fail safe into the same UNKNOWN-verdict path
-            # a genuinely inconclusive review already takes below - never treat
-            # this as an APPROVE (fail-closed). The user-facing notification
-            # names only the exception TYPE, not its text, which could carry
-            # sensitive detail - but that also made the failure permanently
-            # undiagnosable (observed live 2026-07-30: a RuntimeError here
-            # could never be root-caused). Log a full traceback server-side
-            # instead, at ERROR (never INFO/below - see Observability &
-            # Logging), so it's available for investigation without exposing
-            # exception text to the operator-facing notification.
-            logging.getLogger("pipeline").error(
-                f"{plan_name}/{story_key} review raised {type(e).__name__}:\n"
-                f"{traceback.format_exc()}"
-            )
-            _notify_user(
-                plan_name,
-                f"{story_key} review failed with an unexpected "
-                f"{type(e).__name__}; treating as inconclusive.",
-                **_cid_kwargs,
-            )
-            reviewer_output = ""
+    if first.result is not None:
+        return first.result
+    reviewer_output, prior_kw = first.reviewer_output, first.prior_kw
     verdict = _parse_verdict(reviewer_output)
 
-    # FM-B: a rate-limit response from the reviewer is an infrastructure event,
-    # not a genuine review cycle. Leave the story at tests_passed so the next
-    # advance_pipeline tick retries review once the backend recovers. Do NOT
-    # touch rework_attempts — burning the rework budget on rate-limits parks
-    # correct implementations silently.
-    if verdict == "UNKNOWN" and _is_rate_limited(reviewer_output):
-        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-        fallback_mode = (
-            os.environ.get("PIPELINE_REVIEW_FALLBACK", "off").strip().lower()
-        )
-        fallback_after = int(os.environ.get("PIPELINE_REVIEW_FALLBACK_AFTER", "3"))
-        if (
-            fallback_mode in _LOCAL_BACKEND_NAMES
-            and story["review_deferred_count"] >= fallback_after
-        ):
-            _notify_user(
-                plan_name,
-                f"{story_key} review falling back to {fallback_mode} backend "
-                f"after {story['review_deferred_count']} rate-limited attempts.",
-                **_cid_kwargs,
-            )
-            reviewer_output = _run_reviewer(
-                worktree,
-                branch,
-                backend_name=fallback_mode,
-                plan_role_config=plan_role_config, **_routing_kw,
-                since_sha=story.get("last_reviewed_sha"),
-                risk=story.get("risk", "low"),
-                **prior_kw,
-            )
-            verdict = _parse_verdict(reviewer_output)
-            # Fall through into the normal verdict-handling code below —
-            # this is a genuine review attempt now, not a deferral.
-        else:
-            _defer_limit = review_defer_park_after()
-            if 0 < _defer_limit <= story["review_deferred_count"]:
-                return park_rate_limited_review(
-                    plan_name, story_key, story, manifest, **_cid_kwargs
-                )
-            _notify_user(
-                plan_name,
-                f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-
-    # Transient backend error (HTTP 5xx / connection reset or refused / timed
-    # out): re-invoke the reviewer once inline. This is an infrastructure
-    # hiccup, not a genuine review cycle, so it never increments
-    # review_inconclusive_count; a retry that is still a transient failure is
-    # deferred to the next tick just below.
-    _transient_retried = False
-    if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
-        _notify_user(
-            plan_name, f"{story_key} review hit transient backend error; retrying once.",
-            **_cid_kwargs,
-        )
-        reviewer_output = (
-            _run_reviewer(
-                worktree,
-                branch,
-                backend_name=_escalation_backend,
-                plan_role_config=plan_role_config, **_routing_kw,
-                since_sha=story.get("last_reviewed_sha"),
-                risk=story.get("risk", "low"),
-                **prior_kw,
-            )
-            if story.get("escalated")
-            else _run_reviewer(
-                worktree,
-                branch,
-                plan_role_config=plan_role_config, **_routing_kw,
-                since_sha=story.get("last_reviewed_sha"),
-                risk=story.get("risk", "low"),
-                **prior_kw,
-            )
-        )
-        verdict = _parse_verdict(reviewer_output)
-        _transient_retried = True
-    # A transport failure that survives the single inline retry is an
-    # infrastructure event, not a review outcome: defer to the next tick like
-    # the rate-limit path and never charge review_inconclusive_count.
-    if (
-        _transient_retried
-        and verdict == "UNKNOWN"
-        and _is_transient_backend_error(reviewer_output)
-    ):
-        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-        _notify_user(
-            plan_name,
-            f"{story_key} review deferred: reviewer backend still failing after "
-            f"one retry (transient transport error); will retry next tick.",
-            **_cid_kwargs,
-        )
-        commit_story(plan_name, story_key, story)
-        return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
+    outcome = review_unknown_verdict.defer_rate_limited(
+        verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+        story=story, manifest=manifest, worktree=worktree, branch=branch,
+        plan_role_config=plan_role_config, routing_kw=_routing_kw,
+        cid_kwargs=_cid_kwargs, prior_kw=prior_kw,
+    )
+    if isinstance(outcome, dict):
+        return outcome
+    verdict, reviewer_output = outcome
+    outcome = review_unknown_verdict.retry_transient_backend(
+        verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+        story=story, worktree=worktree, branch=branch,
+        plan_role_config=plan_role_config, routing_kw=_routing_kw,
+        cid_kwargs=_cid_kwargs, prior_kw=prior_kw,
+        escalation_backend=first.escalation_backend,
+    )
+    if isinstance(outcome, dict):
+        return outcome
+    verdict, reviewer_output = outcome
 
     # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
     # confident" self-assessment is never trusted alone - re-verify risk,
@@ -484,502 +274,54 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # must APPROVE before the story proceeds to pr_open.
     security_output = None
     if verdict == "APPROVE" and story.get("risk") == "high":
-        try:
-            security_output = _run_security_reviewer(
-                worktree, branch, since_sha=story.get("last_reviewed_sha"),
-                plan_role_config=plan_role_config, **_routing_kw,
-            )
-        except backend.RateLimitedError:
-            # OA2-04: mirror the main reviewer's rate-limit deferral. A 429 on
-            # the security pass is an infrastructure event, not a review cycle:
-            # defer and retry on the next tick, never burn the rework or
-            # inconclusive budget.
-            _notify_user(
-                plan_name,
-                f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-        except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
-            if _is_transient_backend_exception(e):
-                # A security-reviewer transport failure (timeout, refused or
-                # reset connection) is infrastructure, not a review outcome:
-                # defer like the rate-limit path and never charge
-                # review_inconclusive_count. Only the exception TYPE reaches
-                # logs and the notification; its text may carry sensitive detail.
-                logging.getLogger("pipeline").warning(
-                    "%s/%s security review deferred: reviewer transport failure %s",
-                    plan_name, story_key, type(e).__name__,
-                )
-                _notify_user(
-                    plan_name,
-                    f"{story_key} security review deferred: reviewer backend "
-                    f"transport failure ({type(e).__name__}); will retry next tick.",
-                    **_cid_kwargs,
-                )
-                commit_story(plan_name, story_key, story)
-                return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
-            # Defense in depth: the security backend's own internal error (a bad
-            # tool-call shape, a malformed backend response, ...) must not crash
-            # the pipeline process or abort the plan's review pass for the tick.
-            # Defer like the rate-limit path (never treat this as an APPROVE -
-            # fail closed) and never charge review_inconclusive_count. Log a
-            # full traceback server-side at ERROR (never INFO/below - see
-            # Observability & Logging) so it stays diagnosable without exposing
-            # exception text to the operator-facing notification.
-            logging.getLogger("pipeline").error(
-                f"{plan_name}/{story_key} security review raised {type(e).__name__}:\n"
-                f"{traceback.format_exc()}"
-            )
-            _notify_user(
-                plan_name,
-                f"{story_key} security review deferred: unexpected "
-                f"{type(e).__name__}; will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "status": story["status"], "deferred": "backend_error"}
-        security_verdict = _parse_verdict(security_output)
+        secured = review_high_risk.run_security_review(
+            verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+            story=story, worktree=worktree, branch=branch,
+            plan_role_config=plan_role_config, routing_kw=_routing_kw,
+            cid_kwargs=_cid_kwargs,
+        )
+        if isinstance(secured, dict):
+            return secured
+        verdict, reviewer_output, security_output = secured
 
-        # FM-B/OA2-04: a non-verdict from the security reviewer is an
-        # infrastructure event, not a rejection. Defer like a rate limit - never
-        # fall through to the rework routing below (which would burn the rework
-        # budget) and never charge review_inconclusive_count. A rate-limit text
-        # response keeps its own sentinel; any other non-verdict defers too.
-        if security_verdict == "UNKNOWN":
-            deferred_reason = (
-                "rate_limited" if _is_rate_limited(security_output) else "unknown_verdict"
-            )
-            _notify_user(
-                plan_name,
-                f"{story_key} security review deferred: reviewer returned no "
-                f"verdict; will retry next tick.",
-                **_cid_kwargs,
-            )
-            commit_story(plan_name, story_key, story)
-            return {"ok": True, "status": story["status"], "deferred": deferred_reason}
-
-        story["security_review_verdict"] = security_verdict
-        if security_verdict != "APPROVE":
-            verdict = security_verdict
-            reviewer_output = security_output  # use security feedback for rework
-
-    # A non-rate-limited UNKNOWN is inconclusive, not a rejection: don't touch
-    # review_feedback or rework_attempts, and leave status at its pre-review
-    # value so the next advance_pipeline tick retries review. Fail closed -
-    # this must never fall through to the APPROVE branch. Only after repeated
-    # inconclusive attempts does it park for a human.
+    # A non-rate-limited UNKNOWN is inconclusive, not a rejection: it never
+    # falls through to the APPROVE branch below.
     if verdict == "UNKNOWN":
-        inconclusive = story.get("review_inconclusive_count", 0) + 1
-        story["review_inconclusive_count"] = inconclusive
-        if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
-            if (
-                _auto_escalation_enabled()
-                and not story.get("escalated")
-                and _escalation_target() != (story.get("backend"), story.get("model"))
-            ):
-                _escalate_review_to_claude(
-                    story,
-                    story_key,
-                    plan_name,
-                    f"review inconclusive after {inconclusive} attempts",
-                )
-                # status stays at its pre-review value (e.g. tests_passed) -
-                # the next tick retries review, now resolved via Claude.
-            else:
-                story["status"] = "parked"
-                story["parked_reason"] = (
-                    f"review inconclusive after {inconclusive} attempts - needs human review"
-                )
-                # Diagnostic-only: the raw reason a VERDICT line never
-                # appeared (step-cap, truncation, a swallowed backend
-                # exception, or a genuinely empty response) is otherwise
-                # lost the moment this story parks - nothing else persists
-                # reviewer_output on the inconclusive path, so a human
-                # investigating later has no way to tell which of those it
-                # was without re-running the review. Bounded to keep the
-                # manifest small; not used by any control-flow logic.
-                story["last_inconclusive_output_excerpt"] = (
-                    reviewer_output[:500] if reviewer_output else "(empty response)"
-                )
-                _notify_user(
-                    plan_name,
-                    f"{story_key} parked: review inconclusive after "
-                    f"{inconclusive} attempts - needs human review.",
-                    event="story_parked",
-                    story_key=story_key,
-                    **_cid_kwargs,
-                )
-        else:
-            _notify_user(plan_name, f"{story_key} review inconclusive; will retry.", **_cid_kwargs)
-        commit_story(plan_name, story_key, story)
-        return {"ok": True, "verdict": verdict, "status": story["status"]}
+        return review_unknown_verdict.record_inconclusive(
+            verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+            story=story, cid_kwargs=_cid_kwargs,
+        )
 
-    # T11: a REQUEST_CHANGES with no substantive findings text is not a
-    # genuine rejection - it gives the redispatched agent nothing to fix, and
-    # treating it as one silently burns the rework budget on nothing (the
-    # 2026-07-02 gpt-oss run parked a story this way). Route it through the
-    # same inconclusive-handling shape as UNKNOWN above - before the
-    # review_inconclusive_count reset below, so repeated empty responses
-    # still accumulate toward REVIEW_INCONCLUSIVE_MAX - but leave the verdict
-    # itself visible and never touch rework_attempts/review_feedback. Checked
-    # here (not merged into the UNKNOWN branch above) because it applies
-    # equally to a content-free REQUEST_CHANGES from either the ordinary
-    # reviewer or a security-reviewer override.
+    # T11: a content-free REQUEST_CHANGES is inconclusive, not a rejection (see
+    # review_unknown_verdict.record_empty_request_changes); it never burns rework.
     if verdict == "REQUEST_CHANGES" and (not _has_review_findings(reviewer_output) or (len(reviewer_output) > parsers.UNFOCUSED_REQUEST_CHANGES_MIN_CHARS and not parsers.findings_are_parseable(reviewer_output))):
-        inconclusive = story.get("review_inconclusive_count", 0) + 1
-        story["review_inconclusive_count"] = inconclusive
-        if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
-            if (
-                _auto_escalation_enabled()
-                and not story.get("escalated")
-                and _escalation_target() != (story.get("backend"), story.get("model"))
-            ):
-                _escalate_review_to_claude(
-                    story,
-                    story_key,
-                    plan_name,
-                    f"review inconclusive after {inconclusive} attempts (empty REQUEST_CHANGES)",
-                )
-            else:
-                story["status"] = "parked"
-                story["parked_reason"] = (
-                    f"review inconclusive after {inconclusive} attempts - needs human review"
-                )
-                story["last_inconclusive_output_excerpt"] = (
-                    reviewer_output[:500] if reviewer_output else "(empty response)"
-                )
-                _notify_user(
-                    plan_name,
-                    f"{story_key} parked: review inconclusive after "
-                    f"{inconclusive} attempts - needs human review.",
-                    event="story_parked",
-                    story_key=story_key,
-                    **_cid_kwargs,
-                )
-        else:
-            _notify_user(
-                plan_name,
-                f"{story_key} review approved-changes-requested-empty: "
-                f"REQUEST_CHANGES with no findings text; will retry.",
-                **_cid_kwargs,
-            )
-        commit_story(plan_name, story_key, story)
-        return {"ok": True, "verdict": verdict, "status": story["status"]}
+        return review_unknown_verdict.record_empty_request_changes(
+            verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+            story=story, cid_kwargs=_cid_kwargs,
+        )
 
     story["review_inconclusive_count"] = 0
 
-    # Mode 24/28 finding-target guard: the Mode 27 same-SHA guard only
-    # catches a review call where HEAD is byte-identical to the last
-    # reviewed commit. A dispatch watchdog checkpoint commit changes HEAD's
-    # SHA trivially (a WIP commit) without addressing the reviewer's own
-    # prior Blocking findings, slipping past that guard and letting the
-    # reviewer silently APPROVE a diff that never touched the flagged
-    # file(s) - "merged-but-incomplete". If every file recorded from the
-    # prior REQUEST_CHANGES cycle's Blocking findings wasn't touched by the
-    # diff since then, downgrade this APPROVE back to REQUEST_CHANGES
-    # instead of opening a PR.
-    #
-    # Exception: a flagged TEST file is exempt from the "was it touched"
-    # check, because review_story only reaches this APPROVE branch when
-    # story["status"] == "tests_passed" - the full suite, including that
-    # test file, is provably green right now. That is strictly stronger,
-    # directly-verified proof the finding (a failing test) is resolved than
-    # "were the test file's own bytes touched" - a correct fix legitimately
-    # lands in the implementation the test exercises, not the test itself.
-    # Root-caused live 2026-07-24 (MODE40-CI-REWORK-FEEDBACK-V2): a
-    # gate-synthesized review flagged the failing test file, the agent fixed
-    # the bug in the implementation module, the suite went green and a real
-    # reviewer said APPROVE, but this guard downgraded it anyway - burning
-    # the story's entire rework budget on an already-resolved finding.
-    # Non-test findings (README prose, server.py logic) still require the flagged
-    # file to be touched OR to no longer differ from the base branch - the same
-    # proof as the test-file exemption. Fails open on base, OSError, returncode.
-    if (
-        verdict == "APPROVE"
-        and story.get("last_reviewed_sha")
-        and story.get("last_review_findings")
-    ):
-        try:
-            diff_res = subprocess.run(
-                ["git", "diff", "--name-only", story["last_reviewed_sha"], "HEAD"],
-                cwd=worktree,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            changed_files = set(diff_res.stdout.splitlines())
-            findings = story["last_review_findings"]
-            untouched = _unaddressed_findings(findings, changed_files, worktree)
-            for f in findings:
-                if not _is_test_file_path(f) and f not in changed_files and f not in untouched:
-                    logging.getLogger("pipeline").info(
-                        "Story %s: %s no longer differs from base branch", story_key, f)
-            if untouched:
-                verdict = "REQUEST_CHANGES"
-                reviewer_output = (
-                    "Prior Blocking finding(s) were never addressed - the "
-                    "following file(s) flagged in an earlier review have not "
-                    "been touched since:\n"
-                    + "\n".join(
-                        f"- Blocking: {p}: not addressed since the last review"
-                        for p in untouched
-                    )
-                )
-        except (subprocess.CalledProcessError, OSError):
-            # Fail open - this is a workflow-correctness gate, not a
-            # security boundary, so an infra error must not block a
-            # genuine APPROVE.
-            pass
+    # Mode 24/28 finding-target guard: an APPROVE that never touched the files
+    # flagged by the prior REQUEST_CHANGES is downgraded (see review_approve_path).
+    if verdict == "APPROVE":
+        verdict, reviewer_output = review_approve_path.downgrade_unaddressed_approve(
+            verdict, reviewer_output, story_key=story_key, story=story, worktree=worktree,
+        )
 
     if verdict == "APPROVE":
-        # A git-push failure (transient network/auth hiccup, or a race with
-        # a concurrent rebase) must not crash the whole advance_pipeline
-        # tick: this call sits inside the tests_passed review loop in
-        # _advance_pipeline_locked, so an uncaught exception here aborts
-        # review for every OTHER tests_passed story and skips merge
-        # adjudication entirely for the rest of that tick (confirmed live in
-        # advance-scheduler.err.log, story 30e5f9fc, 2026-08-19: an
-        # unguarded CalledProcessError from this exact call propagated
-        # through wake_handler and silently dropped the tick). A failed open
-        # is counted and parks after a bounded number of tries, so a missing
-        # token cannot re-run a paid review every tick (review_open_pr).
-        try:
-            pr_url = _open_pr(worktree, story_key, story)
-            _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **_cid_kwargs)
-        except (subprocess.CalledProcessError, OSError) as exc:
-            return handle_open_pr_failure(plan_name, story_key, story, exc, **_cid_kwargs)
-        story["pr_url"] = pr_url
-        story.pop("pr_open_failures", None)
-        story["status"] = "pr_open"
-        # The security-engineer pass's verdict otherwise lives only in the
-        # manifest, so a reader of the PR sees no evidence it ran. Post it now
-        # that the PR exists. A failed post must never change the story's
-        # status: the PR is already open and the verdict is already recorded.
-        if security_output is not None and worktree and os.path.isdir(worktree):
-            try:
-                _post_pr_comment(worktree, _format_security_comment(security_output))
-            except (subprocess.CalledProcessError, OSError):
-                _notify_user(
-                    plan_name,
-                    "security review comment not posted: the PR is already open and "
-                    "the security verdict is recorded in the manifest.",
-                    **_cid_kwargs,
-                )
-        # The work passed: drop any stale rework state from earlier cycles.
-        story.pop("review_feedback", None)
-        story.pop("rework_attempts", None)
-        # Clear any stored SHA when review is approved
-        story.pop("last_reviewed_sha", None)
-        story.pop(REVIEW_LOGIC_FINGERPRINT_KEY, None)
-        story.pop("skip_notified_sha", None)
-        story.pop("last_review_findings", None)
-    else:
-        # Persist the reviewer's reasoning (not just the verdict) so the
-        # redispatched agent knows what to fix, and count the cycle against
-        # the rework budget so a perpetually-rejected story eventually parks
-        # for a human instead of looping review -> rework forever.
-        #
-        # Mode 20 (2026-07-17, verified by replay): a REQUEST_CHANGES verdict
-        # on an acceptance-bearing story can be correct about SOMETHING
-        # outside the oracle's scope while the oracle itself is currently
-        # green - and a whole-file rework, given only the reviewer's raw
-        # feedback, has no signal that it must not regress that already-
-        # correct behavior (observed: this exact gap let a rework destroy a
-        # passing backward-jump fix). Re-verify the oracle against the
-        # CURRENT worktree state before dispatching rework and, if it still
-        # passes, prepend an explicit warning. This does not change the
-        # verdict or control flow - the story still goes to rework - it only
-        # gives the next dispatch a fact the reviewer's own text can't convey.
-        feedback = reviewer_output
-        if story.get("acceptance"):
-            oracle_now = _reverify_acceptance(
-                story, worktree, story_key, settings=settings_for_plan(plan_name)
-            )
-            if oracle_now.get("state") == "pass":
-                feedback = (
-                    "NOTE: the acceptance oracle is currently PASSING against "
-                    "this worktree. The reviewer's feedback below may be about "
-                    "something outside the oracle's required behavior - do "
-                    "NOT regress the acceptance-oracle-passing behavior while "
-                    "addressing it, and re-run the acceptance tests after your "
-                    "change to confirm they are still green.\n\n" + reviewer_output
-                )
-            elif oracle_now.get("state") == "fail" and story.get("rework_attempts", 0) > 0:
-                # Fresh-rework-on-regression (2026-07-29 gpt-oss E2E finding,
-                # bcca562e/token_report): a rework redispatch that RESUMES
-                # the prior dispatch's transcript (see resume_via_transcript
-                # in dispatch_story) replays whatever churn led to this
-                # state, which measurably compounds it - the same story
-                # 500-died and regressed further (11/11 -> 9/11 acceptance)
-                # resuming a poisoned transcript, then converged cleanly on
-                # a FRESH rework once the transcript was deleted. Delete the
-                # transcript so the next redispatch is forced onto
-                # dispatch_story's from-scratch rework prompt.
-                #
-                # Gated on rework_attempts > 0, i.e. a rework has ALREADY
-                # happened: a failing oracle alone is not a regression. With
-                # PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1 the common path to
-                # review-with-red-oracle is a FIRST dispatch that was simply
-                # incomplete, and there the transcript is the richest context
-                # a rework could resume from - discarding it would degrade
-                # the common case to fix the rarer one. rework_attempts is
-                # incremented below, after this block, so here it still holds
-                # the count from PRIOR cycles.
-                #
-                # Best-effort: a missing/unwritable transcript must not block
-                # the review outcome itself.
-                transcript_path = Path(worktree) / ".agent_transcript.json" if worktree else None
-                if transcript_path and transcript_path.exists():
-                    try:
-                        transcript_path.unlink()
-                        _notify_user(
-                            plan_name,
-                            f"{story_key} rework regressed the acceptance "
-                            f"oracle (was passing before this rework, now "
-                            f"failing); deleted the dispatch transcript so the "
-                            f"next attempt starts fresh instead of resuming "
-                            f"the churn that caused it.",
-                            **_rework_kwargs,
-                        )
-                    except OSError:
-                        pass
-        story["review_feedback"] = feedback
-        # Mode 24/28: track which files this cycle's Blocking findings
-        # target, so a later APPROVE can verify they were actually
-        # addressed. Store even when empty (a real "nothing to track"
-        # state, distinct from the key being absent entirely).
-        story["last_review_findings"] = _extract_blocking_finding_files(reviewer_output)
-        # Record the HEAD SHA for this REQUEST_CHANGES review
-        if worktree and os.path.isdir(worktree):
-            try:
-                story["last_reviewed_sha"] = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=worktree,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                if story["last_reviewed_sha"] != before_sha:
-                    logging.getLogger("pipeline").info(
-                        "review head moved during review",
-                        extra={"plan": plan_name, "story": story_key})
-                story[REVIEW_LOGIC_FINGERPRINT_KEY] = review_logic_fingerprint()
-            except (subprocess.CalledProcessError, OSError):
-                pass
-        if (
-            verdict == "REQUEST_CHANGES"
-            and not story["last_review_findings"]
-            and story.get("commit_hygiene_autofix_attempts", 0) < 2
-        ):
-            _suggested = _extract_suggested_commit_message(reviewer_output)
-            if _suggested is not None and worktree and os.path.isdir(worktree):
-                try:
-                    _status_r = subprocess.run(
-                        ["git", "status", "--porcelain"],
-                        cwd=worktree,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    if _status_r.stdout.strip() == "":
-                        try:
-                            subprocess.run(
-                                ["git", "commit", "--amend", "-m", _suggested],
-                                cwd=worktree,
-                                check=True,
-                                capture_output=True,
-                                text=True,
-                            )
-                            story["commit_hygiene_autofix_attempts"] = (
-                                story.get("commit_hygiene_autofix_attempts", 0) + 1
-                            )
-                            story["status"] = "tests_passed"
-                            _notify_user(
-                                plan_name,
-                                f"{story_key}: reviewer's only blocking finding was "
-                                f"commit-message format; auto-amended HEAD commit "
-                                f"without spending a rework attempt.",
-                                **_rework_kwargs,
-                            )
-                            commit_story(plan_name, story_key, story)
-                            return {
-                                "ok": True,
-                                "verdict": verdict,
-                                "status": story["status"],
-                                "auto_fixed_commit_message": True,
-                            }
-                        except (subprocess.CalledProcessError, OSError):
-                            pass
-                except (subprocess.CalledProcessError, OSError):
-                    pass
-        attempts = story.get("rework_attempts", 0) + 1
-        story["rework_attempts"] = attempts
-        _notify_user(
-            plan_name,
-            f"{story_key} sent back by review: changes requested (rework cycle {attempts}).",
-            event="review_changes_requested",
-            story_key=story_key,
-            **_rework_kwargs,
+        early = review_approve_path.finish_approved(
+            plan_name=plan_name, story_key=story_key, story=story, worktree=worktree,
+            security_output=security_output, cid_kwargs=_cid_kwargs,
         )
-        if story.get("escalated"):
-            rework_cap = REWORK_MAX_ATTEMPTS_ESCALATED
-        elif story.get("acceptance"):
-            rework_cap = REWORK_MAX_ATTEMPTS_ORACLE
-        else:
-            rework_cap = REWORK_MAX_ATTEMPTS
-        if attempts >= rework_cap:
-            if (
-                _auto_escalation_enabled()
-                and not story.get("escalated")
-                and _escalation_target() != (story.get("backend"), story.get("model"))
-            ):
-                _escalate_review_to_claude(
-                    story,
-                    story_key,
-                    plan_name,
-                    f"rework budget exhausted after {attempts} review cycles",
-                )
-                # A redispatch will pick up the real review_feedback already
-                # set above, now on Claude (story["backend"] was just set).
-                story["status"] = "changes_requested"
-            else:
-                story["status"] = "parked"
-                story["parked_reason"] = (
-                    f"rework budget exhausted after {attempts} review cycles"
-                )
-                _notify_user(
-                    plan_name,
-                    f"{story_key} parked: reviewer still requesting changes "
-                    f"after {attempts} cycles - needs human review.",
-                    event="story_parked",
-                    story_key=story_key,
-                    **_rework_kwargs,
-                )
-        else:
-            fre = manifest.get("final_rework_escalation") or {}
-            if attempts == rework_cap - 1 and fre.get("enabled"):
-                provider = fre.get("provider")
-                if provider in {"claude", "local", "ollama", "lmstudio", "mlx"}:
-                    model = fre.get("model")
-                    story["backend"] = provider
-                    story["model"] = model
-                    _notify_user(
-                        plan_name,
-                        f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.",
-                        story_key=story_key,
-                        event="escalated",
-                        **_rework_kwargs,
-                    )
-            story["status"] = "changes_requested"
-            if worktree and os.path.isdir(worktree):
-                try:
-                    story["pr_url"] = _open_pr(worktree, story_key, story)
-                    _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **_rework_kwargs)
-                    _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
-                except (subprocess.CalledProcessError, OSError) as exc:
-                    _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.", **_rework_kwargs)
+    else:
+        early = review_approve_path.finish_rework(
+            verdict, reviewer_output, plan_name=plan_name, story_key=story_key,
+            story=story, manifest=manifest, worktree=worktree, before_sha=before_sha,
+            rework_kwargs=_rework_kwargs,
+        )
+    if early is not None:
+        return early
     commit_story(plan_name, story_key, story)
     return {
         "ok": True,

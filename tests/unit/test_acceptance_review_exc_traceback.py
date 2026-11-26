@@ -7,13 +7,13 @@ while keeping the exception TEXT out of the user-facing notification.
 """
 import inspect
 
-import pipeline.server as srv
+from pipeline import review_scope_gate
 
 
 def _source():
-    # The registered review_story tool is a plan-lock wrapper; the reviewer
-    # exception handler lives in the wrapped original.
-    return inspect.getsource(srv._original_review_story)
+    # The reviewer exception handler moved out of review_story into
+    # pipeline/review_scope_gate.py (ohc-07).
+    return inspect.getsource(review_scope_gate)
 
 
 def test_the_handler_records_a_traceback():

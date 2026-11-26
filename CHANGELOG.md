@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- The review-logic fingerprint now also hashes the four modules `review_story` was split into (`review_scope_gate.py`, `review_unknown_verdict.py`, `review_high_risk.py`, `review_approve_path.py`), so previously reviewed stories are re-reviewed once after this lands.
 - CI's `lint` job runs `mypy` (pinned `mypy==2.4.1`) over `pipeline/` and `app/`; the modules that already failed when the gate was added are a baseline in `pyproject.toml` that may only shrink.
 - `ingest_plan` warns when a story's brief names another connected repository but the story has no `blocked_by`: a `cross_repo_unordered` notification names the repositories, so a cross-repository dependency that was noticed but not ordered is visible before approval. It is advisory only and never blocks ingest, approval or dispatch.
 - The dashboard chat can list the repositories the team has connected (`list_repositories`, served by `GET /api/repositories`) and read or search any of them (`read_repository_file`, `list_repository_directory`, `search_repository`) through the workspace read routes and their access check, so a planner can find a cross-repository dependency before it drafts a plan; a plan saved from the chat still targets the repository the turn names.

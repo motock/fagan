@@ -13,7 +13,16 @@ import pipeline.server as p
 from pipeline import persistence as ppers
 from pipeline import review_logic as rl
 
-MODULES = ["scope_gate.py", "review.py", "review_orchestrator.py", "testfiles.py"]
+MODULES = [
+    "scope_gate.py",
+    "review.py",
+    "review_orchestrator.py",
+    "testfiles.py",
+    "review_scope_gate.py",
+    "review_unknown_verdict.py",
+    "review_high_risk.py",
+    "review_approve_path.py",
+]
 
 
 def test_fingerprint_is_16_lowercase_hex():

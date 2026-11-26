@@ -188,7 +188,7 @@ def resolve_role(
     plan_role_config: dict | None = None,
     model_fallback: str | Callable[[], str | None] | None = None,
     registry: dict | None = None,
-    default_provider: str = "claude", environ: Mapping[str, str] | None = None,
+    default_provider: str = "claude", environ: dict | None = None,
     layer_routing: dict | None = None,
 ) -> RoleResolution:
     """Resolve (provider, model) for `role`.
@@ -225,8 +225,7 @@ def resolve_role(
     ignored in favor of model_fallback, rather than raising against a
     provider it was never paired with.
     """
-    if environ is None:
-        environ = os.environ
+    env: Mapping[str, str] = os.environ if environ is None else environ
     reg = registry if registry is not None else load_registry()
     plan_cfg = (plan_role_config or {}).get(role, {})
     layer_cfg = (layer_routing or {}).get(role, {})
@@ -236,7 +235,7 @@ def resolve_role(
         plan_cfg.get("provider")
         or layer_cfg.get("provider")
         or reg_role_cfg.get("provider")
-        or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
+        or env.get(f"PIPELINE_BACKEND_{role.upper()}")
         or default_provider
     ).strip().lower()
 

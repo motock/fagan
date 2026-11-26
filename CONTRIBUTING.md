@@ -44,6 +44,8 @@ scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 
 mypy checks `pipeline/` and `app/`. Modules that already failed when the gate was added are listed in the `[[tool.mypy.overrides]]` baseline in `pyproject.toml`; fix a listed module and remove it from that list, but never add a module to it.
 
+Ruff enforces a function complexity ceiling of 30 (rule `C901`, `max-complexity` in `pyproject.toml`). The ceiling measures the function itself, so moving a large function into its own file does not satisfy it. Files that already exceed it are listed under `[tool.ruff.lint.per-file-ignores]`; refactor a listed file and remove it from that list once its functions are under 30, but never add a file to the list.
+
 The suite runs in parallel by default (pytest-xdist's `-n auto`, set in `pyproject.toml`'s
 `addopts`) — it fans out across your machine's cores automatically, no flag needed.
 

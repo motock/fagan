@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- The ruff lint gate enforces a function complexity ceiling of 30 (`C901`); existing over-ceiling files are exempted by file in `pyproject.toml` and may only shrink.
 - The review-logic fingerprint now also hashes the four modules `review_story` was split into (`review_scope_gate.py`, `review_unknown_verdict.py`, `review_high_risk.py`, `review_approve_path.py`), so previously reviewed stories are re-reviewed once after this lands.
 - CI's `lint` job runs `mypy` (pinned `mypy==2.4.1`) over `pipeline/` and `app/`; the modules that already failed when the gate was added are a baseline in `pyproject.toml` that may only shrink.
 - `ingest_plan` warns when a story's brief names another connected repository but the story has no `blocked_by`: a `cross_repo_unordered` notification names the repositories, so a cross-repository dependency that was noticed but not ordered is visible before approval. It is advisory only and never blocks ingest, approval or dispatch.

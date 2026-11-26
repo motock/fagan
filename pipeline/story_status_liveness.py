@@ -91,7 +91,7 @@ def _watchdog_kill(
     manifest: dict[str, Any],
     pid: int,
     watchdog_summary: str,
-    dispatch_error: str,
+    dispatch_error: str | None,
 ) -> dict[str, Any]:
     # OA2-03: every termination path must increment a counter
     # that participates in a streak/cap, or a story that keeps

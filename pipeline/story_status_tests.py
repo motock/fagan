@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import server_bindings, tenant_exec
+from . import bound_records, server_bindings, tenant_exec
 from .build_detect import _acceptance_rel_paths, _is_pytest_cmd
 from .detached_grade import _baseline_exempted_failures
 from .story_status_records import _record_test_check
@@ -197,5 +197,61 @@ def record_test_result(
     # The worktree's current HEAD sha is recorded alongside so later
     # dispatch/review/rebrief logic can detect when this cache is stale
     # (recorded at a past commit) and refuse to reuse it.
-    check_sha = _record_test_check(story, test_cmd, test_dir, test_result, worktree)
+    check_sha = _record_test_check(story, test_cmd, test_dir, test_result, str(worktree))
     return passed, check_sha
+
+
+def check_acceptance_tampered(
+    plan_name: str,
+    story_key: str,
+    story: dict[str, Any],
+    manifest: dict[str, Any],
+    worktree: Path,
+) -> dict[str, Any] | None:
+    # The read-only oracle is described as read-only in prompt text only;
+    # this is the mechanism behind it. Refuse tests_passed on a worktree whose
+    # acceptance fixture no longer matches its dispatch-time digest, so a
+    # rewritten grader is caught at the done-bar rather than only much later
+    # at the merge gate (see pipeline.ci._acceptance_tampered).
+    tampered = server_bindings.server()._acceptance_tampered(story, str(worktree))
+    if not tampered:
+        return None
+    story["status"] = "changes_requested"
+    server_bindings.server()._notify_user(
+        plan_name,
+        f"{story_key} acceptance fixture modified since dispatch: "
+        f"{', '.join(tampered)} - refusing tests_passed",
+    )
+    bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
+    return {
+        "status": "changes_requested",
+        "reason": "acceptance_tampered",
+        "tampered": tampered,
+    }
+
+
+def apply_static_gates(
+    story: dict[str, Any],
+    story_key: str,
+    worktree: Path,
+    check_sha: str | None,
+    test_env: dict[str, str],
+    passed: bool,
+) -> bool:
+    """Run the lint and dead-code gates on a green test run; return the verdict."""
+    if passed:
+        lint = server_bindings.server()._run_lint_gate(worktree, test_env)
+        if lint is not None:
+            lint["sha"] = check_sha
+            story["last_lint_check"] = lint
+            if lint["returncode"] != 0:
+                passed = False
+
+    # Only worth checking once the baseline (tests, lint) actually passed -
+    # a story already failing on those has enough signal without this too.
+    if passed:
+        dead_functions = server_bindings.server()._find_dead_new_functions(worktree, server_bindings.server()._default_branch())
+        story["last_dead_code_check"] = dead_functions
+        if dead_functions:
+            passed = False
+    return passed

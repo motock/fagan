@@ -482,20 +482,20 @@ def _calls_with_their_trailing_text(source: str) -> list[str]:
 
 
 def test_story_status_keeps_its_undefined_name_suppressions() -> None:
-    """The rewritten ``story_status`` calls keep their ``# noqa: F821`` marker.
+    """The rewritten ``story_status`` calls read ``_store`` through the server.
 
-    ``_store`` is injected into the module's globals at runtime, so every
-    mention of it is an undefined name for the linter and needs the
-    suppression the old call carried.
+    ``_store`` is no longer a bare undefined name: each call reads it from
+    ``server_bindings.server()``, so no ``# noqa: F821`` suppression remains.
     """
     source = _module_source("story_status.py")
     calls = _calls_with_their_trailing_text(source)
 
     assert calls, "story_status must reach for the bound_records wrappers"
-    assert all("# noqa: F821" in call for call in calls), (
-        "every bound_records call in story_status must keep its "
-        "'# noqa: F821' suppression: _store is injected at runtime"
+    assert all("server_bindings.server()._store" in call for call in calls), (
+        "every bound_records call in story_status must read _store through "
+        "server_bindings.server()"
     )
+    assert "noqa: F821" not in source
 
 
 # -- the bound record reads: manifests, journals and journal keys --------------

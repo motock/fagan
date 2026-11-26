@@ -353,8 +353,8 @@ def test_the_call_site_precedes_the_detached_grade_spawn():
     """Edit order matters: the untrack must land BEFORE the grade runs, or a
     tracked scratchpad fails the repo's guard tests and rejects the story."""
     src = _ss_source()
-    call = 'untrack = globals().get("_untrack_scratchpad")'
-    spawn = 'starter = globals().get("start_detached_grade")'
+    call = 'untrack = exports.get("_untrack_scratchpad")'
+    spawn = 'starter = exports.get("start_detached_grade")'
     assert call in src
     assert spawn in src
     assert src.index(call) < src.index(spawn)
@@ -362,10 +362,10 @@ def test_the_call_site_precedes_the_detached_grade_spawn():
 
 def test_the_call_site_tolerates_the_helper_being_absent():
     """Absent under pytest (the guard skipped the export), so the grade body
-    resolves it the way it resolves ``start_detached_grade``: a ``globals()``
+    resolves it the way it resolves ``start_detached_grade``: an ``exports``
     lookup plus a ``None`` check, never a bare call that would raise."""
     src = _ss_source()
-    lookup = 'untrack = globals().get("_untrack_scratchpad")'
+    lookup = 'untrack = exports.get("_untrack_scratchpad")'
     assert lookup in src
     assert "if untrack is not None:" in src
     assert src.index(lookup) < src.index("if untrack is not None:")

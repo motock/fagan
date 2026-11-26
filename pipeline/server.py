@@ -772,7 +772,6 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     return _service.dispatch_story(plan_name, story_key)
 
-
 from pipeline.story_status import (  # noqa: F401
     DETACHED_GRADE_WATCHDOG_SECONDS,
     DISPATCH_STALE_ACTIVITY_SECONDS,
@@ -783,7 +782,6 @@ if "pytest" not in sys.modules:  # hidden under pytest: an absent export is the 
     from .detached_grade import collect_detached_grade, start_detached_grade
     from .git_ops import _untrack_scratchpad
     from .plan_conflict_ruling import _plan_conflict_intercept
-
 check_story_status = mcp.tool()(check_story_status)
 
 

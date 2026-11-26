@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 import time
-import types
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +20,7 @@ from typing import Any
 
 from app import role_registry
 
-from . import bound_records, tenant_exec
+from . import bound_records, server_bindings, tenant_exec
 from .actor import current_namespace
 
 # Import helpers for test detection and scoping.  These imports are used in
@@ -710,20 +709,19 @@ def _get_effective_config_impl(
 
 # ---------- Story-done + story-field allowlists (folded from server.py) ----------
 # ``_mark_story_done_impl`` and the story-field allowlists were moved here from
-# ``pipeline/server.py`` (behavior-preserving refactor). The function body reads
-# server-sourced module globals (``_store``, ``_validate_key``,
-# ``get_ticket_provider``, ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``,
-# ``_record_retro_pending``) as free variables. The test suite monkeypatches
-# those names on ``pipeline.server``, so the function is rebound below to
-# ``pipeline.server``'s namespace at call time (LOAD_GLOBAL does not consult a
-# module-level __getattr__, so a plain re-export would not).
+# ``pipeline/server.py`` (behavior-preserving refactor). The functions below read
+# server-owned names (``_store``, ``_validate_key``, ``get_ticket_provider``,
+# ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``, ``RETRO_PENDING_PATH``,
+# ``_notify_user``, ``_record_retro_pending``) through ``server_bindings.server()``
+# at call time, so tests that monkeypatch them on ``pipeline.server`` take effect.
 
 
 def _record_retro_pending(plan_name: str, story_count: int) -> None:
-    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)  # noqa: F821
+    server = server_bindings.server()
+    server.RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
     existing_lines = (
-        RETRO_PENDING_PATH.read_text().splitlines()  # noqa: F821
-        if RETRO_PENDING_PATH.exists()  # noqa: F821
+        server.RETRO_PENDING_PATH.read_text().splitlines()
+        if server.RETRO_PENDING_PATH.exists()
         else []
     )
     marker = f"- {plan_name} "
@@ -736,23 +734,13 @@ def _record_retro_pending(plan_name: str, story_count: int) -> None:
     before = sum(1 for line in existing_lines if line.startswith("- "))
     date = datetime.now(UTC).date().isoformat()
     noun = "story" if story_count == 1 else "stories"
-    with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
-        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} {noun}\n")
+    with server.RETRO_PENDING_PATH.open("a") as f:
+        f.write(f"- {plan_name} — completed {date}, {story_count} {noun}\n")
     after = before + 1
-    # The threshold lives in this module, but this function is rebound onto
-    # ``pipeline.server``'s namespace (see ``bind_to_server``), so a bare global
-    # read would raise NameError there. Honour a same-named override in the
-    # calling namespace (tests patch ``pipeline.server``), else read the
-    # constant off this module (tests patch ``pipeline.ci``).
-    notify_at = globals().get("_RETRO_BACKLOG_NOTIFY_AT")
-    if notify_at is None:
-        # ``__import__`` is a builtin, so it resolves even though this function's
-        # globals are ``pipeline.server``'s namespace after ``bind_to_server``.
-        notify_at = __import__(f"{__package__}.ci", fromlist=["ci"])._RETRO_BACKLOG_NOTIFY_AT
-    if before < notify_at <= after:
-        _notify_user(  # noqa: F821
+    if before < _RETRO_BACKLOG_NOTIFY_AT <= after:
+        server._notify_user(
             plan_name,
-            f"retro backlog is {after} plans (threshold {notify_at}) \u2014 "
+            f"retro backlog is {after} plans (threshold {_RETRO_BACKLOG_NOTIFY_AT}) — "
             "drain retros/PENDING.md",
             event="retro_backlog_threshold",
             severity="warning",
@@ -764,8 +752,9 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     Transition the ticket to Done and update the local manifest.
     Use after you've reviewed and merged the agent's PR.
     """
-    _validate_key(plan_name)  # noqa: F821
-    _validate_key(story_key)  # noqa: F821
+    server = server_bindings.server()
+    server._validate_key(plan_name)
+    server._validate_key(story_key)
     from .authorization import authorize
 
     refusal = authorize(
@@ -773,18 +762,18 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     )
     if refusal is not None:
         return refusal
-    with _store.transaction(plan_name) as acquired:  # noqa: F821
+    with server._store.transaction(plan_name) as acquired:
         if not acquired:
             return {
                 "ok": True,
                 "skipped": "locked",
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
-        get_ticket_provider().set_state(  # noqa: F821
-            story_key, LogicalState.DONE, plan_name  # noqa: F821
+        server.get_ticket_provider().set_state(
+            story_key, server.LogicalState.DONE, plan_name
         )
 
-        manifest = _store.get_manifest(plan_name)  # noqa: F821
+        manifest = server._store.get_manifest(plan_name)
         story = manifest["stories"][story_key]
         # Captured here because the worktree is removed only after this
         # transaction commits: git must never run while the plan lock is held.
@@ -792,14 +781,14 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         merged_outside_pipeline = story.get("status") != "done" and bool(story.get("pr_url"))
         story["status"] = "done"
         story.pop("parked_reason", None)
-        _store.save_manifest(plan_name, manifest)  # noqa: F821
+        server._store.save_manifest(plan_name, manifest)
 
         # The pipeline's own merge path marks a story done and emits
         # story_merged itself. A story that reaches here with a pr_url and is
         # not yet done was merged outside the pipeline: record the merge
         # before the completion report below reads the sidecar.
         if merged_outside_pipeline:
-            _notify_user(  # noqa: F821
+            server._notify_user(
                 plan_name,
                 f"{story_key} merged (closed via mark_story_done)",
                 event="story_merged",
@@ -823,8 +812,8 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Check if all stories are now done
         all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
         if all_done:
-            if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
-                _record_retro_pending(plan_name, len(manifest["stories"]))
+            if manifest.get("repo_root") == str(server.PIPELINE_SELF_REPO_ROOT):
+                server._record_retro_pending(plan_name, len(manifest["stories"]))
             result = {
                 "ok": True,
                 "plan_completed": True,
@@ -836,8 +825,7 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     # The manifest is saved and the plan lock released: only now remove the
     # story's worktree and local branch (git must never run under the lock).
     #
-    # This body is rebound onto ``pipeline.server``'s namespace, so the two
-    # names the hook needs are imported here, the way ``authorize`` above is.
+    # The names the hook needs are imported here, the way ``authorize`` above is.
     if merged_outside_pipeline:
         from .actor import actor_id
         from .triage_outcomes import record_resolution_if_ruled
@@ -856,11 +844,9 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 def _cleanup_finished_worktree(plan_name: str, story_key: str, worktree: str) -> None:
     """Remove a just-finished story's worktree; never raises.
 
-    Split out of ``_mark_story_done_impl`` because that function's body is
-    rebound onto ``pipeline.server``'s namespace (see ``bind_to_server``), where
-    the cleanup helper and the logger are not visible. Here the names resolve
-    against this module, so ``pipeline.ci.remove_finished_worktree`` stays the
-    patch point and a cleanup failure can never undo the recorded "done".
+    Split out of ``_mark_story_done_impl`` so the cleanup helper and the logger
+    resolve against this module. ``pipeline.ci.remove_finished_worktree`` stays
+    the patch point, and a cleanup failure can never undo the recorded "done".
     """
     try:
         outcome = remove_finished_worktree(
@@ -922,39 +908,6 @@ _VALID_STORY_STATUSES = frozenset(
         "done",
     )
 )
-
-
-def bind_to_server(server: Any) -> None:
-    """Rebind the two server-global-reading functions onto ``server``'s namespace.
-
-    Bare-name reads inside their bodies (``_store``, ``_validate_key``,
-    ``get_ticket_provider``, ``_record_retro_pending``) resolve against
-    pipeline.server at call time, so tests patching pipeline.server still land.
-    pipeline.server calls this right after importing this module, so this module
-    itself never imports the server and can be imported cold.
-    """
-    global _mark_story_done_impl, _record_retro_pending
-    _mark_story_done_impl = types.FunctionType(
-        _mark_story_done_impl.__code__,
-        server.__dict__,
-        _mark_story_done_impl.__name__,
-        _mark_story_done_impl.__defaults__,
-        _mark_story_done_impl.__closure__,
-    )
-    _record_retro_pending = types.FunctionType(
-        _record_retro_pending.__code__,
-        server.__dict__,
-        _record_retro_pending.__name__,
-        _record_retro_pending.__defaults__,
-        _record_retro_pending.__closure__,
-    )
-    server._mark_story_done_impl = _mark_story_done_impl
-    server._record_retro_pending = _record_retro_pending
-    # The rebind makes _mark_story_done_impl's bare names resolve against
-    # server.__dict__, so its post-transaction cleanup call needs this binding
-    # too. The helper itself keeps this module's namespace, where
-    # remove_finished_worktree stays the patch point.
-    server._cleanup_finished_worktree = _cleanup_finished_worktree
 
 
 __all__ = [

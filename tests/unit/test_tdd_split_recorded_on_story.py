@@ -304,7 +304,7 @@ def test_dispatch_source_sets_tdd_split_true_in_phase_success_branch():
     same region as the `_run_test_author_phase(...)` call and the
     `test_author_marker.write_text(...)` marker write -- i.e. inside the
     phase's success branch, not somewhere else in the function."""
-    src = (ROOT / "pipeline" / "dispatch.py").read_text()
+    src = (ROOT / "pipeline" / "dispatch_prompt_build.py").read_text()
     match = re.search(r'\w+\["tdd_split"\]\s*=\s*True', src)
     assert match is not None, "dispatch.py never sets story['tdd_split'] = True"
     window = src[max(0, match.start() - 800): match.end() + 800]

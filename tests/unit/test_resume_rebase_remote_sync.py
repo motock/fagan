@@ -36,6 +36,7 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DISPATCH_PY = REPO_ROOT / "pipeline" / "dispatch.py"
+FRESH_WORKTREE_PY = REPO_ROOT / "pipeline" / "dispatch_fresh_worktree.py"
 
 
 def _norm(path):
@@ -397,7 +398,7 @@ def test_dispatch_binds_sync_branch_remote_via_server_ref():
 def test_dispatch_call_site_is_inside_rebase_ok_branch_after_info_log():
     """The sync call must sit inside the `if result["ok"]:` branch, immediately
     after the rebase info log and before the `elif result["conflict"]:` park."""
-    src = _norm(DISPATCH_PY)
+    src = _norm(FRESH_WORKTREE_PY)
     ok_idx = src.index('if result["ok"]:')
     conflict_idx = src.index('elif result["conflict"]:')
     info_idx = src.index("story %s worktree base predated")
@@ -408,6 +409,6 @@ def test_dispatch_call_site_is_inside_rebase_ok_branch_after_info_log():
 
 def test_dispatch_warns_fail_open_when_sync_fails():
     """A failed sync logs a fail-open warning naming the story and the error."""
-    src = _norm_unquoted(DISPATCH_PY)
+    src = _norm_unquoted(FRESH_WORKTREE_PY)
     assert ("remote sync for resumed story %s failed; dispatching anyway "
             "(fail open): %s") in src

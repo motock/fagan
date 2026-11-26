@@ -8,11 +8,12 @@ source, plus the refusal status the gate must set.
 """
 import inspect
 
+import pipeline.dispatch_prompt_build as prompt_build
 import pipeline.server as srv
 
 
 def _dispatch_source():
-    return inspect.getsource(srv._dispatch_story_impl)
+    return inspect.getsource(prompt_build)
 
 
 def test_dispatch_story_is_still_registered_as_a_tool():

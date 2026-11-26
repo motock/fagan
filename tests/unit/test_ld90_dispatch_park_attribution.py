@@ -25,7 +25,7 @@ import inspect
 
 import pytest
 
-import pipeline.dispatch as pdisp
+import pipeline.dispatch_fresh_worktree as pdisp
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p

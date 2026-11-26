@@ -450,7 +450,7 @@ def test_dispatch_role_goes_through_resolve_role():
 
 
 def test_resolved_model_is_plumbed_into_the_dispatch_spec():
-    src = (_REPO_ROOT / "pipeline/dispatch.py").read_text()
+    src = (_REPO_ROOT / "pipeline/dispatch_prompt_build.py").read_text()
 
     assert "_resolve_dispatch_target" in src, (
         "dispatch_story must actually call the resolver, not just define it"

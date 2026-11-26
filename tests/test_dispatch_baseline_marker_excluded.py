@@ -96,7 +96,7 @@ def test_marker_name_is_the_one_dispatch_writes(name):
     """Pin the literal: the exclusion lists and the writer must agree."""
     import inspect
 
-    from pipeline import dispatch
+    from pipeline import dispatch_prompt_build
 
-    src = inspect.getsource(dispatch)
+    src = inspect.getsource(dispatch_prompt_build)
     assert f'"{name}"' in src or f"'{name}'" in src

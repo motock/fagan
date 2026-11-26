@@ -30,9 +30,11 @@ from .config import (
 from .detached_grade import (
     GRADE_WRAPPER,  # noqa: F401
     _baseline_exempted_failures,
+    collect_detached_grade,  # noqa: F401
+    start_detached_grade,  # noqa: F401
 )
 from .failure_reasons import auth_failure_hint, tests_failed_reason
-from .git_ops import _commit_wip
+from .git_ops import _commit_wip, _untrack_scratchpad  # noqa: F401
 from .no_progress import classify_no_progress
 from .parsers import (
     _is_give_up_summary,
@@ -44,6 +46,7 @@ from .story_status_records import (
     _record_test_check,
 )
 from .test_scope_run import grade_test_cmd
+from .wedge_io import collect_story_wedge_signals  # noqa: F401
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
 # single policy governs both "how long may a grade/dispatch stay outstanding"
@@ -609,6 +612,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     _early, test_result = server_bindings.server()._detached_grade_lifecycle(
         story, story_key, pid, worktree, manifest, plan_name,
         test_cmd, test_dir, test_env,
+        _exports=server_bindings.server(),
     )
     if _early is not None:
         return _early

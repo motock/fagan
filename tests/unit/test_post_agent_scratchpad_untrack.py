@@ -341,8 +341,8 @@ def test_the_helper_is_exported_only_outside_pytest():
     stub subprocess.run and pin its call sequence. The wiring tests above patch
     ``p._untrack_scratchpad`` directly, which is the surface the rebound body
     reads via globals()."""
-    src = Path(ss.__file__).read_text()
-    export = "_server._untrack_scratchpad = _untrack_scratchpad"
+    src = Path(p.__file__).read_text()
+    export = "from .git_ops import _untrack_scratchpad"
     guard = 'if "pytest" not in sys.modules:'
     assert export in src
     assert guard in src

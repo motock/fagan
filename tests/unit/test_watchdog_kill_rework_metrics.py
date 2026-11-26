@@ -292,5 +292,5 @@ def test_notify_call_sits_between_checkpoint_and_rebrief():
     notify_idx = _index("_notify_user(", after=terminate_idx)
     rebrief_idx = _index("_rebrief_step_cap_struggle(", after=notify_idx)
     assert terminate_idx < notify_idx < rebrief_idx
-    assert "noqa: F821" in lines[notify_idx]
+    assert "server_bindings.server()._notify_user(" in lines[notify_idx]
     assert re.search(r"event\s*=\s*[\"']" + EVENT + r"[\"']", "\n".join(lines))

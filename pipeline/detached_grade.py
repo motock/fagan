@@ -377,19 +377,23 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                               _workers=xdist_workers,
                               _apply_xdist=_with_xdist_workers,
                               _persist=_put_manifest,
-                              _fresh=_fresh_manifest):
+                              _fresh=_fresh_manifest,
+                              _exports=None):
     """Run check_story_status's detached-grade lifecycle.
 
-    The optional pipeline.server exports (start_detached_grade,
-    collect_detached_grade, _untrack_scratchpad) are read through
-    ``server_bindings.server()``: pipeline.server hides them under pytest, so an
-    absent export means the synchronous grade path. The SA-19 helpers arrive as
-    default arguments; the detached-grade write helper travels the same way.
+    The optional exports (start_detached_grade, collect_detached_grade,
+    _untrack_scratchpad) are read from ``_exports`` when the caller passes
+    pipeline.server: pipeline.server hides them under pytest, so an absent
+    export means the synchronous grade path. Without ``_exports`` they are read
+    from this module, where the tests patch them directly. The SA-19 helpers
+    arrive as default arguments; the detached-grade write helper travels the
+    same way.
 
     Returns (early_result, test_result): early_result is the dict
     check_story_status must return immediately, else None; test_result is None
     when the caller must grade synchronously.
     """
+    exports = globals() if _exports is None else vars(_exports)
     # A module-level (possibly patched) copy wins over the default: the tests
     # patch pipeline.detached_grade._is_pid_alive et al. in this namespace.
     _probe = globals().get("_is_pid_alive") or _pid_alive
@@ -429,7 +433,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         # spawner below: the helper is exported only outside pytest (it shells out to
         # git, so exporting it under pytest would run the real function inside
         # every pre-existing test that pins subprocess.run's call sequence).
-        untrack = getattr(server_bindings.server(), "_untrack_scratchpad", None)
+        untrack = exports.get("_untrack_scratchpad")
         if untrack is not None:
             _untracked = untrack(str(worktree), story_key)
             if _untracked["paths"]:
@@ -438,7 +442,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     "ts": datetime.now(UTC).isoformat(),
                 }
 
-        starter = getattr(server_bindings.server(), "start_detached_grade", None)
+        starter = exports.get("start_detached_grade")
         if starter is not None:
             # Security review (REQUEST_CHANGES): the detached grade's result
             # channel must not live in the agent-writable worktree — the code
@@ -519,7 +523,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         # file or re-advancing the story.
         if story.get("status") != "in_progress":
             return {"status": story.get("status"), "pid": pid}, None
-        collector = getattr(server_bindings.server(), "collect_detached_grade", None)
+        collector = exports.get("collect_detached_grade")
         grade_result_path = story.get("grading_result_path")
         collected = None
         if collector is not None and grade_result_path:

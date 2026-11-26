@@ -492,37 +492,22 @@ def test_config_provenance_registers_stale_activity_spec_adjacent_to_watchdog():
 # wiring: story_status.py namespace export (the rebinding trap)
 # --------------------------------------------------------------------------
 def test_story_status_exports_stale_constant_into_server_namespace():
-    """The rebound check_story_status resolves bare names against
-    pipeline.server's namespace, so the new threshold must be exported there
-    AFTER the types.FunctionType rebinding block, right below the existing
-    DETACHED_GRADE_WATCHDOG_SECONDS export. Without that export the wiring
-    is dead on arrival even though the story_status-module constant exists."""
-    lines = STORY_STATUS_SRC.read_text(encoding="utf-8").splitlines()
+    """pipeline.server imports the new threshold from story_status right below
+    the existing DETACHED_GRADE_WATCHDOG_SECONDS import, so the server namespace
+    carries it without any rebinding. Without that import the wiring is dead on
+    arrival even though the story_status-module constant exists."""
+    lines = Path(p.__file__).read_text(encoding="utf-8").splitlines()
 
-    rebind_idx = _find_line(lines, r"types\.FunctionType\(")
-    assert rebind_idx is not None, "rebinding block missing"
-
-    detached_idx = _find_line(
-        lines, r"_server\.DETACHED_GRADE_WATCHDOG_SECONDS\s*="
-    )
+    detached_idx = _find_line(lines, r"^\s+DETACHED_GRADE_WATCHDOG_SECONDS,$")
     assert detached_idx is not None, "DETACHED export anchor missing"
 
-    export_idx = _find_line(
-        lines,
-        r"_server\.DISPATCH_STALE_ACTIVITY_SECONDS\s*=\s*"
-        r"DISPATCH_STALE_ACTIVITY_SECONDS",
-    )
+    export_idx = _find_line(lines, r"^\s+DISPATCH_STALE_ACTIVITY_SECONDS,$")
     assert export_idx is not None, (
-        "story_status.py must export the new constant into pipeline.server's "
-        "namespace: _server.DISPATCH_STALE_ACTIVITY_SECONDS = "
-        "DISPATCH_STALE_ACTIVITY_SECONDS"
-    )
-    assert export_idx > rebind_idx, (
-        "the export must come after the types.FunctionType rebinding block"
+        "pipeline/server.py must import the new constant from pipeline.story_status"
     )
     assert 0 < export_idx - detached_idx <= 3, (
-        "the export must sit right below the DETACHED_GRADE_WATCHDOG_SECONDS "
-        "export"
+        "the import must sit right below the DETACHED_GRADE_WATCHDOG_SECONDS "
+        "import"
     )
 
     # Runtime half of the same contract: the constant is reachable in (and

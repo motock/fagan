@@ -166,7 +166,7 @@ from .config import (  # noqa: F401
 
 # Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
 # server (circular-avoidance).
-from .detached_grade import _detached_grade_lifecycle  # noqa: F401
+from .detached_grade import _baseline_exempted_failures, _detached_grade_lifecycle  # noqa: F401
 from .escalation import (
     _auto_escalation_enabled,
     _escalate_review_to_claude,
@@ -175,6 +175,7 @@ from .escalation import (
     _escalation_label,
     _escalation_target,
 )
+from .failure_reasons import auth_failure_hint, tests_failed_reason  # noqa: F401
 from .git_ops import (
     _commit_wip,
     _last_nonempty_line,
@@ -197,6 +198,7 @@ from .merge import (  # noqa: F401
     _try_acquire_git_lock,
     merge_adjudication_plan,
 )
+from .no_progress import classify_no_progress  # noqa: F401
 
 # Pre-dispatch acceptance-oracle validation (a broken oracle costs an
 # implementer its whole step budget; see the module docstring in
@@ -350,6 +352,9 @@ from .self_modification import (  # noqa: F401
     _mcp_self_source_touched,
 )
 from .store import FileStore, Store, _TransactionLock, build_store  # noqa: F401
+from .story_fields import merge_into_fresh_manifest  # noqa: F401
+from .story_status_records import _clear_failure_streaks, _record_test_check  # noqa: F401
+from .test_scope_run import grade_test_cmd  # noqa: F401
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
 # (monkeypatch.setattr(pt, "plane_request", ...), monkeypatch.setattr(pt,

@@ -145,6 +145,7 @@ def test_should_treat_a_missing_pytest_only_export_as_absent(tmp_path, monkeypat
         ["true"],
         tmp_path,
         {},
+        _exports=server_bindings.server(),
     )
 
     assert result == (None, None)

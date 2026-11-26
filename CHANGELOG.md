@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- CI's `lint` job runs `mypy` (pinned `mypy==2.4.1`) over `pipeline/` and `app/`; the modules that already failed when the gate was added are a baseline in `pyproject.toml` that may only shrink.
 - `ingest_plan` warns when a story's brief names another connected repository but the story has no `blocked_by`: a `cross_repo_unordered` notification names the repositories, so a cross-repository dependency that was noticed but not ordered is visible before approval. It is advisory only and never blocks ingest, approval or dispatch.
 - The dashboard chat can list the repositories the team has connected (`list_repositories`, served by `GET /api/repositories`) and read or search any of them (`read_repository_file`, `list_repository_directory`, `search_repository`) through the workspace read routes and their access check, so a planner can find a cross-repository dependency before it drafts a plan; a plan saved from the chat still targets the repository the turn names.
 - A read-only MCP tool, `get_story_ci(plan_name, story_key)`, returns the CI result of a story's pull request: the aggregate state, each check's name and state, and a masked failing-log excerpt (at most 4000 characters) when the state is fail. It reads the branch `agent/<story_key>` through the forge adapter in the plan's own repository, takes no branch, sha, repository or path argument, is plan-scoped over the remote transport, and reports CI even when `merge_ci_gate` is off.

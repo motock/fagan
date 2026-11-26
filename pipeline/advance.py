@@ -18,26 +18,27 @@ import os
 import re
 from typing import Any
 
-from . import access_hooks, bound_records, cross_plan, plan_approval, review_job
+from . import access_hooks, bound_records, cross_plan, plan_approval, review_job  # noqa: F401  (access_hooks re-exported)
 from . import merge as _merge_mod  # noqa: F401  (read by advance_merge via _ModuleRef)
 from .advance_merge import (
     _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
     _adjudicate_merges,
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
+from .advance_ready_dispatch import dispatch_ready_stories
 from .advance_review import review_or_collect
 from .autonomy_settings import effective_autonomy
 from .ci import context_from_manifest
 from .concurrency import (
-    PlanLockReacquireTimeout,
+    PlanLockReacquireTimeout,  # noqa: F401  (re-exported for existing readers)
     _has_live_test_author_phase,
     _released_plan_lock,
 )
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
-from .dispatch_fence import blocks_reclaim
+from .dispatch_fence import blocks_reclaim  # noqa: F401  (re-exported for existing readers)
 from .dispatch_hold import dispatch_held, filter_ready, pause_reason
-from .dispatch_lease import claim_dispatch_lease
+from .dispatch_lease import claim_dispatch_lease  # noqa: F401  (re-exported for existing readers)
 from .park_options import run_park_options_sweep
 from .rebrief import (
     collect_failure_evidence,
@@ -550,226 +551,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
 
-        # 1. Dispatch ready (and resumable-interrupted) stories, capped to
-        # the ON-DEVICE slots still free under MAX_CONCURRENT_AGENTS. <=0
-        # means no cap. Only on-device dispatch consumes a slot: cloud-backed
-        # dispatch (a :cloud-tagged model or a claude-routed story) has no
-        # on-device footprint to protect, so it bypasses the cap entirely —
-        # its spend is bounded by the usage pause thresholds in the per-story
-        # gate below instead. _count_in_progress_agents keeps its backend-
-        # blind cross-plan semantics for its other callers
-        # (pipeline/dispatch.py's concurrent-dispatch warning gates); only
-        # this cap's slot math gets the on-device-aware count.
-        if MAX_CONCURRENT_AGENTS > 0:
-            free_device_slots = max(
-                0, MAX_CONCURRENT_AGENTS - _count_on_device_in_progress_agents()
-            )
-            capped = True
-        else:
-            free_device_slots = 0
-            capped = False
-        # Per-story dispatch gate: only dispatch stories whose own backend+model
-        # passes its gate. A :cloud story dispatches even under local memory
-        # pressure; an on-device story is deferred when the floor is not met.
-        # Independent of the cap: a slot-exempt story still runs this gate,
-        # and gated stories are recorded exactly as before.
-        gated = []
-        dispatched_this_tick = 0
-        for key in ready:
-            if (
-                PIPELINE_MAX_DISPATCH_PER_TICK > 0
-                and dispatched_this_tick >= PIPELINE_MAX_DISPATCH_PER_TICK
-            ):
-                # Per-tick dispatch cap (LOCKSTARVE-A3): this plan has already
-                # launched its budget for this tick. Leave the remaining
-                # stories in their current dispatch-eligible status (todo /
-                # interrupted) so the NEXT tick picks them up; they are not
-                # gated, parked or failed and consume no dispatch attempt.
-                break
-            story = stories[key]
-            on_device = _story_dispatch_is_on_device(story)
-            # A story waiting on a detached test-author already occupies a
-            # slot (it is counted above), so re-dispatching it to collect the
-            # phase must neither be blocked by nor consume another slot.
-            holds_slot = _has_live_test_author_phase(story)
-            if capped and on_device and not holds_slot and free_device_slots <= 0:
-                # On-device slots are exhausted: defer this story until a
-                # slot frees up. Cloud dispatches never reach this branch.
-                continue
-            story_backend, _story_model = _resolve_dispatch_target(
-                story,
-                plan_role_config=manifest.get("role_config"),
-                **layer_routing_kwargs(layer_routing_for_manifest(manifest)),
-            )
-            if story_backend == "claude":
-                # Gate on Claude's usage resource_status, NOT local memory.
-                status = backend.get_backend("dispatch", name="claude").resource_status()
-                if not status.get("ok", True):
-                    gated.append((key, status.get("reason")))
-                    continue
-            else:
-                tag = story.get("model") or _story_model
-                if tag:
-                    status = backend.get_backend("dispatch", name=story_backend).resource_status(
-                        model_tag=tag
-                    )
-                else:
-                    status = backend.get_backend("dispatch", name=story_backend).resource_status()
-                if not status.get("ok", True):
-                    gated.append((key, status.get("reason")))
-                    continue
-            # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch lease
-            # (LOCKSTARVE-B2) before releasing the plan lock around
-            # dispatch_story below. The check-then-set must run against a fresh
-            # read, not the top-of-tick `story`: an earlier iteration already
-            # released the lock, so another owner may hold this story's lease -
-            # claiming stale would miss it and clobber it with our own.
-            m = _fresh_manifest(plan_name)
-            fresh_story = m["stories"].get(key)
-            if fresh_story is None:
-                # A re-ingest during an earlier release window can drop this
-                # story entirely - skip it rather than KeyError the tick.
-                continue
-            if fresh_story["status"] not in ("todo", "interrupted", "changes_requested"):
-                # Another process already advanced this story during a
-                # release window; re-dispatching it would be the same
-                # double-dispatch by a different route.
-                continue
-            if blocks_reclaim(fresh_story, fresh_story.get("worktree") or ""):
-                _notify_user(
-                    plan_name,
-                    f"{key}: the previous dispatch's scheduler is gone but its "
-                    "worktree shows work in progress; waiting for the lease "
-                    "to expire.",
-                    event="dispatch_in_progress",
-                    story_key=key,
-                )
-                continue
-            if not access_hooks.admit_dispatch(fresh_story):
-                # Deferred for this tick only: no lease, no slot, not parked.
-                continue
-            if not claim_dispatch_lease(fresh_story):
-                continue
-            # Persist the claim BEFORE releasing the lock: an unpersisted lease
-            # protects nothing.
-            bound_records.put_manifest(_store, plan_name, m)
-            if capped and on_device and not holds_slot:
-                # Only a dispatch that actually launches on-device consumes
-                # the slot; a cloud dispatch must not touch the counter.
-                free_device_slots -= 1
-            try:
-                with _released_plan_lock(plan_name):
-                    result = dispatch_story(plan_name, key)
-                if isinstance(result, dict) and result.get("ok") is False:
-                    # dispatch_story now returns a structured failure (e.g. a
-                    # git fetch/worktree-add error) instead of letting the
-                    # underlying subprocess.CalledProcessError escape as an
-                    # unhandled exception - re-raise here so this loop's
-                    # existing attempt-counting/failed-status/notify-user
-                    # handling below (unchanged) still triggers exactly as
-                    # it did when dispatch_story used to raise directly.
-                    raise RuntimeError(result.get("error", "dispatch failed"))
-                # Only a dispatch that actually launched consumes this tick's
-                # cap budget. Every real dispatch_story result is a dict
-                # ({"ok": True, ...} on a launch, {"ok": False, ...} raised as
-                # RuntimeError above, {"ok": True, "skipped": ...} on store-lock
-                # contention — that last shape did NOT launch an agent but is
-                # still counted against the cap, since the tick paid the call),
-                # so in production this counts exactly the dispatches that did
-                # not return ok: False. A non-dict return (only possible from a
-                # stub) is not counted.
-                if isinstance(result, dict):
-                    dispatched_this_tick += 1
-                if isinstance(result, dict) and result.get("pending"):
-                    # Detached test-author still running: no executor launched.
-                    summary.setdefault("pending_phase", []).append(key)
-                elif not (isinstance(result, dict) and result.get("skipped")):
-                    summary["dispatched"].append(key)
-                else:
-                    summary.setdefault("skipped", []).append(key)
-            except PlanLockReacquireTimeout:
-                # The plan flock could not be re-acquired after the released
-                # window: this thread no longer holds it, so any further
-                # manifest mutation this tick makes would race whichever
-                # other thread/process took it over. Re-raise rather than
-                # letting the broad handler below treat this as an ordinary
-                # dispatch failure - that would bump dispatch_attempts and
-                # keep writing the manifest with no lock held, and (if the
-                # timeout fires after dispatch_story already launched the
-                # agent) misattribute a healthy in-progress story as a
-                # failed dispatch. Let the tick abort with this cause
-                # instead; the next tick starts clean.
-                raise
-            except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
-                # Re-read: dispatch_story only writes on a successful launch,
-                # so on a raise the recorded status is still todo/interrupted -
-                # bump the attempt counter there, and clear the lease from the
-                # SAME fresh read: the lock was released above, so only a
-                # freshly re-read copy may be written back (never a stale one).
-                m = _fresh_manifest(plan_name)
-                st = m["stories"][key]
-                st.pop("dispatch_lease_expires_at", None)
-                st.pop("dispatch_lease_owner_pid", None)
-                attempts = st.get("dispatch_attempts", 0) + 1
-                st["dispatch_attempts"] = attempts
-                # W4L-04: stamp the story's dispatch-failure notifications with
-                # its persisted correlation_id (omitted entirely for older
-                # manifests). The attempt counter is already in scope here.
-                _cid_kwargs = (
-                    {
-                        "correlation_id": st["correlation_id"],
-                        "attempt": st.get("dispatch_attempts", 0),
-                    }
-                    if st.get("correlation_id")
-                    else {}
-                )
-                if attempts >= DISPATCH_MAX_ATTEMPTS:
-                    st["status"] = "failed"
-                    st["dispatch_error"] = str(e)
-                    _notify_user(
-                        plan_name,
-                        f"{key} dispatch failed {attempts}x "
-                        f"({e}); giving up - needs human intervention.",
-                        event="dispatch_failed",
-                        story_key=key,
-                        **_cid_kwargs,
-                    )
-                    summary["failed"].append(key)
-                else:
-                    # leave status dispatch-eligible; the next tick retries.
-                    _notify_user(
-                        plan_name,
-                        f"{key} dispatch attempt {attempts}/"
-                        f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
-                        **_cid_kwargs,
-                    )
-                summary["notify"].append(key)
-                bound_records.put_manifest(_store, plan_name, m)
-            else:
-                # Dispatch succeeded (or was skipped on store-lock contention):
-                # clear the lease from a fresh read too, as in the except above.
-                m = _fresh_manifest(plan_name)
-                st = m["stories"][key]
-                st.pop("dispatch_lease_expires_at", None)
-                st.pop("dispatch_lease_owner_pid", None)
-                bound_records.put_manifest(_store, plan_name, m)
+        # 1. Dispatch ready (and resumable-interrupted) stories: see
+        # pipeline/advance_ready_dispatch.py. Runs under this tick's plan lock.
+        dispatch_ready_stories(plan_name, manifest, stories, ready, summary)
 
-        # Say why ready stories were held back: the gate reason is otherwise
-        # used only for interruptions, so a dead dispatch backend left stories
-        # in todo with no notice at all. One notice per distinct reason per
-        # gated episode (see _take_new_gate_reasons above).
-        gate_groups = _group_gated_stories(gated)
-        if gate_groups:
-            first_reason, first_keys = next(iter(gate_groups.items()))
-            summary["dispatch_gated"] = {"reason": first_reason, "stories": first_keys}
-        for reason in _take_new_gate_reasons(plan_name, list(gate_groups)):
-            _notify_user(
-                plan_name,
-                f"dispatch is waiting: {reason}",
-                event="dispatch_gated",
-                severity="warning",
-                dedup_key=f"dispatch_gated:{plan_name}:{reason}",
-            )
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
         # -> tests_passed. Polling is per-story, mirroring the interruption gate

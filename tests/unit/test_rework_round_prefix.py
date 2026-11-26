@@ -430,7 +430,7 @@ def test_server_dispatch_path_reads_rework_attempts_for_round_prefix():
 
     # _dispatch_story_impl is the function containing the resume_append_content
     # construction; fall back to whole-module source if the name differs.
-    target = getattr(p, "_dispatch_story_impl", None)
+    import pipeline.dispatch_transcript_resume as target
     if target is not None:
         src = inspect.getsource(target)
     else:

@@ -8,7 +8,7 @@ digesting the file would happily bless a fixture an agent had already edited.
 import hashlib
 import inspect
 
-import pipeline.server as srv
+import pipeline.dispatch_prompt_build as prompt_build
 from pipeline.oracle_gate import acceptance_digests
 
 
@@ -35,7 +35,7 @@ def test_story_without_acceptance_yields_no_digests():
 
 
 def test_dispatch_story_records_the_digests_on_the_story():
-    src = inspect.getsource(srv._dispatch_story_impl)
+    src = inspect.getsource(prompt_build)
     assert "acceptance_digests" in src, (
         "dispatch_story must record the digests; nothing downstream can detect "
         "tampering without them"

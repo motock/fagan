@@ -1,53 +1,57 @@
-import json
+import json  # noqa: F401
 import logging
-import os
-import subprocess
+import os  # noqa: F401
+import subprocess  # noqa: F401
 import uuid
-from datetime import UTC, datetime
-from pathlib import Path
+from datetime import UTC, datetime  # noqa: F401
+from pathlib import Path  # noqa: F401
 from typing import Any
 
 from app import backend, role_registry  # noqa: F401
-from pipeline import forge_auth
+from pipeline import forge_auth  # noqa: F401
 
-from . import access_hooks, bound_records, cross_plan, plan_approval, triage_rebrief
+from . import access_hooks, bound_records, cross_plan, plan_approval, triage_rebrief  # noqa: F401
 from .branch_guard import remote_branch_exists  # noqa: F401
 from .branch_names import record_story_branch, worktree_or_refusal
 from .build_detect import detect_test_command, failed_node_ids  # noqa: F401
 from .concurrency import _plan_lock
-from .config import WORKTREE_SCOPE_RULE
+from .config import WORKTREE_SCOPE_RULE  # noqa: F401
 from .dispatch_attempt import (
     _find_dead_new_functions,  # noqa: F401
     _rebrief_step_cap_struggle,  # noqa: F401
-    _transcript_ends_with_done,
+    _transcript_ends_with_done,  # noqa: F401
 )
 from .dispatch_baseline import (
     _BASELINE_TEST_TIMEOUT_S,  # noqa: F401
     _baseline_test_env,  # noqa: F401
-    _run_baseline_test_snapshot,
-    baseline_snapshot_for,
+    _run_baseline_test_snapshot,  # noqa: F401
+    baseline_snapshot_for,  # noqa: F401
 )
 
 # Context resolution and the remote-branch guard live in their own modules to
 # keep this file under the 1000-line limit.
-from .dispatch_context import _step_resolve_context
-from .dispatch_fence import executor_fence
-from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author
-from .dispatch_revised_note import _revised_instructions_note
+from .dispatch_context import _step_resolve_context  # noqa: F401
+from .dispatch_fence import executor_fence  # noqa: F401
+from .dispatch_fresh_worktree import prepare_worktree
+from .dispatch_phases import _apply_planner_checklist, _step_detached_test_author  # noqa: F401
+from .dispatch_prompt_build import build_prompt
+from .dispatch_revised_note import _revised_instructions_note  # noqa: F401
 from .dispatch_routing import (
     _dispatch_fallback_provider,  # noqa: F401
     _resolve_dispatch_backend,  # noqa: F401
-    _resolve_dispatch_target,
+    _resolve_dispatch_target,  # noqa: F401
 )
-from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken
-from .rebase_conflict_feedback import conflict_handoff_notice, route_resumed_conflict
-from .role_routing_scope import layer_routing_for_plan
+from .dispatch_spawn import spawn_agent
+from .dispatch_transcript_resume import apply_transcript_resume
+from .dispatch_worktree import _create_fresh_worktree, _refuse_if_remote_branch_taken  # noqa: F401
+from .rebase_conflict_feedback import conflict_handoff_notice, route_resumed_conflict  # noqa: F401
+from .role_routing_scope import layer_routing_for_plan  # noqa: F401
 from .service import _ServerRef
-from .store_records import InvalidRecordKeyError
-from .story_fields import record_dispatch_baseline
-from .test_scope_dispatch import stamp_test_scope, test_scope_event_fields
-from .test_scope_run import local_scope_kwargs
-from .trace_context import agent_traceparent
+from .store_records import InvalidRecordKeyError  # noqa: F401
+from .story_fields import record_dispatch_baseline  # noqa: F401
+from .test_scope_dispatch import stamp_test_scope, test_scope_event_fields  # noqa: F401
+from .test_scope_run import local_scope_kwargs  # noqa: F401
+from .trace_context import agent_traceparent  # noqa: F401
 
 logger = logging.getLogger("pipeline")
 
@@ -201,806 +205,34 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 _exclude_worktree_logs_from_tracking(
                     _oracle_repo_root, _acceptance_paths
                 )
-        if not resuming:
-            block = _refuse_if_remote_branch_taken(
-                plan_name, story_key, story, branch, manifest
-            )
-            if block is not None:
-                return block
-            story.pop("dispatch_block_reason", None)
-            setup_error = _create_fresh_worktree(
-                plan_name, branch, worktree_path, story_key=story_key
-            )
-            if setup_error is not None:
-                return setup_error
-        else:
-            # Resumed dispatch (interrupted / changes_requested / existing
-            # worktree): the worktree was branched from origin/<default> at
-            # some prior point. If origin's default branch has moved since
-            # then (e.g. an urgent fix landed via a separate PR between the
-            # original dispatch and this resume), the resumed agent's diff
-            # would be based on a stale base and could spuriously revert that
-            # fix and delete its regression tests - see retro
-            # mcp-self-mod-notice_2026-07-31 (PR #213 incident). Detect that
-            # here and notify; do NOT auto-rebase (separate, riskier
-            # follow-up). Fail open: any git error (e.g. a network issue on
-            # the fetch) is logged and swallowed so dispatch still proceeds -
-            # this is an observability hook, never a gate. Stateless across
-            # calls: no flag/cache is set, each resumed dispatch re-fetches
-            # and re-checks independently. Only runs for a real git worktree
-            # (a `.git` file/dir at the worktree root); a plain directory is
-            # not a git worktree and the rev-list probe cannot run there.
-            if (worktree_path / ".git").exists():
-                try:
-                    with _scoped_repo_root(plan_name) as repo_root:
-                        with _try_acquire_git_lock(repo_root) as acquired:
-                            if acquired:
-                                subprocess.run(
-                                    ["git", "fetch", "origin", _default_branch()],
-                                    cwd=repo_root, check=True, **forge_auth.env_kw(),
-                                )
-                        count_out = subprocess.run(
-                            [
-                                "git",
-                                "rev-list",
-                                "--count",
-                                f"{branch}..origin/{_default_branch()}",
-                            ],
-                            cwd=repo_root,
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                        )
-                        behind = int(count_out.stdout.strip() or "0")
-                        if behind > 0:
-                            # The worktree base predates origin/<default>; a
-                            # resumed agent would otherwise run on a stale base
-                            # that could revert work merged since the worktree
-                            # was created (live 2026-08-17). Actually rebase the
-                            # worktree onto origin/<default> BEFORE the agent
-                            # starts. Fail-secure on a rebase conflict (park,
-                            # never run on the stale base); fail-open on any
-                            # other git/infra failure (proceed, today's
-                            # behavior). _rebase_onto_master never raises.
-                            result = _rebase_onto_master(worktree_path, branch)
-                            if result["ok"]:
-                                _notify_user(
-                                    plan_name,
-                                    f"story {story_key} worktree base predates "
-                                    f"origin/{_default_branch()} by {behind} "
-                                    f"commit(s); rebased onto "
-                                    f"origin/{_default_branch()} before resume.",
-                                )
-                                logging.getLogger("pipeline").info(
-                                    "story %s worktree base predated "
-                                    "origin/%s by %s commit(s); rebased onto "
-                                    "origin/%s before resume",
-                                    story_key, _default_branch(), behind,
-                                    _default_branch(),
-                                )
-                                _sync = _sync_branch_remote(worktree_path, branch)
-                                if not _sync.get("ok"):
-                                    logging.getLogger("pipeline").warning(
-                                        "remote sync for resumed story %s "
-                                        "failed; dispatching anyway (fail "
-                                        "open): %s",
-                                        story_key, _sync.get("error"),
-                                    )
-                            elif result["conflict"] and not route_resumed_conflict(
-                                story, result["error"], _default_branch()
-                            ):
-                                # Fail-secure: never dispatch an agent on a
-                                # base that would revert merged work. Park the
-                                # story for human resolution; a later resume
-                                # can retry the rebase and proceed if it now
-                                # succeeds (parked is a retryable state).
-                                story["status"] = "parked"
-                                story["parked_reason"] = (
-                                    f"rebase conflict: {result['error']}; "
-                                    f"worktree still behind "
-                                    f"origin/{_default_branch()}"
-                                )
-                                bound_records.put_manifest(_store, plan_name, manifest)
-                                _notify_user(
-                                    plan_name,
-                                    f"story {story_key} parked: rebase conflict "
-                                    f"against origin/{_default_branch()} - "
-                                    f"{result['error']}",
-                                    event="story_parked",
-                                    story_key=story_key,
-                                    **(
-                                        {"correlation_id": story["correlation_id"]}
-                                        if story.get("correlation_id")
-                                        else {}
-                                    ),
-                                )
-                                logging.getLogger("pipeline").warning(
-                                    "story %s parked: rebase conflict against "
-                                    "origin/%s; worktree still behind",
-                                    story_key, _default_branch(),
-                                )
-                                return {
-                                    "status": "parked",
-                                    "reason": "rebase_conflict",
-                                    "parked_reason": story["parked_reason"],
-                                }
-                            elif result["conflict"]:
-                                # Handed to the agent, which runs the rebase itself.
-                                _notify_user(plan_name, conflict_handoff_notice(story_key, _default_branch()),
-                                             event="story_conflict_handed_to_agent", story_key=story_key)
-                            else:
-                                # Fail open on a non-conflict git/infra failure
-                                # (e.g. git fetch timeout): notify and proceed
-                                # with dispatch, exactly as before.
-                                _notify_user(
-                                    plan_name,
-                                    f"story {story_key} rebase onto "
-                                    f"origin/{_default_branch()} failed "
-                                    f"(non-conflict); dispatching anyway "
-                                    f"(fail open): {result['error']}",
-                                )
-                                logging.getLogger("pipeline").warning(
-                                    "rebase for resumed story %s failed "
-                                    "(non-conflict); dispatching anyway "
-                                    "(fail open): %s",
-                                    story_key, result["error"],
-                                )
-                except Exception:  # observability hook, never a gate
-                    logging.getLogger("pipeline").warning(
-                        "staleness check for resumed story %s failed; "
-                        "dispatching anyway (fail open)", story_key,
-                        exc_info=True,
-                    )
-
-        # Resolve external context BEFORE the ticket moves to in-progress so a
-        # required-source failure leaves the story's status untouched.
-        context_block, blocked = _step_resolve_context(
-            plan_name, story_key, story, manifest
-        )
-        if blocked is not None:
-            return blocked
-
-        get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
-
-        # Resolve concrete backend AND model for this story (shared with the
-        # per-story dispatch gate in _advance_pipeline_locked). REG-1: both
-        # now come from role_registry.resolve_role via
-        # _resolve_dispatch_target, so a registry-pinned roles.dispatch
-        # model actually runs instead of the driver's env default.
-        dispatch_backend, dispatch_model = _resolve_dispatch_target(
-            story, plan_role_config=_plan_role_config(plan_name), layer_routing=layer_routing_for_plan(plan_name)
-        )
-        # Persist so check_story_status and escalation see which backend ran.
-        story["backend"] = dispatch_backend
-        stamp_test_scope(plan_name, story_key, manifest, story)
-
-        # BASELINE-1: on a story's FIRST dispatch, run the detected test
-        # command ONCE against the freshly created, still-unmodified worktree
-        # and remember whether it already failed. Observed live 2026-09-17:
-        # 4 separate dispatched stories each independently rediscovered the
-        # same pre-existing, out-of-scope failures (a "5 pre-existing ...
-        # failures (httpx missing in subprocess interpreter)" pattern, named
-        # almost verbatim in 4 separate journal entries across 2 plans) and
-        # each spent part of its own step/rework budget investigating them
-        # before concluding they were unrelated to its task. Recording the
-        # baseline here lets the prompt below tell the agent up front which
-        # failures predate its own changes. Gated exactly like the
-        # test-author/planner phases further down:
-        #   - a local-family backend (the same weak-local-executor rationale)
-        #   - not resuming (a resumed dispatch acts on a worktree the agent
-        #     has already been editing, so there is no meaningful "before"
-        #     state left to snapshot)
-        #   - no existing marker (belt-and-suspenders with `resuming`, and
-        #     what stops a second run on a later fresh-looking call)
-        # Never a gate: the helper is wrapped so any failure degrades to "no
-        # baseline", and the marker is written unconditionally right after so
-        # a raising snapshot is not retried on every subsequent dispatch.
-        # A marker already present means the snapshot ran for this worktree:
-        # the story is recorded from it instead (see record_dispatch_baseline).
-        if dispatch_backend in _LOCAL_BACKEND_NAMES:
-            record_dispatch_baseline(
-                _store,
-                plan_name,
-                story_key,
-                story,
-                worktree_path,
-                marker=worktree_path / ".dispatch_baseline_test_checked",
-                snapshot=baseline_snapshot_for(story, _run_baseline_test_snapshot),
-                rerun=not resuming,
-            )
-
-        # A rework redispatch (changes_requested with stored review_feedback)
-        # on the local Ollama driver can resume the prior dispatch's message
-        # transcript instead of rebuilding a cold-start prompt via
-        # _build_dispatch_command's rework_instruction - the transcript
-        # already holds the full prior context, so only the reviewer's new
-        # feedback needs to be appended. Guard on the transcript file actually
-        # existing (backend.py writes it to cwd/.agent_transcript.json on
-        # every dispatch): a story whose first dispatch predates this
-        # feature, ran on a different backend, or had its transcript cleaned
-        # up must fall back to the existing from-scratch rework prompt rather
-        # than crash.
-        review_feedback = story.get("review_feedback")
-        transcript_path = worktree_path / ".agent_transcript.json"
-        resume_via_transcript = (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and review_feedback
-            and transcript_path.exists()
-            and not _transcript_ends_with_done(transcript_path)
-        )
-        revised_instructions = story.get("agent_instructions", "")
-        prior_dispatched = story.get("_dispatched_agent_instructions")
-        revised_instructions_note = _revised_instructions_note(
-            resume_via_transcript, revised_instructions, prior_dispatched
-        )
-
-        # The resume journal comes from the record store; the read is
-        # fail-soft: no journal for a malformed file or a rejected key.
-        journal: list[dict] = []
-        if resuming:
-            try:
-                journal = bound_records.get_journal(_store, plan_name, story_key)
-            except InvalidRecordKeyError:
-                logger.warning("no resume journal for %s/%s", plan_name, story_key)
-
-        spec = _build_dispatch_command(
-            story,
-            story_key,
-            plan_name=plan_name,
-            resume_journal=journal or None,
-            review_feedback=None if resume_via_transcript else review_feedback,
-            context_block=context_block,
-        )
-        # REG-1: dispatch_model is the resolved model for this story - the
-        # story's own pin translated to a concrete tag, else the registry's
-        # dispatch model - and it always wins over the raw spec value
-        # (spec["model"] carries story["model"]/persona precedence from
-        # _build_dispatch_command). It is None when the resolved model does
-        # not belong to the backend that actually won (a claude dispatch is
-        # never handed an ollama tag - _resolve_dispatch_target already
-        # drops it), so the guard keeps spec["model"] intact there.
-        if dispatch_model:
-            spec["model"] = dispatch_model
-        # HARDEN-1: the executor must be told its cwd is authoritative on
-        # EVERY dispatch - fresh or resumed - before any plan-authored brief
-        # (agent_instructions) it may contain. A brief once carried an
-        # absolute path to the shared primary checkout and the agent ran
-        # every command there, landing commits straight on master. Prepend
-        # unconditionally so the rule survives an empty brief too.
-        spec["prompt"] = f"{WORKTREE_SCOPE_RULE}\n\n{triage_rebrief.diagnosis_block(story)}{spec['prompt']}"
-        # BASELINE-1: when the fresh-dispatch baseline snapshot above found
-        # the test command ALREADY failing on the clean, unmodified worktree,
-        # say so up front - before the plan-authored brief - so the agent
-        # doesn't spend its own step/rework budget rediscovering (or trying to
-        # "fix") a failure it did not cause. Only a non-zero baseline is worth
-        # a note; a passing baseline (or none at all) adds nothing. Gated on
-        # `not resuming` too: a resumed dispatch acts on a worktree the agent
-        # has already been editing, so a baseline recorded on the first
-        # dispatch is stale by then and re-emitting it would misdirect the
-        # agent toward failures it may well have already fixed.
-        baseline = story.get("baseline_test_check")
-        if baseline and baseline.get("returncode") not in (None, 0) and not resuming:
-            baseline_note = (
-                "NOTE: the test command already fails on a clean, unmodified "
-                "checkout of this worktree (exit code "
-                f"{baseline['returncode']}), before you have changed anything. "
-                "Do not spend time investigating or fixing a failure that is "
-                "unrelated to your assigned scope below -- if a test you see "
-                "failing looks unrelated to what you were asked to build, it "
-                "was very likely already broken. Focus only on your own "
-                "assigned files.\n\n"
-            )
-            spec["prompt"] = baseline_note + spec["prompt"]
-        worktree_path.mkdir(parents=True, exist_ok=True)
-        log_path = worktree_path / "agent.log"
-
-        # Gap 7: surface multi-model concurrent-dispatch risk. MAX_CONCURRENT_AGENTS
-        # is a process-count cap with no model/VRAM awareness, and Ollama's
-        # `/api/ps` reports whatever's currently loaded. If a *different* model
-        # is already in VRAM and we're about to dispatch a second story on a
-        # different model, Ollama will swap the existing model out to make room
-        # (or OOM-split if 24GB unified memory is tight). Warn, don't block:
-        # same-model concurrency is safe, and even a swap is just slow.
-        if (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and MAX_CONCURRENT_AGENTS > 1
-            and _count_in_progress_agents() > 0
-        ):
-            target_model = story.get("model") or dispatch_model or spec.get("model")
-            if target_model:
-                # spec["model"]/story["model"] may be an unresolved tier
-                # name (e.g. "sonnet"), which never matches anything in
-                # `loaded` (concrete Ollama tags) and would otherwise warn
-                # on every dispatch regardless of what's actually loaded.
-                target_model = backend._resolve_local_model(target_model)
-            try:
-                loaded = backend._ollama_loaded_models(
-                    os.environ.get("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
-                )
-            except Exception:  # noqa: BLE001 (observability hook, never a gate)
-                loaded = set()  # observability hook, never a gate
-            if loaded and target_model and target_model not in loaded:
-                msg = (
-                    f"multi-model concurrent dispatch: {sorted(loaded)} already "
-                    f"loaded, dispatching {story_key} on {target_model} may force "
-                    f"a VRAM swap (set MAX_CONCURRENT_AGENTS=1 to silence)"
-                )
-                _notify_user(plan_name, msg)
-                logging.getLogger("pipeline").warning(msg)
-
-        # Mode 2 regression guard: OLLAMA_NUM_PARALLEL is set via
-        # `launchctl setenv` and silently dropped whenever Ollama.app
-        # auto-updates and relaunches (observed 2026-07-25, v0.32.4),
-        # leaving every llama-server runner at -np 1. With
-        # MAX_CONCURRENT_AGENTS>1 the pipeline then dispatches a second
-        # agent that queues behind the first and hits the 180s
-        # read-silence timeout. Probe the runner's actual -np at dispatch
-        # time and warn loudly when configured concurrency exceeds what
-        # Ollama can actually serve in parallel. Only fires on a 2nd+
-        # concurrent local dispatch (same guard as the multi-model check
-        # above): the first dispatch loads the model and there is no
-        # queue yet. Observability hook, never a gate - a None probe
-        # (no model loaded yet, ps unavailable) means "unknown", not "0".
-        if (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and MAX_CONCURRENT_AGENTS > 1
-            and _count_in_progress_agents() > 0
-        ):
-            try:
-                detected_np = backend._ollama_serving_parallelism()
-            except Exception:  # noqa: BLE001 (observability hook, never a gate)
-                detected_np = None
-            if detected_np is not None and detected_np < MAX_CONCURRENT_AGENTS:
-                msg = (
-                    f"ollama serving parallelism ({detected_np}) is below "
-                    f"MAX_CONCURRENT_AGENTS ({MAX_CONCURRENT_AGENTS}): a "
-                    f"second concurrent dispatch will queue behind the "
-                    f"first and may hit the 180s read-silence timeout. "
-                    f"Re-apply `launchctl setenv OLLAMA_NUM_PARALLEL "
-                    f"{MAX_CONCURRENT_AGENTS}` and restart Ollama, or set "
-                    f"MAX_CONCURRENT_AGENTS=1."
-                )
-                _notify_user(plan_name, msg)
-                logging.getLogger("pipeline").warning(msg)
-
-        # Fix #1: if the story carries an `acceptance` block, materialize the
-        # oracle files into the worktree BEFORE the backend launches so the local
-        # harness can grade against them. The plan's acceptance source is
-        # AUTHORITATIVE on every dispatch that is not a status-based resume
-        # (interrupted / changes_requested) and must always win — even when the
-        # fixture path collides with a file a prior story already merged to the
-        # base branch (the worktree inherits that file; failing to overwrite it
-        # silently grades the stale, already-satisfied file and produces a false
-        # green with zero implementation). Only a genuine resume skips the
-        # write: the oracle may have evolved the fixture mid-run into a
-        # committed WIP, and overwriting would discard that evolution. The skip
-        # is gated on the story's STATUS, never on worktree existence — a
-        # leftover worktree from a dead earlier attempt is not a resume.
-        acceptance = story.get("acceptance") or []
-        acceptance_paths = _acceptance_rel_paths(story)
-        resumed_story = story.get("status") in ("interrupted", "changes_requested")
-        for entry in acceptance:
-            rel = Path(str(entry.get("path", "")))
-            if rel.is_absolute() or ".." in rel.parts:
-                _notify_user(
-                    plan_name,
-                    f"{story_key}: acceptance fixture path outside the worktree rejected: {rel!s}",
-                )
-                continue
-            target = worktree_path / rel
-            if resumed_story and target.exists():
-                logging.getLogger("pipeline").info(
-                    "acceptance fixture %s preserved: resumed run", rel,
-                )
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(entry["source"])
-            logging.getLogger("pipeline").info(
-                "acceptance fixture %s materialized (resuming=%s)", rel, resuming,
-            )
-
-        # Record a digest of each fixture's AUTHORITATIVE manifest source
-        # (never the worktree file, which could already be rewritten) so a
-        # later gate can prove the read-only oracle was not rewritten - see
-        # pipeline.ci._acceptance_tampered. Recorded on EVERY dispatch,
-        # including a resumed one, since the authoritative source hasn't
-        # changed and re-recording also repairs a story dispatched before
-        # this existed.
-        story["acceptance_digests"] = acceptance_digests(story)
-
-        # Pre-dispatch oracle gate: a fixture that cannot pass no matter what
-        # is implemented (a broken helper, a bad CLI invocation) or that is
-        # already satisfied with zero implementation burns an implementer's
-        # entire step budget for no signal (observed live 2026-07-30,
-        # LAUNCHD-PLIST-PORTABILITY). Skipped on a resumed run: the oracle
-        # was already validated on the fresh dispatch, and the worktree may
-        # legitimately carry WIP that changes the outcome.
-        if not resuming:
-            oracle_check = validate_acceptance_fixtures(story, worktree_path)
-            if oracle_check["state"] in ("errors", "passes", "empty"):
-                story["status"] = "blocked_oracle"
-                story["oracle_gate"] = oracle_check
-                _notify_user(
-                    plan_name,
-                    f"{story_key} not dispatched: acceptance oracle is "
-                    f"unusable ({oracle_check['state']}) - {oracle_check['detail']}",
-                )
-                bound_records.put_manifest(_store, plan_name, manifest)
-                return {
-                    "status": "blocked_oracle",
-                    "oracle_gate": oracle_check,
-                }
-
-        # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON pre-executor
-        # test-authoring dispatch (a full agent-loop, BLOCKING until it
-        # exits - unlike the planner checklist above, this produces a real
-        # commit the executor's worktree must already have) in THIS
-        # worktree before the main executor starts. The global
-        # PIPELINE_TDD_SPLIT on/off toggle AND the per-story `tdd_split`
-        # opt-in are both removed; the phase now mirrors the planner's gate
-        # below exactly - unconditional for local-family dispatch. Gated on:
-        #   - a local-family backend (same rationale as the planner: the
-        #     crutch exists for the weak local executor; Claude doesn't
-        #     need it)
-        #   - not resuming (a rework redispatch acts on the SAME tests it
-        #     already has; it never gets a fresh test-authoring pass)
-        #   - no existing test-author marker in the worktree (belt-and-
-        #     suspenders with `resuming`, mirrors plan_path's own check
-        #     below)
-        # _run_test_author_phase never raises and a False return (role
-        # unconfigured/refused, dispatch failure, timeout, or no commit
-        # produced) falls open to today's unmodified monolithic dispatch -
-        # never a gate (§2.5).
-        test_author_marker = worktree_path / ".tdd_split_test_author_done"
-        detached_outcome = _step_detached_test_author(
-            story,
-            story_key=story_key,
-            worktree_path=worktree_path,
-            dispatch_backend=dispatch_backend,
-            local_model=spec["model"],
-            plan_name=plan_name,
-            plan_role_config=_plan_role_config(plan_name),
-            manifest=manifest,
-            marker_path=test_author_marker,
+        early = prepare_worktree(
+            plan_name, story_key, story, manifest, branch, worktree_path,
             resuming=resuming,
         )
-        if detached_outcome == "pending":
-            return {"ok": True, "pending": "test_author", "story_key": story_key}
-        executor_is_resume = resuming and detached_outcome not in (
-            "authored",
-            "fell_open",
+        if early is not None:
+            return early
+
+        built = build_prompt(
+            plan_name, story_key, story, manifest, worktree_path, resuming=resuming
         )
-        if detached_outcome == "not_applicable" and (
-            dispatch_backend in _LOCAL_BACKEND_NAMES
-            and not resuming
-            and not test_author_marker.exists()
-        ) and _run_test_author_phase(
-            story,
-            story_key=story_key,
-            worktree_path=worktree_path,
-            dispatch_backend=dispatch_backend,
-            local_model=spec["model"],
-            plan_name=plan_name,
-            plan_role_config=_plan_role_config(plan_name),
-        ):
-            test_author_marker.write_text("ok\n")
-            story["tdd_split"] = True
-
-        # GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" checklist is always on
-        # for the weak local executor (the on/off toggle was removed; the
-        # planner is now unconditionally enabled for local-family dispatch).
-        # Gated on:
-        #   - a local-family backend (the crutch exists for the weak local
-        #     executor; Claude doesn't need it)
-        #   - not resuming (plan once on the story's first dispatch; a
-        #     rework must never spend a second planner call)
-        #   - no plan already on disk (belt-and-suspenders with `resuming`)
-        # The LLM call itself is best-effort (_run_planner fails open to
-        # None) so a broken/slow/rate-limited planner never blocks or
-        # corrupts dispatch - the story simply proceeds with no checklist,
-        # exactly like an unconfigured (fail-open) planner.
-        # H3 ablation (GUIDED_DECOMPOSITION_PLAN.md §4.1's G-cloud-noscratch
-        # condition): default "on" ships the persistent scratchpad; "off"
-        # tests whether the checklist alone accounts for the benefit,
-        # independent of cross-step memory. Read once here because it now
-        # feeds BOTH the planner call (so the scratchpad becomes a first-class
-        # generated step) and the trailing-instruction backstop below.
-        _apply_planner_checklist(
-            story,
-            spec,
-            dispatch_backend=dispatch_backend,
-            resuming=executor_is_resume,
-            worktree_path=worktree_path,
-            test_author_marker=test_author_marker,
-            plan_name=plan_name,
-        )
-
-        # Referencing the test-author marker is independent of the phase
-        # having run THIS dispatch (mirrors plan_path.exists() above): a
-        # resumed/rework redispatch that skipped re-running the phase must
-        # still get the "don't touch tests" steering, since the tests it
-        # must not touch are already committed on this branch.
-        if test_author_marker.exists():
-            spec["prompt"] = (
-                f"{spec['prompt']}\n\n"
-                "--- Tests already written by your tech lead ---\n"
-                "The test file(s) for this task have already been written "
-                "and committed to this branch by your tech lead. If the "
-                "task description or checklist above says to write tests "
-                "yourself first, DISREGARD that - it does not apply here; "
-                "the tests already exist. Do not create, write, or modify "
-                "any test file. "
-                f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
-                "failures, then implement until they pass."
-            )
-
-        dispatch_kwargs: dict[str, Any] = {
-            "prompt": spec["prompt"],
-            "system": spec["system"],
-            "model": spec["model"],
-            "allowed_tools": spec["allowed_tools"],
-            "cwd": worktree_path,
-            "log_path": log_path,
-            "append": executor_is_resume,
-        }
-        # Only the local driver accepts/uses `acceptance`; pass it through when
-        # we're actually invoking that driver so Claude's signature stays clean.
-        if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
-            dispatch_kwargs["acceptance"] = acceptance_paths
-            dispatch_kwargs["story_summary"] = story.get("summary", "")
-        # L1 (REVIEWER_ESCALATION_PLAN.md): any rework redispatch - a
-        # CI-triggered rework (story["ci_rework"]) OR a reviewer
-        # REQUEST_CHANGES rework (story["review_feedback"]) - raises the
-        # agent's done-bar to full-suite-green so it cannot declare done
-        # while its own edit left the rest of the suite broken. The
-        # reviewer's own pass is acceptance-scoped (see
-        # _scope_test_cmd_to_acceptance in review.py), so a regression
-        # outside the acceptance paths is otherwise invisible until the
-        # merge gate - or, worse, never re-checked at all if `done` is
-        # accepted on a broken tree (observed live 2026-07-22,
-        # MODE-29-REVIEW-STORY-LOCK-GUARD: a rework redispatch's own edit
-        # orphaned a function definition, the agent called done with 79
-        # tests failing, and nothing rejected it because this gate was
-        # only armed for ci_rework). Local-only: the env reaches the local
-        # agent subprocess; Claude's dispatch signature stays clean.
-        if dispatch_backend in _LOCAL_BACKEND_NAMES and (
-            story.get("ci_rework") or story.get("review_feedback")
-        ):
-            dispatch_kwargs["rework_full_suite"] = True
-        # A reviewer-feedback rework gets its own signal, distinct from
-        # REWORK_FULL_SUITE (which both kinds of rework share): on a CI-fail
-        # rework the agent's own committed test is the defect and a green
-        # suite settles it, but on a reviewer-feedback rework the acceptance
-        # oracle is usually ALREADY green when the round starts - that first
-        # dispatch is exactly what the reviewer read - so oracle-green cannot
-        # stand for "the findings are addressed". The oracle harness needs to
-        # tell the two apart to know which done-bar applies.
-        if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("review_feedback"):
-            dispatch_kwargs["review_feedback_rework"] = True
-
-        dispatch_kwargs.update(local_scope_kwargs(story, dispatch_backend, worktree_path))
-        if resume_via_transcript:
-            dispatch_kwargs["resume_transcript_path"] = transcript_path
-            # Same tech-lead-decomposition logic as the initial checklist,
-            # applied to review feedback: a reviewer's prose diagnosis is
-            # itself a coarse brief for a weak executor. Re-run per rework
-            # cycle (unlike the initial checklist, which plans once) since
-            # each cycle's feedback is different. Fails open to the raw
-            # feedback format on any planner failure - identical contract
-            # to the initial-dispatch checklist.
-            fix_checklist = None
-            if dispatch_backend in _LOCAL_BACKEND_NAMES:
-                fix_checklist = _run_rework_planner(
-                    review_feedback,
-                    dispatch_backend=dispatch_backend,
-                    local_model=spec["model"],
-                    plan_role_config=_plan_role_config(plan_name),
-                    worktree=str(worktree_path),
-                )
-            # Rework test-author phase: when the reviewer's feedback itself
-            # calls for NEW test(s) (e.g. a regression test reproducing a
-            # named bug), author them via the dedicated test_author role
-            # BEFORE the main executor redispatch, then steer the executor
-            # to implement against those already-committed tests instead of
-            # writing the tests itself - applying the tech-lead/weak-
-            # executor split (TDD_SPLIT_PRODUCTION_PLAN.md) one rework cycle
-            # later. Gated to local-family dispatch (Claude doesn't need the
-            # crutch) and to a per-sha "already done" marker so a
-            # retried/resumed dispatch on the same reviewer verdict never
-            # re-runs the phase or re-asks the classifier. Fails open: on
-            # any failure, unconfigured role, or "no new tests required",
-            # rework_tests_note stays "" and the resumed prompt + manifest
-            # are byte-for-byte identical to today's monolithic rework
-            # dispatch.
-            rework_tests_committed = False
-            if dispatch_backend in _LOCAL_BACKEND_NAMES:
-                already_done_sha = story.get("rework_test_author_done_for_sha")
-                current_sha = story.get("last_reviewed_sha")
-                if (
-                    current_sha
-                    and already_done_sha != current_sha
-                    and _rework_requires_new_tests(
-                        review_feedback,
-                        dispatch_backend=dispatch_backend,
-                        local_model=spec["model"],
-                        plan_role_config=_plan_role_config(plan_name),
-                    )
-                ):
-                    rework_tests_committed = _run_rework_test_author_phase(
-                        story,
-                        story_key=story_key,
-                        worktree_path=worktree_path,
-                        dispatch_backend=dispatch_backend,
-                        local_model=spec["model"],
-                        review_feedback=review_feedback,
-                        fix_checklist=fix_checklist,
-                        plan_role_config=_plan_role_config(plan_name), layer_routing=layer_routing_for_plan(plan_name),
-                    )
-                    if rework_tests_committed:
-                        story["rework_test_author_done_for_sha"] = current_sha
-            rework_tests_note = ""
-            if rework_tests_committed:
-                rework_tests_note = (
-                    "\n\nThe regression test(s) reproducing this bug have already "
-                    "been written and committed to this branch by your tech lead. "
-                    "Do NOT create, write, or modify any test file. "
-                    f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
-                    "failures, then implement until they pass."
-                )
-            rework_attempts = story.get("rework_attempts", 0)
-            if rework_attempts >= 2:
-                round_prefix = (
-                    f"This is rework round {rework_attempts}. A previous attempt "
-                    f"already redispatched on this same feedback and did not fully "
-                    f"resolve it -- read the feedback below carefully rather than "
-                    f"repeating the same partial fix. "
-                )
-            else:
-                round_prefix = ""
-            # Token dedup (measured 2026-09-04: each rework cycle re-injected
-            # the full ~7-8K-char feedback into the SAME resumed transcript,
-            # ~22K chars over 3 rounds). If this exact feedback is already in
-            # the resumed transcript from a prior cycle, reference it instead
-            # of re-embedding it. Fail OPEN to re-injection on any read/parse
-            # problem — a token optimization must never break dispatch.
-            feedback_already_seeded = False
-            try:
-                prior_msgs = json.loads(transcript_path.read_text())
-                feedback_already_seeded = any(
-                    isinstance(m.get("content"), str) and review_feedback in m["content"]
-                    for m in prior_msgs
-                )
-            except Exception:  # noqa: BLE001 (fail open to re-injection; a token optimization must never break dispatch)
-                feedback_already_seeded = False
-            if feedback_already_seeded:
-                feedback_note = (
-                    "Original review feedback: unchanged from your previous "
-                    "rework cycle — it is already in your transcript above; "
-                    "re-read it there."
-                )
-                feedback_lead = (
-                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
-                    "Address the review feedback already in your transcript above "
-                    "(unchanged from your previous rework cycle)."
-                )
-            else:
-                feedback_note = (
-                    f"Original review feedback (for reference):\n{review_feedback}"
-                )
-                feedback_lead = (
-                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
-                    f"Address this feedback:\n{review_feedback}"
-                )
-            if fix_checklist:
-                dispatch_kwargs["resume_append_content"] = (
-                    f"{round_prefix}"
-                    "The code reviewer REQUESTED CHANGES on your previous "
-                    "attempt. Your tech lead has translated the feedback "
-                    f"into a fix checklist:\n{fix_checklist}\n\n"
-                    f"{feedback_note}"
-                    f"{revised_instructions_note}"
-                    f"{rework_tests_note}"
-                )
-            else:
-                dispatch_kwargs["resume_append_content"] = (
-                    f"{round_prefix}"
-                    f"{feedback_lead}"
-                    f"{revised_instructions_note}"
-                    f"{rework_tests_note}"
-                )
-
-        # W4-logging slice: hand the agent subprocess the story's correlation
-        # ID so its agent.log lines join the orchestrator's events; the drivers
-        # build the child env from os.environ at launch time
-        # (app/backend_ollama.py's `{**os.environ, ...}` and
-        # app/backend_claude.py's _first_party_claude_env), so the var is
-        # staged in os.environ for exactly this synchronous launch call and
-        # restored afterwards; dispatches are serialized per plan by the plan
-        # flock, so no concurrent launch of the same plan observes a torn value.
-        # Pre-spawn fence: every slow phase above is done, so re-check for
-        # positive evidence that this dispatch must not launch an agent - the
-        # worker was abandoned by the scheduler's watchdog, another live
-        # process now owns the lease, or the story already reached a terminal
-        # status. Two agents in one worktree is the documented cause of
-        # zero-output deaths; missing evidence never withholds the spawn.
-        fence_error = executor_fence(plan_name, story_key, _store)
-        if fence_error is not None:
-            return fence_error
-        prev_correlation_env = os.environ.get("PIPELINE_CORRELATION_ID")
-        if story.get("correlation_id"):
-            os.environ["PIPELINE_CORRELATION_ID"] = story["correlation_id"]
-        prev_traceparent = os.environ.get("TRACEPARENT")
-        traceparent = agent_traceparent(story.get("correlation_id"), story.get("dispatch_attempts", 0))
-        if traceparent is not None:
-            os.environ["TRACEPARENT"] = traceparent
-        try:
-            handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
-                **dispatch_kwargs
-            )
-        finally:
-            os.environ.pop("TRACEPARENT", None)
-            if prev_traceparent is not None:
-                os.environ["TRACEPARENT"] = prev_traceparent
-            if prev_correlation_env is None:
-                os.environ.pop("PIPELINE_CORRELATION_ID", None)
-            else:
-                os.environ["PIPELINE_CORRELATION_ID"] = prev_correlation_env
-
-        story["status"] = "in_progress"
-        story.pop("conflict_handoff", None)
-        story["pid"] = handle.pid
-        story["dispatched_at"] = datetime.now(UTC).isoformat()
-        story["worktree"] = str(worktree_path)
-        story["log"] = str(log_path)
-        # Record the concrete model the agent actually boots with (the local
-        # backend resolves a logical tier like "sonnet" to e.g.
-        # "minimax-m3:cloud"). The dashboard shows this instead of the plan's
-        # declared story["model"] so what's displayed matches what ran. The
-        # declared tier is left untouched (it's a routing hint).
-        if getattr(handle, "model", None):
-            story["dispatched_model"] = handle.model
-        # Snapshot the agent_instructions this dispatch actually handed the
-        # agent, so the next rework redispatch can diff against it to detect
-        # an operator's patch_story edit (see revised_instructions_note
-        # above). Recorded on every dispatch - cold or resumed, any backend -
-        # so the baseline is always current regardless of how the next rework
-        # is routed.
-        story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
-        bound_records.put_manifest(_store, plan_name, manifest)
-
-        # W4-logging slice: stamp the success event with the story's
-        # correlation ID (plus the role/model context already in scope here)
-        # so dispatch's own events join the same trace as the agent
-        # subprocess's PIPELINE_CORRELATION_ID. Published straight onto the
-        # process bus — make_event stamps correlation_id at TOP level (the
-        # W4L-01 kwarg). Lazy imports mirror persistence._notify_user so a
-        # monkeypatched event_wiring.get_bus is honored; the wired bus has no
-        # "agent_dispatched" handler, so this is a no-op there.
-        from .event_wiring import get_bus
-        from .events import make_event
-
-        get_bus().publish(
-            make_event(
-                "agent_dispatched",
-                plan_name,
+        if built.early is not None:
+            return built.early
+        if built.resume_via_transcript:
+            apply_transcript_resume(
+                story,
+                built.dispatch_kwargs,
+                plan_name=plan_name,
                 story_key=story_key,
-                payload={
-                    "role": story.get("role"),
-                    "model": spec["model"],
-                    "backend": dispatch_backend,
-                    "attempt": story.get("dispatch_attempts", 0),
-                    "pid": handle.pid,
-                    "branch": branch,
-                    **test_scope_event_fields(story),
-                },
-                correlation_id=story.get("correlation_id"),
+                worktree_path=worktree_path,
+                dispatch_backend=built.dispatch_backend,
+                local_model=built.spec["model"],
+                review_feedback=built.review_feedback,
+                transcript_path=built.transcript_path,
+                revised_instructions_note=built.revised_instructions_note,
             )
+        return spawn_agent(
+            plan_name, story_key, story, manifest, branch, worktree_path,
+            built.log_path, built.dispatch_backend, built.dispatch_kwargs,
+            spec_model=built.spec["model"],
+            executor_is_resume=built.executor_is_resume,
         )
-
-        return {
-            "ok": True,
-            "story_key": story_key,
-            "pid": handle.pid,
-            "branch": branch,
-            "resumed": executor_is_resume,
-        }

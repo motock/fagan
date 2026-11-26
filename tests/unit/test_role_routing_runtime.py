@@ -24,7 +24,7 @@ from pipeline import (
     advance,
     advance_failed_stories,
     advance_ready_dispatch,
-    dispatch,
+    dispatch_prompt_build,
     dispatch_routing,
     escalation,
     rebrief,
@@ -382,7 +382,7 @@ def _layer_routing_keywords(module, func_name):
     return found
 
 def test_dispatch_resolves_the_plan_routing_for_its_target():
-    calls = _layer_routing_keywords(dispatch, "_resolve_dispatch_target")
+    calls = _layer_routing_keywords(dispatch_prompt_build, "_resolve_dispatch_target")
 
     assert calls, "dispatch.py no longer calls _resolve_dispatch_target"
     for kwargs in calls:

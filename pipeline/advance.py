@@ -27,13 +27,14 @@ from .advance_merge import (
     _readjudicate_parked_merge_hold,  # noqa: F401  (re-exported for existing readers)
 )
 from .advance_ready_dispatch import dispatch_ready_stories
-from .advance_review import review_or_collect
+from .advance_review import review_or_collect  # noqa: F401  (re-exported for existing readers)
+from .advance_review_step import run_review_step
 from .autonomy_settings import effective_autonomy
 from .ci import context_from_manifest
 from .concurrency import (
     PlanLockReacquireTimeout,  # noqa: F401  (re-exported for existing readers)
     _has_live_test_author_phase,
-    _released_plan_lock,
+    _released_plan_lock,  # noqa: F401  (re-exported for existing readers)
 )
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
@@ -47,7 +48,7 @@ from .rebrief import (
     detect_unsatisfiable_signal,  # noqa: F401  (re-exported for existing readers)
     diagnose_failure,  # noqa: F401  (re-exported for existing readers)
 )
-from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
+from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate  # noqa: F401  (re-exported for existing readers)
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
 from .stall_scan import run_stall_scan
 from .store_records import validate_plan_name
@@ -572,86 +573,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             dispatch_ok=dispatch_ok, memory_pressure=memory_pressure,
         )
 
-        # Review every tests_passed story (incl. ones orphaned by a crashed
-        # review on a prior tick - review_story is idempotent). Gated by the
-        # REVIEW backend independently of dispatch: a Claude-dispatch pause no
-        # longer blocks reviewing already-finished work on a healthy review
-        # backend, and a local-dispatch run can still defer review if review
-        # is on Claude and Claude is gated.
-        if review_ok:
-            clear_review_gate_notice(plan_name)
-            stories = _fresh_manifest(plan_name)["stories"]
-            # LOCKSTARVE-B4: release the plan lock around review_story, the
-            # same synchronous model-call-heavy pattern LOCKSTARVE-B3 applied
-            # to dispatch_story. No dispatch lease is needed here -
-            # review_story (pipeline/review_orchestrator.py) re-reads the
-            # manifest itself and is a documented no-op skip for any story
-            # not in "tests_passed", so a second tick/process entering it
-            # concurrently cannot corrupt the manifest, and cannot
-            # sequentially double-review a story already advanced past
-            # tests_passed. It does not rule out two calls racing the
-            # SAME simultaneous check-pass window - review_story's own
-            # guard bounds that outcome, not this loop.
-            #
-            # But the per-iteration STATUS CHECK must still come from a
-            # FRESH on-disk read, never the snapshot taken before the loop -
-            # an earlier iteration's own released-lock window can let
-            # another actor already review and advance a later story in
-            # this same snapshot. Checking the stale in-memory status would
-            # call review_story on it again anyway: review_story's own guard
-            # makes that safe from a data-corruption standpoint, but it
-            # still emits a spurious "review skipped" notification and a
-            # misleading summary["advanced"] entry claiming this tick
-            # advanced a story it did not touch. Only the set of keys to
-            # consider is safe to snapshot; the status of each must be
-            # re-read per iteration.
-            for key in list(stories.keys()):
-                fresh_story = _fresh_manifest(plan_name)["stories"].get(key)
-                if fresh_story is None:
-                    continue
-                # The detached path also sees a story an operator moved out of
-                # tests_passed while its review job was live: that job must be
-                # cancelled. review_or_collect starts a job only for a
-                # tests_passed story, so passing a moved story on is safe.
-                if review_job.detached_enabled() and (
-                    fresh_story["status"] == "tests_passed"
-                    or fresh_story.get("review_job")
-                ):
-                    review_or_collect(plan_name, key, fresh_story, summary)
-                    continue
-                if fresh_story["status"] != "tests_passed":
-                    continue
-                with _released_plan_lock(plan_name):
-                    rv = review_story(plan_name, key)
-                if rv.get("ok") is False or rv.get("skipped"):
-                    # ok:False - a concurrent re-ingest dropped the story
-                    # during the released window (review_story returns
-                    # {"ok": False, "error": ...}, no "status" key).
-                    # skipped - review_story's own plan-flock guard
-                    # (_plan_lock) could not take the plan lock during the
-                    # window this loop deliberately opened (the {"ok": True,
-                    # "skipped": "locked"} shape, also no "status" key), so no
-                    # review ran. Either way there is no status to report and
-                    # rv["status"] would KeyError the whole tick; record the
-                    # skip and let a later tick retry - the story is still
-                    # tests_passed on disk. Same handling LOCKSTARVE-B3
-                    # applies to dispatch_story's contention return.
-                    summary.setdefault("skipped", []).append(key)
-                    continue
-                summary["advanced"].append({key: rv["status"]})
-                if rv.get("deferred") == "rate_limited":
-                    summary["review_deferred"].append(key)
-        else:
-            # Only surface the review gate when there is tests_passed work
-            # waiting to be reviewed this tick; otherwise the notification is
-            # noise (e.g. all stories are already pr_open awaiting merge).
-            if any(s["status"] == "tests_passed" for s in stories.values()):
-                if should_notify_review_gate(plan_name):
-                    _notify_user(
-                        plan_name,
-                        f"Review backend gated ({review_reason}): deferring review.",
-                        dedup_key=f"review_gate:{plan_name}:{review_reason}",
-                    )
-                summary["notify"].append("review_paused")
+        # 3. Review tests_passed stories (or surface the review gate): see
+        # pipeline/advance_review_step.py.
+        run_review_step(
+            plan_name, stories, summary, review_ok=review_ok, review_reason=review_reason
+        )
 
     return {"ok": True, **summary}

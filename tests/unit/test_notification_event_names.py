@@ -33,6 +33,7 @@ from pipeline import (
     advance_failed_stories,
     advance_merge,
     advance_ready_dispatch,
+    advance_review_step,
 )
 
 # --- the vocabulary (exact strings; the metrics story depends on them) -----
@@ -73,6 +74,8 @@ def _source() -> str:
         + inspect.getsource(advance_ready_dispatch)
         + "\n"
         + inspect.getsource(advance_failed_stories)
+        + "\n"
+        + inspect.getsource(advance_review_step)
     )
 
 

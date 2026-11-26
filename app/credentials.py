@@ -267,7 +267,7 @@ class EnvFileProvider:
             # primitive; an undeclared name is simply "not configured".
             if ref.name not in _ENV_CREDENTIAL_NAMES:
                 return None
-            variable = ref.name
+            variable: str | None = ref.name
         else:
             variable = _LEGACY_ENV.get((ref.purpose, ref.name))
         if variable is None:
@@ -318,6 +318,10 @@ def credential_provider(environ=None) -> CredentialProvider:
     # ``load_plugin``'s ``required_methods`` validates the *factory*; the seam's
     # protocol is on the provider the factory returns, so it is checked here.
     factory = load_plugin("credentials", environ)
+    if factory is None:
+        # Fail closed: the spec was set, so a missing factory means the
+        # environment changed under us and no provider may be assumed.
+        raise PluginError("credentials plugin spec is set but no factory loaded")
     provider = factory()
     require_methods(provider, ("get",), "credentials")
     _PLUGIN_PROVIDERS[spec] = provider

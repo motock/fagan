@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import TypedDict
 
 from app.cloud_served import is_cloud_served
 from pipeline.config_provenance import ENV_VAR_CATALOG
@@ -25,7 +26,9 @@ _LOCAL_TIER_ENV = {
 # of truth for env var defaults (see IGNORED_ENV_VARS in that module for the
 # same "exactly one definition - a second copy would drift" rationale).
 _LOCAL_DEFAULT_MODEL = next(
-    spec.default for spec in ENV_VAR_CATALOG if spec.name == "PIPELINE_LOCAL_MODEL_DEFAULT"
+    spec.default
+    for spec in ENV_VAR_CATALOG
+    if spec.name == "PIPELINE_LOCAL_MODEL_DEFAULT" and spec.default is not None
 )
 
 
@@ -146,7 +149,13 @@ def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
 # env var always overrides an entry here (operator override wins); a model
 # tag with no entry, or an entry missing one of the two keys, falls back to
 # OllamaDriver's constructor-captured default for that specific value.
-_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
+class _ModelTuning(TypedDict, total=False):
+    temperature: float
+    num_ctx: int
+    think: str
+
+
+_LOCAL_MODEL_TUNING: dict[str, _ModelTuning] = {
     # 2026-07-03 A/B experiment (tests/benchmark/_runs/full_20260703_postfix
     # vs temp_tune_20260703, 15 cells each): temp=1.0 -> 6/15 success, 3
     # cells where the implementation file never landed at all; temp=0.3 ->

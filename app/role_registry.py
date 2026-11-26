@@ -24,7 +24,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -188,7 +188,7 @@ def resolve_role(
     plan_role_config: dict | None = None,
     model_fallback: str | Callable[[], str | None] | None = None,
     registry: dict | None = None,
-    default_provider: str = "claude", environ: dict | None = None,
+    default_provider: str = "claude", environ: Mapping[str, str] | None = None,
     layer_routing: dict | None = None,
 ) -> RoleResolution:
     """Resolve (provider, model) for `role`.

@@ -475,4 +475,4 @@ def list_repositories_route() -> dict[str, Any]:
     query value. The listing and its failure answer are built by
     pipeline.repo_listing_hooks, which fails closed.
     """
-    return repo_listing_hooks.list_repositories_result(_store._value())
+    return repo_listing_hooks.list_repositories_result(_store)

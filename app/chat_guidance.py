@@ -79,8 +79,12 @@ def _needed_record(plan_name: str, http_client, api_base_url: str) -> dict | Non
 
 
 def _render(record: dict) -> str:
-    source = record.get("source") if isinstance(record.get("source"), dict) else {}
-    questions = record.get("questions") if isinstance(record.get("questions"), list) else []
+    source = record.get("source")
+    if not isinstance(source, dict):
+        source = {}
+    questions = record.get("questions")
+    if not isinstance(questions, list):
+        questions = []
     numbered = [f"{index}. {_strip_markers(str(question))}" for index, question in enumerate(questions, start=1)]
     excerpt = _strip_markers(str(record.get("request_excerpt", "")))
     source_line = f"Source: {_strip_markers(str(source.get('kind', '')))} {_strip_markers(str(source.get('ref', '')))}"

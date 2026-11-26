@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from typing import TypedDict
 
 #: The operator opt-in that makes the documentation pages public again.
 PUBLIC_DOCS_ENV = "PIPELINE_DASHBOARD_PUBLIC_DOCS"
@@ -42,7 +43,19 @@ API_VERSION = "1.1.0"
 _PUBLIC_VALUE = "1"
 
 
-def docs_kwargs(environ: Mapping[str, str] | None = None) -> dict[str, object]:
+class DocsKwargs(TypedDict, total=False):
+    """The FastAPI keyword arguments ``docs_kwargs`` may return.
+
+    Typed so ``FastAPI(**docs_kwargs())`` is checked against FastAPI's own
+    parameters; an untyped ``dict[str, object]`` would not be.
+    """
+
+    openapi_url: str
+    docs_url: None
+    redoc_url: None
+
+
+def docs_kwargs(environ: Mapping[str, str] | None = None) -> DocsKwargs:
     """FastAPI keyword arguments for the documentation endpoints.
 
     Returns ``{}`` — FastAPI's public defaults: ``/openapi.json``, ``/docs`` and

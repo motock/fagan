@@ -138,7 +138,14 @@ def test_listing_of_the_root_keeps_gitignore_and_github(clone: Path) -> None:
     assert "README.md" in names
 
 
+def _require_case_sensitive_filesystem(clone: Path) -> None:
+    """Skip when .GIT and the fixture's .git are the same directory (macOS, Windows)."""
+    if (clone / ".GIT").exists():
+        pytest.skip("case-insensitive filesystem: .GIT is the fixture's .git directory")
+
+
 def test_listing_omits_an_upper_case_git_entry(clone: Path) -> None:
+    _require_case_sensitive_filesystem(clone)
     (clone / ".GIT").mkdir()
     names = [e["name"] for e in server.list_repository_directory(GRANTED)["entries"]]
     assert ".GIT" not in names
@@ -162,6 +169,7 @@ def test_search_finds_nothing_inside_the_git_directory(clone: Path) -> None:
 
 
 def test_search_finds_nothing_inside_an_upper_case_git_directory(clone: Path) -> None:
+    _require_case_sensitive_filesystem(clone)
     (clone / ".GIT").mkdir()
     (clone / ".GIT" / "config").write_text("needle-upper\n", encoding="utf-8")
     result = server.search_repository(GRANTED, "needle-upper")

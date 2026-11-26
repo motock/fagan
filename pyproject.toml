@@ -188,7 +188,6 @@ module = [
     "pipeline.store_sqlite_settings",
     "pipeline.story_ci_read",
     "pipeline.story_metrics",
-    "pipeline.story_status",
     "pipeline.strength_class",
     "pipeline.supervise",
     "pipeline.telemetry",

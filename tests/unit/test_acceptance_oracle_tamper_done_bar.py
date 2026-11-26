@@ -5,6 +5,7 @@ reaches tests_passed on a rewritten grader and only fails much later.
 import inspect
 
 import pipeline.server as srv
+from pipeline import story_status_tests
 
 
 def _source():
@@ -27,7 +28,7 @@ def test_the_done_bar_consults_the_tamper_detector():
 def test_the_tamper_check_precedes_the_test_run():
     src = _source()
     tamper = src.index("_acceptance_tampered")
-    scoped = src.index("_scope_test_cmd_to_acceptance")
+    scoped = src.index("scope_test_command(")
     assert tamper < scoped, (
         "the tamper check must run before the scoped acceptance run, so a "
         "rewritten oracle is never executed as the done-bar"
@@ -35,7 +36,7 @@ def test_the_tamper_check_precedes_the_test_run():
 
 
 def test_the_operator_is_notified_on_refusal():
-    src = _source()
-    assert "_notify_user" in src[src.index("_acceptance_tampered"):], (
+    src = inspect.getsource(story_status_tests.check_acceptance_tampered)
+    assert "_notify_user" in src[src.index("._acceptance_tampered("):], (
         "a refused done-bar must notify, not fail silently"
     )

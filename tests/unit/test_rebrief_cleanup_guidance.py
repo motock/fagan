@@ -11,7 +11,7 @@ encode a separate, protected contract.
 """
 import inspect
 
-from pipeline import rebrief
+from pipeline import rebrief, story_status_failures
 from pipeline import server as p
 
 
@@ -78,7 +78,7 @@ def test_cleanup_guidance_applied_after_a_diagnosis_block_preserves_the_diagnosi
 
 
 def test_check_story_status_calls_append_cleanup_guidance_after_step_cap_rebrief():
-    src = inspect.getsource(p.check_story_status)
+    src = inspect.getsource(story_status_failures.check_step_cap)
     rebrief_idx = src.index("_rebrief_step_cap_struggle")
     cleanup_idx = src.index("append_cleanup_guidance")
     assert cleanup_idx > rebrief_idx, (

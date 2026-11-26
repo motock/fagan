@@ -278,7 +278,8 @@ def test_notify_call_sits_between_checkpoint_and_rebrief():
     """Exactly one ``event="dispatch_watchdog_timeout"`` emit, placed after
     ``_terminate_and_checkpoint`` and before ``_rebrief_step_cap_struggle``,
     carrying the ``# noqa: F821`` the rebound body requires."""
-    lines = STORY_STATUS_SRC.read_text(encoding="utf-8").splitlines()
+    liveness_src = REPO_ROOT / "pipeline" / "story_status_liveness.py"
+    lines = liveness_src.read_text(encoding="utf-8").splitlines()
 
     assert sum('event="dispatch_watchdog_timeout"' in line for line in lines) == 1
 

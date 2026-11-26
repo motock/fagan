@@ -15,10 +15,26 @@ import json
 # pipeline.server must be imported FIRST or collection dies on the cycle.
 from pipeline import server as p
 from pipeline import story_status as ss
+from pipeline import (
+    story_status_failures,
+    story_status_liveness,
+    story_status_review_reuse,
+    story_status_tests,
+)
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _make_fake_git_run,
     _write_manifest,
     plan_dir,
+)
+
+# The check_story_status family: story_status and the phase modules it was
+# split into. Its notices now come from all of them.
+_STORY_STATUS_FAMILY = (
+    ss,
+    story_status_liveness,
+    story_status_failures,
+    story_status_tests,
+    story_status_review_reuse,
 )
 
 
@@ -30,7 +46,7 @@ def _notify_user_calls():
     name -> value node (the `**{...}` correlation spread is skipped, since its
     `kw.arg` is None).
     """
-    tree = ast.parse(inspect.getsource(ss))
+    tree = ast.parse("\n".join(inspect.getsource(m) for m in _STORY_STATUS_FAMILY))
     calls = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):

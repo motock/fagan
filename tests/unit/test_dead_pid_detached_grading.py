@@ -112,6 +112,17 @@ def _read_manifest(plan_dir, plan_name):
     return json.loads((plan_dir / f"{plan_name}.manifest.json").read_text())
 
 
+#: The check_story_status family: story_status.py and the phase modules it was
+#: split into. Its record-store calls now live across all of them.
+STORY_STATUS_FAMILY_FILES = (
+    "story_status.py",
+    "story_status_liveness.py",
+    "story_status_failures.py",
+    "story_status_tests.py",
+    "story_status_review_reuse.py",
+)
+
+
 def _story_status_source() -> str:
     """Both modules: the detached-grade primitives (GRADE_WRAPPER,
     start_detached_grade, collect_detached_grade) moved verbatim out of
@@ -124,8 +135,9 @@ def _story_status_source() -> str:
     """
     from pipeline import detached_grade as dg
 
-    return (Path(ss.__file__).read_text() + "\n"
-            + Path(dg.__file__).read_text())
+    package = Path(ss.__file__).parent
+    sources = [(package / name).read_text() for name in STORY_STATUS_FAMILY_FILES]
+    return "\n".join(sources + [Path(dg.__file__).read_text()])
 
 
 def _watchdog_seconds() -> int:
@@ -884,7 +896,7 @@ def test_grading_pid_bookkeeping_confined_to_dead_pid_region():
 def test_existing_story_status_surface_survives():
     """Survivor list: the branches this story must not touch are still
     present, and the synchronous run (marker path + OSError fallback) still
-    lives inside check_story_status.  Membership only — check_story_status's
+    lives inside story_status_tests.  Membership only — check_story_status's
     dead-pid region is being edited by this very story."""
     src = _story_status_source()
     for needle in (
@@ -902,17 +914,14 @@ def test_existing_story_status_surface_survives():
     ):
         assert needle in src, f"survivor missing from story_status.py: {needle}"
 
-    tree = ast.parse(src)
-    fn = next(
-        n for n in tree.body
-        if isinstance(n, ast.FunctionDef) and n.name == "check_story_status"
-    )
-    segment = "\n".join(src.splitlines()[fn.lineno - 1:fn.end_lineno])
+    from pipeline import story_status_tests as tests_phase
+
+    segment = Path(tests_phase.__file__).read_text()
     assert "subprocess.run(" in segment, (
-        "the synchronous grade run must remain inside check_story_status "
+        "the synchronous grade run must remain inside story_status_tests "
         "(the marker-driven path and the OSError fallback both use it)"
     )
     assert "_heavy_lock" in segment, (
         "the heavy-command serialization around the synchronous run must "
-        "remain inside check_story_status"
+        "remain inside story_status_tests"
     )

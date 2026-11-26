@@ -8,61 +8,37 @@ Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 import json  # noqa: F401
 import os
 import subprocess
-import sys
 import time
-import types
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline.dispatch import _find_dead_new_functions
-
-from . import bound_records, tenant_exec
+from . import bound_records, server_bindings, tenant_exec
 from .build_detect import (
     _acceptance_rel_paths,
-    _added_pytest_test_paths,
     _is_pytest_cmd,
-    _scope_test_cmd_to_acceptance,
     failed_node_ids,  # noqa: F401
 )
-from .checkpoint import _terminate_and_checkpoint
-from .ci import _acceptance_tampered
-from .concurrency import _heavy_lock
 from .config import (
-    _LOCAL_BACKEND_NAMES,
-    DISPATCH_MAX_ATTEMPTS,
-    DISPATCH_STALE_ACTIVITY_SECONDS,
-    DISPATCH_STARTUP_GRACE_SECONDS,
+    DISPATCH_STALE_ACTIVITY_SECONDS,  # noqa: F401
     DISPATCH_WATCHDOG_SECONDS,
     INFRA_FAILURE_FALLBACK_THRESHOLD,
     INFRA_FAILURE_LOG_SUBSTRING,
-    REWORK_MAX_ATTEMPTS_NO_COMMIT,
     STEP_CAP_FALLBACK_THRESHOLD,
     STEP_CAP_MARKERS,
 )
 from .detached_grade import (
     GRADE_WRAPPER,  # noqa: F401
     _baseline_exempted_failures,
-    collect_detached_grade,
-    start_detached_grade,
-)
-from .detached_grade import (
-    _detached_grade_lifecycle as _detached_grade_lifecycle_unbound,
-)
-from .escalation import (
-    _escalate_review_to_claude,
-    _escalate_to_claude,
-    _escalation_label,
-    _escalation_target,
+    collect_detached_grade,  # noqa: F401
+    start_detached_grade,  # noqa: F401
 )
 from .failure_reasons import auth_failure_hint, tests_failed_reason
-from .git_ops import _commit_wip, _untrack_scratchpad
+from .git_ops import _commit_wip, _untrack_scratchpad  # noqa: F401
 from .no_progress import classify_no_progress
 from .parsers import (
     _is_give_up_summary,
-    _validate_key,
 )
-from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
 from .story_fields import merge_into_fresh_manifest
 from .story_status_records import (
@@ -70,7 +46,7 @@ from .story_status_records import (
     _record_test_check,
 )
 from .test_scope_run import grade_test_cmd
-from .wedge_io import collect_story_wedge_signals
+from .wedge_io import collect_story_wedge_signals  # noqa: F401
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
 # single policy governs both "how long may a grade/dispatch stay outstanding"
@@ -84,9 +60,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     Check whether a dispatched agent has finished. If complete, runs tests
     in the worktree and reports pass/fail without auto-merging.
     """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    manifest = bound_records.get_manifest(_store, plan_name)  # noqa: F821
+    server_bindings.server()._validate_key(plan_name)
+    server_bindings.server()._validate_key(story_key)
+    manifest = bound_records.get_manifest(server_bindings.server()._store, plan_name)
     if manifest is None:
         return {"ok": False, "error": "Plan not found"}
     story = manifest["stories"].get(story_key)
@@ -120,7 +96,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     datetime.now(UTC) - datetime.fromisoformat(dispatched_at)
                 ).total_seconds()
                 # Determine if activity is stale
-                signals = collect_story_wedge_signals(plan_name, story_key, story)
+                signals = server_bindings.server().collect_story_wedge_signals(plan_name, story_key, story)
                 activity_age = signals.get("activity_age_seconds")
                 # A redispatch reuses the worktree, so agent.log can carry an
                 # mtime from a PREVIOUS attempt far older than this dispatch.
@@ -133,7 +109,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     activity_age = min(activity_age, elapsed)
                 watchdog_summary = None
                 dispatch_error = None
-                if activity_age is not None and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS:
+                if activity_age is not None and activity_age > server_bindings.server().DISPATCH_STALE_ACTIVITY_SECONDS:
                     watchdog_summary = (
                         f"Dispatch watchdog: no activity for {activity_age:.0f}s "
                         f"(stale-activity watchdog); elapsed {elapsed:.0f}s; "
@@ -143,7 +119,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"watchdog killed after {activity_age:.0f}s with no activity"
                     )
                 # Fallback to wall-clock watchdog if activity is unknown or not stale
-                elif activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
+                elif activity_age is None and elapsed > server_bindings.server().DISPATCH_WATCHDOG_SECONDS:
                     watchdog_summary = (
                         f"Dispatch watchdog: no completion after {elapsed:.0f}s; process terminated."
                     )
@@ -158,7 +134,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     # carries the new value - incrementing after would lag by
                     # one kill and the threshold escalation would never fire.
                     story["watchdog_streak"] = story.get("watchdog_streak", 0) + 1
-                    _terminate_and_checkpoint(
+                    server_bindings.server()._terminate_and_checkpoint(
                         manifest,
                         plan_name,
                         story_key,
@@ -167,7 +143,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         step="dispatch_watchdog_timeout",
                         summary=watchdog_summary,
                     )
-                    _notify_user(  # noqa: F821
+                    server_bindings.server()._notify_user(
                         plan_name,
                         f"{story_key} killed by the dispatch watchdog; the "
                         f"re-dispatch counts as a rework cycle.",
@@ -176,7 +152,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         event="dispatch_watchdog_timeout",
                         **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                     )
-                    _rebrief_step_cap_struggle(  # noqa: F821
+                    server_bindings.server()._rebrief_step_cap_struggle(
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
@@ -195,10 +171,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         if (
                             fallback_model
                             and current_model != fallback_model
-                            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+                            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
                         ):
                             story["model"] = fallback_model
-                            _notify_user(  # noqa: F821
+                            server_bindings.server()._notify_user(
                                 plan_name,
                                 f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
                                 f"on {current_model}; switching to fallback model "
@@ -209,28 +185,28 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             )
                         elif (
                             not fallback_model
-                            and _auto_escalation_enabled()  # noqa: F821
-                            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+                            and server_bindings.server()._auto_escalation_enabled()
+                            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
                             and not story.get("escalated")
-                            and _escalation_target() != (story.get("backend"), story.get("model"))
+                            and server_bindings.server()._escalation_target() != (story.get("backend"), story.get("model"))
                         ):
-                            _escalate_to_claude(manifest, plan_name, story_key)
-                            _notify_user(  # noqa: F821
+                            server_bindings.server()._escalate_to_claude(manifest, plan_name, story_key)
+                            server_bindings.server()._notify_user(
                                 plan_name,
                                 f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
-                                f"on {current_model}; escalating to {_escalation_label()} (no "
+                                f"on {current_model}; escalating to {server_bindings.server()._escalation_label()} (no "
                                 f"local_model_fallback configured).",
                                 story_key=story_key,
                                 event="escalated",
                                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                             )
-                            bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+                            bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
                             return {
                                 "status": "todo",
                                 "reason": "step_cap_escalated_to_claude",
                                 "pid": pid,
                             }
-                    bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+                    bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
                     return {
                         "status": "interrupted",
                         "pid": pid,
@@ -254,7 +230,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # grace window elapses with the log still empty, the agent is
         # presumed genuinely dead (failed launch) and we count it.
         log_age = time.time() - agent_log.stat().st_mtime
-        if log_age < DISPATCH_STARTUP_GRACE_SECONDS:
+        if log_age < server_bindings.server().DISPATCH_STARTUP_GRACE_SECONDS:
             return {"status": "running", "pid": pid}
         # The agent process exited without ever writing a byte of output -
         # a failed launch, not a real attempt. Running tests against the
@@ -265,20 +241,20 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # becomes a terminal "failed" so it stops looping forever.
         attempts = story.get("dispatch_attempts", 0) + 1
         story["dispatch_attempts"] = attempts
-        if attempts >= DISPATCH_MAX_ATTEMPTS:
+        if attempts >= server_bindings.server().DISPATCH_MAX_ATTEMPTS:
             story["status"] = "failed"
             story["dispatch_error"] = (
                 f"agent produced no output in {attempts} launch attempts"
             )
-            _notify_user(  # noqa: F821
+            server_bindings.server()._notify_user(
                 plan_name,
                 f"{story_key} failed to launch {attempts}x; "
                 f"giving up - needs human intervention.",
             )
-            bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+            bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
             return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
-        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
         return {"status": "interrupted", "pid": pid}
 
     # Step-cap exit routing (regression guard for PR #49 / commit 90a3cf1):
@@ -293,7 +269,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # on master. `interrupted` is dispatch-eligible, so the next
     # advance_pipeline tick resumes the agent in its existing worktree from
     # its WIP commit, seeded by the journal entry we write below.
-    last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""  # noqa: F821
+    last_log_line = server_bindings.server()._last_nonempty_line(agent_log) if agent_log.exists() else ""
 
     # Infra-failure exit routing: a dispatch that died on an LLM/Ollama
     # transport error (after chat()'s own retries and the 5xx trim-retry are
@@ -303,7 +279,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
         interrupted_at = datetime.now(UTC).isoformat()
-        _store.append_journal(  # noqa: F821
+        server_bindings.server()._store.append_journal(
             plan_name,
             story_key,
             {
@@ -338,7 +314,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["infra_failure_streak"] = 1
             story["infra_failure_streak_model"] = current_model
         if story["infra_failure_streak"] == 1:
-            _notify_user(  # noqa: F821
+            server_bindings.server()._notify_user(
                 plan_name,
                 f"{story_key} dispatch died on an infrastructure failure "
                 f"(LLM/Ollama transport error) on {current_model}; resuming "
@@ -349,13 +325,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if (
             fallback_model
             and current_model != fallback_model
-            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
             story["model"] = fallback_model
             story.pop("infra_failure_streak", None)
             story.pop("infra_failure_streak_model", None)
-            _notify_user(  # noqa: F821
+            server_bindings.server()._notify_user(
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; switching to "
@@ -366,18 +342,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             )
         elif (
             not fallback_model
-            and _auto_escalation_enabled()  # noqa: F821
-            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+            and server_bindings.server()._auto_escalation_enabled()
+            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
             and not story.get("escalated")
-            and _escalation_target() != (story.get("backend"), story.get("model"))
+            and server_bindings.server()._escalation_target() != (story.get("backend"), story.get("model"))
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
-            _escalate_to_claude(manifest, plan_name, story_key)
-            _notify_user(  # noqa: F821
+            server_bindings.server()._escalate_to_claude(manifest, plan_name, story_key)
+            server_bindings.server()._notify_user(
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
-                f"{_escalation_label()} (no local_model_fallback configured).",
+                f"{server_bindings.server()._escalation_label()} (no local_model_fallback configured).",
                 story_key=story_key,
                 event="escalated",
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
@@ -387,13 +363,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 "reason": "infra_failure_escalated_to_claude",
                 "pid": pid,
             }
-        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
 
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(UTC).isoformat()
-        _store.append_journal(  # noqa: F821
+        server_bindings.server()._store.append_journal(
             plan_name,
             story_key,
             {
@@ -414,7 +390,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # uses the model that just ran (the struggling one) and the worktree's
         # agent.log is still present for evidence. Fail-open: a None/errored
         # diagnosis leaves agent_instructions untouched (no-op).
-        _rebrief_step_cap_struggle(  # noqa: F821
+        server_bindings.server()._rebrief_step_cap_struggle(
             story, str(worktree), plan_role_config=manifest.get("role_config"),
             plan_name=plan_name,
             story_key=story_key)
@@ -442,7 +418,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if (
             fallback_model
             and current_model != fallback_model
-            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
         ):
             if story.get("step_cap_streak_model") == current_model:
                 story["step_cap_streak"] = story.get("step_cap_streak", 0) + 1
@@ -453,7 +429,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["model"] = fallback_model
                 story.pop("step_cap_streak", None)
                 story.pop("step_cap_streak_model", None)
-                _notify_user(  # noqa: F821
+                server_bindings.server()._notify_user(
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; switching to fallback model "
@@ -464,10 +440,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         elif (
             not fallback_model
-            and _auto_escalation_enabled()  # noqa: F821
-            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+            and server_bindings.server()._auto_escalation_enabled()
+            and story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
             and not story.get("escalated")
-            and _escalation_target() != (story.get("backend"), story.get("model"))
+            and server_bindings.server()._escalation_target() != (story.get("backend"), story.get("model"))
         ):
             # No local_model_fallback opt-in for this plan: under auto
             # dispatch, escalate to Claude instead of cycling on the same
@@ -480,11 +456,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["step_cap_streak"] = 1
                 story["step_cap_streak_model"] = current_model
             if story["step_cap_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
-                _escalate_to_claude(manifest, plan_name, story_key)
-                _notify_user(  # noqa: F821
+                server_bindings.server()._escalate_to_claude(manifest, plan_name, story_key)
+                server_bindings.server()._notify_user(
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
-                    f"on {current_model}; escalating to {_escalation_label()} (no "
+                    f"on {current_model}; escalating to {server_bindings.server()._escalation_label()} (no "
                     f"local_model_fallback configured).",
                     story_key=story_key,
                     event="escalated",
@@ -495,7 +471,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     "reason": "step_cap_escalated_to_claude",
                     "pid": pid,
                 }
-        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     # The read-only oracle is described as read-only in prompt text only;
@@ -503,22 +479,22 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # acceptance fixture no longer matches its dispatch-time digest, so a
     # rewritten grader is caught at the done-bar rather than only much later
     # at the merge gate (see pipeline.ci._acceptance_tampered).
-    tampered = _acceptance_tampered(story, str(worktree))
+    tampered = server_bindings.server()._acceptance_tampered(story, str(worktree))
     if tampered:
         story["status"] = "changes_requested"
-        _notify_user(  # noqa: F821
+        server_bindings.server()._notify_user(
             plan_name,
             f"{story_key} acceptance fixture modified since dispatch: "
             f"{', '.join(tampered)} - refusing tests_passed",
         )
-        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
         return {
             "status": "changes_requested",
             "reason": "acceptance_tampered",
             "tampered": tampered,
         }
 
-    test_dir, test_cmd = detected = detect_test_command(worktree)  # noqa: F821
+    test_dir, test_cmd = detected = server_bindings.server().detect_test_command(worktree)
 
     # FM-A: when the story carries an acceptance block, gate on only those
     # oracle test files rather than the full worktree suite. The model's own
@@ -543,12 +519,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # and the repo-wide suite red, and the tick still promoted the story off the
     # scoped fixture run).
     rework_full_suite = (
-        story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+        story.get("backend", "local") in server_bindings.server()._LOCAL_BACKEND_NAMES
         and bool(story.get("ci_rework") or story.get("review_feedback"))
     )
     if acceptance and not rework_full_suite:
         acceptance_paths = [str(worktree / p) for p in _acceptance_rel_paths(story)]
-        scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
+        scoped = server_bindings.server()._scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
         if scoped is not None:
             test_cmd = scoped
     elif _is_pytest_cmd(test_cmd):
@@ -579,13 +555,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # only its own new tests/unit/test_guard_liveness_check.py (23
         # tests), never ran the pre-existing sibling test file that was red,
         # returned 0, and merged onto a broken master.
-        own_test_paths = _added_pytest_test_paths(
-            worktree, story_key, _default_branch()  # noqa: F821
+        own_test_paths = server_bindings.server()._added_pytest_test_paths(
+            worktree, story_key, server_bindings.server()._default_branch()
         )
-        ignored = _pytest_ignored_paths(test_cmd)  # noqa: F821
+        ignored = server_bindings.server()._pytest_ignored_paths(test_cmd)
         hidden_paths = [
             rel for rel in own_test_paths
-            if _is_hidden_by_pytest_ignores(rel, ignored)  # noqa: F821
+            if server_bindings.server()._is_hidden_by_pytest_ignores(rel, ignored)
         ]
         if hidden_paths:
             test_cmd = [*test_cmd, *(str(worktree / p) for p in hidden_paths)]
@@ -633,9 +609,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     #                        through a subprocess.run-shaped shim; the
     #                        bookkeeping is consumed so a future re-grade
     #                        starts clean.
-    _early, test_result = _detached_grade_lifecycle(
+    _early, test_result = server_bindings.server()._detached_grade_lifecycle(
         story, story_key, pid, worktree, manifest, plan_name,
         test_cmd, test_dir, test_env,
+        _exports=server_bindings.server(),
     )
     if _early is not None:
         return _early
@@ -646,8 +623,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # we never have N concurrent builds saturating the host. Cheap commands
         # (pytest, mvn, gradle, make, npm — depending on the project) skip the
         # lock entirely.
-        if _is_heavy(test_cmd):  # noqa: F821
-            with _heavy_lock():
+        if server_bindings.server()._is_heavy(test_cmd):
+            with server_bindings.server()._heavy_lock():
                 test_result = subprocess.run(
                     tenant_exec.wrap(test_cmd, cwd=str(test_dir), kind="test"),
                     check=False,
@@ -693,7 +670,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # (recorded at a past commit) and refuse to reuse it.
     check_sha = _record_test_check(story, test_cmd, test_dir, test_result, worktree)
     if passed:
-        lint = _run_lint_gate(worktree, test_env)  # noqa: F821
+        lint = server_bindings.server()._run_lint_gate(worktree, test_env)
         if lint is not None:
             lint["sha"] = check_sha
             story["last_lint_check"] = lint
@@ -703,7 +680,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # Only worth checking once the baseline (tests, lint) actually passed -
     # a story already failing on those has enough signal without this too.
     if passed:
-        dead_functions = _find_dead_new_functions(worktree, _default_branch())  # noqa: F821
+        dead_functions = server_bindings.server()._find_dead_new_functions(worktree, server_bindings.server()._default_branch())
         story["last_dead_code_check"] = dead_functions
         if dead_functions:
             passed = False
@@ -730,7 +707,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # are recorded first: a security-relevant ruling must still leave a
     # test-run record on the manifest.
     if not passed:
-        _intercept = globals().get("_plan_conflict_intercept")
+        _intercept = getattr(server_bindings.server(), "_plan_conflict_intercept", None)
         if _intercept is not None:
             _conflict = _intercept(
                 plan_name, story_key, story, test_result, worktree,
@@ -747,19 +724,19 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # `interrupted`) because re-dispatching the same prompt to the same
     # model on the same empty worktree is unlikely to produce a different
     # outcome next tick; better to surface it for the dashboard.
-    if passed and not _worktree_has_new_commits(  # noqa: F821
+    if passed and not server_bindings.server()._worktree_has_new_commits(
         worktree,
         story_key,
-        base_branch=_default_branch(),  # noqa: F821
+        base_branch=server_bindings.server()._default_branch(),
     ):
-        base = _default_branch()  # noqa: F821
+        base = server_bindings.server()._default_branch()
         story["status"] = "failed"
         story["failure_reason"] = (
             f"tests passed but agent branch has no new commits vs {base}; "
             "agent likely parked without writing code."
             + auth_failure_hint(story.get("log"))
         )
-        bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+        bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
@@ -784,8 +761,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         not passed
         and story["status"] == "failed"
         and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
-        and _worktree_has_new_commits(  # noqa: F821
-            worktree, story_key, base_branch=_default_branch()  # noqa: F821
+        and server_bindings.server()._worktree_has_new_commits(
+            worktree, story_key, base_branch=server_bindings.server()._default_branch()
         )
     ):
         story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
@@ -836,7 +813,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             # signal from "made changes but the reviewer wasn't satisfied" -
             # see REWORK_MAX_ATTEMPTS_NO_COMMIT's docstring in config.py.
             # Applies uniformly regardless of escalation/oracle status.
-            rework_cap = REWORK_MAX_ATTEMPTS_NO_COMMIT
+            rework_cap = server_bindings.server().REWORK_MAX_ATTEMPTS_NO_COMMIT
             if attempts >= rework_cap:
                 # Mirror review_story's own rework-cap escalation (Mode 24/28):
                 # a local agent that keeps parking/crashing without writing
@@ -849,18 +826,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 # already had (review_story's three call sites), so a story
                 # that hit exactly this path never got a chance at Claude.
                 if (
-                    _auto_escalation_enabled()  # noqa: F821
+                    server_bindings.server()._auto_escalation_enabled()
                     and not story.get("escalated")
-                    and _escalation_target() != (story.get("backend"), story.get("model"))
+                    and server_bindings.server()._escalation_target() != (story.get("backend"), story.get("model"))
                 ):
-                    _escalate_review_to_claude(
+                    server_bindings.server()._escalate_review_to_claude(
                         story,
                         story_key,
                         plan_name,
                         f"no new commit after {attempts} rework redispatches",
                     )
                     story["status"] = "changes_requested"
-                    bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
+                    bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
                     return {
                         "status": "changes_requested",
                         "reason": "no_new_commit_escalated_to_claude",
@@ -870,8 +847,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"no new commit after {attempts} rework redispatches - "
                     "agent keeps parking/crashing without writing code."
                 )
-                bound_records.put_manifest(_store, plan_name, manifest)  # noqa: F821
-                _notify_user(  # noqa: F821
+                bound_records.put_manifest(server_bindings.server()._store, plan_name, manifest)
+                server_bindings.server()._notify_user(
                     plan_name,
                     f"{story_key} parked: no new commit after {attempts} rework "
                     f"redispatches - needs human review.",
@@ -889,12 +866,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             # last commit, and fold a root-cause diagnosis into the brief
             # (same fail-open rebrief the step-cap path uses).
             (worktree / ".agent_transcript.json").unlink(missing_ok=True)
-            _rebrief_step_cap_struggle(  # noqa: F821
+            server_bindings.server()._rebrief_step_cap_struggle(
                 story, str(worktree), plan_role_config=manifest.get("role_config"),
                 plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
-            bound_records.put_manifest(_store, plan_name,  # noqa: F821
-                merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
+            bound_records.put_manifest(server_bindings.server()._store, plan_name,
+                merge_into_fresh_manifest(server_bindings.server()._store, plan_name, story_key, story,
                     manifest, keys_at_entry=_story_keys))
             return {
                 "status": "changes_requested",
@@ -905,14 +882,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # run. A missing/wrong API is a story-scoping bug, not a model-capability
     # gap - the terminal notify in advance_pipeline uses this to point a
     # human at "clarify the story" instead of the generic "tests failed".
-    give_up_summary = _last_done_summary(agent_log) if not passed else ""  # noqa: F821
+    give_up_summary = server_bindings.server()._last_done_summary(agent_log) if not passed else ""
     if give_up_summary and _is_give_up_summary(give_up_summary):
         story["failure_kind"] = "give_up"
     else:
         story.pop("failure_kind", None)
 
-    bound_records.put_manifest(_store, plan_name,  # noqa: F821
-        merge_into_fresh_manifest(_store, plan_name, story_key, story,  # noqa: F821
+    bound_records.put_manifest(server_bindings.server()._store, plan_name,
+        merge_into_fresh_manifest(server_bindings.server()._store, plan_name, story_key, story,
             manifest, drop=("failure_kind",), keys_at_entry=_story_keys))
 
     result = {
@@ -924,93 +901,3 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if story.get("failure_kind"):
         result["failure_kind"] = story["failure_kind"]
     return result
-
-
-def bind_to_server(_server: Any) -> None:
-    """Rebind check_story_status and export its collaborators onto ``_server``.
-
-    Called by pipeline.server right after it imports this module, so this module
-    itself never imports the server and can be imported cold."""
-    global check_story_status, _detached_grade_lifecycle
-
-    # Rebind the function's globals to pipeline.server's namespace so that
-    # bare-name reads inside the body (e.g. `detect_test_command`,
-    # `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at
-    # call time. This preserves the original behavior where the function lived in
-    # pipeline.server and saw monkeypatched module globals (LOAD_GLOBAL does not
-    # consult a module-level __getattr__, so a plain re-export would not).
-    check_story_status = types.FunctionType(
-        check_story_status.__code__,
-        _server.__dict__,
-        check_story_status.__name__,
-        check_story_status.__defaults__,
-        check_story_status.__closure__,
-    )
-    # check_story_status's own logic (not a primitive): rebound onto pipeline.server's
-    # globals so its globals().get(...) probes see the same pytest-conditional exports
-    # check_story_status sees, and exported unconditionally.
-    _detached_grade_lifecycle = types.FunctionType(
-        _detached_grade_lifecycle_unbound.__code__,
-        _server.__dict__,
-        _detached_grade_lifecycle_unbound.__name__,
-        _detached_grade_lifecycle_unbound.__defaults__,
-        _detached_grade_lifecycle_unbound.__closure__,
-    )
-    _server._detached_grade_lifecycle = _detached_grade_lifecycle
-
-    # The rebound body resolves bare names against pipeline.server's namespace, so
-    # the grading watchdog constant it reads must be reachable there. (The
-    # detached-grade primitives are exported further down, after their defs.)
-    _server.DETACHED_GRADE_WATCHDOG_SECONDS = DETACHED_GRADE_WATCHDOG_SECONDS
-    _server.DISPATCH_STALE_ACTIVITY_SECONDS = DISPATCH_STALE_ACTIVITY_SECONDS
-    _server.collect_story_wedge_signals = collect_story_wedge_signals
-
-
-    # The rebound check_story_status body resolves bare names against
-    # pipeline.server's namespace, so the detached-grade primitives it calls must
-    # be reachable there. Export them into _server.__dict__ at import time — but
-    # NOT under pytest: the pre-existing check_story_status test files pin the
-    # SYNCHRONOUS dead-pid grade (they stub subprocess.run and never stub these
-    # primitives), and exporting the real spawner under pytest would flip those
-    # runs to detached grades and break them. The detached-grading tests patch
-    # p.start_detached_grade / p.collect_detached_grade directly — exactly the
-    # surface the rebound body reads via globals().
-    # The rebound check_story_status body resolves bare names against
-    # pipeline.server's namespace, so the helper its verdict block calls must
-    # be reachable there - same reason the detached-grade primitives below are
-    # exported.
-    _server._baseline_exempted_failures = _baseline_exempted_failures
-    _server.bound_records = bound_records  # rebound body's manifest I/O
-
-    # BASELINE-1 path C: the grade-result write merges onto a fresh read, so a
-    # baseline the dispatch recorded meanwhile survives it.
-    _server.merge_into_fresh_manifest = merge_into_fresh_manifest
-
-    # The rebound body's test-result bookkeeping and streak clearing are pure
-    # manifest mutations (the same ones it performed inline before they were
-    # extracted), so they are exported unconditionally: the grade path must record
-    # its test run and clear its streaks on every outcome, including a
-    # plan-conflict verdict.
-    _server._record_test_check = _record_test_check
-    _server.grade_test_cmd = grade_test_cmd
-    _server._clear_failure_streaks = _clear_failure_streaks
-    _server.classify_no_progress = classify_no_progress
-    # Pure failure-reason wording, read by the grade path on every failed grade.
-    _server.auth_failure_hint = auth_failure_hint
-    _server.tests_failed_reason = tests_failed_reason
-
-    # The post-agent scratchpad untrack has the detached-grade primitives'
-    # reason AND one of its own: it shells out to git, so exporting the real
-    # function under pytest would run it inside every pre-existing test that
-    # drives the dead-pid grade path (they stub subprocess.run and pin its call
-    # sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
-    # the surface the rebound body reads via globals(). The plan-conflict
-    # intercept is exported on the same terms: it shells out to git and calls the
-    # overlord role, so under pytest it stays absent from pipeline.server and
-    # every pre-existing check_story_status test keeps its exact subprocess.run
-    # call sequence.
-    if "pytest" not in sys.modules:
-        _server.start_detached_grade = start_detached_grade
-        _server.collect_detached_grade = collect_detached_grade
-        _server._untrack_scratchpad = _untrack_scratchpad
-        _server._plan_conflict_intercept = _plan_conflict_intercept

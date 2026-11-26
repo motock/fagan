@@ -291,15 +291,14 @@ def test_notify_failure_does_not_lose_the_park(plan_dir, monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_park_notify_call_keeps_noqa_f821_marker():
-    """The edited call must keep its noqa F821 comment: `_notify_user` is a
-    free variable injected from pipeline.server's globals, so dropping the
-    marker makes `ruff check pipeline/story_status.py` fail."""
+    """The edited call reads `_notify_user` through server_bindings.server(),
+    so no noqa F821 suppression remains anywhere in story_status."""
     source = (Path(p.__file__).parent / "story_status.py").read_text()
     anchor = "parked: no new commit after"
     idx = source.index(anchor)
     window = source[max(0, idx - 400):idx]
-    marker = "_notify_user(  # " + "noqa: F821"
-    assert marker in window
+    assert "server_bindings.server()._notify_user(" in window
+    assert "noqa: F821" not in source
 
 
 def test_park_notify_uses_a_bare_string_literal_event():

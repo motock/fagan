@@ -166,6 +166,7 @@ from .config import (  # noqa: F401
 
 # Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
 # server (circular-avoidance).
+from .detached_grade import _baseline_exempted_failures, _detached_grade_lifecycle  # noqa: F401
 from .escalation import (
     _auto_escalation_enabled,
     _escalate_review_to_claude,
@@ -174,6 +175,7 @@ from .escalation import (
     _escalation_label,
     _escalation_target,
 )
+from .failure_reasons import auth_failure_hint, tests_failed_reason  # noqa: F401
 from .git_ops import (
     _commit_wip,
     _last_nonempty_line,
@@ -196,6 +198,7 @@ from .merge import (  # noqa: F401
     _try_acquire_git_lock,
     merge_adjudication_plan,
 )
+from .no_progress import classify_no_progress  # noqa: F401
 
 # Pre-dispatch acceptance-oracle validation (a broken oracle costs an
 # implementer its whole step budget; see the module docstring in
@@ -349,6 +352,9 @@ from .self_modification import (  # noqa: F401
     _mcp_self_source_touched,
 )
 from .store import FileStore, Store, _TransactionLock, build_store  # noqa: F401
+from .story_fields import merge_into_fresh_manifest  # noqa: F401
+from .story_status_records import _clear_failure_streaks, _record_test_check  # noqa: F401
+from .test_scope_run import grade_test_cmd  # noqa: F401
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
 # (monkeypatch.setattr(pt, "plane_request", ...), monkeypatch.setattr(pt,
@@ -409,6 +415,7 @@ from .usage import (  # noqa: F401
     _usage_state_age_seconds,
     _write_usage_state,
 )
+from .wedge_io import collect_story_wedge_signals  # noqa: F401
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 PIPELINE_SELF_REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -765,16 +772,16 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     return _service.dispatch_story(plan_name, story_key)
 
+from pipeline.story_status import (  # noqa: F401
+    DETACHED_GRADE_WATCHDOG_SECONDS,
+    DISPATCH_STALE_ACTIVITY_SECONDS,
+    check_story_status,
+)
 
-from pipeline import story_status as _story_status
-
-_story_status.bind_to_server(sys.modules[__name__])
-check_story_status = _story_status.check_story_status
-
-# check_story_status is rebound onto this module's __dict__ by
-# story_status.bind_to_server (types.FunctionType trick, see there) so its globals
-# resolve against pipeline.server. mcp.tool() only registers it -- it does
-# not wrap or copy the function -- so identity/__code__/__globals__ survive.
+if "pytest" not in sys.modules:  # hidden under pytest: an absent export is the sync grade path
+    from .detached_grade import collect_detached_grade, start_detached_grade
+    from .git_ops import _untrack_scratchpad
+    from .plan_conflict_ruling import _plan_conflict_intercept
 check_story_status = mcp.tool()(check_story_status)
 
 

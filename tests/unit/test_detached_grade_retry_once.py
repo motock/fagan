@@ -41,7 +41,7 @@ import pytest
 # pipeline.server imports check_story_status back from story_status, so
 # pipeline.server must be imported FIRST or collection dies on the cycle.
 # Every existing story_status test file does the same.
-from pipeline import server as _server  # noqa: F401
+from pipeline import server as _server
 from pipeline import story_status as ss
 
 # The exact fail-closed dict for a dead grading process whose result file is
@@ -66,8 +66,8 @@ def _wrapper() -> str:
     return ss.GRADE_WRAPPER
 
 
-def _story_status_source() -> str:
-    return Path(ss.__file__).read_text()
+def _server_source() -> str:
+    return Path(_server.__file__).read_text()
 
 
 def _wait_for_grade(pid: int, result_path, timeout: float = _COLLECT_TIMEOUT):
@@ -337,7 +337,7 @@ def test_detached_grade_survivors_unchanged(tmp_path):
     malformed.write_text("{definitely not valid json{{")
     assert ss.collect_detached_grade(pid, str(malformed)) == FAIL_CLOSED
 
-    source = _story_status_source()
+    source = _server_source()
     assert 'if "pytest" not in sys.modules:' in source, (
         "the module-level pytest guard at the end of the file is a survivor"
     )

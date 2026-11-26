@@ -35,7 +35,12 @@ def _notify_user_calls():
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if not (isinstance(node.func, ast.Name) and node.func.id == "_notify_user"):
+        func = node.func
+        is_notify = (
+            (isinstance(func, ast.Name) and func.id == "_notify_user")
+            or (isinstance(func, ast.Attribute) and func.attr == "_notify_user")
+        )
+        if not is_notify:
             continue
         if len(node.args) < 2 or not isinstance(node.args[1], ast.JoinedStr):
             continue

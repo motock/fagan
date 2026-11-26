@@ -274,18 +274,15 @@ def test_the_export_line_precedes_the_pytest_guard():
     sys.modules:`` block, so the grading tests exercise the real verdict path
     rather than a name that only exists in production. The guard keeps its two
     detached-grade primitives."""
-    src = Path(ss.__file__).read_text()
-    export = "_server._baseline_exempted_failures = _baseline_exempted_failures"
+    src = Path(p.__file__).read_text()
+    export = "from .detached_grade import _baseline_exempted_failures"
     guard = 'if "pytest" not in sys.modules:'
     assert export in src
     assert guard in src
     assert src.index(export) < src.index(guard)
     # The two detached-grade primitives stay attached to the guard.
     assert src.index(guard) < src.index(
-        "_server.start_detached_grade = start_detached_grade"
-    )
-    assert src.index(guard) < src.index(
-        "_server.collect_detached_grade = collect_detached_grade"
+        "from .detached_grade import collect_detached_grade, start_detached_grade"
     )
 
 

@@ -1,9 +1,9 @@
 """Detached-grade primitives for the scheduler-tick recovery path.
 
 Extracted verbatim from the scheduler-tick status module (behavior-preserving
-file move).  The rebound status check resolves these bare names against
-pipeline.server's namespace, so the original module re-exports them and keeps
-exporting them onto ``_server`` at import time.
+file move).  The status check reads the server-owned names it needs through
+``server_bindings.server()`` at call time, so tests patching pipeline.server
+take effect.
 """
 
 import json
@@ -14,7 +14,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import bound_records, tenant_exec
+from . import bound_records, server_bindings, tenant_exec
 from .build_detect import failed_node_ids
 from .host_state import build_host_state
 from .settings_resolve import SAFE_DEFAULT_SOURCE
@@ -377,28 +377,25 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                               _workers=xdist_workers,
                               _apply_xdist=_with_xdist_workers,
                               _persist=_put_manifest,
-                              _fresh=_fresh_manifest):
-    """Run check_story_status's detached-grade lifecycle with pipeline.server's globals.
+                              _fresh=_fresh_manifest,
+                              _exports=None):
+    """Run check_story_status's detached-grade lifecycle.
 
-    Rebound onto pipeline.server.__dict__ in pipeline/story_status.py exactly like
-    check_story_status, so globals().get("start_detached_grade") /
-    globals().get("collect_detached_grade") / globals().get("_untrack_scratchpad")
-    resolve to pipeline.server's (pytest-conditional) exports rather than this
-    module's own.
-
-    The SA-19 helpers arrive as default arguments because
-    types.FunctionType(...) preserves __defaults__ when story_status rebinds
-    this function onto pipeline.server's globals, so a rebound body still
-    reaches them. Bare-name reads of them would NameError there. The
-    detached-grade write helper travels the same way.
+    The optional exports (start_detached_grade, collect_detached_grade,
+    _untrack_scratchpad) are read from ``_exports`` when the caller passes
+    pipeline.server: pipeline.server hides them under pytest, so an absent
+    export means the synchronous grade path. Without ``_exports`` they are read
+    from this module, where the tests patch them directly. The SA-19 helpers
+    arrive as default arguments; the detached-grade write helper travels the
+    same way.
 
     Returns (early_result, test_result): early_result is the dict
     check_story_status must return immediately, else None; test_result is None
     when the caller must grade synchronously.
     """
-    # A caller whose namespace exports a (possibly patched) copy wins over the
-    # default: the tests patch pipeline.detached_grade._is_pid_alive et al. and
-    # call this function unrebound.
+    exports = globals() if _exports is None else vars(_exports)
+    # A module-level (possibly patched) copy wins over the default: the tests
+    # patch pipeline.detached_grade._is_pid_alive et al. in this namespace.
     _probe = globals().get("_is_pid_alive") or _pid_alive
     _count_live = globals().get("live_grade_count") or _live_count
     _grade_cap = globals().get("max_concurrent_grades") or _cap
@@ -432,11 +429,11 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         # land in the merge (where a rebase against another story that tracked
         # it conflicts). Recorded on the manifest for audit; the common case
         # (nothing tracked) records nothing and makes no commit.
-        # Resolved through globals() exactly like the detached-grade spawner
-        # below: the helper is exported only outside pytest (it shells out to
+        # Resolved through the server exports exactly like the detached-grade
+        # spawner below: the helper is exported only outside pytest (it shells out to
         # git, so exporting it under pytest would run the real function inside
         # every pre-existing test that pins subprocess.run's call sequence).
-        untrack = globals().get("_untrack_scratchpad")
+        untrack = exports.get("_untrack_scratchpad")
         if untrack is not None:
             _untracked = untrack(str(worktree), story_key)
             if _untracked["paths"]:
@@ -445,7 +442,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     "ts": datetime.now(UTC).isoformat(),
                 }
 
-        starter = globals().get("start_detached_grade")
+        starter = exports.get("start_detached_grade")
         if starter is not None:
             # Security review (REQUEST_CHANGES): the detached grade's result
             # channel must not live in the agent-writable worktree — the code
@@ -526,7 +523,7 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
         # file or re-advancing the story.
         if story.get("status") != "in_progress":
             return {"status": story.get("status"), "pid": pid}, None
-        collector = globals().get("collect_detached_grade")
+        collector = exports.get("collect_detached_grade")
         grade_result_path = story.get("grading_result_path")
         collected = None
         if collector is not None and grade_result_path:
@@ -557,12 +554,12 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest,
                     age = (
                         datetime.now(UTC) - started
                     ).total_seconds()
-            if age is not None and age > DETACHED_GRADE_WATCHDOG_SECONDS:  # noqa: F821
+            if age is not None and age > server_bindings.server().DETACHED_GRADE_WATCHDOG_SECONDS:
                 collected = dict(fail_closed)
                 collected["stderr"] = (
                     f"{fail_closed['stderr']}; grading watchdog fired after "
                     f"{age:.0f}s without a collectable result (threshold "
-                    f"{DETACHED_GRADE_WATCHDOG_SECONDS}s)"  # noqa: F821
+                    f"{server_bindings.server().DETACHED_GRADE_WATCHDOG_SECONDS}s)"
                 )
         # Hand the collected result to the EXISTING post-grade logic below in
         # the shape it already reads (subprocess.run's return value).

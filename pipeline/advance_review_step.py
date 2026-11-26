@@ -13,9 +13,11 @@ Names that tests monkeypatch on ``pipeline.advance`` are read as
 
 from typing import Any
 
-from . import advance as _home
 from . import review_job
+from .module_ref import _LazyModule
 from .review_gate_notice import clear_review_gate_notice, should_notify_review_gate
+
+_home = _LazyModule("pipeline.advance")
 
 
 def run_review_step(

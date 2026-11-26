@@ -13,12 +13,14 @@ Names that tests monkeypatch on ``pipeline.advance`` are read as
 from typing import Any
 
 from . import access_hooks, bound_records
-from . import advance as _home
 from .concurrency import PlanLockReacquireTimeout, _has_live_test_author_phase
 from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim
 from .dispatch_lease import claim_dispatch_lease
+from .module_ref import _LazyModule
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
+
+_home = _LazyModule("pipeline.advance")
 
 
 def dispatch_ready_stories(

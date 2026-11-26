@@ -13,10 +13,12 @@ Names that tests monkeypatch on ``pipeline.advance`` are read as
 import logging
 from typing import Any
 
-from . import advance as _home
 from . import bound_records
 from .dispatch import _resolve_dispatch_target
+from .module_ref import _LazyModule
 from .role_routing_scope import layer_routing_for_manifest, layer_routing_kwargs
+
+_home = _LazyModule("pipeline.advance")
 
 
 def poll_running_stories(

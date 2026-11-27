@@ -21,6 +21,10 @@ _SCANNED_FILES = (
     "pipeline/advance.py",
     "pipeline/advance_review.py",
     "pipeline/advance_merge.py",
+    "pipeline/advance_merge_hold.py",
+    "pipeline/advance_merge_ci_gate.py",
+    "pipeline/advance_merge_gate_failure.py",
+    "pipeline/advance_merge_land.py",
     "pipeline/review_orchestrator.py",
     "pipeline/story_status.py",
 )

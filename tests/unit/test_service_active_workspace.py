@@ -222,10 +222,13 @@ def test_resolve_workspace_unchanged():
 
 
 def test_list_workspaces_unchanged():
-    """Do NOT modify list_workspaces (brief)."""
+    """Do NOT modify list_workspaces (brief).
+
+    Digest updated 2026-11 when the two `valid` assignments were wrapped in bool() for the type checker.
+    """
     assert (
         _digest(PipelineService.list_workspaces)
-        == "df2b1402d20da250f85654a05f3c2c96d62f97a8c1c4241d30feb296fe787950"
+        == "825209300668827b6f0c579b0c1beff4d138267f97269a015f6760d1f5605b8e"
     )
 
 

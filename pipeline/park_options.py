@@ -118,6 +118,8 @@ def prepare_park_options(plan_name: str, story_key: str) -> dict | None:
     story = ((manifest or {}).get("stories") or {}).get(story_key)
     if not isinstance(story, dict) or story.get("status") != "parked":
         return None
+    if manifest is None:  # unreachable: a story was found in it
+        return None
     check = story.get("last_test_check")
     park_class = classify_park(
         story,

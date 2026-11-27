@@ -130,17 +130,19 @@ def _parse_plan_conflict_reply(reply: str, conflict_files: list[str]) -> dict:
         }
 
     # --- PREAUTHORIZE_TEST_EDIT: every field present and non-blank ---------
-    fields: dict[str, str] = {}
+    raw_fields: dict[str, str | None] = {}
     for name in _BLOCK_FIELDS:
-        fields[name] = _fenced_block(reply, name)
+        raw_fields[name] = _fenced_block(reply, name)
     for name in _LINE_FIELDS:
-        fields[name] = _labelled_line(reply, name)
+        raw_fields[name] = _labelled_line(reply, name)
 
-    for name, value in fields.items():
-        if value is None:
+    fields: dict[str, str] = {}
+    for name, field_value in raw_fields.items():
+        if field_value is None:
             return {"ruling": "PARK", "reason": f"missing required field: {name}"}
-        if not value.strip():
+        if not field_value.strip():
             return {"ruling": "PARK", "reason": f"blank required field: {name}"}
+        fields[name] = field_value
 
     # The free-text bodies are copied verbatim into the executor's brief.  A
     # body carrying the plan-conflict sentinel or a RULING: line is either a

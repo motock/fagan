@@ -72,6 +72,8 @@ def choose_park_option(plan_name: str, story_key: str, option_id: str) -> dict:
             if not acquired:
                 raise RuntimeError(f"could not acquire the plan lock for {plan_name!r}")
             manifest = bound_records.get_manifest(_store, plan_name)
+            if manifest is None:
+                raise RuntimeError(f"plan {plan_name!r} vanished while choosing a park option")
             story = manifest["stories"][story_key]
             execute_ruling(plan_name, story_key, story, ruling, manifest)
             for s in manifest["stories"].values():

@@ -137,7 +137,10 @@ def _client_for(namespace: str, setting: dict):
     from pipeline.github_issues_client import GitHubIssuesClient, token_source_for
     from pipeline.github_issues_intake import _owner_and_repo
 
-    owner, repo = _owner_and_repo(setting["repo_url"])
+    owner_repo = _owner_and_repo(setting["repo_url"])
+    if owner_repo is None:
+        raise TypeError("repo_url is not a <owner>/<repo> repository URL")
+    owner, repo = owner_repo
     token_source = token_source_for(namespace, setting.get("token_ref", ""))
     return GitHubIssuesClient(owner, repo, token_source)
 

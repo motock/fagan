@@ -13,6 +13,7 @@ the log line: only the reason token and the correlation id.
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 from pipeline.actor import current_correlation_id, current_namespace
 from pipeline.audit import append_host_audit
@@ -96,7 +97,8 @@ def _stored_manifest(namespace: str, plan_name: str) -> dict | None:
     """
     from pipeline import server
 
-    return server._store.records().get_manifest(namespace, plan_name)
+    # cast: the Store protocol omits records(); every concrete store defines it.
+    return cast(Any, server._store).records().get_manifest(namespace, plan_name)
 
 
 def audit_refusal(reason: str) -> None:

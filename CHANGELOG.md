@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- 26 more modules (`events_nats*`, `forge_*`, `jira_*`, `merge`, `metrics_exposition`, `park_option*`, `plan_*`, `remote_*` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - 24 more modules (`pipeline`, `access_hooks`, `advance_*`, `audit*`, `ci`, `events` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - `shell=True` is gone from production code: the reviewer's bash runner and the local `file://` sync runner call `/bin/sh -c` explicitly, ruff `S602`/`S604` forbid it from returning, and SECURITY.md documents the review step's command-execution trust boundary.
 - The `python:3.12-slim` base image in `Dockerfile`, `deploy/Dockerfile` and `deploy/compose.yaml` is pinned by digest as well as tag, and Dependabot's `docker` ecosystem opens pull requests when the digest moves.

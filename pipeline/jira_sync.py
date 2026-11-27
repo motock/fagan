@@ -21,6 +21,7 @@ import logging
 import os
 import re
 from contextlib import nullcontext
+from typing import cast
 
 from pipeline.notification_links import story_link
 
@@ -90,7 +91,7 @@ def sync_event(event: dict) -> None:
         )
 
 
-def _sync(event: dict, plan: str, event_type: str, story_key: object) -> None:
+def _sync(event: dict, plan: str, event_type: str | None, story_key: object) -> None:
     from pipeline import manifest_source
     from pipeline.actor import bind_namespace
     from pipeline.ci import context_from_manifest
@@ -262,4 +263,4 @@ def _park(client, plan: str, parent: str, story_key: object) -> None:
     subtask = _subtask_key(client, parent, story_key)
     if subtask is None:
         return
-    client.add_comment(subtask, PARKED_COMMENT, link=story_link(plan, story_key))
+    client.add_comment(subtask, PARKED_COMMENT, link=story_link(plan, cast(str, story_key)))  # cast: _subtask_key returned non-None, so story_key is a str

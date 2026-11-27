@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import cast
 
 from app.plugin_loader import load_plugin, plugin_spec, require_allowlist
 
@@ -38,7 +39,8 @@ def audience_members(namespace: str, plan: str, audience: str, owner: str) -> fr
         if plugin_spec(_SEAM) is None:
             return _fallback(audience, owner)
         require_allowlist(_SEAM)
-        result = load_plugin(_SEAM)().members(namespace, plan, audience, owner)
+        # plugin_spec() above is not None, so load_plugin returns a factory.
+        result = cast(Callable, load_plugin(_SEAM))().members(namespace, plan, audience, owner)
     except Exception as exc:  # noqa: BLE001 - fail closed on any plugin failure
         logger.warning(
             "audience plugin failed; resolving to nobody: audience=%s error_type=%s",

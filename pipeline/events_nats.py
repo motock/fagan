@@ -56,6 +56,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from .events import EventBus, JsonlEventBus
@@ -320,8 +321,8 @@ class NatsEventBus(EventBus):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._pid: int | None = None
-        self._nc = None
-        self._js = None
+        self._nc: Any = None
+        self._js: Any = None
         self._stream_ready = False
         self._handlers: dict[str, list] = {}
         self._durable_types: frozenset[str] = settings.durable_types
@@ -449,7 +450,8 @@ class NatsEventBus(EventBus):
         # directly: a broker bus owns no JSONL append-log and must not build one
         # just to validate a name. The reuse is pinned by
         # test_publish_reuses_the_jsonl_bus_plan_rules.
-        return JsonlEventBus._validate_plan(None, plan)
+        # cast: the method never reads ``self`` (see above), so None is safe.
+        return JsonlEventBus._validate_plan(cast(JsonlEventBus, None), plan)
 
     @staticmethod
     def _subject(event_type: str, plan: str) -> str:

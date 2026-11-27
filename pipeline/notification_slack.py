@@ -227,8 +227,9 @@ class SlackChannelType:
             ).strip()
             source = self._webhook_url_ref
         else:
-            url = os.environ.get(self._webhook_url_env, "").strip()
-            source = self._webhook_url_env
+            env_name = self._webhook_url_env or ""
+            url = os.environ.get(env_name, "").strip()
+            source = env_name
         if not url or not _is_valid_webhook_url(url):
             # Name the variable or reference only: its value is the credential.
             log.error(

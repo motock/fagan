@@ -38,7 +38,7 @@ import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -217,7 +217,7 @@ def health_extras(
         os.environ.get(REQUIRE_SCHEDULER_ENV) == "1",
     )
     try:
-        records = (build_store() if store is None else store).records()
+        records = cast(Any, build_store() if store is None else store).records()  # cast: Protocol omits records()
         summary = records.outbox_summary(DEFAULT_NAMESPACE)  # intentional: background consumer
     except Exception:  # noqa: BLE001 (read-only probe: an unreadable store is "no outbox")
         # A rejected PIPELINE_STORE selection must not turn the health probe

@@ -289,8 +289,8 @@ def _replay_plan(plan: str, inputs: _Inputs, *, runs: int, limit: int) -> dict[s
             continue
         tally = report.setdefault(_park_class(record), _new_tally())
         prompt, reason = _rebuild_prompt(record, inputs)
-        if reason is not None:
-            tally["skipped"][reason] += 1
+        if prompt is None or reason is not None:
+            tally["skipped"][reason or "no_input"] += 1
             continue
         if replayed >= limit:
             continue

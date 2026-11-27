@@ -270,7 +270,8 @@ def _intake_issue(
         counts["existing"] += 1
         return
 
-    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    raw_fields = issue.get("fields")
+    fields: dict[str, Any] = raw_fields if isinstance(raw_fields, dict) else {}
     summary = fields.get("summary") if isinstance(fields.get("summary"), str) else ""
     request_text = f"Jira {key}: {summary}\n\n{adf_to_text(fields.get('description'))}"
     try:

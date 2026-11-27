@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import bound_records, forge_auth
 from .actor import actor_id
@@ -49,7 +49,7 @@ from .overlord_context import overlord_context
 from .ruling_snapshot import ruling_input
 from .triage_outcomes import record_resolution_if_ruled
 
-_lock_state = {}
+_lock_state: dict[str, int] = {}
 
 
 def _merge_gate_ci_status(
@@ -110,7 +110,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
     if worktree and Path(worktree).is_dir():
         resolved = _resolve_story_branch(worktree, key)
 
-    prepared = get_forge(REPO_ROOT).prepare_merge(worktree, resolved)
+    prepared = get_forge(str(REPO_ROOT)).prepare_merge(worktree, resolved)
     if prepared.get("auto_resolved"):
         # W4L-04: stamp the story's correlation_id onto this merge-gate
         # notice. This helper receives only plan+story key (no story dict),
@@ -520,7 +520,13 @@ def _adjudicate_high_risk_merge(
         "RULING: proceed|park\n"
         "RATIONALE: <one line>\n"
     )
-    ctx_block, ctx_digests = overlord_context(plan_name, story_key, "merge_adjudication")
+    ctx_block, ctx_digests = overlord_context(
+        plan_name,
+        # cast: story_key is None only for story-less callers; overlord_context
+        # then degrades to ("", []) exactly as before.
+        cast(str, story_key),
+        "merge_adjudication",
+    )
     head, marker, closing = prompt.rpartition("Respond in this exact format:")
     sent_prompt = head + ctx_block + marker + closing
     try:
@@ -657,7 +663,8 @@ def _merge_decision(
                     from .persistence import _notify_user
 
                     _notify_user(
-                        plan_name,
+                        # cast: unchanged call shape for plan-less callers.
+                        cast(str, plan_name),
                         f"{story.get('key')} high-risk merge proceeding at tier auto+notify",
                     )
             return decision

@@ -103,7 +103,7 @@ class GitHubForge(Forge):
     supports_comments = True
 
     # -- runner seam ------------------------------------------------------
-    def _run(self, argv: list[str], cwd: str | None = None, **kw: Any):
+    def _run(self, argv: list[str], cwd: str | Path | None = None, **kw: Any):
         """The single place this adapter spawns a process."""
         check = kw.pop("check", False)
         return subprocess.run(
@@ -297,7 +297,7 @@ class GitHubForge(Forge):
     # stay thin delegations to ``pipeline.ci``'s public shims, which in turn
     # delegate back to the ``*_impl`` methods below - so the seam is inverted
     # without a delegation cycle and the S1 contract tests keep passing.
-    def checks_status(
+    def checks_status(  # type: ignore[override]  # extra required kw-only ``settings``; callers go through pipeline.ci
         self, branch: str, sha: str, *, settings: SettingsContext
     ) -> dict[str, str]:
         """ONE CI status for ``branch``/``sha``; never polls (S1-era name)."""

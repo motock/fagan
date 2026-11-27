@@ -56,7 +56,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from . import persistence
 from .events import JsonlEventBus
@@ -111,7 +111,7 @@ class _Consumer:
 
     event_type: str
     durable: str
-    subscription: object
+    subscription: Any
     stop: asyncio.Event
     bus: NatsEventBus
     task: asyncio.Task | None = None
@@ -415,7 +415,9 @@ async def _fetch_loop(consumer: _Consumer) -> None:
 def _is_fetch_timeout(exc: BaseException) -> bool:
     """Whether *exc* is an idle pull (no message), not a broker failure."""
     try:
-        from nats.errors import TimeoutError as nats_timeout
+        from nats.errors import TimeoutError as nats_timeout_error
+
+        nats_timeout: type[BaseException] = nats_timeout_error
     except Exception:  # noqa: BLE001 - without nats-py only the builtin exists
         nats_timeout = TimeoutError
     return isinstance(exc, (TimeoutError, nats_timeout))
@@ -511,7 +513,8 @@ async def _dead_letter(
             )
 
     if subject is not None:
-        _write_dead_letter_record(event_type, plan, event, event_id, attempts)
+        # cast: a non-None subject is only built from a str plan.
+        _write_dead_letter_record(event_type, cast(str, plan), event, event_id, attempts)
 
     logger.warning(
         "dead-lettering a %s event: handler %s failed (%s)",
@@ -529,7 +532,7 @@ def _dead_letter_subject(event_type: str, plan) -> str | None:
     try:
         # The same rules the JSONL bus applies, so a name the rest of the
         # pipeline rejects can never become a subject (or a wildcard).
-        validated = JsonlEventBus._validate_plan(None, plan)
+        validated = JsonlEventBus._validate_plan(cast(JsonlEventBus, None), plan)
     except ValueError:
         return None
     return f"{DEAD_LETTER_PREFIX}.{event_type}.{validated}"

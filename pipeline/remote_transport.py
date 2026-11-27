@@ -54,7 +54,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from mcp.server.transport_security import TransportSecuritySettings
@@ -326,7 +326,8 @@ class BearerAuthMiddleware:
                 "remote mcp transport requires an OidcProvider; refusing to serve "
                 f"with {type(provider).__name__}"
             )
-        env = os.environ if environ is None else environ
+        # cast: os.environ is a str -> str mapping the callees only read.
+        env = cast(dict[str, str], os.environ) if environ is None else environ
         self._app = app
         self._provider = provider
         self._limiter = build_rate_limiter(clock=clock, environ=env)
@@ -670,7 +671,8 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
     transport without OIDC, raises ``SystemExit`` so a misconfiguration stops
     the process instead of exposing an unauthenticated endpoint.
     """
-    env = os.environ if environ is None else environ
+    # cast: os.environ is a str -> str mapping the callees only read.
+    env = cast(dict[str, str], os.environ) if environ is None else environ
     transport, host, port = _settings_from_env(env)
     # Resolved before the provider and before any socket is opened: a malformed
     # resource identifier must stop the process, not surface as a 500 on the
@@ -692,7 +694,12 @@ def serve(mcp: Any, environ: dict[str, str] | None = None) -> None:
         if transport == "streamable-http"
         else mcp.sse_app(host=host, transport_security=security)
     )
-    gated = BearerAuthMiddleware(app, provider, environ=env)
+    gated = BearerAuthMiddleware(
+        app,
+        # cast: network_grade is True (checked above), which only OidcProvider sets.
+        cast(OidcProvider, provider),
+        environ=env,
+    )
 
     logger.warning(
         "serving MCP over %s on %s:%s behind OIDC bearer authentication",

@@ -67,7 +67,11 @@ def _check_compare(node: ast.Compare) -> Violation | None:
     if len(node.ops) != 1 or not isinstance(node.ops[0], _EXACT_OPS):
         return None
     right = node.comparators[0]
-    if _is_cumulative_name(node.left) and isinstance(right, _LITERAL_COLLECTIONS):
+    if (
+        isinstance(node.left, ast.Name)
+        and _is_cumulative_name(node.left)
+        and isinstance(right, _LITERAL_COLLECTIONS)
+    ):
         return Violation(
             node.lineno, "exact_enumeration", f"exact contents of {node.left.id}"
         )

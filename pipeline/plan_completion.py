@@ -21,6 +21,7 @@ is logged and does not block the notification.
 
 import datetime
 import logging
+from typing import Any, cast
 
 from . import server as _server
 from .persistence import _notify_user
@@ -46,7 +47,7 @@ def _with_journals(plan_name: str, manifest: dict) -> dict:
     journal.
     """
     try:
-        records = build_store().records()
+        records = cast(Any, build_store()).records()  # cast: Protocol omits records()
     except Exception:
         logger.warning(
             "journal read skipped for %s: record store unavailable",
@@ -117,7 +118,7 @@ def notify_if_plan_completed(
     otherwise (plan not complete, already notified, or any failure).
     """
     try:
-        records = _server._store.records()
+        records = cast(Any, _server._store).records()  # cast: Protocol omits records()
         if records.is_plan_completed(_NAMESPACE, plan_name):
             return False
 

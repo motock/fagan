@@ -34,7 +34,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pipeline
 from pipeline import actor, plan_activity
@@ -350,7 +350,8 @@ def advance_all_plans_pooled() -> dict[str, Any]:
     results: dict[str, Any] = {}
     live: list[str] = []
     for name in plans:
-        if plan_activity.is_inert(server._store.get_manifest_or_none(name)):
+        # is_inert checks isinstance(dict) itself and returns False for None.
+        if plan_activity.is_inert(cast(dict, server._store.get_manifest_or_none(name))):
             results[name] = {"ok": True, "skipped": "inert"}
         else:
             live.append(name)

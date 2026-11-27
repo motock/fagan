@@ -146,7 +146,7 @@ def failed_node_ids(stdout: str | None) -> list[str]:
         node_id = match.group(1).split(" - ")[0].strip()
         if node_id:
             ids.add(node_id)
-    ids.update(jvm_failed_test_ids(stdout))
+    ids.update(jvm_failed_test_ids(stdout or ""))
     return sorted(ids)
 
 

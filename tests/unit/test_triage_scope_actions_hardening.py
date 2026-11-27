@@ -20,6 +20,14 @@ PROTECTED = [
     "pipeline/review_orchestrator.py",
     "pipeline/merge.py",
     "pipeline/advance_merge.py",
+    "pipeline/advance_merge_hold.py",
+    "pipeline/advance_merge_ci_gate.py",
+    "pipeline/advance_merge_gate_failure.py",
+    "pipeline/advance_merge_land.py",
+    "pipeline/review_scope_gate.py",
+    "pipeline/review_unknown_verdict.py",
+    "pipeline/review_high_risk.py",
+    "pipeline/review_approve_path.py",
     "pipeline/dispatch_lease.py",
     "pipeline/pin_guard.py",
     "pipeline/security_audit.py",
@@ -93,3 +101,22 @@ def test_should_set_amended_paths_and_not_record_execution(monkeypatch, tmp_path
     assert result == "amend_scope"
     assert story["_amended_paths"] == ["pipeline/helper_a.py"]
     assert records == []
+
+
+SPLIT_OUT_MODULES = [
+    "pipeline/advance_merge_hold.py",
+    "pipeline/advance_merge_ci_gate.py",
+    "pipeline/advance_merge_gate_failure.py",
+    "pipeline/advance_merge_land.py",
+    "pipeline/review_scope_gate.py",
+    "pipeline/review_unknown_verdict.py",
+    "pipeline/review_high_risk.py",
+    "pipeline/review_approve_path.py",
+]
+
+
+@pytest.mark.parametrize("path", SPLIT_OUT_MODULES)
+def test_should_refuse_module_split_out_of_protected_gate(path):
+    allowed, refused = check_scope_amendment(_story(), [path])
+    assert allowed == []
+    assert refused == {path: "protected_module"}

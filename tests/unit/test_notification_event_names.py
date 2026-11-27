@@ -32,6 +32,10 @@ from pipeline import (
     advance,
     advance_failed_stories,
     advance_merge,
+    advance_merge_ci_gate,
+    advance_merge_gate_failure,
+    advance_merge_hold,
+    advance_merge_land,
     advance_ready_dispatch,
     advance_review_step,
 )
@@ -70,6 +74,14 @@ def _source() -> str:
         inspect.getsource(advance)
         + "\n"
         + inspect.getsource(advance_merge)
+        + "\n"
+        + inspect.getsource(advance_merge_hold)
+        + "\n"
+        + inspect.getsource(advance_merge_ci_gate)
+        + "\n"
+        + inspect.getsource(advance_merge_gate_failure)
+        + "\n"
+        + inspect.getsource(advance_merge_land)
         + "\n"
         + inspect.getsource(advance_ready_dispatch)
         + "\n"
@@ -601,7 +613,13 @@ class TestStoryKeyAttributionSourceLevel:
         assert not problems, "\n".join(problems)
 
     def test_survivors_in_the_merge_blocks_are_intact(self):
-        merge_src = inspect.getsource(advance_merge)
+        merge_src = (
+            inspect.getsource(advance_merge)
+            + inspect.getsource(advance_merge_hold)
+            + inspect.getsource(advance_merge_ci_gate)
+            + inspect.getsource(advance_merge_gate_failure)
+            + inspect.getsource(advance_merge_land)
+        )
         for needle in (
             'story["ci_rework"] = True',
             'story["review_feedback"] = _merge_ci_rework_feedback(',

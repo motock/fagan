@@ -32,6 +32,7 @@ from pipeline import server as p
 
 import pipeline.advance as adv
 import pipeline.advance_merge as adv_merge
+import pipeline.advance_merge_land as adv_merge_land
 import pipeline.ci as pci
 import pipeline.merge as pmerge
 import pipeline.plan_completion as ppc
@@ -60,6 +61,7 @@ def test_notify_if_plan_completed_referenced_in_module_source(module):
         # The mark-done notify call for the advance path lives in
         # advance_merge.py; scan both so this guard keeps covering it.
         src += "\n" + inspect.getsource(adv_merge)
+        src += "\n" + inspect.getsource(adv_merge_land)
     assert "notify_if_plan_completed" in src, (
         f"{module.__name__} must call "
         f"pipeline.plan_completion.notify_if_plan_completed after marking "

@@ -114,5 +114,8 @@ def test_advance_pipeline_locked_impl_calls_maybe_record_retro():
     # block (including this call) out of _advance_pipeline_locked_impl into
     # the module-level _adjudicate_merges helper it now calls, so the pin
     # follows the call site to its new home.
-    src = inspect.getsource(pipeline.advance._adjudicate_merges)
+    # The merge phase of that helper now lives in advance_merge_land.
+    import pipeline.advance_merge_land
+
+    src = inspect.getsource(pipeline.advance_merge_land._record_merged)
     assert "_maybe_record_retro(plan_name, manifest)" in src

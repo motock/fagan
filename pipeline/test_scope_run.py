@@ -65,7 +65,7 @@ def is_no_tests_cmd(cmd: list[str]) -> bool:
 
 def _is_test_file_path(path: str) -> bool:
     p = Path(path)
-    return (p.parts and p.parts[0] == "tests" and p.suffix == ".py"
+    return (bool(p.parts) and p.parts[0] == "tests" and p.suffix == ".py"
             and (p.name.startswith("test_") or p.name.endswith("_test.py")))
 
 

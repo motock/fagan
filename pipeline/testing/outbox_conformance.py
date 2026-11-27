@@ -56,7 +56,7 @@ OUTBOX_METHODS = tuple(
 )
 
 #: Protocol names declared exercised by at least one test in this suite.
-COVERED = set()
+COVERED: set[str] = set()
 
 
 def covers(*names):

@@ -53,7 +53,7 @@ AUDIT_METHODS = tuple(
 )
 
 #: Protocol names declared exercised by at least one test in this suite.
-COVERED = set()
+COVERED: set[str] = set()
 
 
 def covers(*names):
@@ -82,7 +82,7 @@ class _AuditStoreBinding:
     ``None`` means the class applies to every policy.
     """
 
-    serves_other_namespaces = None
+    serves_other_namespaces: bool | None = None
 
     @pytest.fixture(autouse=True)
     def _bind_store(self, request, record_store_factory):

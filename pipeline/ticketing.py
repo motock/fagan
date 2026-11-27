@@ -29,7 +29,7 @@ module.
 import os
 import re
 from enum import Enum
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 import httpx
 
@@ -181,7 +181,8 @@ class TicketProvider(Protocol):
     """The seam between orchestration and whatever ticketing backend (or
     none) is configured. See the module comment above for the rationale."""
 
-    enabled: bool
+    @property
+    def enabled(self) -> bool: ...
 
     def create_epic(self, summary: str) -> str | None:
         """Create an epic and return its backend id, or None if the backend
@@ -312,7 +313,7 @@ class JiraTicketProvider:
 
     enabled = True
 
-    def _unimplemented(self) -> None:
+    def _unimplemented(self) -> NoReturn:
         raise NotImplementedError(
             "JiraTicketProvider is a documented stub, not a working "
             "integration. See TICKETING_ABSTRACTION_PLAN.md S5 for what a "
@@ -369,7 +370,9 @@ def get_ticket_provider() -> TicketProvider:
         return provider
     choice = os.environ.get("PIPELINE_TICKET_PROVIDER", "auto").strip().lower()
     if choice == "auto":
-        return PlaneTicketProvider() if _plane_enabled() else NullTicketProvider()
+        if _plane_enabled():
+            return PlaneTicketProvider()
+        return NullTicketProvider()
     if choice == "none":
         return NullTicketProvider()
     if choice == "plane" and not _plane_enabled():

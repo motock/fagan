@@ -12,6 +12,7 @@ caller (see ``pipeline.triage.rule_on_story``).
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 # with_lint_evidence is re-exported so pipeline.triage reads it from this module.
 from .triage_lint_evidence import lint_paths, with_lint_evidence  # noqa: F401
@@ -84,7 +85,8 @@ def check_ruling_allowed(park_class: ParkClass, action: str) -> bool:
 
     An unrecognised class name allows nothing (fail closed).
     """
-    return action in ALLOWED_ACTIONS.get(getattr(park_class, "name", None), frozenset())
+    name: Any = getattr(park_class, "name", None)
+    return action in ALLOWED_ACTIONS.get(name, frozenset())
 
 
 def _merged_view(story, evidence) -> dict:

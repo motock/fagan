@@ -147,4 +147,5 @@ def can_view(principal: Principal, namespace: str) -> bool:
     """
     validate_namespace(namespace)
     visible = checked_visible(active_view_scope(), principal)
-    return visible is ALL or namespace in visible
+    # checked_visible returns ALL or a frozenset, so anything else is ALL.
+    return not isinstance(visible, frozenset) or namespace in visible

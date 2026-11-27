@@ -159,12 +159,14 @@ def _history_by_story(
         if not isinstance(record, dict) or record.get("principal_type") != "human":
             continue
         target = record.get("target")
-        kind = _AUDIT_KINDS.get(record.get("action"))
+        action: Any = record.get("action")
+        kind = _AUDIT_KINDS.get(action)
         if isinstance(target, dict) and kind is not None:
             add(target.get("story"), HistoryEvent(_parse_time(record.get("ts")), kind))
     notices, _malformed = store.records().get_notification_history(namespace, plan_name)
     for notice in notices:
-        kind = _NOTICE_KINDS.get(notice.get("event")) if isinstance(notice, dict) else None
+        event: Any = notice.get("event") if isinstance(notice, dict) else None
+        kind = _NOTICE_KINDS.get(event)
         if kind is not None:
             add(notice.get("story_key"), HistoryEvent(_parse_time(notice.get("ts")), kind))
     for judgment in decisions:

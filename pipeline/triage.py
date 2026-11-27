@@ -55,7 +55,7 @@ TRIAGE_MAX_PER_TICK = 1
 # split_story (see docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md). Kept as the
 # extension point for the next action added to the output contract.
 # Exported via __all__; handled in execute_ruling.
-DEFERRED_ACTIONS = frozenset()
+DEFERRED_ACTIONS: frozenset[str] = frozenset()
 # ---------------------------------------------------------------------------
 # Triage executor helpers
 # ---------------------------------------------------------------------------
@@ -916,9 +916,9 @@ def _exception_type_chain(exc: BaseException) -> str:
     """Return the class names along ``exc``'s cause/context chain, outermost
     first, joined by ``" <- "`` (at most 5 links). Names only - never the
     exception message, which can carry tokens, paths or payload data."""
-    names = []
-    seen = set()
-    current = exc
+    names: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
     while current is not None and id(current) not in seen and len(names) < 5:
         seen.add(id(current))
         names.append(type(current).__name__)

@@ -43,7 +43,7 @@ TIERS = ('atomic', 'ordered')
 TRANSACTION_METHODS = ('transaction',)
 
 #: Protocol names declared exercised by at least one test in this suite.
-COVERED = set()
+COVERED: set[str] = set()
 
 
 def covers(*names):
@@ -81,7 +81,7 @@ class _TransactionStoreBinding:
     is not the store's declared one. ``None`` means the class applies to both.
     """
 
-    tier = None
+    tier: str | None = None
 
     @pytest.fixture(autouse=True)
     def _bind_store(self, request, record_store_factory):

@@ -32,7 +32,7 @@ def sweep_digest(results: list[dict]) -> str | None:
     """
     if not results:
         return None
-    keys = {group: [] for group in _GROUPS}
+    keys: dict[str, list[str]] = {group: [] for group in _GROUPS}
     for row in results:
         keys[_group(row["outcome"])].append(row["story_key"])
     parts = [

@@ -148,9 +148,10 @@ def _prospective(
             continue
         story_key = _match_story(draft_story, stories)
         if story_key is None:
+            draft_summary = draft_story.get("summary")
             unmatched.append(
                 _draft_story_key(draft_story)
-                or (draft_story.get("summary") if isinstance(draft_story.get("summary"), str) else draft_key)
+                or (draft_summary if isinstance(draft_summary, str) else draft_key)
             )
             continue
         story = stories[story_key]

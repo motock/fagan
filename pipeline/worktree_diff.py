@@ -244,7 +244,7 @@ def collect_file_diff(
             return _file_result(path, skipped=skipped)
         diff_args = ["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color"]
         target = ["--", "/dev/null", path]
-        ok_codes = (0, 1)  # --no-index exits 1 when the files differ
+        ok_codes: tuple[int, ...] = (0, 1)  # --no-index exits 1 when the files differ
     else:
         diff_args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color"]
         target = [base_sha, "--", path]

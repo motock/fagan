@@ -80,7 +80,10 @@ def _plugin() -> Any:
         from app.plugin_loader import load_plugin, require_allowlist
 
         require_allowlist(_SEAM)
-        obj = load_plugin(_SEAM)()
+        factory = load_plugin(_SEAM)
+        if factory is None:
+            raise TypeError("'NoneType' object is not callable")
+        obj = factory()
         if not callable(getattr(obj, "wrap", None)):
             raise TypeError("command wrap plugin has no wrap method")
         _cached = obj

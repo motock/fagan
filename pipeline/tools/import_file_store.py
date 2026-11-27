@@ -29,7 +29,7 @@ import sys
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pipeline.audit_file import FileAuditLog
 from pipeline.plan_approval import canonical_digest
@@ -469,7 +469,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # The source is the file layout whatever PIPELINE_STORE selects, so the
         # factory is asked for it explicitly rather than given the environment.
-        summary = run_import(build_store({"PIPELINE_STORE": "file"}), target, args.dry_run)
+        summary = run_import(
+            cast(FileStore, build_store({"PIPELINE_STORE": "file"})),  # "file" selects FileStore
+            target,
+            args.dry_run,
+        )
     finally:
         target.close()
     print(json.dumps(summary, indent=2))

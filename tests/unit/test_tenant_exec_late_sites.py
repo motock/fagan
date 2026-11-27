@@ -247,7 +247,7 @@ def test_collect_refused_wrap_returns_none_without_exception_text(
 # --- app.ollama_prompt_utils: reviewer shell (kind='review') --------------
 
 
-def test_reviewer_shell_without_plugin_uses_shell_true_and_skips_wrap(
+def test_reviewer_shell_without_plugin_uses_sh_c_argv_and_skips_wrap(
     tmp_path, monkeypatch, wrap_calls
 ):
     monkeypatch.setattr(tenant_exec, "is_configured", lambda: False)
@@ -258,8 +258,8 @@ def test_reviewer_shell_without_plugin_uses_shell_true_and_skips_wrap(
     assert wrap_calls == []
     assert len(ran) == 1
     cmd, kwargs = ran[0]
-    assert cmd == "echo hi"
-    assert kwargs["shell"] is True
+    assert cmd == ["/bin/sh", "-c", "echo hi"]
+    assert "shell" not in kwargs
     assert result.stdout == "hi\n"
 
 

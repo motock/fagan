@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- `shell=True` is gone from production code: the reviewer's bash runner and the local `file://` sync runner call `/bin/sh -c` explicitly, ruff `S602`/`S604` forbid it from returning, and SECURITY.md documents the review step's command-execution trust boundary.
 - The `python:3.12-slim` base image in `Dockerfile`, `deploy/Dockerfile` and `deploy/compose.yaml` is pinned by digest as well as tag, and Dependabot's `docker` ecosystem opens pull requests when the digest moves.
 - Every `uses:` in `.github/workflows/ci.yml` is pinned to a full commit SHA (`actions/checkout`, `actions/setup-python`), and `tests/unit/test_workflow_actions_pinned.py` fails on any workflow action referenced by a tag or branch.
 - The ruff lint gate enforces a function complexity ceiling of 30 (`C901`); existing over-ceiling files are exempted by file in `pyproject.toml` and may only shrink.

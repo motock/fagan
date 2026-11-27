@@ -33,6 +33,12 @@ A few things worth knowing when assessing this codebase's attack surface:
   pipeline does, not a bug — but it means a malicious or compromised plan
   (`agent_instructions`, `acceptance` fixtures) is a genuine code-execution
   vector. Don't ingest a plan from a source you don't trust.
+- **The review step also runs model-written shell commands** (`/bin/sh -c`,
+  `app/ollama_prompt_utils.py`). They run with a secret-stripped environment
+  and a 30 minute ceiling, and are sandboxed only when tenant execution is
+  configured. On a single-operator install they run as the pipeline's own
+  user, so the repository under review must be trusted to the same degree
+  as a plan.
 - **The dashboard's HTTP API is gated by a shared-secret key.** Every request
   under the `/api/` prefix (`app/dashboard.py`'s middleware) must present a
   matching `X-Pipeline-Api-Key` header, checked with a constant-time

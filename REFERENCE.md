@@ -3724,14 +3724,14 @@ line, and is emitted in a fixed order:
 | --- | --- | --- | --- |
 | `fagan_scheduler_age_seconds` | gauge | — | Age of the scheduler's last health snapshot; omitted when no scheduler is reported. |
 | `fagan_scheduler_healthy` | gauge (1/0) | — | The scheduler probe's `healthy` verdict. |
-| `fagan_outbox_records` | gauge | — | Records waiting in the notification outbox. |
-| `fagan_outbox_oldest_age_seconds` | gauge | — | Age of the oldest outbox record; omitted when no record has a usable timestamp. |
+| `fagan_outbox_records` | gauge | — | Records waiting in the notification outbox, across every namespace (the default namespace and each namespace that holds a plan). |
+| `fagan_outbox_oldest_age_seconds` | gauge | — | Age of the oldest outbox record across every namespace; omitted when no record has a usable timestamp. |
 | `fagan_broker_reachable` | gauge (1/0) | — | Whether the broker answered the consumer-status probe. |
 | `fagan_consumer_pending` | gauge | `durable` | Messages pending for that durable consumer. |
 | `fagan_consumer_subscribed` | gauge (1/0) | `durable` | Whether the durable consumer is subscribed. |
 | `fagan_consumer_dead_lettered` | gauge | `durable` | Messages on the durable's dead-letter subject. |
 | `fagan_consumer_oldest_pending_age_seconds` | gauge | `durable` | Age of the oldest pending message; omitted when unknown. |
-| `fagan_plans` | gauge | `status` | Plans by approval status (`approved`, `pending_approval`, `rejected`, `none`). The plans are the record store's when it answers (a `PIPELINE_STORE=sqlite` deployment counts what the database knows, including a plan with no file on this host); otherwise this host's plan manifests. A plan name that fails the plan-route key check is skipped, and a manifest that is missing or unreadable is not counted. |
+| `fagan_plans` | gauge | `status` | Plans by approval status (`approved`, `pending_approval`, `rejected`, `none`), across every namespace (the default namespace and each namespace that holds a plan; no namespace or plan name is a label). The plans are the record store's when it answers (a `PIPELINE_STORE=sqlite` deployment counts what the database knows, including a plan with no file on this host); otherwise this host's plan manifests. A plan name that fails the plan-route key check is skipped, and a manifest that is missing or unreadable is not counted. |
 | `fagan_story_dispatch_to_review_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to the start of its first review, at `quantile="0.5"` and `quantile="0.9"`. |
 | `fagan_story_review_to_merge_seconds` | gauge | `quantile` | Seconds from the start of the first review to the merge, rework loops included, at the same two quantiles. |
 | `fagan_story_cycle_seconds` | gauge | `quantile` | Seconds from a story's first dispatch to its merge, at the same two quantiles. |

@@ -47,6 +47,7 @@ from pydantic import BaseModel
 from pipeline import outbox_health
 from pipeline.host_state import HostState, build_host_state
 from pipeline.store import Store, build_store
+from pipeline.store_namespaces import outbox_summary_across_namespaces
 from pipeline.store_records import DEFAULT_NAMESPACE
 
 #: Env var carrying the scheduler staleness threshold, in seconds.
@@ -218,7 +219,7 @@ def health_extras(
     )
     try:
         records = cast(Any, build_store() if store is None else store).records()  # cast: Protocol omits records()
-        summary = records.outbox_summary(DEFAULT_NAMESPACE)  # intentional: background consumer
+        summary = outbox_summary_across_namespaces(records, DEFAULT_NAMESPACE)
     except Exception:  # noqa: BLE001 (read-only probe: an unreadable store is "no outbox")
         # A rejected PIPELINE_STORE selection must not turn the health probe
         # into a 500; the runtime block reports it as "invalid" instead.

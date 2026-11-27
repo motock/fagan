@@ -86,6 +86,7 @@ in practice.
 
 ### Fixed
 
+- The process-wide metrics scrape and the `/api/health` outbox block count every namespace's plans and notification outbox, not only the default namespace's: `fagan_plans`, `fagan_outbox_records` and `fagan_outbox_oldest_age_seconds` used to read zero plans and an empty outbox on a deployment whose teams keep their plans in their own namespaces. A namespace whose read fails is skipped and logged by error type; the others are still counted.
 - A dispatched agent's log no longer opens with false warnings that `PIPELINE_TRANSPORT_NUM_CTX`, `PIPELINE_TRANSPORT_TEMPERATURE` and `PIPELINE_TRANSPORT_MAX_STEPS` are set in the environment: the dispatcher set them itself, so a process carrying `PIPELINE_CORRELATION_ID` skips the transport-only warning, while a long-lived operator process still warns.
 - The off-task guard ignores version numbers, paths outside the worktree and the agent's own `.agent_*` files, and the agent's automatic commits never include those files.
 - `export_plan` reads the plan from the namespace bound to the call; it used to read the default namespace only, so a team's plan answered `Plan not found`.

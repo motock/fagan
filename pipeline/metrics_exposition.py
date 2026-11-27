@@ -36,6 +36,11 @@ from pipeline.events_nats_consumer import consumer_status
 from pipeline.health_freshness import health_extras
 from pipeline.service_levels import MEASURES as SERVICE_LEVEL_MEASURES
 from pipeline.service_levels import service_level_percentiles
+from pipeline.store_namespaces import (
+    outbox_summary_across_namespaces,
+    process_wide_namespaces,
+    read_each_namespace,
+)
 from pipeline.store_records import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
@@ -205,12 +210,8 @@ def _approval_status(manifest: Any) -> str:
     return status if status in PLAN_STATUSES else "none"
 
 
-def _plan_samples(records: Any, counts: dict[str, int]) -> list[tuple[dict, int]]:
-    """Count the plans the injected store knows by approval status, in fixed order.
-
-    The plan listing and each manifest come from the store's record view, so a
-    store-backed deployment counts the plans its record store knows and never
-    this host's manifest files. An empty store therefore counts zero plans.
+def _namespace_plan_counts(records: Any, namespace: str) -> dict[str, int]:
+    """Count one namespace's plans by approval status.
 
     Every name is checked by :func:`pipeline.parsers._validate_key` before it is
     read, because the record store's ``list_plans`` is not separator-checked: a
@@ -218,19 +219,38 @@ def _plan_samples(records: Any, counts: dict[str, int]) -> list[tuple[dict, int]
     invalid name is skipped: it is neither read nor counted. A manifest that is
     missing or not a JSON object is skipped rather than counted.
     """
-    # intentional: the scrape is process-wide and binds no request namespace
-    for name in records.list_plans(DEFAULT_NAMESPACE):
+    counts = dict.fromkeys(PLAN_STATUSES, 0)
+    for name in records.list_plans(namespace):
         name = str(name)
         try:
             parsers._validate_key(name)
         except ValueError:
             continue
-        # intentional: the same process-wide scrape, so the default namespace
-        manifest = records.get_manifest(DEFAULT_NAMESPACE, name)
+        manifest = records.get_manifest(namespace, name)
         if not isinstance(manifest, dict):
             continue
         counts[_approval_status(manifest)] += 1
-    return [({"status": status}, counts[status]) for status in PLAN_STATUSES]
+    return counts
+
+
+def _plan_samples(records: Any, namespaces: list[str]) -> list[tuple[dict, int]]:
+    """Count the plans the injected store knows by approval status, in fixed order.
+
+    The plan listing and each manifest come from the store's record view, so a
+    store-backed deployment counts the plans its record store knows and never
+    this host's manifest files. An empty store therefore counts zero plans.
+    *namespaces* is the process-wide set, summed into one count per status: no
+    namespace or plan name becomes a label. A namespace whose read raises is
+    skipped, see :func:`pipeline.store_namespaces.read_each_namespace`.
+    """
+    totals = dict.fromkeys(PLAN_STATUSES, 0)
+    per_namespace = read_each_namespace(
+        namespaces, lambda namespace: _namespace_plan_counts(records, namespace)
+    )
+    for counts in per_namespace:
+        for status in PLAN_STATUSES:
+            totals[status] += counts[status]
+    return [({"status": status}, totals[status]) for status in PLAN_STATUSES]
 
 
 def _scheduler_samples(snapshot: dict, extras: Any) -> None:
@@ -306,14 +326,13 @@ def _service_level_samples(snapshot: dict, percentiles: Any) -> None:
 
 
 def outbox_summary(store: Any) -> dict:
-    """Return the notification outbox aggregate, from the injected store.
+    """Return the notification outbox aggregate over every namespace, from the injected store.
 
     The store owns the outbox queues, so the scrape asks it for the aggregate
     rather than walking a directory. Kept as this module's own producer seam, so
     ``collect`` calls it through the module attribute and a test can replace it.
     """
-    # intentional: the outbox gauge is process-wide, so it reads the default
-    return store.records().outbox_summary(DEFAULT_NAMESPACE)
+    return outbox_summary_across_namespaces(store.records(), DEFAULT_NAMESPACE)
 
 
 def _component_samples(snapshot: dict, rows: Any) -> None:
@@ -398,8 +417,9 @@ def collect(
         )
 
     try:
+        records = injected.records()
         snapshot["fagan_plans"] = _plan_samples(
-            injected.records(), dict.fromkeys(PLAN_STATUSES, 0)
+            records, process_wide_namespaces(records, DEFAULT_NAMESPACE)
         )
     except Exception:  # noqa: BLE001 - a probe failure must not break the scrape
         errors["plans"] += 1

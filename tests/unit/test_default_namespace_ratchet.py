@@ -53,7 +53,7 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/bound_records.py": 2,
     "pipeline/health_freshness.py": 2,
     "pipeline/ci.py": 3,
-    "pipeline/metrics_exposition.py": 4,
+    "pipeline/metrics_exposition.py": 3,
     "pipeline/namespace_resolver.py": 2,
     "pipeline/persistence.py": 2,
     "pipeline/plan_draft.py": 3,
@@ -106,7 +106,7 @@ ALLOWLIST_REASONS: dict[str, str] = {
     "pipeline/telemetry.py": "telemetry's own process-wide label for the default namespace, not a request scope",
     "pipeline/tools/backfill_plan_source.py": "backfill tool: moves file-layout plans into the default namespace",
     "pipeline/tools/import_file_store.py": "import tool: file-layout data is imported into the default namespace",
-    "pipeline/health_freshness.py": "background consumer: outbox probe reads the default partition; no request is bound",
+    "pipeline/health_freshness.py": "background consumer: outbox probe reads every namespace, passing the default; no request is bound",
     "pipeline/audit_contract.py": "audit contract definition: the contract names the default chain namespace",
 }
 

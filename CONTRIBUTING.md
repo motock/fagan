@@ -39,10 +39,10 @@ scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 ```bash
 .venv/bin/python -m pytest -q       # full suite must pass
 .venv/bin/python -m ruff check .    # must be clean
-.venv/bin/python -m mypy            # must be clean; the baseline in pyproject.toml only shrinks
+.venv/bin/python -m mypy            # must be clean
 ```
 
-mypy checks `pipeline/` and `app/`. Modules that already failed when the gate was added are listed in the `[[tool.mypy.overrides]]` baseline in `pyproject.toml`; fix a listed module and remove it from that list, but never add a module to it.
+mypy checks `pipeline/` and `app/`. Every module in `pipeline` and `app` is checked; there is no exemption list, so fix new errors rather than ignoring a module.
 
 Ruff enforces a function complexity ceiling of 30 (rule `C901`, `max-complexity` in `pyproject.toml`). The ceiling measures the function itself, so moving a large function into its own file does not satisfy it. Files that already exceed it are listed under `[tool.ruff.lint.per-file-ignores]`; refactor a listed file and remove it from that list once its functions are under 30, but never add a file to the list.
 

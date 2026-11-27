@@ -123,10 +123,3 @@ max-complexity = 30
 files = ["pipeline", "app"]
 ignore_missing_imports = true
 warn_unused_ignores = true
-
-# Baseline recorded 2026-11: modules that failed when the gate was added. Remove a module when it is clean; never add one.
-[[tool.mypy.overrides]]
-module = [
-    "pipeline.ingest",
-]
-ignore_errors = true

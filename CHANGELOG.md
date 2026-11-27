@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- 24 more modules (`pipeline`, `access_hooks`, `advance_*`, `audit*`, `ci`, `events` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - `shell=True` is gone from production code: the reviewer's bash runner and the local `file://` sync runner call `/bin/sh -c` explicitly, ruff `S602`/`S604` forbid it from returning, and SECURITY.md documents the review step's command-execution trust boundary.
 - The `python:3.12-slim` base image in `Dockerfile`, `deploy/Dockerfile` and `deploy/compose.yaml` is pinned by digest as well as tag, and Dependabot's `docker` ecosystem opens pull requests when the digest moves.
 - Every `uses:` in `.github/workflows/ci.yml` is pinned to a full commit SHA (`actions/checkout`, `actions/setup-python`), and `tests/unit/test_workflow_actions_pinned.py` fails on any workflow action referenced by a tag or branch.

@@ -105,8 +105,8 @@ def claim_dispatch_lease(
     else:
         raw = os.environ.get(_TTL_ENV_VAR)
         try:
-            resolved = int(raw)
-        except (TypeError, ValueError):
+            resolved = _DEFAULT_TTL_S if raw is None else int(raw)
+        except ValueError:
             resolved = _DEFAULT_TTL_S
         ttl = _validated_ttl_s(resolved, from_env=True)
 

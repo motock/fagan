@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import MutableMapping
+from pathlib import Path
 
 
-def _load_env_file(repo_root: str | os.PathLike[str], environ: dict[str, str]) -> None:
+def _load_env_file(repo_root: str | os.PathLike[str], environ: MutableMapping[str, str]) -> None:
     """Populate ``environ`` from ``<repo_root>/.pipeline.env`` (CFG-E2).
 
     Extracted from the import-time bootstrap below so tests can drive the
@@ -55,14 +57,16 @@ def _load_env_file(repo_root: str | os.PathLike[str], environ: dict[str, str]) -
         # can scope it. Unset/empty -> default repo-root lookup; a named file
         # that does not exist loads NOTHING (no fallback, no raise).
         override = environ.get("PIPELINE_ENV_FILE")
+        env_path: str | Path
         if override:
             if not os.path.isfile(override):
                 return
             env_path = override
         else:
-            env_path = env_file.find_env_file(repo_root)
-            if env_path is None:
+            found = env_file.find_env_file(os.fspath(repo_root))
+            if found is None:
                 return
+            env_path = found
         # Parse the WHOLE file into a dict before touching environ: a
         # malformed or unreadable file must leave the environment completely
         # unchanged (no partial injection).

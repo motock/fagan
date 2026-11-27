@@ -213,7 +213,7 @@ def _terminate_and_checkpoint(
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
     interrupted_at = datetime.now(UTC).isoformat()
-    record = {
+    record: dict[str, Any] = {
         "step": step,
         "summary": summary,
         "next_hint": "",

@@ -44,7 +44,7 @@ _REASON = (
 )
 
 
-def ignored_env_vars_present(environ: dict | None = None) -> list[dict]:
+def ignored_env_vars_present(environ: Mapping[str, str] | None = None) -> list[dict]:
     """Return a list of dicts describing transport-only env vars present.
 
     Parameters

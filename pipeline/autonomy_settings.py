@@ -18,6 +18,7 @@ deployment layer, so a lower layer may only tighten it.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from pipeline.policy_settings import SETTINGS_ERROR_KEY
 from pipeline.settings_registry import REGISTRY
@@ -81,14 +82,14 @@ def effective(key: str, legacy, context) -> object:
 
 def effective_autonomy(legacy: str, context) -> str:
     """Return the autonomy mode in force, ``legacy`` being the environment value."""
-    return effective("autonomy", str(legacy).lower(), context)
+    return cast(str, effective("autonomy", str(legacy).lower(), context))  # effective returns the value or its fallback
 
 
 def effective_auto_merge(legacy: bool, context) -> bool:
     """Return whether auto-merge is in force, ``legacy`` being the env value."""
-    return effective("auto_merge", legacy, context)
+    return cast(bool, effective("auto_merge", legacy, context))  # effective returns the value or its fallback
 
 
 def effective_triage_mode(legacy: str, context) -> str:
     """Return the triage mode in force, ``legacy`` being the environment value."""
-    return effective("triage_mode", legacy, context)
+    return cast(str, effective("triage_mode", legacy, context))  # effective returns the value or its fallback

@@ -254,7 +254,7 @@ def key_conflicts(keys, manifests: dict[str, dict], worktree_root, *, resuming=(
     neighbour does not conflict whether or not the directory exists; an
     unsatisfied neighbour still does. Matching is case-insensitive.
     """
-    wanted = {}
+    wanted: dict[str, list[str]] = {}
     for key in keys:
         if isinstance(key, str) and key:
             wanted.setdefault(key.lower(), []).append(key)

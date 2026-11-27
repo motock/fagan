@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from app import role_registry
 
@@ -58,6 +58,9 @@ from .live_ref import LiveRef as _ServerRef
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
 from .repo_clone import parse_repo_url
+
+if TYPE_CHECKING:
+    from .forge_github import GitHubForge
 from .settings_store import effective_setting, read_layers
 from .settings_team import settings_team
 from .test_scope import (
@@ -220,7 +223,8 @@ def _fetch_ci_failure_excerpt(branch: str) -> str | None:
     Delegates to the active forge adapter; returns ``None`` on any failure so
     callers can fall back to the classification-only ``error``. Never raises.
     """
-    return get_forge(_scoped_repo_cwd()).failure_log_excerpt(branch)
+    # Only reached through the GitHub adapter, which owns this verb.
+    return cast("GitHubForge", get_forge(_scoped_repo_cwd())).failure_log_excerpt(branch)
 
 
 def _ci_rerun(sha: str) -> bool:
@@ -229,7 +233,8 @@ def _ci_rerun(sha: str) -> bool:
     Delegates to the active forge adapter. Never raises; on any failure it
     returns ``False`` so callers can fall back to the ordinary retry logic.
     """
-    return get_forge(_scoped_repo_cwd()).rerun_workflow(sha)
+    # Only reached through the GitHub adapter, which owns this verb.
+    return cast("GitHubForge", get_forge(_scoped_repo_cwd())).rerun_workflow(sha)
 
 
 def _aggregate_ci_states(snapshot: dict[str, str]) -> str:

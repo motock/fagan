@@ -61,6 +61,7 @@ its value, because a sink URI may carry a credential.
 from __future__ import annotations
 
 import fcntl
+import functools
 import json
 import logging
 import os
@@ -458,9 +459,9 @@ def _chain_heads() -> Iterator[tuple[str, tuple[int, str]]]:
             head = _head(lambda: log.head(DEFAULT_NAMESPACE, HOST_CHAIN_ID), chain)
         elif chain.startswith("decisions:"):
             path = decision_records.decision_stream_path(chain.removeprefix("decisions:"))
-            head = _head(lambda path=path: audit._tail(path), chain)
+            head = _head(functools.partial(audit._tail, path), chain)
         else:
-            head = _head(lambda chain=chain: log.head(DEFAULT_NAMESPACE, chain), chain)
+            head = _head(functools.partial(log.head, DEFAULT_NAMESPACE, chain), chain)
         if head is not None:
             yield chain, head
 

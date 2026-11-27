@@ -33,7 +33,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pipeline
 from pipeline.actor import (
@@ -136,7 +136,7 @@ def _advance(plan: str, requested: object = None) -> dict[str, Any]:
                 audit_refusal(reason)
                 return {"ok": False, "error": reason}
             with bind_namespace(namespace):
-                return pipeline.server.advance_pipeline(plan)
+                return cast(Any, pipeline.server).advance_pipeline(plan)
     except Exception as exc:  # noqa: BLE001 - reported by class name
         # Class name only: the message can carry filesystem paths.
         logger.warning(

@@ -81,10 +81,12 @@ def claim(worktree) -> dict | None:
     # renamed to the claimed name would wedge every later claim.
     if not stat.S_ISREG(info.st_mode):
         _clear(drop)
-        return _refuse("not_regular")
+        _refuse("not_regular")
+        return None
     if info.st_size > _MAX_BYTES:
         _clear(drop)
-        return _refuse("too_large")
+        _refuse("too_large")
+        return None
     _clear_stale_claim(claimed)
     try:
         os.replace(drop, claimed)
@@ -92,7 +94,8 @@ def claim(worktree) -> dict | None:
         return None
     except OSError:
         _clear(drop)
-        return _refuse("claim_failed")
+        _refuse("claim_failed")
+        return None
     try:
         return _read_claimed(claimed)
     finally:
@@ -103,35 +106,43 @@ def _read_claimed(path: str) -> dict | None:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
-        return _refuse("not_regular")
+        _refuse("not_regular")
+        return None
     # A directory opens read-only without error, so the type is checked on
     # the open descriptor before anything is read from it.
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
-        return _refuse("not_regular")
+        _refuse("not_regular")
+        return None
     with os.fdopen(fd, "rb") as fh:
         raw = fh.read(_MAX_BYTES + 1)
     if len(raw) > _MAX_BYTES:
-        return _refuse("too_large")
+        _refuse("too_large")
+        return None
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except ValueError:
-        return _refuse("not_json")
+        _refuse("not_json")
+        return None
     return _validate(parsed)
 
 
 def _validate(parsed) -> dict | None:
     if not isinstance(parsed, dict):
-        return _refuse("bad_field")
+        _refuse("bad_field")
+        return None
     step = parsed.get("step")
     if not isinstance(step, str) or not 1 <= len(step.strip()) <= _MAX_STEP:
-        return _refuse("bad_field")
+        _refuse("bad_field")
+        return None
     summary = parsed.get("summary", "")
     if not isinstance(summary, str) or len(summary) > _MAX_SUMMARY:
-        return _refuse("bad_field")
+        _refuse("bad_field")
+        return None
     next_hint = parsed.get("next_hint", "")
     if not isinstance(next_hint, str) or len(next_hint) > _MAX_NEXT_HINT:
-        return _refuse("bad_field")
+        _refuse("bad_field")
+        return None
     commit = parsed.get("commit")
     if not (isinstance(commit, str) and _COMMIT_RE.fullmatch(commit)):
         commit = None

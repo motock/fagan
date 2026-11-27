@@ -323,7 +323,8 @@ class JsonlEventBus(EventBus):
                 parsed_events.append(ev)
         # Dispatch events.
         for ev in parsed_events:
-            handlers = self._handlers.get(ev.get("type"), [])
+            ev_type = ev.get("type")
+            handlers = [] if ev_type is None else self._handlers.get(ev_type, [])
             for h in handlers:
                 try:
                     h(ev)

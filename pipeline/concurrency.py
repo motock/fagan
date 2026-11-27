@@ -76,7 +76,7 @@ class _ServerRef:
 if _pre_reload_server_ref is not None:
     # Restore the original class object so by-value importers keep their
     # identity across reloads (see the comment above the capture).
-    _ServerRef = _pre_reload_server_ref
+    _ServerRef = _pre_reload_server_ref  # type: ignore[misc]  # reload restores the original class object
 del _pre_reload_server_ref
 
 # Same live-binding rule as above: the record store is read from the server

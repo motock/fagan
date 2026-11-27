@@ -227,7 +227,7 @@ def _step_detached_test_author(
         if marker_path.exists():
             return "not_applicable"
 
-        if has_phase:
+        if isinstance(phase, dict):
             # Lazy import at call time (the same lazy-resolution property
             # pipeline.dispatch gets from _ServerRef for _run_test_author_phase)
             # so tests can patch pipeline.test_author.collect_test_author_phase.

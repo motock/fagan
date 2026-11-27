@@ -48,7 +48,7 @@ class InMemoryAuditLog:
         validate_namespace(namespace)
         validate_chain(chain)
         with self._lock:
-            return copy.deepcopy(self._chains.get(namespace, {}).get(chain, []))
+            return list(copy.deepcopy(self._chains.get(namespace, {}).get(chain, [])))
 
     def head(self, namespace: str, chain: str) -> dict | None:
         """Return the newest record of the chain, or ``None`` when absent."""

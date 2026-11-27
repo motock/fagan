@@ -69,7 +69,7 @@ def _step_resolve_context(
 
     context = manifest.get("context")
     sources = ctxsrc.sources_for_phase(context["sources"], "dispatch") if context else []
-    if not sources:
+    if not sources or context is None:
         return "", None
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     digests = story.setdefault("context_digests", {})

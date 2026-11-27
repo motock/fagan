@@ -23,7 +23,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from app.plugin_loader import (
     load_plugin,
@@ -89,7 +89,7 @@ def merge_decision(
     return decide(story)
 
 
-def merge_refusal(plan_name: str, story: dict[str, Any]) -> dict[str, str] | None:
+def merge_refusal(plan_name: str, story: dict[str, Any]) -> dict[str, Any] | None:
     """Return the error result when the hook refuses a manual merge, else None.
 
     Unlike ``refuse_dispatch`` this parks nothing: the caller returns the error
@@ -175,7 +175,8 @@ def _hook() -> RepoAccessHook | None:
     if plugin_spec(_SEAM) is None:
         return None
     require_allowlist(_SEAM)
-    hook = load_plugin(_SEAM)()
+    # plugin_spec() above is not None, so load_plugin returns a factory.
+    hook = cast(Callable, load_plugin(_SEAM))()
     require_methods(hook, ("check",), "repo access hook")
     return hook
 
@@ -232,7 +233,8 @@ def _reference_hook() -> ReferenceHook | None:
     if plugin_spec(_REFERENCE_SEAM) is None:
         return None
     require_allowlist(_REFERENCE_SEAM)
-    hook = load_plugin(_REFERENCE_SEAM)()
+    # plugin_spec() above is not None, so load_plugin returns a factory.
+    hook = cast(Callable, load_plugin(_REFERENCE_SEAM))()
     require_methods(hook, ("allow",), "reference hook")
     return hook
 
@@ -345,6 +347,7 @@ def _admission_hook() -> AdmissionHook | None:
     if plugin_spec(_ADMISSION_SEAM) is None:
         return None
     require_allowlist(_ADMISSION_SEAM)
-    hook = load_plugin(_ADMISSION_SEAM)()
+    # plugin_spec() above is not None, so load_plugin returns a factory.
+    hook = cast(Callable, load_plugin(_ADMISSION_SEAM))()
     require_methods(hook, ("admit",), "admission hook")
     return hook

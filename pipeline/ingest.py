@@ -24,6 +24,7 @@ from typing import Any
 from . import (
     cross_plan,
     external_refs,  # noqa: F401
+    ingest_manifest,
     ingest_preflight,
     ingest_validate,
     plan_draft,
@@ -45,10 +46,10 @@ from .ecosystem_detect import (  # noqa: F401
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
 )
-from .ingest_advisories import story_advisories
+from .ingest_advisories import story_advisories  # noqa: F401
 from .ingest_manifest import (
     build_manifest,
-    merge_descriptive_story_fields,
+    merge_descriptive_story_fields,  # noqa: F401
     plan_level_fields,
     validate_story_descriptions,  # noqa: F401
 )
@@ -59,7 +60,7 @@ from .plan_approval import approval_enabled, on_ingest
 from .plan_approval_notice import notify_approval_event, pending_notice_due
 from .repo_config import load_repo_config
 from .service import _ServerRef
-from .sizing_by_class import class_aware_sizing_warning
+from .sizing_by_class import class_aware_sizing_warning  # noqa: F401
 from .sizing_class import needs_small_story_caps, sizing_applies
 from .store_records import UnreadableRecordError
 
@@ -680,33 +681,9 @@ def _ingest_plan_impl(
         merged_epics = dict(prior.get("epics", {}))
         merged_epics.update(manifest["epics"])
 
-        merged_stories = dict(prior.get("stories", {}))
-        for key, new_story in manifest["stories"].items():
-            old_story = merged_stories.get(key)
-            if old_story is not None:
-                combined = dict(old_story)
-                for field in _INGEST_AUTHORED_STORY_FIELDS:
-                    if field == "risk" and old_story.get("status") != "todo":
-                        continue
-                    if field in ("files", "blocked_by", "test_scope"):
-                        # `files` and `blocked_by` are the authored fields
-                        # allowed to be absent from a re-ingested story:
-                        # present -> copied; absent -> the key is removed.
-                        if field in new_story:
-                            combined[field] = new_story[field]
-                        else:
-                            combined.pop(field, None)
-                        continue
-                    combined[field] = new_story[field]
-                # The descriptive fields (description/epic/plan_key) follow the
-                # same rule for merging only; they stay out of
-                # _INGEST_AUTHORED_STORY_FIELDS.
-                merge_descriptive_story_fields(combined, new_story)
-                # Hashed by canonical_digest; the stamped `backend` is not.
-                combined["authored_backend"] = new_story["authored_backend"]
-                merged_stories[key] = combined
-            else:
-                merged_stories[key] = new_story
+        merged_stories = ingest_manifest.merge_stories(
+            prior.get("stories", {}), manifest["stories"], _INGEST_AUTHORED_STORY_FIELDS
+        )
 
         final_manifest = dict(prior)
         final_manifest["epics"] = merged_epics
@@ -734,30 +711,10 @@ def _ingest_plan_impl(
         # Auto-route oversized on-device stories to the host's :cloud default
         # model before the manifest is written: an oversized story is still
         # dispatched, just not to a local executor that would choke on it.
-        # Mutate the story dicts final_manifest holds so the route is
-        # persisted; the routed-key set is per-ingest only (a re-ingested
-        # story already on a :cloud model fails _on_device_route_target.)
-        routed_keys: set[str] = set()
-        routed: list[tuple[str, str, str]] = []
-        for key, story in final_manifest["stories"].items():
-            warning = class_aware_sizing_warning(story, repo_root, plan.get("role_config"), _story_sizing_warning)
-            if warning is None:
-                continue
-            tag = _on_device_route_target(story)
-            if tag is None:
-                continue
-            from_backend = story.get("backend")
-            from_model = story.get("model")
-            story["backend"] = "ollama"
-            story["model"] = tag
-            story["sizing_auto_routed"] = {
-                "from_backend": from_backend,
-                "from_model": from_model,
-                "to_model": tag,
-                "reason": warning,
-            }
-            routed_keys.add(key)
-            routed.append((key, tag, warning))
+        routed = ingest_manifest.route_oversized_stories(
+            final_manifest["stories"], repo_root, plan.get("role_config")
+        )
+        routed_keys = {key for key, _tag, _warning in routed}
 
         # Opt-in plan-approval gate (ENT-LC-01); a no-op while PIPELINE_PLAN_APPROVAL is off.
         notify_pending = False
@@ -806,53 +763,12 @@ def _ingest_plan_impl(
         # allows a non-Claude dispatch tier, or names a file already over the
         # file-size cap. Advisory only -- a human plan author may have
         # deliberately authorized a larger story, so this never blocks.
-        for key, story in final_manifest["stories"].items():
-            if key in routed_keys:
-                # Already notified with the sizing_auto_routed event above;
-                # a second plain warning would double-notify the same story.
-                warning = None
-            else:
-                warning = _story_sizing_warning(
-                    _sizing_view(story, final_manifest.get("role_config")), repo_root
-                )
-            if warning:
-                if not os.environ.get(
-                    "PIPELINE_LOCAL_MODEL_DEFAULT", ""
-                ).endswith(":cloud"):
-                    warning += _AUTO_ROUTE_SKIPPED_SUFFIX
-                _notify_user(plan_name, f"{key}: {warning}", event="sizing_risk", story_key=key)
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
-            for event, text in story_advisories(story, repo_root, final_manifest.get("repo_url"), _store):
-                _notify_user(plan_name, f"{key}: {text}", event=event, story_key=key)
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {text}")
-            # Non-blocking authoring nudge: flag acceptance fixtures that
-            # depend on macOS-only tooling. Dispatch, the done-bar and the
-            # merge-gate reverify all run on macOS, but CI runs ubuntu-latest
-            # only, so such a fixture passes every local gate and fails only
-            # after the PR is open (observed live 2026-07-30). Advisory only.
-            msg = _security_review_unenforced_warning(story)
-            if msg is not None:
-                _notify_user(plan_name, f"{key}: {msg}", event="security_review_unenforced", story_key=key)
-            platform_msg = _platform_locked_fixture_warning(story)
-            if platform_msg is not None:
-                _notify_user(plan_name, f"{key}: {platform_msg}")
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {platform_msg}")
-            # Non-blocking authoring nudge: flag a local-dispatch story whose
-            # test_author/planner scaffolding roles resolve to a DIFFERENT
-            # provider - exactly the configuration that silently dropped the
-            # TDD-split crutch from two stories on 2026-07-30 (both parked).
-            # Advisory only.
-            story_backend = story.get("backend") or os.environ.get(
-                "PIPELINE_BACKEND_DISPATCH", "claude"
-            ).strip().lower()
-            role_msg = _scaffolding_provider_mismatch_warning(
-                dispatch_backend=story_backend,
-                role_config=final_manifest.get("role_config"),
-                registry_roles=role_registry.load_registry().get("roles", {}),
-            )
-            if role_msg is not None:
-                _notify_user(plan_name, f"{key}: {role_msg}")
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {role_msg}")
+        for key, body, notify_kwargs, log in ingest_manifest.iter_story_notices(
+            final_manifest, routed_keys, repo_root
+        ):
+            _notify_user(plan_name, f"{key}: {body}", **notify_kwargs)
+            if log:
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {body}")
 
         file_overlaps = _file_overlap_advisories(plan_name, final_manifest["stories"])
 

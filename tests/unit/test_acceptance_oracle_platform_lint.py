@@ -6,6 +6,7 @@ after the PR is open.
 import inspect
 
 import pipeline.server as srv
+from pipeline import ingest_manifest
 from pipeline.build_detect import _platform_locked_fixture_warning
 
 
@@ -53,7 +54,8 @@ def test_the_lint_is_wired_into_ingest_plan():
     # ingest_plan is a thin @mcp.tool() delegate onto _ingest_plan_impl (the
     # PipelineService W1a extraction); the lint calls live in the impl.
     src = inspect.getsource(srv._ingest_plan_impl)
-    assert "_platform_locked_fixture_warning" in src, (
+    notices_src = inspect.getsource(ingest_manifest.iter_story_notices)
+    assert "_platform_locked_fixture_warning" in notices_src, (
         "ingest_plan must call the lint; a lint nothing calls flags nothing"
     )
     assert "_isolation_only_acceptance_warning" in src, (

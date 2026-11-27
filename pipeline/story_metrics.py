@@ -148,7 +148,7 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
     counted twice: these are raw counts, and deduplication is the sink's job.
     """
     groups: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
-    disqualifying = {}
+    disqualifying: dict[str, int] = {}
     for record in records:
         if not isinstance(record, dict):
             continue

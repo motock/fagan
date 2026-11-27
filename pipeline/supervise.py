@@ -50,6 +50,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import cast
 
 DEFAULT_BACKOFF_SECONDS = 2.0
 DEFAULT_BACKOFF_MAX_SECONDS = 30.0
@@ -277,9 +278,9 @@ class Supervisor:
             # dropped: its status would be lost and the restart would never
             # happen. Only its status is recorded - the restart bookkeeping
             # stays in _check_children.
-            child = direct.get(pid)
-            if child is not None:
-                self._record_exit(child, status)
+            exited = direct.get(pid)
+            if exited is not None:
+                self._record_exit(exited, status)
 
     @staticmethod
     def _record_exit(child: Child, wait_status: int) -> None:
@@ -316,29 +317,35 @@ class Supervisor:
         running = [child for child in self._children if child.process is not None]
         for child in running:
             try:
-                child.process.send_signal(number)
+                _running_process(child).send_signal(number)
             except ProcessLookupError:  # exited between poll and signal
                 pass
         deadline = time.monotonic() + self._shutdown_grace
         for child in running:
             try:
-                child.process.wait(timeout=max(deadline - time.monotonic(), 0.0))
+                _running_process(child).wait(timeout=max(deadline - time.monotonic(), 0.0))
             except subprocess.TimeoutExpired:
                 pass
         for child in running:
-            if child.process.poll() is None:
+            process = _running_process(child)
+            if process.poll() is None:
                 log(
                     "%s did not exit within %.1fs; killing pid %s",
                     child.name,
                     self._shutdown_grace,
-                    child.process.pid,
+                    process.pid,
                 )
-                child.process.kill()
+                process.kill()
         for child in running:
-            child.process.wait()
+            _running_process(child).wait()
             child.process = None
         log("all children reaped; exiting")
         return 0
+
+
+def _running_process(child: Child) -> subprocess.Popen[bytes]:
+    # Callers only pass children selected by ``child.process is not None``.
+    return cast("subprocess.Popen[bytes]", child.process)
 
 
 def main(argv: list[str] | None = None) -> int:

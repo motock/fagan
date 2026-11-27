@@ -253,6 +253,7 @@ def dispatch_strength_class(
         # process env directly - `env` above is deliberately narrowed to {}
         # for a non-dict mapping, and os.environ is not a dict. Absent both,
         # None keeps the suffix/class rule as-is.
+        endpoint: str | None
         if environ is None:
             endpoint = endpoint_from_env()
         else:

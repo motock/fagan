@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import MutableMapping
 from pathlib import Path
 
 LOCAL_REGISTRY_NAME = "model_registry.local.json"
@@ -98,7 +99,7 @@ def apply_choices(
     choices: list[dict],
     *,
     registry_path: str | os.PathLike[str],
-    environ: dict | None = None,
+    environ: MutableMapping[str, str] | None = None,
     setter=None,
 ) -> list[dict]:
     """Apply ``choices`` through the setter, one role at a time.
@@ -126,15 +127,14 @@ def apply_choices(
             scopes.append(os.environ)
 
     path = str(Path(registry_path))
-    missing = object()
-    previous = [(scope, scope.get(REGISTRY_PATH_ENV, missing)) for scope in scopes]
+    previous = [(scope, scope.get(REGISTRY_PATH_ENV)) for scope in scopes]
     for scope in scopes:
         scope[REGISTRY_PATH_ENV] = path
     try:
         return [_apply_one(choice, setter, PIPELINE_ROLES) for choice in choices]
     finally:
         for scope, prior in previous:
-            if prior is missing:
+            if prior is None:
                 scope.pop(REGISTRY_PATH_ENV, None)
             else:
                 scope[REGISTRY_PATH_ENV] = prior

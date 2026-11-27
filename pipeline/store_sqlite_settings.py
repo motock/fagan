@@ -16,6 +16,7 @@ store.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from pipeline.store_settings import (
@@ -54,6 +55,9 @@ class SettingsTablesMixin:
     """
 
     _conn: Any
+    _write_records: Callable[[], Any]
+    _record_row: Callable[[str, tuple], tuple | None]
+    _record_rows: Callable[[str, tuple], list[tuple]]
 
     def _settings_row(
         self, namespace: str, scope: str, scope_id: str, repo: str
@@ -127,6 +131,7 @@ class SettingsRecordsMixin:
     """
 
     _store: Any
+    _namespace: Callable[[str], None]
 
     def get_settings(
         self, namespace: str, scope: str, scope_id: str, repo: str

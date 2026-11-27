@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- 11 more modules (`setup.*`, `store`, `store_records`, `store_sqlite_settings`, `story_*`, `strength_class`, `supervise`) now pass the mypy gate and are off its baseline; no behaviour change.
 - 15 more modules (`review*`, `scheduler_daemon*`, `service*`, `settings_*` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - 26 more modules (`events_nats*`, `forge_*`, `jira_*`, `merge`, `metrics_exposition`, `park_option*`, `plan_*`, `remote_*` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - 24 more modules (`pipeline`, `access_hooks`, `advance_*`, `audit*`, `ci`, `events` and others) now pass the mypy gate and are off its baseline; no behaviour change.

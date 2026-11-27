@@ -128,17 +128,6 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = [
     "pipeline.ingest",
-    "pipeline.setup.envfile",
-    "pipeline.setup.providers",
-    "pipeline.setup.services",
-    "pipeline.setup.wizard",
-    "pipeline.store",
-    "pipeline.store_records",
-    "pipeline.store_sqlite_settings",
-    "pipeline.story_ci_read",
-    "pipeline.story_metrics",
-    "pipeline.strength_class",
-    "pipeline.supervise",
     "pipeline.telemetry",
     "pipeline.telemetry_durations",
     "pipeline.tenant_exec",

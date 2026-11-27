@@ -34,8 +34,10 @@ Design rules, all load-bearing:
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
+from typing import Any, cast
 
 from . import claude_setup, envfile, providers, services, ui
 from . import schema as _schema
@@ -146,7 +148,7 @@ def _as_list(value: object) -> list:
     if isinstance(value, str):
         return [value]
     try:
-        return list(value)
+        return list(cast("Iterable[object]", value))  # non-iterables raise TypeError, handled below
     except TypeError:
         return []
 
@@ -194,7 +196,7 @@ def _section_entry(name: str, enabled: bool, reason: str | None) -> dict:
     return {"name": name, "enabled": enabled, "reason": reason}
 
 
-def _normalize_port(port: object) -> tuple[bool, object]:
+def _normalize_port(port: Any) -> tuple[bool, Any]:
     message = "port must be a whole number between 1 and 65535"
     if isinstance(port, bool):
         return False, message
@@ -207,7 +209,7 @@ def _normalize_port(port: object) -> tuple[bool, object]:
     return True, value
 
 
-def _normalize_path_flag(flag: str, raw: object) -> tuple[bool, str | None]:
+def _normalize_path_flag(flag: str, raw: object) -> tuple[bool, str]:
     try:
         text = raw if isinstance(raw, str) else str(raw)
     except Exception:  # noqa: BLE001 - a hostile __str__ must not escape
@@ -594,7 +596,7 @@ def _default_ask(*, state: Mapping[str, object], flags: dict):
 
 def _ask_keys(keys: Sequence[str], current, *, kinds: Mapping | None = None) -> dict:
     kinds = kinds or {}
-    answers: dict[str, str] = {}
+    answers: dict[str, str | None] = {}
     for key in keys:
         spec = _SPECS[key]
         default = current.get(key) or spec.default or ""
@@ -604,7 +606,7 @@ def _ask_keys(keys: Sequence[str], current, *, kinds: Mapping | None = None) -> 
         answers[key] = ui.prompt_value(
             _prompt_label(key), kind="secret" if key in _SECRETS else kind,
             default=default, choices=spec.choices,
-            validate=lambda raw, k=key: _schema.validate_value(k, raw),
+            validate=partial(_schema.validate_value, key),
         )
     return answers
 
@@ -616,7 +618,7 @@ def _ask_core(current: Mapping[str, str], *, flags: dict) -> dict:
         default=DEFAULT_DATA_DIR,
         validate=lambda raw: _schema.validate_value("PLAN_DIR", raw),
     )
-    answers: dict[str, str] = {}
+    answers: dict[str, str | None] = {}
     if data_dir:
         answers["PLAN_DIR"] = str(Path(data_dir) / "plans")
         answers["WORKTREE_ROOT"] = str(Path(data_dir) / "worktrees")
@@ -715,7 +717,7 @@ def _prompt_label(key: str) -> str:
 
 
 def run_plan(
-    plan: Mapping[str, object], *, output: Callable[[str], None] = print,
+    plan: Mapping[str, Any], *, output: Callable[[str], None] = print,
     env_writer: Callable[..., dict] | None = None,
     provider_applier: Callable[..., object] | None = None,
     asset_installer: Callable[..., object] | None = None,
@@ -929,7 +931,7 @@ def _record_applier_failures(result: dict, failures: list[str]) -> None:
 # -- render_summary ---------------------------------------------------------
 
 
-def render_summary(result: Mapping[str, object]) -> str:
+def render_summary(result: Mapping[str, Any]) -> str:
     """Render ``result`` as deterministic, secret-free text.
 
     One line per section, then the masked changes, then any errors, then the
@@ -968,7 +970,7 @@ def render_summary(result: Mapping[str, object]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _summary_autonomy(result: Mapping[str, object]) -> str | None:
+def _summary_autonomy(result: Mapping[str, Any]) -> str | None:
     for field in ("changed", "planned"):
         values = result.get(field)
         value = values.get("PIPELINE_AUTONOMY") if isinstance(values, Mapping) else None
@@ -977,19 +979,19 @@ def _summary_autonomy(result: Mapping[str, object]) -> str | None:
     return None
 
 
-def _mcp_block(result: Mapping[str, object]) -> Mapping | None:
+def _mcp_block(result: Mapping[str, Any]) -> Mapping | None:
     assets = result.get("assets")
     mcp = assets.get("mcp") if isinstance(assets, Mapping) else None
     return mcp if isinstance(mcp, Mapping) else None
 
 
-def _render_block(result: Mapping[str, object]) -> Mapping | None:
+def _render_block(result: Mapping[str, Any]) -> Mapping | None:
     started = result.get("services")
     render = started.get("render") if isinstance(started, Mapping) else None
     return render if isinstance(render, Mapping) else None
 
 
-def _summary_next_steps(result: Mapping[str, object]) -> list[str]:
+def _summary_next_steps(result: Mapping[str, Any]) -> list[str]:
     steps = [str(step) for step in result.get("next_steps") or ()]
     mcp = _mcp_block(result)
     if mcp is not None and mcp.get("status") in ("failed", "skipped"):

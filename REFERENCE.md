@@ -61,8 +61,9 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   `_scope_test_cmd_to_acceptance` derives the scoped command per runner
   (pytest: append the fixture paths; cargo: `cargo test --test <stem>` per
   `tests/*.rs` fixture; npm/yarn: `node --test <paths>` when `scripts.test`
-  is `node --test`); an unscopeable runner falls back to the full suite. This
-  prevents a correct implementation from being blocked by the model's own wrong
+  is `node --test`); an unscopeable runner falls back to the full suite. A
+  fixture file missing from the working copy fails the gate outright, since a
+  scoped runner would otherwise exit 0 on it. This prevents a correct implementation from being blocked by the model's own wrong
   test assertions, but it also means the gate no longer catches regressions
   elsewhere in the worktree; the reviewer's own "run the test suite"
    instruction is the remaining backstop for those. Stories without an

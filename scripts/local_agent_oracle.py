@@ -31,9 +31,13 @@ missed this variant — every story with an `acceptance` block dispatches
 here, which is exactly the cohort that hits the "paralysis by analysis"
 pattern most.
 
+An acceptance fixture file missing from the working copy fails the oracle
+(oracle_result returns False, naming the path) without running the test command.
+At startup, a missing fixture ends the run before any model call.
+
 Exit codes:
   0 = oracle green, auto-committed, done
-  1 = LLM call failed (no commit)
+  1 = LLM call failed, or a startup-missing acceptance fixture (no commit)
   2 = step cap reached, WIP-committed
   3 = repetition OR read-heavy guard fired, WIP-committed
 """
@@ -241,6 +245,16 @@ def auto_commit(reason: str) -> None:
     return auto_commit_impl(globals(), reason)
 
 
+def missing_acceptance_fixtures() -> list[str]:
+    """ACCEPTANCE_PATHS entries that are not regular files under CWD.
+
+    Checked before any runner is trusted: a scoped runner given an absent
+    fixture matches no tests and exits 0, so its exit code cannot prove the
+    fixture passed.
+    """
+    return [rel for rel in ACCEPTANCE_PATHS if not (CWD / rel).is_file()]
+
+
 def oracle_result() -> tuple[bool, str]:
     """Run the harness-owned acceptance suite. Returns (passed, tail).
 
@@ -251,9 +265,13 @@ def oracle_result() -> tuple[bool, str]:
     (matches the same detector the orchestrator's check_story_status uses
     after the run finishes). On a non-zero exit (compile error, test
     failure, collection error) the tail is captured so the model can react.
+    A missing fixture file fails the oracle without running the command.
     """
     if not ACCEPTANCE_PATHS:
         return True, "(no acceptance files configured)"
+    missing = missing_acceptance_fixtures()
+    if missing:
+        return False, f"acceptance fixture missing from the working copy: {', '.join(missing)}"
     test_dir, test_cmd = p.detect_test_command(CWD)
     if test_cmd and test_cmd[0] == "pytest":
         argv = [*test_cmd, *ACCEPTANCE_PATHS, "-q", "--no-header", "-p", "no:cacheprovider"]
@@ -565,6 +583,17 @@ def _main_impl() -> int:
     resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
     if resume and resume_append:
         messages.append({"role": "user", "content": resume_append})
+
+    # A missing fixture means the oracle cannot grade this story at all. End the
+    # run before the first model call with exit 1 (LLM-call-failed path): it
+    # writes no commit, and the done marker grades the story as failed rather
+    # than parking or re-dispatching it (no step/infra retry can restore a file
+    # the checkout dropped). No new exit code.
+    missing = missing_acceptance_fixtures() if ACCEPTANCE_PATHS else []
+    if missing:
+        print(f"[boot] acceptance fixture missing from the working copy: {', '.join(missing)}",
+              flush=True)
+        return 1
 
     if not ACCEPTANCE_PATHS:
         print("[local_agent_oracle] WARNING: no LOCAL_AGENT_ACCEPTANCE; "

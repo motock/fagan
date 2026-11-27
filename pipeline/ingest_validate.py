@@ -27,7 +27,9 @@ from .ecosystem_detect import (
 from .ingest_manifest import validate_story_descriptions
 
 
-def read_draft_refusal(plan_name: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def read_draft_refusal(
+    plan_name: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Read the staged draft; return ``(plan, refusal)``."""
     from . import ingest as _home
 

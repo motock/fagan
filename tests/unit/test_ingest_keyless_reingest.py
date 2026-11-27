@@ -28,6 +28,7 @@ import pytest
 # pipeline.ingest first re-enters a partially-initialized pipeline.server.
 import pipeline.server as p
 from pipeline import ingest as ingest_mod
+from pipeline import ingest_validate
 from pipeline import persistence as ppers
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -261,11 +262,13 @@ def test_only_epics_naming_no_epic_is_safe() -> None:
 def test_check_is_wired_after_manifest_path_and_before_the_transaction() -> None:
     src = inspect.getsource(ingest_mod._ingest_plan_impl)
     manifest_at = src.index("already_ingested = plan_name in _store.records().list_plans(")
-    call_at = src.index("_keyless_reingest_error(")
+    call_at = src.index("ingest_validate.keyless_reingest_refusal(")
     txn_at = src.index("with _store.transaction(")
     assert manifest_at < call_at < txn_at
     assert "already_ingested" in src[call_at:txn_at]
-    assert '{"ok": False, "error": keyless_error}' in src[call_at:txn_at]
+    helper_src = inspect.getsource(ingest_validate.keyless_reingest_refusal)
+    assert "_keyless_reingest_error(" in helper_src
+    assert '{"ok": False, "error": keyless_error}' in helper_src
 
 
 # --------------------------------------------------------------------------- #

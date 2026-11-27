@@ -21,7 +21,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, external_refs, plan_draft, plan_names, testfiles
+from . import (
+    cross_plan,
+    external_refs,
+    ingest_validate,
+    plan_draft,
+    plan_names,
+    testfiles,
+)
 from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
 from .branch_names import worktree_parent
@@ -31,7 +38,7 @@ from .context_sources import (
     normalize_context_sources,
     validate_context_config,
 )
-from .ecosystem_detect import (
+from .ecosystem_detect import (  # noqa: F401
     UNSUPPORTED_MARKERS,
     detect_test_command,
     fail_loud_exit_message,
@@ -42,7 +49,7 @@ from .ingest_manifest import (
     build_manifest,
     merge_descriptive_story_fields,
     plan_level_fields,
-    validate_story_descriptions,
+    validate_story_descriptions,  # noqa: F401
 )
 from .ingest_plan_fields import _TEAM_RE, _team_error, _test_scope_error  # noqa: F401
 from .org_context_hook import merge_org_sources, plugin_org_sources
@@ -583,87 +590,19 @@ def _ingest_plan_impl(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     plan_names.validate_new_plan_name(plan_name)
-    plan, refusal = plan_draft.read_plan_draft(plan_name)
+    plan, refusal = ingest_validate.read_draft_refusal(plan_name)
     if refusal is not None:
-        missing = f"No plan named {plan_name}"
-        # A plan whose draft a full ingest consumed names the way out (ADR 0012).
-        if refusal.get("error") == missing and plan_name in _store.records().list_plans(
-            current_namespace()
-        ):
-            return {"ok": False, "error": (
-                f"plan '{plan_name}' has no staged draft: save_plan it "
-                "(export_plan renders the current plan) before re-ingesting")}
         return refusal
-
-    # advance_all_plans() iterates every plan in shared PLAN_DIR, each
-    # potentially belonging to a different repo, so a manifest without its
-    # own repo_root falls back to the global REPO_ROOT - the wrong repo for
-    # any plan other than the one that env var happens to be set for (or a
-    # deliberately-broken sentinel, if one's configured to fail loudly
-    # instead). Catching it here means a typo'd or missing path surfaces
-    # immediately, not as a cryptic ENOENT after three silent merge-attempt
-    # failures.
-    repo_root = plan.get("repo_root")
-    if not repo_root or not Path(repo_root).is_dir():
-        return {
-            "ok": False,
-            "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
-        }
-
-    # AUTH-02: the manifest records the team a policy decision is evaluated
-    # against (ADR 0009: principal -> team -> repo -> plan -> story). Validate
-    # it here, with the other plan-level fields and before any file is
-    # written, so a typo'd slug fails closed instead of landing on disk.
-    team_error = _team_error(plan) or _test_scope_error(plan)
-    if team_error is not None:
-        return {"ok": False, "error": team_error}
-
-    # LAG-5: a repo whose ecosystem fagan cannot test (Ruby, PHP, Swift,
-    # Elixir) would otherwise ingest fine and burn dispatch/rework budget on
-    # a test gate that always fails with "unsupported ecosystem". Rejecting
-    # here surfaces the fix (declare test_cmd in .fagan.json) before any
-    # executor is dispatched. A README-only repo (no marker at all) still
-    # keeps detect_test_command's no-op and ingests normally.
-    #
-    # detect_test_command lists repo_root (cwd.iterdir and its subdir scan),
-    # which raises OSError on a directory that exists but cannot be read
-    # (permissions, a stale NFS mount). The is_dir() check above only proves
-    # it stat()s, so keep this rejection in the same {"ok": False} shape
-    # instead of letting the OSError escape _ingest_plan_impl.
-    try:
-        test_dir, test_cmd = detect_test_command(Path(repo_root))
-    except OSError as error:
-        return {
-            "ok": False,
-            "error": f"Plan repo_root {repo_root!r} is not readable: {error}",
-        }
-    if is_unsupported_ecosystem_command(test_cmd):
-        # fail_loud_exit_message is also True for repo_config's
-        # invalid_config_command: a repo_root with a malformed .fagan.json is
-        # NOT an unsupported ecosystem, so its rejection must name the actual
-        # RepoConfigError reason instead of a marker that does not exist.
-        message = fail_loud_exit_message(test_cmd) or ""
-        if message.startswith("fagan: invalid .fagan.json: "):
-            reason = message[len("fagan: invalid .fagan.json: "):]
-            return {
-                "ok": False,
-                "error": (
-                    f"Plan repo_root {repo_root!r} has an invalid .fagan.json: "
-                    f"{reason}"
-                ),
-            }
-        marker = next(
-            (m for m in UNSUPPORTED_MARKERS if (Path(test_dir) / m).exists()),
-            "unsupported ecosystem",
-        )
-        return {
-            "ok": False,
-            "error": (
-                f"Plan repo_root {repo_root!r} uses an unsupported ecosystem "
-                f"({marker}): its test gate would exit non-zero with nothing "
-                f"run. Add a .fagan.json with a test_cmd to {repo_root!r}."
-            ),
-        }
+    refusal = ingest_validate.repo_root_refusal(plan)
+    if refusal is not None:
+        return refusal
+    repo_root = plan["repo_root"]
+    refusal = ingest_validate.plan_scope_refusal(plan)
+    if refusal is not None:
+        return refusal
+    refusal = ingest_validate.test_command_refusal(repo_root)
+    if refusal is not None:
+        return refusal
 
     # A plan-level preflight_override admits non-Claude stories whose brief
     # lacks a real `Preflight:` line (.claude/rules/local-dispatch-preflight.md).
@@ -742,33 +681,25 @@ def _ingest_plan_impl(
             if kind == "finding":
                 return {"ok": False, "error": lint_msg}
 
-    plan_context, context_error = _merged_context(plan, Path(repo_root))
-    if context_error is not None:
-        return {"ok": False, "error": context_error}
-    org_path = os.environ.get("PIPELINE_CONTEXT_CONFIG")
-    if org_path is not None and plan_context is not None:
-        org_count = sum(1 for s in plan_context["sources"] if s["origin"] == "org")
-        _notify_user(
-            plan_name,
-            f"context_resolved: org config {org_path} contributed {org_count} source(s)",
-            event="context_resolved",
-        )
+    plan_context, refusal = ingest_validate.merged_context_refusal(
+        plan_name, plan, repo_root
+    )
+    if refusal is not None:
+        return refusal
 
-    # ADR 0012 decision 5: the manifest records each story's authored
-    # description, so it must be a string. Validated here - before the
-    # transaction and any provider call - so a refusal writes nothing and
-    # leaves the previously ingested manifest on disk untouched.
-    description_refusal = validate_story_descriptions(plan, only_epics)
-    if description_refusal is not None:
-        return description_refusal
+    refusal = ingest_validate.description_refusal(plan, only_epics)
+    if refusal is not None:
+        return refusal
 
     already_ingested = plan_name in _store.records().list_plans(current_namespace())
-    keyless_error = _keyless_reingest_error(plan, only_epics, already_ingested, overwrite)
-    if keyless_error is not None:
-        return {"ok": False, "error": keyless_error}
-    key_conflict_error = _story_key_conflict_error(plan_name, plan, only_epics)
-    if key_conflict_error is not None:
-        return {"ok": False, "error": key_conflict_error}
+    refusal = ingest_validate.keyless_reingest_refusal(
+        plan, only_epics, already_ingested, overwrite
+    )
+    if refusal is not None:
+        return refusal
+    refusal = ingest_validate.key_conflict_refusal(plan_name, plan, only_epics)
+    if refusal is not None:
+        return refusal
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:

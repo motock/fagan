@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- The `python:3.12-slim` base image in `Dockerfile`, `deploy/Dockerfile` and `deploy/compose.yaml` is pinned by digest as well as tag, and Dependabot's `docker` ecosystem opens pull requests when the digest moves.
 - Every `uses:` in `.github/workflows/ci.yml` is pinned to a full commit SHA (`actions/checkout`, `actions/setup-python`), and `tests/unit/test_workflow_actions_pinned.py` fails on any workflow action referenced by a tag or branch.
 - The ruff lint gate enforces a function complexity ceiling of 30 (`C901`); existing over-ceiling files are exempted by file in `pyproject.toml` and may only shrink.
 - The review-logic fingerprint now also hashes the four modules `review_story` was split into (`review_scope_gate.py`, `review_unknown_verdict.py`, `review_high_risk.py`, `review_approve_path.py`), so previously reviewed stories are re-reviewed once after this lands.

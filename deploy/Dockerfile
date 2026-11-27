@@ -5,8 +5,8 @@
 # the long-running server an operator deploys:
 #
 #   * multi-stage, so compilers and pip caches never reach the runtime layer;
-#   * an exact python:3.12-slim tag (no `latest`: a rebuild must be
-#     reproducible);
+#   * a python:3.12-slim tag and digest (no `latest`: a rebuild must be
+#     reproducible, and the digest stops a re-pushed tag from changing it);
 #   * git in the runtime stage, because the pipeline shells out to it for
 #     worktrees and commits;
 #   * a numeric non-root uid (10001) that owns everything it writes;
@@ -36,7 +36,7 @@
 # Stage 1: build the virtualenv. Only requirements files are needed here, so
 # a dependency bump does not invalidate the application layers below.
 # --------------------------------------------------------------------------
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -54,7 +54,7 @@ RUN python -m venv /opt/venv \
 # --------------------------------------------------------------------------
 # Stage 2: runtime. No pip cache, no compiler toolchain, no root user.
 # --------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b AS runtime
 
 # Pinned tooling versions live inside the install step at the bottom of this
 # stage (GH_VERSION / NODE_VERSION / CLAUDE_CODE_VERSION). They are shell

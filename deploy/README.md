@@ -30,8 +30,10 @@ docker build -f deploy/Dockerfile -t pipeline-server .
 The build is two-stage: dependencies install into `/opt/venv` in a builder
 stage and only the finished virtualenv is copied into the runtime stage, so no
 compiler toolchain or pip cache reaches the published image. Both stages pin
-the exact tag `python:3.12-slim` — never `latest`, so a rebuild of the same
-commit produces the same base.
+the tag and digest `python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b`
+(the multi-architecture index digest) — never `latest`, so a rebuild of the
+same commit produces the same base. Dependabot's `docker` ecosystem entries in
+`.github/dependabot.yml` open a pull request when the digest moves.
 
 No secret is baked in. There is no `ARG`, no `.env` is copied, and the build
 context is never copied wholesale; a `COPY . .` from the repo root would sweep

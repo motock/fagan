@@ -122,6 +122,19 @@ def _init_git_repo(path):
     subprocess.run(["git", "config", "user.name", "Test"], check=False, cwd=path, capture_output=True, text=True)
 
 
+def _create_acceptance_fixtures(root, paths):
+    """Create each acceptance fixture as an empty file under `root`.
+
+    The oracle refuses to grade a fixture that is not in the working copy
+    (a missing file must not count as green), so any test that configures
+    ACCEPTANCE_PATHS against a temp CWD must materialize those files first.
+    """
+    for rel in paths:
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+
 def _finish_if_green_spy(monkeypatch, *, oracle_ok, full_ok, full_tail=""):
     """Wire oracle_result / _full_suite_result / auto_commit / worktree_dirty
     to deterministic fakes and return (messages, commits, full_calls) so a test

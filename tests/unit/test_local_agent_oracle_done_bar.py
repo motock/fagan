@@ -12,6 +12,7 @@ each case fails on its behavioral assertion rather than on a missing attribute.
 import pytest
 
 from tests.unit._local_agent_oracle_test_helpers import (  # noqa: F401
+    _create_acceptance_fixtures,
     _finish_if_green_spy,
     _isolate_environ,
     _sequence_chat,
@@ -99,8 +100,10 @@ def test_finish_if_green_does_not_consult_suite_when_oracle_red(monkeypatch, no_
 # --- the model's direct `done` call -----------------------------------------
 
 @pytest.fixture
-def done_loop(monkeypatch, no_rework):
+def done_loop(tmp_path, monkeypatch, no_rework):
     """Drive _main_impl() with a scripted `done`; oracle green, tree clean."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/acceptance_x.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/acceptance_x.py"])
     monkeypatch.setattr(lao, "_capture_oracle_snapshot", lambda: None)
     monkeypatch.setattr(lao, "exclude_runtime_artifacts", lambda: None)

@@ -31,6 +31,8 @@ _BLOCK = "repeat this exact call with confirm_removals=true"
 
 def _story(tmp_path, source):
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    (tmp_path / "tests/unit").mkdir(parents=True)
+    (tmp_path / "tests/unit/test_zz_fake_oracle.py").write_text("")
     return {
         "summary": "s",
         "acceptance": [{"path": "tests/unit/test_zz_fake_oracle.py", "source": source}],
@@ -85,6 +87,8 @@ def test_gate_trip_with_no_acceptance_source_is_born_broken(tmp_path, monkeypatc
     # Defensive: if a fixture entry somehow lacks source, the discriminator
     # cannot prove the oracle intends to test the gate, so treat as born-broken.
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    (tmp_path / "tests/unit").mkdir(parents=True)
+    (tmp_path / "tests/unit/test_zz_fake_oracle.py").write_text("")
     story = {
         "summary": "s",
         "acceptance": [{"path": "tests/unit/test_zz_fake_oracle.py"}],  # no source

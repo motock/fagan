@@ -6,6 +6,7 @@ import ast
 import inspect
 
 from tests.unit._local_agent_oracle_test_helpers import (  # noqa: F401
+    _create_acceptance_fixtures,
     _finish_if_green_spy,
     _init_git_repo,
     _isolate_environ,
@@ -104,6 +105,7 @@ def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
     letting the auto-check fire. Bounded by MAX_STEPS."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(lao, "MAX_STEPS", 3)
@@ -139,6 +141,7 @@ def test_oracle_done_rejected_on_lint_gate_when_tests_pass(
     bypass path."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(lao, "MAX_STEPS", 3)
@@ -178,6 +181,7 @@ def test_oracle_done_rejected_message_does_not_presume_the_test_is_wrong(
     failure can equally be a still-incomplete implementation."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(lao, "MAX_STEPS", 3)
@@ -206,6 +210,7 @@ def test_oracle_done_accepted_on_cold_start_without_consulting_suite(
     the done-handler gate is scoped to rework rounds, not global."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", False)
     monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
@@ -233,6 +238,7 @@ def test_oracle_done_accepted_on_rework_round_when_full_suite_green(
     done path."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))

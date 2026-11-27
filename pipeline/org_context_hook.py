@@ -16,7 +16,8 @@ dispatch-time secret scan, size caps and digest snapshots.
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from app.plugin_loader import (
     load_plugin,
@@ -52,7 +53,8 @@ def plugin_org_sources(namespace: str) -> tuple[list[dict], str | None]:
         return [], None
     try:
         require_allowlist(_SEAM)
-        provider = load_plugin(_SEAM)()
+        # plugin_spec() above is not None, so load_plugin returns a factory.
+        provider = cast(Callable, load_plugin(_SEAM))()
         require_methods(provider, ("org_sources",), "org context provider")
         result = provider.org_sources(namespace)
         errors = _source_errors(result)

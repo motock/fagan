@@ -20,6 +20,7 @@ import re
 import subprocess
 import threading
 from logging import getLogger
+from pathlib import Path
 from typing import Any, Protocol
 
 from app.plugin_loader import load_plugin, require_methods
@@ -264,7 +265,7 @@ _FORGE_METHODS = (
 )
 
 
-def get_forge(repo_root: str) -> Forge:
+def get_forge(repo_root: str | Path) -> Forge:
     """The forge adapter for ``repo_root``, cached per repo root.
 
     The same ``repo_root`` returns the identical instance and the remote is

@@ -20,7 +20,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .context_sources import scan_for_secrets
 from .overlord_replay import (
@@ -156,9 +156,10 @@ def run_scenarios(
             "question": _ADJUDICATION_QUESTION if merge else _TRIAGE_QUESTION,
             "input": {"evidence": scenario["question"], "truncated": False},
         }
+        # cast: the record carries an untruncated input, so a prompt is rebuilt.
         prompt, _ = _rebuild_prompt(record, inputs)
         answers = [
-            _ask(prompt, merge=merge, plan="scenarios", story_key=scenario["id"]) for _ in range(runs)
+            _ask(cast(str, prompt), merge=merge, plan="scenarios", story_key=scenario["id"]) for _ in range(runs)
         ]
         passed = all(
             answer in scenario["expected"] and answer not in scenario["forbidden"] for answer in answers

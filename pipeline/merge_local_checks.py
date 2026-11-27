@@ -233,7 +233,8 @@ def _from_job(res: dict[str, Any], head: str) -> dict[str, Any]:
         return _record(head, "error", {}, str(res.get("error") or "unknown"))
     if res.get("sha") != head:
         return _record(head, "error", {}, "local checks graded a different commit")
-    checks = res.get("checks") if isinstance(res.get("checks"), dict) else {}
+    raw_checks = res.get("checks")
+    checks: dict[Any, Any] = raw_checks if isinstance(raw_checks, dict) else {}
     return _record(head, str(res.get("state")), checks, str(res.get("error") or ""))
 
 

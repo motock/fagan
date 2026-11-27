@@ -163,7 +163,7 @@ class GitLabForge(Forge):
     supports_comments = True
 
     # -- runner seam ------------------------------------------------------
-    def _run(self, argv: list[str], cwd: str | None = None, **kw: Any):
+    def _run(self, argv: list[str], cwd: str | Path | None = None, **kw: Any):
         """The single place this adapter spawns a process."""
         check = kw.pop("check", False)
         return subprocess.run(

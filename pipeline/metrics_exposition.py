@@ -366,6 +366,7 @@ def collect(
     """
     from pipeline.store import build_store
 
+    injected: Any
     try:
         injected = build_store() if store is None else store
     except Exception:  # noqa: BLE001 - a fail-closed store must not break the scrape

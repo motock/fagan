@@ -21,7 +21,7 @@ import os
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -203,7 +203,8 @@ async def _namespace_denied_response(reason: str, correlation: str) -> JSONRespo
 def _is_valid(requested: object) -> bool:
     """Return whether *requested* is a whole, valid namespace value."""
     try:
-        validate_namespace(requested)
+        # cast: validate_namespace rejects a non-str itself, which is the check here.
+        validate_namespace(cast(str, requested))
     except InvalidRecordKeyError:
         return False
     return True

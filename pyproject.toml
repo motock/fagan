@@ -120,6 +120,9 @@ max-complexity = 30
 "tests/**" = ["C901", "S602", "S604"]
 
 [tool.mypy]
+# Pinned so the result does not depend on the interpreter running mypy; must
+# match the Python version of the CI `lint` job (.github/workflows/ci.yml).
+python_version = "3.14"
 files = ["pipeline", "app"]
 ignore_missing_imports = true
 warn_unused_ignores = true

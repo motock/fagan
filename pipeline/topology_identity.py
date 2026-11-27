@@ -121,7 +121,7 @@ def resolved_runtime() -> dict[str, Any]:
     from pipeline.event_wiring import EVENT_BUS_NATS, reported_event_bus_name
     from pipeline.store import reported_store_kind
 
-    runtime = {
+    runtime: dict[str, Any] = {
         "event_bus": reported_event_bus_name(),
         "store": reported_store_kind(),
     }

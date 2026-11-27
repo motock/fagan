@@ -68,7 +68,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote
 
 from . import (
@@ -322,10 +322,16 @@ def configure(exporter: Any | None = None) -> None:
 
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor,
+        SimpleSpanProcessor,
+        SpanExporter,
+    )
 
     provider = TracerProvider(resource=Resource.create(_resource_attributes()))
-    guarded = _GuardedExporter(exporter)
+    # _GuardedExporter implements the SpanExporter methods but cannot subclass
+    # it: opentelemetry is imported lazily.
+    guarded = cast(SpanExporter, _GuardedExporter(exporter))
     if batch:
         # The OTLP/HTTP exporter retries with backoff; exporting on the span's
         # own thread would stall the request or tick being traced. Batching

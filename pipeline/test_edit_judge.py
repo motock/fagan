@@ -196,7 +196,7 @@ def _assertion_units(func: ast.AST) -> list[tuple[str, list[ast.AST]]]:
         elif isinstance(node, (ast.With, ast.AsyncWith)) and any(
             _is_expect_call(item.context_expr) for item in node.items
         ):
-            expressions = [item.context_expr for item in node.items]
+            expressions: list[ast.AST] = [item.context_expr for item in node.items]
             text = "with " + ", ".join(ast.unparse(expr) for expr in expressions)
             units.append((node.lineno, text, expressions))
     return [(text, nodes) for _, text, nodes in sorted(units, key=lambda unit: unit[0])]

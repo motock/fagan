@@ -567,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: invalid plan name", file=sys.stderr)
         return 1
     try:
-        plans = _read_namespaced_plans() if args.all else [(current_namespace(), n, _read_decisions(n)) for n in names]
+        plans = _read_namespaced_plans() if args.all else [(current_namespace(), n, _read_decisions(n)) for n in names or []]
     except (OSError, TypeError, ValueError):
         print("error: a decisions log could not be read", file=sys.stderr)
         return 1

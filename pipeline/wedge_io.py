@@ -45,6 +45,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import cast
 
 from . import bound_records, config
 
@@ -178,7 +179,7 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
     """
     pid = story.get("pid")
     is_int_pid = isinstance(pid, int) and not isinstance(pid, bool)
-    pid_alive = _pid_is_alive(pid) if is_int_pid else None
+    pid_alive = _pid_is_alive(cast(int, pid)) if is_int_pid else None  # is_int_pid checked pid's type
 
     now = time.time()
     newest_mtime: float | None = None

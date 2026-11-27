@@ -23,6 +23,7 @@ import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from app import backend, role_registry
 
@@ -524,7 +525,7 @@ def start_test_author_phase(
         handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
             prompt=_test_author_prompt(story.get("agent_instructions", ""), context_block),
             system=_TEST_AUTHOR_SYSTEM,
-            model=test_author_model,
+            model=cast(str, test_author_model),  # None passes through as before
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
             cwd=worktree_path,
             log_path=log_path,
@@ -741,7 +742,7 @@ def _run_rework_test_author_phase(
                 ],
             ),
             system=_TEST_AUTHOR_SYSTEM,
-            model=test_author_model,
+            model=cast(str, test_author_model),  # None passes through as before
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
             cwd=worktree_path,
             log_path=log_path,

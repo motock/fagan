@@ -148,7 +148,7 @@ def record_human_resolution(
         ruling = latest_failure_ruling(plan_name, story_key) or {}
     if ruling.get("question") == _ADJUDICATION_QUESTION:
         ruling_action = ruling.get("ruling")
-        park_class = HIGH_RISK_MERGE_CLASS
+        park_class: str | None = HIGH_RISK_MERGE_CLASS
     else:
         ruling_action = ruling.get("action")
         park_class = ruling.get("park_class")

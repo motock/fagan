@@ -139,7 +139,7 @@ def test_scope_event_fields(story):
 
 
 # Not a test: pytest would otherwise collect this module's `test_*` name.
-test_scope_event_fields.__test__ = False
+test_scope_event_fields.__test__ = False  # type: ignore[attr-defined]  # function attribute, read by pytest
 
 
 def effective_test_scope(manifest):

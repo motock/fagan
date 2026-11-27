@@ -84,7 +84,9 @@ def _observe(event: dict) -> None:
         if event_type == DISPATCH_EVENT:
             timestamp = _parse(event.get("ts"))
             if timestamp is not None:
-                _entry(key, evict=True)[DISPATCH_EVENT] = timestamp
+                entry = _entry(key, evict=True)
+                if entry is not None:  # evict=True always yields a dict
+                    entry[DISPATCH_EVENT] = timestamp
             return
         starts = _entry(key, evict=False)
         if starts is None:  # untracked story and the map is full: drop it

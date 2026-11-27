@@ -80,7 +80,7 @@ OTHER_USAGE = dict(USAGE, input_tokens=5)
 NOTIFICATION = {'ts': '2026-11-10T09:01:00Z', 'message': 'plan ready'}
 OTHER_NOTIFICATION = {'ts': '2026-11-10T09:02:00Z', 'message': 'plan merged'}
 DRAFT = {'epics': [{'summary': 'e', 'stories': [{'key': 'S-1'}]}]}
-OTHER_DRAFT = {'epics': []}
+OTHER_DRAFT: dict[str, list] = {'epics': []}
 REPORT = 'all stories merged'
 OTHER_REPORT = 'retro pending'
 CONTENT = 'context body'
@@ -103,7 +103,7 @@ def digest_of(content):
 # -- the coverage registry ----------------------------------------------------
 
 #: Protocol names declared exercised by at least one test in this suite.
-COVERED = set()
+COVERED: set[str] = set()
 
 
 def covers(*names):
@@ -131,8 +131,8 @@ Backend = namedtuple('Backend', 'store serves_other known_gaps')
 # star-imports. Absent, they take the strictest reading of ADR 0012 decision 2:
 # a foreign namespace is refused and no defect is excused.
 
-_SERVES_OTHER_DEFAULT = frozenset()
-_KNOWN_GAPS_DEFAULT = {}
+_SERVES_OTHER_DEFAULT: frozenset[str] = frozenset()
+_KNOWN_GAPS_DEFAULT: dict[str, object] = {}
 
 
 def _declared(request, name, default):

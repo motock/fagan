@@ -146,7 +146,8 @@ def _refusal(story: dict, live: dict, attempts: list) -> str | None:
     denied = [path for path in paths if is_denied_path(path)]
     if denied:
         return f"conflict in a protected path ({', '.join(denied)})"
-    declared = story.get("files") if isinstance(story.get("files"), list) else []
+    files = story.get("files")
+    declared = files if isinstance(files, list) else []
     outside = [path for path in paths if path not in declared and not _is_test_path(path)]
     if outside:
         return f"conflict outside the story's files ({', '.join(outside)})"

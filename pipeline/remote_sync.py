@@ -20,7 +20,7 @@ BEFORE any command runs, and every value interpolated into a shell
 command is encoded for the shell context with ``shlex.quote``. Git refs
 legally contain ``;``, ``$``, ``|``, ``&`` and backticks, and paths
 legally contain spaces, so unquoted interpolation is shell injection -
-POSIX quoting is correct both for the local ``shell=True`` runner and for
+POSIX quoting is correct both for the local ``/bin/sh -c`` runner and for
 the remote shell that ``_ssh_run`` hands the command to.
 """
 
@@ -125,7 +125,8 @@ def ensure_remote_worktree(
     elif host is not None:
         runner = functools.partial(_ssh_run, host)
     elif remote_url.startswith("file://"):
-        runner = functools.partial(subprocess.run, shell=True, check=True)
+        def runner(command, **kwargs):
+            return subprocess.run(["/bin/sh", "-c", command], check=True, **kwargs)
     else:
         raise ValueError(
             "run_remote is required for ssh remotes: pass run_remote or "

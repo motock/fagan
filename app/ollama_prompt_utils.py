@@ -403,7 +403,7 @@ def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
     env = _strip_agent_secrets(dict(os.environ))
     if not tenant_exec.is_configured():
         return subprocess.run(
-            cmd, check=False, shell=True, cwd=cwd,
+            ["/bin/sh", "-c", cmd], check=False, cwd=cwd,
             capture_output=True, text=True, timeout=_BASH_TIMEOUT_S, env=env,
         )
     try:

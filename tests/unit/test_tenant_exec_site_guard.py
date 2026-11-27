@@ -21,7 +21,7 @@ SUBPROCESS_NAMES = ("run", "Popen", "check_output", "check_call")
 
 ALLOWED: dict[tuple[str, str], str] = {
     ("app/backend_claude.py", "complete"): "fixed claude CLI argv; wrapped only when a cwd is given",
-    ("app/ollama_prompt_utils.py", "_bounded_bash_run"): "shell=True branch runs only when no wrap plugin is configured; with a plugin the command goes through tenant_exec.wrap",
+    ("app/ollama_prompt_utils.py", "_bounded_bash_run"): "/bin/sh -c branch runs only when no wrap plugin is configured; with a plugin the command goes through tenant_exec.wrap",
     ("pipeline/advance_pool.py", "advance_plan_subprocess"): "sys.executable -m pipeline.advance_one; plan name is validated",
     ("pipeline/advance_workers.py", "_spawn"): "sys.executable -m pipeline.advance_worker with inherited pipe fds",
     ("pipeline/build_detect.py", "_lint_acceptance_fixtures"): "ruff from PATH run over a temporary copy of the story's fixtures; a linter executes no repository code",

@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline import workspace_fs as _workspace_fs
@@ -278,7 +278,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     def resume_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
         result = _set_plan_paused(plan_name, False)
-        return wake.after(plan_name, "resume_plan", result)
+        return cast(dict[str, Any], wake.after(plan_name, "resume_plan", result))  # after() returns result unchanged
 
 
     def list_decisions(self, plan_name: str) -> list[dict]:
@@ -375,7 +375,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             exists = os.path.exists(p)
             valid = False
             if exists:
-                valid = _workspace.validate_workspace(p).get("ok")
+                valid = bool(_workspace.validate_workspace(p).get("ok"))
             workspaces.append({"path": p, "exists": exists, "valid": valid})
         # Manifest-only
         for plan_name in self.list_plans():
@@ -393,7 +393,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             exists = os.path.exists(repo_root)
             valid = False
             if exists:
-                valid = _workspace.validate_workspace(repo_root).get("ok")
+                valid = bool(_workspace.validate_workspace(repo_root).get("ok"))
             workspaces.append({"path": repo_root, "exists": exists, "valid": valid})
         return workspaces
 
@@ -441,7 +441,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if error is not None:
             return error
         try:
-            resolved = _workspace_fs.resolve_within_workspace(active, relative_path, hide_git=root is not None)
+            resolved = _workspace_fs.resolve_within_workspace(cast(str, active), relative_path, hide_git=root is not None)
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
         if not os.path.isfile(resolved):
@@ -481,7 +481,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         resolve_spelling = '.' if relative_path == '' else relative_path
         try:
             resolved = _workspace_fs.resolve_within_workspace(
-                active, resolve_spelling, hide_git=root is not None
+                cast(str, active), resolve_spelling, hide_git=root is not None
             )
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
@@ -528,7 +528,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # workspace keeps the exact-case exclusion it always had.
         git_dir_glob = _workspace_fs.GIT_DIR_GLOB_ANY_CASE if root is not None else '.git'
         try:
-            result = _workspace_fs.run_grep(active, pattern, git_dir_glob)
+            result = _workspace_fs.run_grep(cast(str, active), pattern, git_dir_glob)
         except subprocess.TimeoutExpired:
             return {'ok': False, 'error': 'search timed out'}
         except FileNotFoundError:
@@ -570,7 +570,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if err is not None:
             return err
         result = _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
-        return wake.after(plan_name, "ingest_plan", result)
+        return cast(dict[str, Any], wake.after(plan_name, "ingest_plan", result))  # after() returns result unchanged
 
     def request_decision(self,
         plan_name: str,
@@ -737,9 +737,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # SA-05: a repo_url plan is cloned here and its repo_root replaced with
         # the managed path, for any principal; the allow-list below then sees
         # that path. A refusal leaves nothing written.
-        err = remote_scope.resolve_repo_url(plan)
-        if err is not None:
-            return err
+        clone_refusal = remote_scope.resolve_repo_url(plan)
+        if clone_refusal is not None:
+            return clone_refusal
 
         if workspace is not None:
             ws_result = validate_workspace(workspace)
@@ -875,7 +875,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if refusal is not None:
             return refusal
         result = _set_story_status_impl(self, plan_name, story_key, status)
-        return wake.after(plan_name, "set_story_status", result)
+        return cast(dict[str, Any], wake.after(plan_name, "set_story_status", result))  # after() returns result unchanged
     def patch_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
     ) -> dict[str, Any]:
@@ -892,7 +892,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         set_story_status, not this tool.
         """
         result = _patch_story_impl(self, plan_name, story_key, fields)
-        return wake.after(plan_name, "patch_story", result)
+        return cast(dict[str, Any], wake.after(plan_name, "patch_story", result))  # after() returns result unchanged
 
     def patch_plan(self, plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """
@@ -992,7 +992,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return _advance_pipeline_locked(plan_name)
     def mark_story_done(self, plan_name: str, story_key: str) -> dict[str, Any]:
         result = _mark_story_done_impl(plan_name, story_key)
-        return wake.after(plan_name, "mark_story_done", result)
+        return cast(dict[str, Any], wake.after(plan_name, "mark_story_done", result))  # after() returns result unchanged
 
     def check_usage(self) -> dict[str, Any]:
         return _check_usage_impl()

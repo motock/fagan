@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+from types import FrameType
 
 from pipeline import manifest_source
 from pipeline.scheduler_timeouts import _heartbeat_interval_seconds
@@ -57,7 +58,7 @@ def describe_stuck_worker(worker) -> dict:
         if frame is None:
             return {"stack": "", "plan_name": ""}
         plan_name = ""
-        probe = frame
+        probe: FrameType | None = frame
         while probe is not None:
             candidate = probe.f_locals.get("plan_name")
             if isinstance(candidate, str):

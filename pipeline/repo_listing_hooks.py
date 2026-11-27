@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from app.plugin_loader import (
     load_plugin,
@@ -141,6 +142,6 @@ def _hook() -> RepoListingHook | None:
     if plugin_spec(_SEAM) is None:
         return None
     require_allowlist(_SEAM)
-    hook = load_plugin(_SEAM)()
+    hook = cast(Callable, load_plugin(_SEAM))()  # plugin_spec() above proved the seam is configured
     require_methods(hook, ("list_repositories",), "repo listing hook")
     return hook

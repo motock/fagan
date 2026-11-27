@@ -5,7 +5,7 @@ pipeline.service, so tests patching pipeline.server still land.
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from pipeline import worktree_diff
 from pipeline.actor import actor_id
@@ -149,7 +149,7 @@ def _get_story_diff_impl(
     if path is None or not summary["available"]:
         return summary
     allowed_paths = {entry["path"] for entry in summary["files"]}
-    return worktree_diff.collect_file_diff(worktree, base_sha, path, allowed_paths)
+    return worktree_diff.collect_file_diff(worktree, cast(str, base_sha), path, allowed_paths)  # collect_file_diff returns no_base_ref when base_sha is falsy
 
 
 def _patch_story_impl(

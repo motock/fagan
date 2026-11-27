@@ -18,7 +18,7 @@ resolve layers; ``pipeline.settings_store.effective_setting`` does that.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from app.identity import LOCAL_OPERATOR, Principal
 
@@ -222,7 +222,7 @@ def remote_settings_refusal(name: str, principal: Principal, arguments: object) 
         if scope == HOST_ONLY_SCOPE:
             reason = HOST_ONLY_REASON
         else:
-            reason = _layer_refusal_reason(action, principal, scope_id, repo)
+            reason = _layer_refusal_reason(action, principal, cast(str, scope_id), cast(str, repo))  # all three checked as str above
     return _not_authorized(action, reason) if reason else None
 
 

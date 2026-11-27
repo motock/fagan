@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Any
 
 from pipeline import config_provenance, manifest_source  # noqa: F401 - re-exported
 from pipeline.actor import SYSTEM_SCHEDULER, bind_principal  # noqa: F401 - re-exported
@@ -154,22 +155,22 @@ class SchedulerDaemon:
         # ``{**health(), "config": ...}``). ``health()`` never reads these.
         self._heartbeat_phase = None
         self._heartbeat_ts = None
-        self._last_reconcile_ts = None
-        self._last_scan_ts = None
-        self._last_error = None
+        self._last_reconcile_ts: str | None = None
+        self._last_scan_ts: str | None = None
+        self._last_error: str | None = None
         self._reconcile_count = 0
         self._scan_count = 0
         # Additive scan-watchdog state (story sh-02). Kept off the ``health()``
         # dict until a timeout actually happens because existing tests pin the
         # exact clean-tick key set.
         self._scan_timed_out = 0
-        self._last_scan_timeout_ts = None
+        self._last_scan_timeout_ts: float | None = None
         # Reconcile-phase watchdog state (story LOCKSTARVE-C1). Unlike the
         # scan fields above, ``reconcile_timed_out`` is always present in
         # ``health()`` (0 on a clean tick) — the pinned exact-equality key
         # tests were reconciled to admit it.
         self._reconcile_timed_out = 0
-        self._last_reconcile_timeout_ts = None
+        self._last_reconcile_timeout_ts: float | None = None
         # Per-attempt flag backing health()'s additive
         # ``last_reconcile_timeout_ts``: True only while the MOST RECENT
         # reconcile attempt timed out. Reset at the start of every attempt so
@@ -196,20 +197,20 @@ class SchedulerDaemon:
         # process death is the only release. ``run_once`` prunes dead workers
         # each tick and raises SystemExit(1) once a survivor outlives the
         # grace window (``_abandon_worker_grace_seconds``).
-        self._abandoned_workers = []
+        self._abandoned_workers: list[tuple[threading.Thread, float]] = []
         # cops-03: last loop time each abandoned worker's "still alive ...
         # waiting out the grace window" WARNING was emitted, keyed by the
         # worker thread. The warning used to fire on EVERY tick (one line per
         # second for the whole 300s grace window); it is now throttled to at
         # most one per worker per ``_ABANDON_WARNING_INTERVAL_S``. Entries are
         # pruned with the ledger so a dead worker leaves no state behind.
-        self._abandoned_worker_warned_at = {}
+        self._abandoned_worker_warned_at: dict[threading.Thread, float] = {}
         # The most recent drain worker (story SWH-03): kept across ticks so a
         # worker abandoned by the join timeout below can be recognized as
         # still alive on the next tick, which must skip its drain rather than
         # start a second drainer that would race the outbox merge and drop a
         # spooled notification. Overwritten only when a new worker is started.
-        self._drain_worker = None
+        self._drain_worker: threading.Thread | None = None
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -274,7 +275,7 @@ class SchedulerDaemon:
 
     def health(self) -> dict:
         """Return a snapshot of the daemon's health state."""
-        snapshot = {
+        snapshot: dict[str, Any] = {
             "alive": True,
             "last_reconcile_ts": self._last_reconcile_ts,
             "last_scan_ts": self._last_scan_ts,
@@ -895,7 +896,7 @@ def run_daemon() -> int:
 
     # Resolved at call time (not at module load) so tests patching
     # ``pipeline.server.advance_all_plans`` land on this call site.
-    from .server import advance_all_plans  # noqa: I001  -- must stay first
+    from .server import advance_all_plans  # type: ignore[attr-defined]  # noqa: I001  -- injected into server globals; must stay first
     from .advance_runtime import build_runtime
     from .scheduler_namespaces import advance_all_namespaces
     tick_fn, stop_runtime = build_runtime(

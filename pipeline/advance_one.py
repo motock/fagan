@@ -34,7 +34,7 @@ import socket
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pipeline.actor import (
     SYSTEM_SCHEDULER,
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                     _write_result(result_path, {"ok": False, "error": reason})
                     return 1
                 with bind_namespace(namespace):
-                    result = pipeline.server.advance_pipeline(plan_name)
+                    result = cast(Any, pipeline.server).advance_pipeline(plan_name)
             except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
                 # Class name only: the message can carry filesystem paths.
                 _write_result(

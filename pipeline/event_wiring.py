@@ -3,6 +3,7 @@ import os
 import threading
 from collections.abc import Callable
 from contextlib import nullcontext
+from typing import Any, cast
 
 from app.plugin_loader import (
     PluginError,
@@ -167,9 +168,10 @@ def _wake(event: dict) -> dict:
 
     # Resolved at call time (not at module load) so tests patching
     # ``pipeline.server.advance_pipeline`` land on this call site.
-    from .server import advance_pipeline
+    from . import server
 
-    result = advance_pipeline(plan_name)
+    # advance_pipeline is re-exported onto the module at import, which mypy cannot see.
+    result = cast(Any, server).advance_pipeline(plan_name)
     return {"ok": True, "woke": plan_name, "result": result}
 
 
@@ -309,7 +311,8 @@ class DispatchingJsonlEventBus(JsonlEventBus):
         # The event type, the handler's class of failure and nothing else: a
         # handler failure must be diagnosable without putting event contents or
         # the exception's text in the log.
-        for handler in self._handlers.get(event.get("type"), []):
+        event_type = event.get("type")
+        for handler in [] if event_type is None else self._handlers.get(event_type, []):
             try:
                 handler(event)
             except Exception as exc:  # noqa: BLE001
@@ -358,7 +361,8 @@ def build_bus() -> EventBus:
             # Fail closed as the selector does: a bad spec is a configuration
             # error reported as ValueError, never a silent built-in fallback.
             raise ValueError(str(exc)) from None
-        bus = factory()
+        # load_plugin returns None only when no plugin is configured; the caller checked that.
+        bus = cast(Callable, factory)()
         # Checked before subscribing: a factory that builds something else must
         # not receive the pipeline's handlers.
         if not isinstance(bus, EventBus):

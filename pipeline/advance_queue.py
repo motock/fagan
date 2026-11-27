@@ -21,6 +21,7 @@ import logging
 import threading
 import time
 from collections import deque
+from typing import cast
 
 from pipeline.parsers import _validate_key
 from pipeline.store_records import validate_namespace
@@ -168,9 +169,10 @@ class AdvanceQueue:
                     return None
                 if self._rotation:
                     return self._pop_locked()
-                deadline = self._wait_locked(deadline)
-                if deadline is _TIMED_OUT:
+                waited = self._wait_locked(deadline)
+                if waited is _TIMED_OUT:
                     return None
+                deadline = cast("float | None", waited)  # not the sentinel: checked above
 
     def take(self, timeout_s: float | None) -> str | None:
         """Pop the next default-namespace plan and mark it in flight.
@@ -188,9 +190,10 @@ class AdvanceQueue:
                     if self._rotation[0] is not None:
                         raise RuntimeError("namespaced entry needs take_entry")
                     return self._pop_locked()[1]
-                deadline = self._wait_locked(deadline)
-                if deadline is _TIMED_OUT:
+                waited = self._wait_locked(deadline)
+                if waited is _TIMED_OUT:
                     return None
+                deadline = cast("float | None", waited)  # not the sentinel: checked above
 
     def finish(self, plan_name: str, *, namespace: str | None = None) -> None:
         """Record that the advance of *plan_name* in *namespace* ended.

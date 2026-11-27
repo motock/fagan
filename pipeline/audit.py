@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import audit_chain, persistence
 from .actor import (
@@ -97,7 +97,8 @@ def _audit_log() -> Any:
     """
     from .server import _store
 
-    return _store.audit_log()
+    # The Store protocol omits audit_log(); the concrete store provides it.
+    return cast(Any, _store).audit_log()
 
 
 def _body(

@@ -414,7 +414,7 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
     try:
         # Inside the repo when there is one: a sandboxed collect sees only the
         # story's worktree, so a path under the system temp dir does not exist there.
-        tmp_dir_kwargs = {"dir": repo_root, "prefix": ".pipeline-fixtures-"} if repo_root else {}
+        tmp_dir_kwargs: dict[str, Any] = {"dir": repo_root, "prefix": ".pipeline-fixtures-"} if repo_root else {}
         with tempfile.TemporaryDirectory(**tmp_dir_kwargs) as tmp_dir:
             tmp_path = Path(tmp_dir)
             _materialize_acceptance_fixtures(story, tmp_path)
@@ -571,10 +571,10 @@ def _scope_test_cmd_to_acceptance(
                 stems.append(pp.stem)
             else:
                 return None
-        args: list[str] = []
+        cargo_args: list[str] = []
         for s in stems:
-            args += ["--test", s]
-        return ["cargo", "test", *args]
+            cargo_args += ["--test", s]
+        return ["cargo", "test", *cargo_args]
     # npm test / yarn test whose script is `node --test ...`
     if test_cmd[:2] in (["npm", "test"], ["yarn", "test"]):
         pkg = Path(test_dir) / "package.json"

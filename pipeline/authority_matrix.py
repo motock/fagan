@@ -31,7 +31,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,8 @@ class FileLayerSource:
         if self._team_path is not _UNSET:
             if self._team_path is None:
                 return None
-            return Path(self._team_path)
+            # None and _UNSET are excluded by the two checks above.
+            return Path(cast("str | os.PathLike[str]", self._team_path))
         configured = os.environ.get(TEAM_ENV_VAR)
         return Path(configured) if configured else None
 

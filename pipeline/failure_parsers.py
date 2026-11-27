@@ -26,7 +26,7 @@ _GRADLE_FAILED = re.compile(
 )
 
 
-def jvm_failed_test_ids(stdout: str) -> list[str]:
+def jvm_failed_test_ids(stdout: str | None) -> list[str]:
     """Return the sorted, unique failed test ids found in Maven/Gradle output.
 
     Maven Surefire/Failsafe summary lines and error-per-class lines yield

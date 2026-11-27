@@ -342,7 +342,8 @@ class AdvanceWorkerPool:
             child.send(plan, namespace=namespace)
             line = child.read_line(timeout_s)
         except _ReadTimeout:
-            return self._on_timeout(child, plan, timeout_s, namespace)
+            self._on_timeout(child, plan, timeout_s, namespace)
+            return None
         except OSError as exc:
             logger.warning(
                 "advance worker write failed",

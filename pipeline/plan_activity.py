@@ -43,7 +43,7 @@ def _has_live_agent(stories: dict) -> bool:
     )
 
 
-def is_inert(manifest: dict) -> bool:
+def is_inert(manifest: object) -> bool:
     """Return whether *manifest* has no work for an advance pass to do.
 
     True for a plan whose stories are all ``done``, for a paused plan with no

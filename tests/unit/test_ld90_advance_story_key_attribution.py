@@ -40,6 +40,7 @@ import pipeline.advance as adv
 import pipeline.advance_failed_stories as adv_failed
 import pipeline.advance_merge as adv_merge
 import pipeline.advance_merge_hold as adv_merge_hold
+import pipeline.advance_merge_land as adv_merge_land
 import pipeline.advance_ready_dispatch as adv_dispatch
 import pipeline.advance_review_step as adv_review
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -127,7 +128,15 @@ def _notify_user_calls():
     tree = ast.parse(
         "\n".join(
             inspect.getsource(m)
-            for m in (adv, adv_merge, adv_merge_hold, adv_dispatch, adv_failed, adv_review)
+            for m in (
+                adv,
+                adv_merge,
+                adv_merge_hold,
+                adv_merge_land,
+                adv_dispatch,
+                adv_failed,
+                adv_review,
+            )
         )
     )
     calls = []

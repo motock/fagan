@@ -9,7 +9,9 @@ The names this module reads that are bound at module level in
 
 import logging
 import os  # noqa: F401 - names stay importable from here
+import subprocess  # noqa: F401
 import time
+from datetime import UTC, datetime  # noqa: F401
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +22,12 @@ from . import (
     merge_local_checks,
     merge_reverify,
 )
-from .ci import SettingsContext, gate_record, settings_for_plan
-from .concurrency import _released_plan_lock
+from .ci import (
+    SettingsContext,
+    gate_record,  # noqa: F401 - stays importable from here
+    settings_for_plan,
+)
+from .concurrency import _released_plan_lock  # noqa: F401 - the readiness phase reads it here
 from .host_state import build_host_state
 from .merge_local_checks import (  # re-exported for pipeline.advance_merge callers
     MERGE_REVERIFY_TIMEOUT_DEFAULT,  # noqa: F401
@@ -45,7 +51,7 @@ from .rebase_conflict_feedback import (  # re-exported: _conflict_rework_max etc
     conflict_rework_feedback,  # noqa: F401
     parse_conflict_files,  # noqa: F401
 )
-from .telemetry import record_merge_result
+from .telemetry import record_merge_result  # noqa: F401
 
 MERGE_MAX_ATTEMPTS = _ModuleRef("pipeline.advance", "MERGE_MAX_ATTEMPTS")
 
@@ -268,6 +274,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     from .advance_merge_ci_gate import run_ci_gate
     from .advance_merge_gate_failure import handle_gate_failure
     from .advance_merge_hold import check_review_binding, evaluate_merge_hold
+    from .advance_merge_land import await_merge_readiness, land_story
 
     # The merge gates this tick reads, resolved once from the plan manifest so
     # every gate call and the merge record name the same (namespace, team, repo).
@@ -342,128 +349,13 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             )
             continue
 
-        # Mergeability must be COMPUTED before `gh pr merge` will act. Right
-        # after a push GitHub reports ``UNKNOWN`` while it computes, and gh's
-        # merge command REFUSES instead of waiting - a refusal that used to be
-        # counted as a failed merge attempt and, at MERGE_MAX_ATTEMPTS, fail a
-        # PR that was in fact green and landable: PR #1618 (c1bfcfbf) burned
-        # four attempts and PR #1621 (e0163dbc) three on 2026-11-08, both CLEAN
-        # / MERGEABLE with all four required checks SUCCESS, both merged first
-        # try by hand. So wait (bounded) for a computed answer: ``ready``
-        # merges, ``blocked`` takes today's path below, and a budget that
-        # expires while still ``pending`` spends NO attempt - the story stays
-        # pr_open with a merge_pending_reason and the next tick retries.
-        # ``pr_url`` gates the poll because a story with no recorded PR has
-        # nothing to interrogate; it then behaves exactly as before.
-        if story.get("pr_url"):
-            # Poll with the plan lock released so a human approve or mark-done
-            # is not refused "plan busy". Persist this tick's edits first, then
-            # apply the answer only if the story is still the polled story.
-            polled = (story["status"], story.get("review_verdict_sha"))
-            bound_records.put_manifest(_store, plan_name, manifest)
-            with _released_plan_lock(plan_name):
-                readiness = _await_merge_readiness(
-                    _merge_readiness_forge(), worktree, branch, settings
-                )
-            manifest = bound_records.get_manifest(_store, plan_name)
-            if manifest is None:
-                raise FileNotFoundError("manifest not found")
-            # A human (or another tick) moved the story on: that wins, no-op.
-            stories = manifest["stories"]
-            story = stories.get(key) or {}
-            if (story.get("status"), story.get("review_verdict_sha")) != polled:
-                continue
-            if readiness == "pending":
-                story["merge_pending_reason"] = (
-                    "merge readiness still pending after "
-                    f"{_merge_readiness_timeout(settings):g}s"
-                )
-                # Deliberately NOT an attempt: this is a state the host has
-                # not finished computing, not a refusal. The manifest write at
-                # the end of this function persists the reason.
-                summary.setdefault("merge_pending", []).append(key)
-                continue
-            # Computed (or definitively blocked): a stale reason must not
-            # outlive the wait.
-            story.pop("merge_pending_reason", None)
-
-        # _merge_pr removes the worktree and deletes the branch, so the
-        # self-source diff must be taken BEFORE the merge, not after.
-        mcp_touched = _mcp_self_source_touched(
-            worktree, f"origin/{_default_branch()}"
+        ready = await_merge_readiness(
+            plan_name, key, story, manifest, worktree, branch, settings, summary
         )
-        try:
-            _merge_pr(story.get("worktree", ""), key)
-        except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
-            attempts = story.get("merge_attempts", 0) + 1
-            story["merge_attempts"] = attempts
-            if attempts >= MERGE_MAX_ATTEMPTS:
-                story["status"] = "failed"
-                story["merge_error"] = str(e)
-                _notify_user(
-                    plan_name,
-                    f"{key} merge failed {attempts}x "
-                    f"({e}); giving up - needs human intervention.",
-                    event="merge_failed",
-                    story_key=key,
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                summary["failed"].append(key)
-                record_merge_result("failed")
-            else:
-                # leave pr_open; the next tick retries within budget.
-                _notify_user(
-                    plan_name,
-                    f"{key} merge attempt {attempts}/"
-                    f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
-                    event="merge_retry",
-                    story_key=key,
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-            summary["notify"].append(key)
+        manifest = ready.manifest
+        stories = manifest["stories"]
+        story = ready.story
+        if ready.finished:
             continue
-        story["status"] = "done"
-        story["merge_gates"] = gate_record(settings)
-        story.pop("merge_attempts", None)
-        story.pop("parked_reason", None)
-        story.pop("ci_rerun_attempted", None)
-        story.pop("ci_rework", None)  # L1: clear the rework flag on done
-        _mark_plane_done(key, plan_name)
-        _notify_user(
-            plan_name,
-            f"{key} merged",
-            story_key=key,
-            event="story_merged",
-            **(
-                {"correlation_id": story["correlation_id"]}
-                if story.get("correlation_id")
-                else {}
-            ),
-        )
-        # A fully-done self-repo plan must enter the retro backlog no
-        # matter which path marked the last story done (dedup inside
-        # _record_retro_pending makes repeat calls across ticks safe).
-        _maybe_record_retro(plan_name, manifest)
-
-        from .plan_completion import notify_if_plan_completed
-
-        try:
-            notify_if_plan_completed(plan_name, manifest, just_merged=key)
-        except Exception:
-            logging.getLogger("pipeline").exception(
-                "notify_if_plan_completed failed for %s", plan_name
-            )
-        if mcp_touched:
-            _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
-            summary["notify"].append(key)
-        summary["merged"].append(key)
-        record_merge_result("merged")
+        land_story(plan_name, key, story, manifest, worktree, settings, summary)
     bound_records.put_manifest(_store, plan_name, manifest)

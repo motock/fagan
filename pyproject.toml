@@ -114,7 +114,6 @@ max-complexity = 30
 "tests/unit/test_advance_cloud_slot_exempt.py" = ["F811"]
 
 # Over the complexity ceiling when it was added (2026-11). Remove a file when its functions are under 30; never add one.
-"pipeline/advance_merge.py" = ["C901"]
 "pipeline/ingest.py" = ["C901"]
 "scripts/install_checks.py" = ["C901"]
 "scripts/local_agent_oracle_tools.py" = ["C901"]

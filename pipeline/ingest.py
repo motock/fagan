@@ -19,7 +19,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import (
     cross_plan,
@@ -595,6 +595,8 @@ def _ingest_plan_impl(
     plan, refusal = ingest_validate.read_draft_refusal(plan_name)
     if refusal is not None:
         return refusal
+    # read_draft_refusal returns plan=None only together with a refusal.
+    plan = cast("dict[str, Any]", plan)
     refusal = ingest_validate.repo_root_refusal(plan)
     if refusal is not None:
         return refusal

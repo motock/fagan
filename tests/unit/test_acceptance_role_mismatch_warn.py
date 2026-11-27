@@ -6,7 +6,7 @@ from two stories, both of which then parked.
 """
 import inspect
 
-import pipeline.server as srv
+from pipeline import ingest_manifest
 from pipeline.planner import _scaffolding_provider_mismatch_warning
 
 
@@ -39,5 +39,5 @@ def test_claude_dispatch_is_not_flagged():
 def test_the_warning_is_wired_into_ingest_plan():
     # ingest_plan is a thin @mcp.tool() delegate onto _ingest_plan_impl (the
     # PipelineService W1a extraction); the warning call lives in the impl.
-    src = inspect.getsource(srv._ingest_plan_impl)
+    src = inspect.getsource(ingest_manifest.iter_story_notices)
     assert "_scaffolding_provider_mismatch_warning" in src

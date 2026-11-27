@@ -20,7 +20,7 @@ import inspect
 import pytest
 
 from app import role_registry
-from pipeline import ingest as ingest_mod
+from pipeline import ingest_manifest
 from pipeline.ingest import _sizing_view, _story_sizing_warning
 
 THREE_PY_FILES = {"agent_instructions": "Touch `app/a.py`, `app/b.py` and `app/c.py`."}
@@ -101,5 +101,5 @@ def test_claude_resolving_registry_keeps_auto_silent(monkeypatch, tmp_path):
 
 
 def test_the_sizing_view_is_wired_into_ingest_plan():
-    src = inspect.getsource(ingest_mod._ingest_plan_impl)
+    src = inspect.getsource(ingest_manifest.iter_story_notices)
     assert "_sizing_view(story" in src

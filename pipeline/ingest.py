@@ -21,28 +21,37 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cross_plan, external_refs, plan_draft, plan_names, testfiles
+from . import (
+    cross_plan,
+    external_refs,  # noqa: F401
+    ingest_manifest,
+    ingest_preflight,
+    ingest_validate,
+    plan_draft,
+    plan_names,
+    testfiles,
+)
 from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
 from .branch_names import worktree_parent
-from .build_detect import _lint_acceptance_fixtures
+from .build_detect import _lint_acceptance_fixtures as _lint_acceptance_fixtures  # noqa: PLC0414
 from .context_sources import (
     DEFAULT_MAX_TOTAL_CHARS,
     normalize_context_sources,
     validate_context_config,
 )
-from .ecosystem_detect import (
+from .ecosystem_detect import (  # noqa: F401
     UNSUPPORTED_MARKERS,
     detect_test_command,
     fail_loud_exit_message,
     is_unsupported_ecosystem_command,
 )
-from .ingest_advisories import story_advisories
+from .ingest_advisories import story_advisories  # noqa: F401
 from .ingest_manifest import (
     build_manifest,
-    merge_descriptive_story_fields,
+    merge_descriptive_story_fields,  # noqa: F401
     plan_level_fields,
-    validate_story_descriptions,
+    validate_story_descriptions,  # noqa: F401
 )
 from .ingest_plan_fields import _TEAM_RE, _team_error, _test_scope_error  # noqa: F401
 from .org_context_hook import merge_org_sources, plugin_org_sources
@@ -51,7 +60,7 @@ from .plan_approval import approval_enabled, on_ingest
 from .plan_approval_notice import notify_approval_event, pending_notice_due
 from .repo_config import load_repo_config
 from .service import _ServerRef
-from .sizing_by_class import class_aware_sizing_warning
+from .sizing_by_class import class_aware_sizing_warning  # noqa: F401
 from .sizing_class import needs_small_story_caps, sizing_applies
 from .store_records import UnreadableRecordError
 
@@ -583,192 +592,48 @@ def _ingest_plan_impl(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     plan_names.validate_new_plan_name(plan_name)
-    plan, refusal = plan_draft.read_plan_draft(plan_name)
+    plan, refusal = ingest_validate.read_draft_refusal(plan_name)
     if refusal is not None:
-        missing = f"No plan named {plan_name}"
-        # A plan whose draft a full ingest consumed names the way out (ADR 0012).
-        if refusal.get("error") == missing and plan_name in _store.records().list_plans(
-            current_namespace()
-        ):
-            return {"ok": False, "error": (
-                f"plan '{plan_name}' has no staged draft: save_plan it "
-                "(export_plan renders the current plan) before re-ingesting")}
+        return refusal
+    refusal = ingest_validate.repo_root_refusal(plan)
+    if refusal is not None:
+        return refusal
+    repo_root = plan["repo_root"]
+    refusal = ingest_validate.plan_scope_refusal(plan)
+    if refusal is not None:
+        return refusal
+    refusal = ingest_validate.test_command_refusal(repo_root)
+    if refusal is not None:
         return refusal
 
-    # advance_all_plans() iterates every plan in shared PLAN_DIR, each
-    # potentially belonging to a different repo, so a manifest without its
-    # own repo_root falls back to the global REPO_ROOT - the wrong repo for
-    # any plan other than the one that env var happens to be set for (or a
-    # deliberately-broken sentinel, if one's configured to fail loudly
-    # instead). Catching it here means a typo'd or missing path surfaces
-    # immediately, not as a cryptic ENOENT after three silent merge-attempt
-    # failures.
-    repo_root = plan.get("repo_root")
-    if not repo_root or not Path(repo_root).is_dir():
-        return {
-            "ok": False,
-            "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
-        }
+    override, refusal = ingest_preflight.preflight_override_refusal(plan)
+    if refusal is not None:
+        return refusal
+    overrides, refusal = ingest_preflight.story_preflight_refusal(
+        plan, only_epics, override, repo_root
+    )
+    if refusal is not None:
+        return refusal
 
-    # AUTH-02: the manifest records the team a policy decision is evaluated
-    # against (ADR 0009: principal -> team -> repo -> plan -> story). Validate
-    # it here, with the other plan-level fields and before any file is
-    # written, so a typo'd slug fails closed instead of landing on disk.
-    team_error = _team_error(plan) or _test_scope_error(plan)
-    if team_error is not None:
-        return {"ok": False, "error": team_error}
+    plan_context, refusal = ingest_validate.merged_context_refusal(
+        plan_name, plan, repo_root
+    )
+    if refusal is not None:
+        return refusal
 
-    # LAG-5: a repo whose ecosystem fagan cannot test (Ruby, PHP, Swift,
-    # Elixir) would otherwise ingest fine and burn dispatch/rework budget on
-    # a test gate that always fails with "unsupported ecosystem". Rejecting
-    # here surfaces the fix (declare test_cmd in .fagan.json) before any
-    # executor is dispatched. A README-only repo (no marker at all) still
-    # keeps detect_test_command's no-op and ingests normally.
-    #
-    # detect_test_command lists repo_root (cwd.iterdir and its subdir scan),
-    # which raises OSError on a directory that exists but cannot be read
-    # (permissions, a stale NFS mount). The is_dir() check above only proves
-    # it stat()s, so keep this rejection in the same {"ok": False} shape
-    # instead of letting the OSError escape _ingest_plan_impl.
-    try:
-        test_dir, test_cmd = detect_test_command(Path(repo_root))
-    except OSError as error:
-        return {
-            "ok": False,
-            "error": f"Plan repo_root {repo_root!r} is not readable: {error}",
-        }
-    if is_unsupported_ecosystem_command(test_cmd):
-        # fail_loud_exit_message is also True for repo_config's
-        # invalid_config_command: a repo_root with a malformed .fagan.json is
-        # NOT an unsupported ecosystem, so its rejection must name the actual
-        # RepoConfigError reason instead of a marker that does not exist.
-        message = fail_loud_exit_message(test_cmd) or ""
-        if message.startswith("fagan: invalid .fagan.json: "):
-            reason = message[len("fagan: invalid .fagan.json: "):]
-            return {
-                "ok": False,
-                "error": (
-                    f"Plan repo_root {repo_root!r} has an invalid .fagan.json: "
-                    f"{reason}"
-                ),
-            }
-        marker = next(
-            (m for m in UNSUPPORTED_MARKERS if (Path(test_dir) / m).exists()),
-            "unsupported ecosystem",
-        )
-        return {
-            "ok": False,
-            "error": (
-                f"Plan repo_root {repo_root!r} uses an unsupported ecosystem "
-                f"({marker}): its test gate would exit non-zero with nothing "
-                f"run. Add a .fagan.json with a test_cmd to {repo_root!r}."
-            ),
-        }
-
-    # A plan-level preflight_override admits non-Claude stories whose brief
-    # lacks a real `Preflight:` line (.claude/rules/local-dispatch-preflight.md).
-    # Validated once, up front, before any side effect: a present-but-invalid
-    # value must fail the ingest even when every story is Claude-provider.
-    override = plan.get("preflight_override")
-    if "preflight_override" in plan and (
-        not isinstance(override, str) or not override.strip()
-    ):
-        return {
-            "ok": False,
-            "error": "preflight_override must be a non-empty reason string",
-        }
-    overrides = []
-
-    # Validate story["backend"] upfront, before any Plane side effects, so a
-    # typo'd provider name fails closed here rather than surfacing as a
-    # NotImplementedError deep inside get_backend at dispatch time.
-    for epic in plan["epics"]:
-        if only_epics and epic["summary"] not in only_epics:
-            continue
-        for story in epic.get("stories", []):
-            story_backend = story.get("backend")
-            if story_backend is not None and story_backend not in _VALID_STORY_BACKENDS:
-                return {
-                    "ok": False,
-                    "error": (
-                        f"Story {story.get('summary', '?')!r} has unknown "
-                        f"backend {story_backend!r}. Valid values: "
-                        f"{sorted(_VALID_STORY_BACKENDS)}"
-                    ),
-                }
-            files_error = _files_field_error(story) or _test_scope_error(story, f"story {story.get('summary')!r}")
-            if files_error is not None:
-                return {"ok": False, "error": files_error}
-            blocked_by_error = external_refs.blocked_by_error(story, _blocked_by_error)
-            if blocked_by_error is not None:
-                return {"ok": False, "error": blocked_by_error}
-            acceptance_error = _acceptance_field_error(story)
-            if acceptance_error is not None:
-                return {"ok": False, "error": acceptance_error}
-            # .claude/rules/local-dispatch-preflight.md: a story dispatched to
-            # a non-Claude provider must carry a real `Preflight:` line (a
-            # conflict/impact run against the base commit), so the executor
-            # does not discover a stale base or a conflicting sibling change
-            # mid-dispatch. Claude-provider stories are never gated.
-            provider = _preflight_dispatch_provider(story, plan.get("role_config"))
-            if provider != "claude":
-                status = _preflight_status(story.get("agent_instructions"))
-                if status != "ok":
-                    if override is None:
-                        phrase = (
-                            "says `Preflight: NOT RUN`"
-                            if status == "not_run"
-                            else "has no `Preflight:` line"
-                        )
-                        return {
-                            "ok": False,
-                            "error": (
-                                f"story {story.get('summary')!r} is gated for "
-                                f"provider {provider!r}: it {phrase}; see "
-                                f".claude/rules/local-dispatch-preflight.md; set "
-                                f'a plan-level "preflight_override": "<reason>" '
-                                f"for emergencies"
-                            ),
-                        }
-                    overrides.append((story.get("key"), status, override))
-            # OPSA-8: lint the .py acceptance fixture sources upfront, before
-            # any Plane side effect. A lint-violating fixture is a read-only
-            # oracle the dispatched agent can never fix (PR #235), so it must
-            # not reach dispatch - and it must not leave orphaned epics or
-            # stories behind when the ingest is rejected. Gating on "finding"
-            # only, never on "skipped": a broken or absent lint tool can never
-            # block a known-good plan.
-            kind, lint_msg = _lint_acceptance_fixtures(story, repo_root)
-            if kind == "finding":
-                return {"ok": False, "error": lint_msg}
-
-    plan_context, context_error = _merged_context(plan, Path(repo_root))
-    if context_error is not None:
-        return {"ok": False, "error": context_error}
-    org_path = os.environ.get("PIPELINE_CONTEXT_CONFIG")
-    if org_path is not None and plan_context is not None:
-        org_count = sum(1 for s in plan_context["sources"] if s["origin"] == "org")
-        _notify_user(
-            plan_name,
-            f"context_resolved: org config {org_path} contributed {org_count} source(s)",
-            event="context_resolved",
-        )
-
-    # ADR 0012 decision 5: the manifest records each story's authored
-    # description, so it must be a string. Validated here - before the
-    # transaction and any provider call - so a refusal writes nothing and
-    # leaves the previously ingested manifest on disk untouched.
-    description_refusal = validate_story_descriptions(plan, only_epics)
-    if description_refusal is not None:
-        return description_refusal
+    refusal = ingest_validate.description_refusal(plan, only_epics)
+    if refusal is not None:
+        return refusal
 
     already_ingested = plan_name in _store.records().list_plans(current_namespace())
-    keyless_error = _keyless_reingest_error(plan, only_epics, already_ingested, overwrite)
-    if keyless_error is not None:
-        return {"ok": False, "error": keyless_error}
-    key_conflict_error = _story_key_conflict_error(plan_name, plan, only_epics)
-    if key_conflict_error is not None:
-        return {"ok": False, "error": key_conflict_error}
+    refusal = ingest_validate.keyless_reingest_refusal(
+        plan, only_epics, already_ingested, overwrite
+    )
+    if refusal is not None:
+        return refusal
+    refusal = ingest_validate.key_conflict_refusal(plan_name, plan, only_epics)
+    if refusal is not None:
+        return refusal
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:
@@ -816,33 +681,9 @@ def _ingest_plan_impl(
         merged_epics = dict(prior.get("epics", {}))
         merged_epics.update(manifest["epics"])
 
-        merged_stories = dict(prior.get("stories", {}))
-        for key, new_story in manifest["stories"].items():
-            old_story = merged_stories.get(key)
-            if old_story is not None:
-                combined = dict(old_story)
-                for field in _INGEST_AUTHORED_STORY_FIELDS:
-                    if field == "risk" and old_story.get("status") != "todo":
-                        continue
-                    if field in ("files", "blocked_by", "test_scope"):
-                        # `files` and `blocked_by` are the authored fields
-                        # allowed to be absent from a re-ingested story:
-                        # present -> copied; absent -> the key is removed.
-                        if field in new_story:
-                            combined[field] = new_story[field]
-                        else:
-                            combined.pop(field, None)
-                        continue
-                    combined[field] = new_story[field]
-                # The descriptive fields (description/epic/plan_key) follow the
-                # same rule for merging only; they stay out of
-                # _INGEST_AUTHORED_STORY_FIELDS.
-                merge_descriptive_story_fields(combined, new_story)
-                # Hashed by canonical_digest; the stamped `backend` is not.
-                combined["authored_backend"] = new_story["authored_backend"]
-                merged_stories[key] = combined
-            else:
-                merged_stories[key] = new_story
+        merged_stories = ingest_manifest.merge_stories(
+            prior.get("stories", {}), manifest["stories"], _INGEST_AUTHORED_STORY_FIELDS
+        )
 
         final_manifest = dict(prior)
         final_manifest["epics"] = merged_epics
@@ -870,30 +711,10 @@ def _ingest_plan_impl(
         # Auto-route oversized on-device stories to the host's :cloud default
         # model before the manifest is written: an oversized story is still
         # dispatched, just not to a local executor that would choke on it.
-        # Mutate the story dicts final_manifest holds so the route is
-        # persisted; the routed-key set is per-ingest only (a re-ingested
-        # story already on a :cloud model fails _on_device_route_target.)
-        routed_keys: set[str] = set()
-        routed: list[tuple[str, str, str]] = []
-        for key, story in final_manifest["stories"].items():
-            warning = class_aware_sizing_warning(story, repo_root, plan.get("role_config"), _story_sizing_warning)
-            if warning is None:
-                continue
-            tag = _on_device_route_target(story)
-            if tag is None:
-                continue
-            from_backend = story.get("backend")
-            from_model = story.get("model")
-            story["backend"] = "ollama"
-            story["model"] = tag
-            story["sizing_auto_routed"] = {
-                "from_backend": from_backend,
-                "from_model": from_model,
-                "to_model": tag,
-                "reason": warning,
-            }
-            routed_keys.add(key)
-            routed.append((key, tag, warning))
+        routed = ingest_manifest.route_oversized_stories(
+            final_manifest["stories"], repo_root, plan.get("role_config")
+        )
+        routed_keys = {key for key, _tag, _warning in routed}
 
         # Opt-in plan-approval gate (ENT-LC-01); a no-op while PIPELINE_PLAN_APPROVAL is off.
         notify_pending = False
@@ -942,53 +763,12 @@ def _ingest_plan_impl(
         # allows a non-Claude dispatch tier, or names a file already over the
         # file-size cap. Advisory only -- a human plan author may have
         # deliberately authorized a larger story, so this never blocks.
-        for key, story in final_manifest["stories"].items():
-            if key in routed_keys:
-                # Already notified with the sizing_auto_routed event above;
-                # a second plain warning would double-notify the same story.
-                warning = None
-            else:
-                warning = _story_sizing_warning(
-                    _sizing_view(story, final_manifest.get("role_config")), repo_root
-                )
-            if warning:
-                if not os.environ.get(
-                    "PIPELINE_LOCAL_MODEL_DEFAULT", ""
-                ).endswith(":cloud"):
-                    warning += _AUTO_ROUTE_SKIPPED_SUFFIX
-                _notify_user(plan_name, f"{key}: {warning}", event="sizing_risk", story_key=key)
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
-            for event, text in story_advisories(story, repo_root, final_manifest.get("repo_url"), _store):
-                _notify_user(plan_name, f"{key}: {text}", event=event, story_key=key)
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {text}")
-            # Non-blocking authoring nudge: flag acceptance fixtures that
-            # depend on macOS-only tooling. Dispatch, the done-bar and the
-            # merge-gate reverify all run on macOS, but CI runs ubuntu-latest
-            # only, so such a fixture passes every local gate and fails only
-            # after the PR is open (observed live 2026-07-30). Advisory only.
-            msg = _security_review_unenforced_warning(story)
-            if msg is not None:
-                _notify_user(plan_name, f"{key}: {msg}", event="security_review_unenforced", story_key=key)
-            platform_msg = _platform_locked_fixture_warning(story)
-            if platform_msg is not None:
-                _notify_user(plan_name, f"{key}: {platform_msg}")
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {platform_msg}")
-            # Non-blocking authoring nudge: flag a local-dispatch story whose
-            # test_author/planner scaffolding roles resolve to a DIFFERENT
-            # provider - exactly the configuration that silently dropped the
-            # TDD-split crutch from two stories on 2026-07-30 (both parked).
-            # Advisory only.
-            story_backend = story.get("backend") or os.environ.get(
-                "PIPELINE_BACKEND_DISPATCH", "claude"
-            ).strip().lower()
-            role_msg = _scaffolding_provider_mismatch_warning(
-                dispatch_backend=story_backend,
-                role_config=final_manifest.get("role_config"),
-                registry_roles=role_registry.load_registry().get("roles", {}),
-            )
-            if role_msg is not None:
-                _notify_user(plan_name, f"{key}: {role_msg}")
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {role_msg}")
+        for key, body, notify_kwargs, log in ingest_manifest.iter_story_notices(
+            final_manifest, routed_keys, repo_root
+        ):
+            _notify_user(plan_name, f"{key}: {body}", **notify_kwargs)
+            if log:
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {body}")
 
         file_overlaps = _file_overlap_advisories(plan_name, final_manifest["stories"])
 

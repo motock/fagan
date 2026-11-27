@@ -30,14 +30,22 @@ Digest membership
     becomes a digest member later, in the description/team story that also bumps
     ``APPROVAL_DIGEST_VERSION`` to 2 -- do not add it to a digest tuple here.
 
-The module must not import :mod:`pipeline.ingest` (circular import): it takes a
-plan-level ``plan``/``epic``/``story`` mapping and returns plain data.
+The module must not import :mod:`pipeline.ingest` at load time (circular
+import): it takes a plan-level ``plan``/``epic``/``story`` mapping and returns
+plain data. The transaction-body phases at the end reach names the test suite
+patches on :mod:`pipeline.ingest` through that module at call time (``_home``,
+imported inside each function).
 """
 
 from __future__ import annotations
 
+import os
 import uuid
+from collections.abc import Iterable, Iterator
 from typing import Any
+
+from .ingest_advisories import story_advisories
+from .sizing_by_class import class_aware_sizing_warning
 
 #: Plan-authored, *descriptive* story fields the manifest now records. Kept
 #: separate from ``pipeline.server._INGEST_AUTHORED_STORY_FIELDS`` on purpose.
@@ -201,3 +209,138 @@ def plan_level_fields(plan: dict[str, Any]) -> dict[str, Any]:
         if field in plan:
             fields[field] = plan[field]
     return fields
+
+
+def merge_stories(
+    prior_stories: dict[str, Any],
+    new_stories: dict[str, Any],
+    authored_fields: Iterable[str],
+) -> dict[str, Any]:
+    """Carry runtime state over from the prior manifest's stories.
+
+    Stories only in ``prior_stories`` survive verbatim; a re-ingested story
+    keeps its runtime state and takes the authored fields from the new one.
+    """
+    merged_stories = dict(prior_stories)
+    for key, new_story in new_stories.items():
+        old_story = merged_stories.get(key)
+        if old_story is None:
+            merged_stories[key] = new_story
+            continue
+        combined = dict(old_story)
+        for field in authored_fields:
+            if field == "risk" and old_story.get("status") != "todo":
+                continue
+            if field in ("files", "blocked_by", "test_scope"):
+                # `files` and `blocked_by` are the authored fields
+                # allowed to be absent from a re-ingested story:
+                # present -> copied; absent -> the key is removed.
+                if field in new_story:
+                    combined[field] = new_story[field]
+                else:
+                    combined.pop(field, None)
+                continue
+            combined[field] = new_story[field]
+        # The descriptive fields (description/epic/plan_key) follow the
+        # same rule for merging only; they stay out of
+        # _INGEST_AUTHORED_STORY_FIELDS.
+        merge_descriptive_story_fields(combined, new_story)
+        # Hashed by canonical_digest; the stamped `backend` is not.
+        combined["authored_backend"] = new_story["authored_backend"]
+        merged_stories[key] = combined
+    return merged_stories
+
+
+def route_oversized_stories(
+    stories: dict[str, Any], repo_root: str, role_config: dict | None
+) -> list[tuple[str, str, str]]:
+    """Auto-route oversized on-device stories to the host's :cloud default.
+
+    Mutates the story dicts in ``stories`` so the route is persisted and
+    returns ``(key, tag, warning)`` for each routed story. The routed-key set
+    is per-ingest only (a re-ingested story already on a :cloud model fails
+    ``_on_device_route_target``).
+    """
+    from . import ingest as _home
+
+    routed: list[tuple[str, str, str]] = []
+    for key, story in stories.items():
+        warning = class_aware_sizing_warning(
+            story, repo_root, role_config, _home._story_sizing_warning
+        )
+        if warning is None:
+            continue
+        tag = _home._on_device_route_target(story)
+        if tag is None:
+            continue
+        from_backend = story.get("backend")
+        from_model = story.get("model")
+        story["backend"] = "ollama"
+        story["model"] = tag
+        story["sizing_auto_routed"] = {
+            "from_backend": from_backend,
+            "from_model": from_model,
+            "to_model": tag,
+            "reason": warning,
+        }
+        routed.append((key, tag, warning))
+    return routed
+
+
+# (story key, notification body, notify kwargs, also log as a warning)
+StoryNotice = tuple[str, str, dict[str, Any], bool]
+
+
+def iter_story_notices(
+    final_manifest: dict[str, Any], routed_keys: set[str], repo_root: str
+) -> Iterator[StoryNotice]:
+    """Yield each story's non-blocking advisories, in the order they fire.
+
+    A generator, so each advisory is computed only after the previous one has
+    been delivered - the same interleaving as the inline loop it replaces.
+    """
+    from . import ingest as _home
+
+    for key, story in final_manifest["stories"].items():
+        if key in routed_keys:
+            # Already notified with the sizing_auto_routed event;
+            # a second plain warning would double-notify the same story.
+            warning = None
+        else:
+            warning = _home._story_sizing_warning(
+                _home._sizing_view(story, final_manifest.get("role_config")), repo_root
+            )
+        if warning:
+            if not os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", "").endswith(":cloud"):
+                warning += _home._AUTO_ROUTE_SKIPPED_SUFFIX
+            yield key, warning, {"event": "sizing_risk", "story_key": key}, True
+        for event, text in story_advisories(
+            story, repo_root, final_manifest.get("repo_url"), _home._store
+        ):
+            yield key, text, {"event": event, "story_key": key}, True
+        # Non-blocking authoring nudge: flag acceptance fixtures that
+        # depend on macOS-only tooling. Dispatch, the done-bar and the
+        # merge-gate reverify all run on macOS, but CI runs ubuntu-latest
+        # only, so such a fixture passes every local gate and fails only
+        # after the PR is open (observed live 2026-07-30). Advisory only.
+        msg = _home._security_review_unenforced_warning(story)
+        if msg is not None:
+            yield key, msg, {"event": "security_review_unenforced", "story_key": key}, False
+        platform_msg = _home._platform_locked_fixture_warning(story)
+        if platform_msg is not None:
+            yield key, platform_msg, {}, True
+        # Non-blocking authoring nudge: flag a local-dispatch story whose
+        # test_author/planner scaffolding roles resolve to a DIFFERENT
+        # provider - exactly the configuration that silently dropped the
+        # TDD-split crutch from two stories on 2026-07-30 (both parked).
+        # Advisory only.
+        story_backend = story.get("backend") or os.environ.get(
+            "PIPELINE_BACKEND_DISPATCH", "claude"
+        ).strip().lower()
+        role_msg = _home._scaffolding_provider_mismatch_warning(
+            dispatch_backend=story_backend,
+            role_config=final_manifest.get("role_config"),
+            registry_roles=_home.role_registry.load_registry().get("roles", {}),
+        )
+        if role_msg is not None:
+            yield key, role_msg, {}, True

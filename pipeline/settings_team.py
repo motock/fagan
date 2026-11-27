@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from app.plugin_loader import (
     load_plugin,
@@ -48,7 +49,7 @@ def _provider(spec: str) -> Any:
         # Deny by default: the team decides which settings gate a plan's test
         # scope, autonomy and merge, so the module allowlist is required.
         require_allowlist(SEAM)
-        factory = load_plugin(SEAM)
+        factory = cast(Callable, load_plugin(SEAM))  # require_allowlist(SEAM) above refuses an unconfigured seam
         built = factory()
         require_methods(built, PROVIDER_METHODS, SEAM)
         _PLUGIN_TEAMS[spec] = built

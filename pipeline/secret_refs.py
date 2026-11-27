@@ -22,6 +22,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
+from typing import Any
 
 from app.plugin_loader import PluginError, load_plugin_list, require_methods
 
@@ -41,7 +42,7 @@ _READ_CHUNK = 65536
 
 # Provider registries keyed by the raw plugin spec that built them, so the
 # operator's plugin modules are imported and instantiated once per spec.
-_PLUGIN_REGISTRIES: dict[str, dict[str, object]] = {}
+_PLUGIN_REGISTRIES: dict[str, dict[str, Any]] = {}
 
 
 class SecretRefError(ValueError):
@@ -147,7 +148,7 @@ def _read_file(name: str, env) -> str | None:
     return text.rstrip("\r\n") or None
 
 
-def _plugin_providers(env) -> dict[str, object]:
+def _plugin_providers(env) -> dict[str, Any]:
     spec = str(env.get(PLUGIN_ENV, "")).strip()
     if not spec:
         return {}
@@ -157,7 +158,7 @@ def _plugin_providers(env) -> dict[str, object]:
         factories = load_plugin_list(PLUGIN_SEAM, env)
     except PluginError:
         raise SecretRefError("secret provider configuration is invalid") from None
-    registry: dict[str, object] = {}
+    registry: dict[str, Any] = {}
     for factory in factories:
         try:
             provider = factory()

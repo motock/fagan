@@ -21,6 +21,7 @@ import os
 import re
 import tempfile
 from datetime import UTC, datetime
+from typing import TypeVar
 
 from app.credentials import is_default_namespace
 from pipeline.actor import current_namespace
@@ -28,6 +29,8 @@ from pipeline.namespace_names import is_segmented_namespace
 
 from .host_state import build_host_state
 from .parsers import _validate_key
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +252,7 @@ def claim_wakes() -> list[str]:
     return claimed
 
 
-def after(plan_name: str, reason: str, result: object) -> object:
+def after(plan_name: str, reason: str, result: _T) -> _T:
     """Wake *plan_name* when an operator method's *result* is a success.
 
     Lets a mutating MCP tool wake the scheduler in one line::

@@ -369,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                 _write_result(result_path, {"state": "error", "error": reason})
                 return 1
             with bind_namespace(namespace):
-                rv = pipeline.server.review_story(plan_name, story_key)
+                rv = pipeline.server.review_story(plan_name, story_key)  # type: ignore[attr-defined]  # injected into pipeline.server's globals from the lifecycle tool list
     except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
         # Class name only: the message can carry filesystem paths or a token.
         _write_result(

@@ -45,6 +45,7 @@ re-bind could bless it.
 
 import logging
 import subprocess
+from typing import Any, cast
 
 from pipeline import forge_auth
 
@@ -192,7 +193,7 @@ def check_with_worktree(
     local, dirty = worktree_head_state(worktree)
     if local is None:
         return binding
-    bound = story["review_verdict_sha"]
+    bound = cast(dict, story)["review_verdict_sha"]  # check() above denies any non-dict story
     if local != bound:
         logger.warning(
             "local worktree HEAD is not the reviewed commit; refusing to merge",
@@ -328,7 +329,7 @@ def binding_denial_action(story: object, rebind_attempts: object) -> str:
     fields = story if isinstance(story, dict) else None
     verdict = fields.get("review_verdict") if fields is not None else None
     try:
-        attempts = int(rebind_attempts or 0)
+        attempts = int(cast(Any, rebind_attempts) or 0)  # non-numeric input is caught below
     except (TypeError, ValueError):
         attempts = REVIEW_REBIND_MAX_ATTEMPTS
     if verdict == "APPROVE" and attempts < REVIEW_REBIND_MAX_ATTEMPTS:

@@ -304,7 +304,7 @@ def _repository_read(
 
     result = read(root)
     if not result.get("ok"):
-        reason = _SERVICE_REASONS.get(result.get("error"), "read_failed")
+        reason = _SERVICE_REASONS.get(result.get("error", ""), "read_failed")
         _audit_read(tool, repo, reason)
         return {"ok": False, "reason": reason}
     _audit_read(tool, repo, "ok")

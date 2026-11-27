@@ -78,6 +78,7 @@ import subprocess
 import tempfile
 import unicodedata
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote
 
 __all__ = [
@@ -457,7 +458,18 @@ def _normalize_checked(raw: str) -> Path:
     return resolved
 
 
-def validate_workspace(raw: str | None) -> dict:
+class WorkspaceCheck(dict[str, Any]):
+    """Result of ``validate_workspace``: ``ok``, ``path`` and ``error`` keys.
+
+    ``ok`` is always present, so ``get`` is typed ``Any`` rather than
+    ``Any | None`` and callers can use it as a flag.
+    """
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return super().get(key, default)
+
+
+def validate_workspace(raw: str | None) -> WorkspaceCheck:
     """Validate that *raw* points to an existing git repository with commits.
 
     Never raises: every rejection (including security denials) becomes an
@@ -470,13 +482,13 @@ def validate_workspace(raw: str | None) -> dict:
         # Raised inside this try so the denial returns the sanitized result.
         check_repo_root_allowed(str(path))
     except ValueError as exc:
-        return {"ok": False, "path": "", "error": sanitize_error_message(exc)}
+        return WorkspaceCheck({"ok": False, "path": "", "error": sanitize_error_message(exc)})
 
     try:
         if not path.exists():
-            return {"ok": False, "path": str(path), "error": "path does not exist"}
+            return WorkspaceCheck({"ok": False, "path": str(path), "error": "path does not exist"})
         if not path.is_dir():
-            return {"ok": False, "path": str(path), "error": "path is not a directory"}
+            return WorkspaceCheck({"ok": False, "path": str(path), "error": "path is not a directory"})
 
         git_dir_result = subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--git-dir"],
@@ -484,7 +496,7 @@ def validate_workspace(raw: str | None) -> dict:
             check=False,
         )
         if git_dir_result.returncode != 0:
-            return {"ok": False, "path": str(path), "error": "not a git repository"}
+            return WorkspaceCheck({"ok": False, "path": str(path), "error": "not a git repository"})
 
         head_result = subprocess.run(
             ["git", "-C", str(path), "rev-parse", "HEAD"],
@@ -492,15 +504,15 @@ def validate_workspace(raw: str | None) -> dict:
             check=False,
         )
         if head_result.returncode != 0:
-            return {
+            return WorkspaceCheck({
                 "ok": False,
                 "path": str(path),
                 "error": "git repository has no commits",
-            }
+            })
     except OSError as exc:
-        return {"ok": False, "path": str(path), "error": sanitize_error_message(exc)}
+        return WorkspaceCheck({"ok": False, "path": str(path), "error": sanitize_error_message(exc)})
 
-    return {"ok": True, "path": str(path), "error": None}
+    return WorkspaceCheck({"ok": True, "path": str(path), "error": None})
 
 
 def create_workspace(raw: str | None) -> dict:

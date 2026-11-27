@@ -8,8 +8,8 @@ set that value lists the key in its ``allow_loosen``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
 from pipeline.policy_settings import SETTINGS_ERROR_KEY
 from pipeline.settings_registry import LAYERS, REGISTRY, REQUEST_LAYER, SettingKey
@@ -74,7 +74,7 @@ def resolve(
 
     invalid_layers = []
     lock_rejections = []
-    current = None
+    current: tuple[Any, str] | None = None
     for name, value in offered:
         if value is None:
             continue
@@ -86,7 +86,7 @@ def resolve(
             # so the policy layer keeps the source.
             if name == request_layer and value == current[0]:
                 continue
-            looser = setting.tighter(value, current[0]) != value
+            looser = cast(Callable[[Any, Any], Any], setting.tighter)(value, current[0]) != value
             if looser and not _may_loosen(setting, current[1], layer_maps):
                 lock_rejections.append(
                     {"layer": name, "requested": value, "by": current[1]}

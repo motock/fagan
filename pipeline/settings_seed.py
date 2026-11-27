@@ -94,7 +94,7 @@ def seed_from_env(
     stored = dict(record["values"]) if record else {}
     version = record["version"] if record else None
     stored_loosen = record["allow_loosen"] if record else []
-    report = {
+    report: dict[str, Any] = {
         "ok": True,
         "scope": scope,
         "scope_id": scope_id,

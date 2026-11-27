@@ -380,6 +380,8 @@ def _run_reviewer(
     # None on no drift (the prompt below stays byte-for-byte unchanged) and
     # ("", "") when drift was detected but the story has no new files of its
     # own (also today's prompt, plus the INFO notice below).
+    base_ref: str | None
+    inline_diff: str | None
     scoped = scoped_rework_diff(worktree, since_sha, None) if since_sha else None
     if scoped is not None:
         logging.getLogger(__name__).info(

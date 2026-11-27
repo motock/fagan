@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 from pipeline import cross_plan, plan_activity, wake, workspace_reader
 from pipeline import workspace_fs as _workspace_fs
@@ -441,7 +441,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if error is not None:
             return error
         try:
-            resolved = _workspace_fs.resolve_within_workspace(active, relative_path, hide_git=root is not None)
+            resolved = _workspace_fs.resolve_within_workspace(cast(str, active), relative_path, hide_git=root is not None)
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
         if not os.path.isfile(resolved):
@@ -481,7 +481,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         resolve_spelling = '.' if relative_path == '' else relative_path
         try:
             resolved = _workspace_fs.resolve_within_workspace(
-                active, resolve_spelling, hide_git=root is not None
+                cast(str, active), resolve_spelling, hide_git=root is not None
             )
         except ValueError:
             return {'ok': False, 'error': 'invalid path'}
@@ -528,7 +528,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # workspace keeps the exact-case exclusion it always had.
         git_dir_glob = _workspace_fs.GIT_DIR_GLOB_ANY_CASE if root is not None else '.git'
         try:
-            result = _workspace_fs.run_grep(active, pattern, git_dir_glob)
+            result = _workspace_fs.run_grep(cast(str, active), pattern, git_dir_glob)
         except subprocess.TimeoutExpired:
             return {'ok': False, 'error': 'search timed out'}
         except FileNotFoundError:
@@ -737,9 +737,9 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         # SA-05: a repo_url plan is cloned here and its repo_root replaced with
         # the managed path, for any principal; the allow-list below then sees
         # that path. A refusal leaves nothing written.
-        err = remote_scope.resolve_repo_url(plan)
-        if err is not None:
-            return err
+        clone_refusal = remote_scope.resolve_repo_url(plan)
+        if clone_refusal is not None:
+            return clone_refusal
 
         if workspace is not None:
             ws_result = validate_workspace(workspace)

@@ -110,7 +110,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
     if worktree and Path(worktree).is_dir():
         resolved = _resolve_story_branch(worktree, key)
 
-    prepared = get_forge(REPO_ROOT).prepare_merge(worktree, resolved)
+    prepared = get_forge(str(REPO_ROOT)).prepare_merge(worktree, resolved)
     if prepared.get("auto_resolved"):
         # W4L-04: stamp the story's correlation_id onto this merge-gate
         # notice. This helper receives only plan+story key (no story dict),

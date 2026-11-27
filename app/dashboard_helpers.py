@@ -258,7 +258,7 @@ def _plan_summary(
     partition = namespace or current_namespace()
     stories = manifest.get("stories", {})
     # The Store protocol omits records(); FileStore and SqliteStore both define it.
-    updated_at = _store.records().get_manifest_updated_at(partition, plan_name)
+    updated_at = _store.records().get_manifest_updated_at(partition, plan_name)  # type: ignore[attr-defined]
     # A manifest that vanished under a race with a concurrent write has no
     # timestamp - sort it last rather than 500ing the whole list over one
     # plan's timestamp.
@@ -447,7 +447,7 @@ def plan_list(include_archived: bool, repo: str | None) -> dict[str, Any]:
         namespaces = [current_namespace()]
         labelled = None
     # The Store protocol omits records(); FileStore and SqliteStore both define it.
-    records = _store.records()
+    records = _store.records()  # type: ignore[attr-defined]
     for namespace in namespaces:
         try:
             names = records.list_plans(namespace)

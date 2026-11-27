@@ -44,7 +44,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from app.identity import Principal
 
@@ -385,7 +385,7 @@ class PlanApprovalMixin:
             reason="",
             expected_digest=expected_digest,
         )
-        return wake.after(plan_name, "approve_plan", result)
+        return cast("dict[str, Any]", wake.after(plan_name, "approve_plan", result))  # after() returns its argument
 
     def reject_plan(
         self,

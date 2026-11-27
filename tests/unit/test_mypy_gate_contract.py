@@ -148,8 +148,11 @@ def test_should_reject_an_empty_files_list() -> None:
 
 def test_should_list_only_existing_modules_in_the_baseline() -> None:
     modules = _baseline_modules(_load_pyproject())
-    assert modules, "the baseline must list the modules that failed at adoption"
     assert _missing_modules(modules) == []
+
+
+def test_should_have_an_empty_baseline() -> None:
+    assert _baseline_modules(_load_pyproject()) == []
 
 
 def test_should_keep_the_baseline_sorted_and_unique() -> None:

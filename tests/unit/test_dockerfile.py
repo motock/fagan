@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -44,9 +45,17 @@ DOCKERFILE = REPO_ROOT / "Dockerfile"
 IMAGE_TAG = "fagan-mcp-test"
 ENTRYPOINT = "app/pipeline_mcp_server.py"
 
-# The exact content the story pins down for the Dockerfile.
+# The base image is pinned by tag AND digest. The digest is matched by pattern
+# so a Dependabot digest bump does not break these tests; the tag is exact.
+BASE_IMAGE_TAG = "python:3.12-slim"
+BASE_IMAGE_DIGEST_PATTERN = r"@sha256:[0-9a-f]{64}"
+BASE_IMAGE_RE = re.compile(rf"^FROM {re.escape(BASE_IMAGE_TAG)}{BASE_IMAGE_DIGEST_PATTERN}$")
+
+# The exact content the story pins down for the Dockerfile. The base-image line
+# is compared with its digest normalised to a placeholder (see
+# _normalise_digest), so the expected value does not move with each bump.
 EXPECTED_LINES = [
-    "FROM python:3.12-slim",
+    f"FROM {BASE_IMAGE_TAG}@sha256:<digest>",
     "WORKDIR /app",
     "COPY requirements.txt .",
     "RUN pip install --no-cache-dir -r requirements.txt",
@@ -201,13 +210,36 @@ def test_dockerfile_exists_and_is_not_empty() -> None:
     assert text.strip(), "Dockerfile exists but is empty"
 
 
+def _is_pinned_base_image(from_line: str) -> bool:
+    """True only for ``FROM python:3.12-slim@sha256:<64 hex>`` (exact tag, digest by pattern)."""
+    return BASE_IMAGE_RE.fullmatch(from_line) is not None
+
+
+def _normalise_digest(line: str) -> str:
+    """Replace a pinned digest with ``<digest>`` so the exact-content check ignores bumps."""
+    return re.sub(BASE_IMAGE_DIGEST_PATTERN, "@sha256:<digest>", line)
+
+
 def test_base_image_is_python_312_slim() -> None:
     lines = _nonempty_lines(_dockerfile_text())
     from_lines = [line for line in lines if line.upper().startswith("FROM ")]
     assert from_lines, "Dockerfile has no FROM line"
-    assert from_lines[0] == "FROM python:3.12-slim", (
-        f"expected base image 'FROM python:3.12-slim', got {from_lines[0]!r}"
+    assert _is_pinned_base_image(from_lines[0]), (
+        "expected base image 'FROM python:3.12-slim@sha256:<64 hex digits>' "
+        f"(tag and digest), got {from_lines[0]!r}"
     )
+
+
+def test_unpinned_base_image_without_digest_is_rejected() -> None:
+    """Negative case: the tag alone can be re-pushed, so a digest-less FROM must fail the check."""
+    assert not _is_pinned_base_image("FROM python:3.12-slim")
+    assert not _is_pinned_base_image(
+        "FROM python:3.12-slim@sha256:" + "a" * 63
+    ), "a digest shorter than 64 hex characters must be rejected"
+    assert not _is_pinned_base_image(
+        "FROM python:3.13-slim@sha256:" + "a" * 64
+    ), "a different tag must be rejected even with a digest"
+    assert _is_pinned_base_image("FROM python:3.12-slim@sha256:" + "0" * 64)
 
 
 def test_requirements_copied_before_pip_install() -> None:
@@ -239,7 +271,7 @@ def test_cmd_runs_stdio_entrypoint() -> None:
 
 def test_dockerfile_matches_expected_content() -> None:
     """The story pins the Dockerfile content exactly; grade it as a block."""
-    lines = _nonempty_lines(_dockerfile_text())
+    lines = [_normalise_digest(line) for line in _nonempty_lines(_dockerfile_text())]
     width = len(EXPECTED_LINES)
     found = any(
         lines[start : start + width] == EXPECTED_LINES

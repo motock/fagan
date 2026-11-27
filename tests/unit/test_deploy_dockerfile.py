@@ -34,6 +34,9 @@ DOCKERFILE = DEPLOY_DIR / "Dockerfile"
 ENTRYPOINT = DEPLOY_DIR / "entrypoint.sh"
 
 BASE_IMAGE = "python:3.12-slim"
+# Tag is exact; the digest is matched by pattern so a Dependabot bump does not
+# break the test. A tag without a digest is not a reproducible base.
+BASE_IMAGE_PATTERN = re.compile(rf"{re.escape(BASE_IMAGE)}@sha256:[0-9a-f]{{64}}")
 
 # Paths and filename patterns that carry secrets or operator-local state.
 # None of them may be copied into an image layer: a COPY bakes the content
@@ -98,8 +101,9 @@ def test_dockerfile_is_multi_stage_on_pinned_base() -> None:
 
     for stage in stages:
         image = stage.split()[0]
-        assert image == BASE_IMAGE, (
-            f"every stage must build on the exact tag {BASE_IMAGE!r}, got {image!r}"
+        assert BASE_IMAGE_PATTERN.fullmatch(image), (
+            f"every stage must build on {BASE_IMAGE!r} pinned by a 64-hex "
+            f"@sha256: digest, got {image!r}"
         )
         assert "latest" not in stage.lower(), f"stage {stage!r} pins a moving tag"
 

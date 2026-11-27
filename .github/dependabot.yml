@@ -9,3 +9,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # Refreshes the pinned python:3.12-slim digest in Dockerfile and
+  # deploy/Dockerfile by pull request. deploy/compose.yaml is not scanned by
+  # the docker ecosystem and must be bumped by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly

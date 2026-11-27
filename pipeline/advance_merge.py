@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Any
 
 from . import (
-    access_hooks,
+    access_hooks,  # noqa: F401 - names stay importable from here
     bound_records,
-    external_merge,
+    external_merge,  # noqa: F401
     merge_local_checks,
     merge_reverify,
 )
@@ -30,7 +30,7 @@ from .merge_local_checks import (  # re-exported for pipeline.advance_merge call
 )
 from .merge_readjudication import (  # re-exported for pipeline.advance
     _MERGE_HOLD_REASON,  # noqa: F401
-    _readjudicate_parked_merge_hold,
+    _readjudicate_parked_merge_hold,  # noqa: F401 - patched here; the hold phase calls it through this module
 )
 from .merge_reverify import (
     cancel_merge_reverify,
@@ -266,14 +266,9 @@ def _merge_reverify_gate(
 
 
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
-    from .review_merge_binding import (
-        REVIEW_REBIND_MAX_ATTEMPTS,
-        binding_denial_action,
-        branch_head_sha,
-        check_with_worktree,
-        deny,
-        rebind_after_pipeline_push,
-    )
+    # Phase modules read names back from this module, so import them lazily.
+    from .advance_merge_hold import check_review_binding, evaluate_merge_hold
+    from .review_merge_binding import rebind_after_pipeline_push
 
     # The merge gates this tick reads, resolved once from the plan manifest so
     # every gate call and the merge record name the same (namespace, team, repo).
@@ -289,80 +284,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         story = stories.get(key)
         if story is None:
             continue
-        # MERGEPARK-2: a parked high-risk merge hold is re-examined when the
-        # evidence the ruling cited changed. A fresh "merge" ruling flips the
-        # story to pr_open and falls through into the SAME merge path below;
-        # a fresh "park" ruling falls through to the park branch, which
-        # refreshes the snapshot. ``decision`` is None when the story was not
-        # re-adjudicated (or the gather failed), and the pr_open path then
-        # runs the gate itself as before.
-        # A parked story whose PR a person merged on the forge is completed here.
-        if external_merge.finish_if_merged_outside(plan_name, key, story, manifest, summary):
-            continue
-        decision = _readjudicate_parked_merge_hold(plan_name, key, story)
-        if decision is None and story["status"] != "pr_open":
-            continue
-        # A fresh ruling is already in hand: a "merge" ruling left the story
-        # pr_open and falls into the SAME merge path below; a "park" ruling
-        # falls into the park branch below, which records the park and
-        # refreshes the snapshot. Either way the gate is not asked twice.
-        # Thread the real plan name into the merge gate without changing the
-        # call arity: several long-standing tests (and the dry-run preview
-        # below) call/patch ``_merge_decision`` with a one-argument callable,
-        # so a second positional argument would break them. The explicit
-        # ``plan_name`` parameter stays for direct callers; production flows
-        # the name through this context, which ``_adjudicate_merges`` owns.
-        if (
-            decision is None
-            and story["status"] == "pr_open"
-            and merge_local_checks.adjudication_due(story, plan_name)
-        ):
-            # The repo's own tests, build and lint run on the branch head before
-            # the overlord rules on a high-risk merge. A wait is no verdict yet:
-            # nothing is ruled, parked or merged, and the manifest write at the
-            # end of this function still persists the job handle (ci_wait).
-            local = merge_local_checks.local_checks_gate(plan_name, key, story, summary)
-            if local is not None and local["action"] == "wait":
-                continue
-            decision = local
-        if decision is None:
-            with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(
-                key
-            ):
-                decision = access_hooks.merge_decision(_merge_decision, plan_name, story)
-        if decision["action"] != "merge":
-            # A detached re-verify may still be running; it must not outlive
-            # the story leaving pr_open.
-            _rv_job = story.pop("merge_reverify", None)
-            if _rv_job:
-                cancel_merge_reverify(_rv_job)
-            _lc_job = story.pop("merge_local_checks_job", None)
-            if _lc_job:
-                cancel_merge_reverify(_lc_job)
-            story["status"] = "parked"
-            story["parked_reason"] = decision["reason"]
-            # MERGEPARK-2: record the evidence this ruling was made on, so a
-            # later tick can tell whether the picture actually changed (e.g.
-            # checks pending at park time, green now) instead of the park
-            # being terminal. Written in every mode: a gated park is
-            # re-adjudicable too if autonomy is ever full again.
-            story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
-            story["merge_parked_at"] = datetime.now(UTC).isoformat()
-            _notify_user(
-                plan_name,
-                f"{key} parked: {decision['reason']}"
-                + (f" — {story['pr_url']}" if story.get("pr_url") else ""),
-                event="story_parked",
-                story_key=key,
-                **(
-                    {"correlation_id": story["correlation_id"]}
-                    if story.get("correlation_id")
-                    else {}
-                ),
-            )
-            summary["parked"].append(key)
-            record_merge_result("parked")
-            summary["notify"].append(key)
+        if evaluate_merge_hold(plan_name, key, story, manifest, summary):
             continue
 
         # Mode 9: rebase onto current origin/master + CI gate before merge,
@@ -395,60 +317,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # CI-gate-disabled path must run zero subprocesses, see
             # test_advance_pipeline_ci_gate_disabled_skips_ci).
             branch = ""
-        # The approval must cover the commit being merged: probe the remote
-        # tip AFTER fetch and BEFORE any rebase/checkpoint/push, and refuse
-        # here so nothing is rebased or pushed first. Keying this gate on
-        # `branch` alone conflated "no local worktree" (a missing checkout)
-        # with "no branch to bind against": the branch still exists remotely,
-        # so the gate probes the same fallback name the CI poll below uses
-        # instead of merging with zero binding verification.
-        gate_branch = branch or _degraded_ci_branch(key)
-        head = branch_head_sha(gate_branch)
-        binding = check_with_worktree(story, head, story.get("worktree", ""))
-        if not binding["ok"]:
-            # b4 evidence (2026-11-09/10): the recovery from a stale approval
-            # was a MANUAL forced re-review, which APPROVED the new head -
-            # `deny`'s premise that a retry cannot re-earn the review is
-            # false, `review_story` exists. So an APPROVE whose head simply
-            # moved is sent back through the normal review path (up to
-            # REVIEW_REBIND_MAX_ATTEMPTS times); anything else parks as today.
-            if (
-                binding_denial_action(story, story.get("review_rebind_attempts", 0))
-                == "rereview"
-                # The b4 shape is a head that moved AFTER an approval: the
-                # evidence is a recorded `last_reviewed_sha` (written when a
-                # review cycle graded a head). With no such record the approval
-                # never covered this branch head at all - not something a
-                # re-review of the SAME unchanged state can remedy - so the
-                # gate parks exactly as it did before this change.
-                and story.get("last_reviewed_sha")
-            ):
-                # Back to the review path. BOTH shas must go: a surviving
-                # review_verdict_sha would let the OLD approval cover the NEW
-                # head, and a surviving last_reviewed_sha would make the
-                # re-review skip the head as "unchanged since the last review".
-                story["status"] = "tests_passed"
-                story.pop("review_verdict_sha", None)
-                story.pop("last_reviewed_sha", None)
-                story["review_rebind_attempts"] = (
-                    story.get("review_rebind_attempts", 0) + 1
-                )
-                _notify_user(
-                    plan_name,
-                    f"{key} review_rebind: the branch head moved after the "
-                    f"approval ({(head or '')[:8]}); re-reviewing it "
-                    f"automatically, attempt "
-                    f"{story['review_rebind_attempts']}/{REVIEW_REBIND_MAX_ATTEMPTS}.",
-                    event="review_rebind",
-                    story_key=key,
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                continue
-            deny(plan_name, key, story, head, binding, summary)
+        if check_review_binding(plan_name, key, story, branch, summary):
             continue
         gate_error = ""
         ci_definitive_fail = False

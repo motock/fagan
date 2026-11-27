@@ -17,6 +17,8 @@ def _story(tmp_path):
     # empty tmp_path would fall back to its generic "npm test" default,
     # which cannot be scoped to specific paths.
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    (tmp_path / "tests/unit").mkdir(parents=True)
+    (tmp_path / "tests/unit/test_zz_fake_oracle.py").write_text("")
     return {
         "summary": "s",
         "acceptance": [{"path": "tests/unit/test_zz_fake_oracle.py", "source": "x"}],

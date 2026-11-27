@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from tests.unit._local_agent_oracle_test_helpers import (  # noqa: F401
+    _create_acceptance_fixtures,
     _FakeResp,
     _isolate_environ,
     _sequence_chat,
@@ -431,6 +432,7 @@ def test_oracle_detects_pytest_when_pyproject_present(tmp_path, monkeypatch):
     # on the module instead of via the env var.
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_x.py"])
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_x.py"])
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 't'\n")
 
     captured = {}
@@ -464,6 +466,7 @@ def test_oracle_detects_cargo_when_cargo_toml_present(tmp_path, monkeypatch):
     project's [[test]] wiring picks up the acceptance file."""
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/acceptance.rs"])
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/acceptance.rs"])
     (tmp_path / "Cargo.toml").write_text("[package]\nname = 't'\n")
 
     captured = {}
@@ -497,6 +500,7 @@ def test_oracle_uses_npm_test_when_package_json_present(tmp_path, monkeypatch):
     ['npm', 'test']; the oracle runs it bare."""
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test/acceptance.test.js"])
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["test/acceptance.test.js"])
     (tmp_path / "package.json").write_text('{"name": "t"}\n')
 
     captured = {}

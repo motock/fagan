@@ -15,6 +15,7 @@ import os
 
 from pipeline import rebrief
 from tests.unit._local_agent_oracle_test_helpers import (  # noqa: F401
+    _create_acceptance_fixtures,
     _init_git_repo,
     _isolate_environ,
     _sequence_chat,
@@ -28,6 +29,7 @@ def _wire_run(tmp_path, monkeypatch, responses):
     Returns the fake chat's recorded call list."""
     _init_git_repo(tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
+    _create_acceptance_fixtures(tmp_path, ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", False)
     monkeypatch.setattr(lao, "MAX_STEPS", 1)

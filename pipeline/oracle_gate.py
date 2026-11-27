@@ -18,7 +18,9 @@ implementation at all (state "passes") or that collected no tests (state
 validate_acceptance_fixtures runs a story's declared acceptance fixtures
 against a given checkout (scoped via build_detect's existing runner-detection
 helpers, the same ones used for grading) and classifies the result - so a
-broken oracle can be caught before an implementer is even launched.
+broken oracle can be caught before an implementer is even launched. A fixture
+file absent from the checkout is state "errors" without running anything: a
+scoped runner would otherwise exit 0 on it.
 
 acceptance_digests records a sha256 of each fixture's AUTHORITATIVE manifest
 source at dispatch time, so a later gate (see pipeline.ci._acceptance_tampered)
@@ -101,6 +103,16 @@ def validate_acceptance_fixtures(story: dict[str, Any], checkout: Path) -> dict:
     paths = [entry["path"] for entry in acceptance]
     if not acceptance:
         return {"state": "none", "detail": "story has no acceptance fixtures", "paths": []}
+
+    # A scoped runner given an absent fixture matches no tests and exits 0, so
+    # the exit code cannot prove the fixture passes. Refuse before running it.
+    missing = [path for path in paths if not (Path(checkout) / path).is_file()]
+    if missing:
+        return {
+            "state": "errors",
+            "detail": f"acceptance fixture missing: {', '.join(missing)}",
+            "paths": paths,
+        }
 
     try:
         test_dir, test_cmd = detect_test_command(Path(checkout))

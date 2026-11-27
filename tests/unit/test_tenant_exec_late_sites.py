@@ -135,7 +135,17 @@ def _oracle_story():
     }
 
 
+def _write_oracle_fixture(checkout):
+    # The pre-dispatch gate refuses a fixture absent from the checkout, so these
+    # tests must create the file they declare. Without it they would exercise
+    # the missing-fixture refusal rather than the wrapped command they target.
+    fixture = checkout / "tests" / "unit" / "test_fixture.py"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text("def test_x():\n    pass\n")
+
+
 def test_oracle_gate_runs_wrapped_test_command_in_test_dir(tmp_path, monkeypatch, wrap_calls):
+    _write_oracle_fixture(tmp_path)
     test_dir = tmp_path / "suite"
     test_dir.mkdir()
     test_cmd = ["pytest", "-q", "tests/unit/test_fixture.py"]
@@ -153,6 +163,7 @@ def test_oracle_gate_runs_wrapped_test_command_in_test_dir(tmp_path, monkeypatch
 def test_oracle_gate_refused_wrap_reports_errors_and_runs_nothing(
     tmp_path, monkeypatch, refusing_wrap
 ):
+    _write_oracle_fixture(tmp_path)
     monkeypatch.setattr(og, "detect_test_command", lambda checkout: (tmp_path, ["pytest", "-q"]))
     monkeypatch.setattr(og, "_scope_test_cmd_to_acceptance", lambda cmd, paths, cwd: None)
     ran = _record_runs(monkeypatch)
@@ -297,6 +308,7 @@ def test_reviewer_shell_refused_wrap_returns_126_and_runs_nothing(
 def test_refused_commands_leak_no_command_text_into_logs_or_results(
     tmp_path, monkeypatch, plugin_configured, refusing_wrap, caplog
 ):
+    _write_oracle_fixture(tmp_path)
     command = f"echo {REFUSAL_MARKER}"
     monkeypatch.setenv("PIPELINE_TRIAGE_SUITE_PROBE", "1")
     monkeypatch.setattr(rh, "detect_lint_command", lambda checkout: (tmp_path, [command]))

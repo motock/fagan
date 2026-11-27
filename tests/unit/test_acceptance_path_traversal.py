@@ -224,12 +224,36 @@ def test_dispatch_rejection_notifies_with_offending_path(
         repo, branch, story, notifications=notifications,
     )
 
-    naming = [m for m in notifications if "../escape.txt" in str(m)]
-    assert len(naming) == 1, (
-        f"expected exactly one notification naming the rejected path, got "
-        f"{notifications!r}"
+    rejected = [m for m in notifications if "outside the worktree rejected" in str(m)]
+    assert len(rejected) == 1, (
+        f"expected exactly one rejection notification, got {notifications!r}"
     )
-    assert "rejected" in str(naming[0]) or "outside the worktree" in str(naming[0])
+    assert "../escape.txt" in str(rejected[0])
+    # The story is then blocked by the oracle gate (its only fixture was
+    # rejected, so it is missing); that blocked notification names the same path.
+    blocked = [m for m in notifications if "not dispatched" in str(m)]
+    assert len(blocked) == 1, (
+        f"expected exactly one blocked notification, got {notifications!r}"
+    )
+    assert "../escape.txt" in str(blocked[0])
+
+
+# ---------------------------------------------------------------------------
+# 4b. dispatch: a story whose only fixture was rejected is blocked, not run.
+# ---------------------------------------------------------------------------
+def test_dispatch_blocks_story_whose_only_fixture_was_rejected(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    _origin, repo, branch = _make_origin(tmp_path)
+    story = _story(acceptance=[{"path": "../escape.txt", "source": "PWNED"}])
+
+    result = _dispatch(
+        plan_dir, worktree_root, agents_dir, monkeypatch, "blocked", "S1",
+        repo, branch, story,
+    )
+
+    assert result["status"] == "blocked_oracle"
+    assert result["oracle_gate"]["state"] == "errors"
 
 
 # ---------------------------------------------------------------------------

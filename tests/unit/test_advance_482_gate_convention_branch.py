@@ -227,9 +227,13 @@ def _stub_tick_env(plan_dir, repo, monkeypatch):
 # ---------------------------------------------------------------------------
 def _gate_function_sources():
     import pipeline.advance as adv_mod
+    import pipeline.advance_merge_ci_gate as ci_gate_mod
 
     out = []
-    for name, fn in inspect.getmembers(adv_mod, inspect.isfunction):
+    for name, fn in [
+        *inspect.getmembers(adv_mod, inspect.isfunction),
+        *inspect.getmembers(ci_gate_mod, inspect.isfunction),
+    ]:
         try:
             fn_src = inspect.getsource(fn)
         except (OSError, TypeError):
@@ -242,8 +246,15 @@ def _gate_function_sources():
 def test_advance_merge_gate_receives_no_hardcoded_convention_branch():
     import pipeline.advance as adv_mod
     import pipeline.advance_merge as adv_merge
+    import pipeline.advance_merge_ci_gate as adv_merge_ci_gate
 
-    src = inspect.getsource(adv_mod) + "\n" + inspect.getsource(adv_merge)
+    src = (
+        inspect.getsource(adv_mod)
+        + "\n"
+        + inspect.getsource(adv_merge)
+        + "\n"
+        + inspect.getsource(adv_merge_ci_gate)
+    )
     # (a) The original hardcoded form is banned outright.
     assert 'f"agent/{key.lower()}"' not in src, (
         "advance.py still contains the hardcoded convention branch literal "

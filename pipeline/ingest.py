@@ -23,7 +23,8 @@ from typing import Any
 
 from . import (
     cross_plan,
-    external_refs,
+    external_refs,  # noqa: F401
+    ingest_preflight,
     ingest_validate,
     plan_draft,
     plan_names,
@@ -32,7 +33,7 @@ from . import (
 from .actor import actor_id, current_namespace
 from .authorization import DEFAULT_TEAM
 from .branch_names import worktree_parent
-from .build_detect import _lint_acceptance_fixtures
+from .build_detect import _lint_acceptance_fixtures as _lint_acceptance_fixtures  # noqa: PLC0414
 from .context_sources import (
     DEFAULT_MAX_TOTAL_CHARS,
     normalize_context_sources,
@@ -604,82 +605,14 @@ def _ingest_plan_impl(
     if refusal is not None:
         return refusal
 
-    # A plan-level preflight_override admits non-Claude stories whose brief
-    # lacks a real `Preflight:` line (.claude/rules/local-dispatch-preflight.md).
-    # Validated once, up front, before any side effect: a present-but-invalid
-    # value must fail the ingest even when every story is Claude-provider.
-    override = plan.get("preflight_override")
-    if "preflight_override" in plan and (
-        not isinstance(override, str) or not override.strip()
-    ):
-        return {
-            "ok": False,
-            "error": "preflight_override must be a non-empty reason string",
-        }
-    overrides = []
-
-    # Validate story["backend"] upfront, before any Plane side effects, so a
-    # typo'd provider name fails closed here rather than surfacing as a
-    # NotImplementedError deep inside get_backend at dispatch time.
-    for epic in plan["epics"]:
-        if only_epics and epic["summary"] not in only_epics:
-            continue
-        for story in epic.get("stories", []):
-            story_backend = story.get("backend")
-            if story_backend is not None and story_backend not in _VALID_STORY_BACKENDS:
-                return {
-                    "ok": False,
-                    "error": (
-                        f"Story {story.get('summary', '?')!r} has unknown "
-                        f"backend {story_backend!r}. Valid values: "
-                        f"{sorted(_VALID_STORY_BACKENDS)}"
-                    ),
-                }
-            files_error = _files_field_error(story) or _test_scope_error(story, f"story {story.get('summary')!r}")
-            if files_error is not None:
-                return {"ok": False, "error": files_error}
-            blocked_by_error = external_refs.blocked_by_error(story, _blocked_by_error)
-            if blocked_by_error is not None:
-                return {"ok": False, "error": blocked_by_error}
-            acceptance_error = _acceptance_field_error(story)
-            if acceptance_error is not None:
-                return {"ok": False, "error": acceptance_error}
-            # .claude/rules/local-dispatch-preflight.md: a story dispatched to
-            # a non-Claude provider must carry a real `Preflight:` line (a
-            # conflict/impact run against the base commit), so the executor
-            # does not discover a stale base or a conflicting sibling change
-            # mid-dispatch. Claude-provider stories are never gated.
-            provider = _preflight_dispatch_provider(story, plan.get("role_config"))
-            if provider != "claude":
-                status = _preflight_status(story.get("agent_instructions"))
-                if status != "ok":
-                    if override is None:
-                        phrase = (
-                            "says `Preflight: NOT RUN`"
-                            if status == "not_run"
-                            else "has no `Preflight:` line"
-                        )
-                        return {
-                            "ok": False,
-                            "error": (
-                                f"story {story.get('summary')!r} is gated for "
-                                f"provider {provider!r}: it {phrase}; see "
-                                f".claude/rules/local-dispatch-preflight.md; set "
-                                f'a plan-level "preflight_override": "<reason>" '
-                                f"for emergencies"
-                            ),
-                        }
-                    overrides.append((story.get("key"), status, override))
-            # OPSA-8: lint the .py acceptance fixture sources upfront, before
-            # any Plane side effect. A lint-violating fixture is a read-only
-            # oracle the dispatched agent can never fix (PR #235), so it must
-            # not reach dispatch - and it must not leave orphaned epics or
-            # stories behind when the ingest is rejected. Gating on "finding"
-            # only, never on "skipped": a broken or absent lint tool can never
-            # block a known-good plan.
-            kind, lint_msg = _lint_acceptance_fixtures(story, repo_root)
-            if kind == "finding":
-                return {"ok": False, "error": lint_msg}
+    override, refusal = ingest_preflight.preflight_override_refusal(plan)
+    if refusal is not None:
+        return refusal
+    overrides, refusal = ingest_preflight.story_preflight_refusal(
+        plan, only_epics, override, repo_root
+    )
+    if refusal is not None:
+        return refusal
 
     plan_context, refusal = ingest_validate.merged_context_refusal(
         plan_name, plan, repo_root

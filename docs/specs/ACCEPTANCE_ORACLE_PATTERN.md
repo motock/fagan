@@ -168,7 +168,9 @@ states demand opposite actions — the harness MUST classify before reacting:
   infrastructure failure. The grader never reached a real assertion, so the
   run produces no usable signal. Refuse to dispatch and report the fixture as
   broken — the most expensive failure mode to discover late, because it
-  consumes an executor's entire budget while producing nothing.
+  consumes an executor's entire budget while producing nothing. A fixture file
+  absent from the working copy is also `errors`: the oracle never grades a
+  missing file as a pass, whatever the runner's exit code.
 - **`fails_correctly`** — the fixture ran cleanly and correctly reports that
   the deliverable is missing: the CORRECT pre-dispatch state and the only
   state that should proceed to implementation. A not-yet-written module may

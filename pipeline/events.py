@@ -5,6 +5,7 @@ This module defines the event contract and an in‑process event bus used by the
 unit tests.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -12,7 +13,9 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipeline.store_records import validate_namespace
+from app.credentials import is_default_namespace
+from pipeline.actor import bind_namespace, current_namespace
+from pipeline.store_records import InvalidRecordKeyError, validate_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +94,10 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
         :func:`pipeline.store_records.validate_namespace`. Plan names are
         unique only inside a namespace, so a consumer that acts on a plan
         needs this to act on the right one. When ``None`` (the default) the
-        key is absent and the legacy shape is unchanged.
+        namespace bound for the caller (:func:`pipeline.actor.current_namespace`)
+        is used, and the key is stamped only when that namespace is not the
+        default; with nothing bound the key is absent and the legacy shape is
+        unchanged.
 
     Returns
     -------
@@ -134,6 +140,11 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
             "idempotency_key must be a non-empty str of at most 128 characters"
         )
 
+    if namespace is None:
+        # The namespace the caller is working in. Nothing bound, or the default
+        # one, leaves the event exactly as it was before namespaces were stamped.
+        bound = current_namespace()
+        namespace = None if is_default_namespace(bound) else bound
     if namespace is not None:
         validate_namespace(namespace)
 
@@ -169,6 +180,26 @@ def make_event(type: str, plan: str, story_key=None, payload=None,
     if namespace is not None:
         event["namespace"] = namespace
     return event
+
+
+def namespace_binding_for_event(event: dict):
+    """Bind the namespace an event carries, for a read or write on its plan.
+
+    A bus consumer delivers with nothing bound, so the event's own
+    ``namespace`` is the only way to reach its plan's history. An event without
+    one, or with a malformed one, binds nothing and so uses the default
+    namespace. That fallback is deliberate for the dead-letter writer, which
+    must stay unraiseable; a caller that must refuse a malformed namespace
+    checks it itself.
+    """
+    namespace = event.get("namespace")
+    if namespace is None:
+        return contextlib.nullcontext()
+    try:
+        validate_namespace(namespace)
+    except InvalidRecordKeyError:
+        return contextlib.nullcontext()
+    return bind_namespace(namespace)
 
 # ---------------------------------------------------------------------------
 # Event bus abstractions

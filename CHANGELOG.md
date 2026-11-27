@@ -93,6 +93,8 @@ in practice.
 - A chat turn whose model answers with no text is nudged once to answer in plain language from the tool results it already has; if the answer is still empty, or no turn is left, the turn ends with "The model returned no answer. Try sending the message again." instead of an empty reply. Each such turn logs one `chat reply empty` warning with the provider, model and turn count only.
 - The standalone installer writes the public origin as `https://<host>` when `--port` is 443, so the OIDC issuer, redirect URI, resource URL, dashboard origin and Keycloak hostname match the bare origin Keycloak puts in its discovery document. Logins on port 443 were refused with `OIDC login unavailable`. Other ports keep `https://<host>:<port>`. Existing `.env` files without `PUBLIC_ORIGIN` keep their current values.
 
+- Records written from a bus event land in the namespace of the plan the event is about, not the default: notification history, dead-letter records, `agent_dispatched`, `plan_guidance_resolved` and the `ci_complete` reconcile carry the bound namespace, and the plan-completion notice, report and completion mark are written there too. Before, a team namespace's plan showed an empty event history while its rows sat in `default`. Events with no namespace, or the default one, are unchanged.
+
 ### Security
 
 - Email delivery to a host that resolves to a loopback, private, link-local or other non-public address is now refused. An install that sends through an internal relay (for example a postfix container) must list that host in `PIPELINE_NOTIFY_SMTP_ALLOW_PRIVATE_HOSTS` or its email stops after upgrading.

@@ -375,7 +375,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             exists = os.path.exists(p)
             valid = False
             if exists:
-                valid = bool(_workspace.validate_workspace(p).get("ok"))
+                valid = _workspace.validate_workspace(p).get("ok")
             workspaces.append({"path": p, "exists": exists, "valid": valid})
         # Manifest-only
         for plan_name in self.list_plans():
@@ -393,7 +393,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             exists = os.path.exists(repo_root)
             valid = False
             if exists:
-                valid = bool(_workspace.validate_workspace(repo_root).get("ok"))
+                valid = _workspace.validate_workspace(repo_root).get("ok")
             workspaces.append({"path": repo_root, "exists": exists, "valid": valid})
         return workspaces
 

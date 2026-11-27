@@ -94,6 +94,7 @@ in practice.
 
 ### Changed
 
+- `httpx` is pinned exactly (`httpx==0.28.1`) in `requirements.txt`, matching every other runtime requirement, and `tests/unit/test_runtime_requirements_pins.py` fails if a runtime requirement drops its `==` pin.
 - Plan authors are told to check the connected repositories before planning a change to an interface, a version or a shared contract: the `list_repositories` tool description says to search the other repositories and to order a dependent repository's work with `blocked_by`, and the shipped story schema rule (`.claude/rules/pipeline-story-schema.md`, "A change that crosses repositories") gives the cross-repository authoring steps. No pipeline behaviour changes.
 - The decompose prompt tells the analyst to keep a change with the existing tests it breaks: a story that changes a value, name, version or behaviour that existing tests assert must update those tests in the same story, so its pull request can pass the repository's CI on its own (cap-05). Measured 2026-11-25: a version bump in one story and its test update in the next left the first pull request unable to pass CI.
 - `GET /api/metrics` admits a caller whose token carries the scope `metrics-read`, so a machine scraper needs no admin role. The scope grants nothing else; every other caller still gets the same 403.

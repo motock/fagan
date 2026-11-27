@@ -914,6 +914,8 @@ class ContextSnapshotRecords:
     :data:`DEFAULT_NAMESPACE`).
     """
 
+    _store: Any
+
     def _refuse_other_namespace(self, namespace: str) -> None:  # pragma: no cover
         raise NotImplementedError
 

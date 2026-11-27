@@ -102,7 +102,9 @@ def get_story_ci(plan_name: str, story_key: str) -> dict[str, Any]:
             state = _state(forge, repo_root, snapshot)
             excerpt = None
             if state == FAIL:
-                raw = forge.failure_log_excerpt(branch)
+                # Forge has no failure_log_excerpt (it is failure_excerpt), so this raises at run time
+                # and a failing story reads as ci_unreadable; the tests' fake forge pins the name.
+                raw = forge.failure_log_excerpt(branch)  # type: ignore[attr-defined]
                 excerpt = redact(raw)[:EXCERPT_MAX] if raw else None
     except Exception as error:  # noqa: BLE001 - any forge failure reads as unreadable CI
         # The error type only: its text can carry a URL or a token.

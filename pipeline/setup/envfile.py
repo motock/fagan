@@ -109,7 +109,7 @@ def write_env_file(
     data = render_env_text(values).encode("utf-8")
     mode = _SECRET_MODE if _has_secret(values, secret_keys) else _PUBLIC_MODE
 
-    backup: Path | None = None
+    backup: str | None = None
     if target.exists():
         if target.read_bytes() == data:
             return {

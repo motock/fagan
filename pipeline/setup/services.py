@@ -38,6 +38,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 __all__ = ["render_services", "start_services", "verify_health"]
 
@@ -253,8 +254,8 @@ def render_services(
             "--mlx-model-path",
             str(mlx_model_path),
         ]
-        suffixes = _DARWIN_RENDERED_SUFFIXES
-        extras = _DARWIN_EXTRA_RENDERED
+        suffixes: tuple[str, ...] = _DARWIN_RENDERED_SUFFIXES
+        extras: tuple[str, ...] = _DARWIN_EXTRA_RENDERED
     elif resolved_platform == "linux":
         out_dir = root / "systemd"
         argv = [
@@ -396,7 +397,7 @@ def _probe_once(
 ) -> tuple[bool, str]:
     """Perform one health request; return ``(healthy, reason)``."""
     try:
-        response = opener(request, timeout=HEALTH_TIMEOUT)
+        response: Any = opener(request, timeout=HEALTH_TIMEOUT)
     except urllib.error.HTTPError as exc:
         return (False, f"dashboard returned HTTP {exc.code}")
     except OSError as exc:

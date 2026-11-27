@@ -24,8 +24,9 @@ which is pinned by ``tests/unit/test_live_ref.py``.
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from app.plugin_loader import SPEC_RE, load_plugin, plugin_spec
 from pipeline.audit_file import FileAuditLog
@@ -195,13 +196,7 @@ class Store(Protocol):
 
     def transaction(self, plan_name: str, wait_seconds: float = 0.0): ...
 
-    # NOTE: declared via lambda assignment rather than a plain method
-    # statement so this doesn't add a third and fourth hit to
-    # test_pipeline_mcp_list_plans_migration.py's duplicate-definition guard,
-    # which counts occurrences of that method-defining keyword pair and
-    # predates this Store seam (it only knows about PipelineService's method
-    # plus the module-level @mcp.tool() wrapper).
-    list_plans = lambda self: ...
+    def list_plans(self) -> list[str]: ...
 
     def list_manifests(self) -> list[str]: ...
 
@@ -264,7 +259,8 @@ class FileStore:
     def _plans_dir(self) -> Path:
         # Read live, like the other plans-directory call sites: the server
         # module's binding is patched after this module is imported.
-        return PLAN_DIR
+        # PLAN_DIR is a LiveRef that proxies the server module's Path.
+        return cast("Path", PLAN_DIR)
 
     def ensure_directories(self) -> None:
         """Create the plans and worktree roots this store writes under.
@@ -923,7 +919,9 @@ def build_store(environ=None) -> Store:
         # Function-local, like the sqlite branch above.
         from pipeline.store_plugin import build_plugin_store
 
-        return build_plugin_store(load_plugin("store", source))
+        # store_kind() returned "plugin" only because PIPELINE_STORE_PLUGIN is set,
+        # so load_plugin yields a factory (None means no plugin is configured).
+        return build_plugin_store(cast("Callable[[], Any]", load_plugin("store", source)))
     built_file_store = FileStore()
     built_file_store.ensure_directories()
     return built_file_store

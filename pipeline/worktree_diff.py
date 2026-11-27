@@ -229,7 +229,7 @@ def _untracked_skip_reason(worktree: Path, path: str) -> str | None:
 
 
 def collect_file_diff(
-    worktree: Path, base_sha: str | None, path: str, allowed_paths: set[str], max_chars: int = 40000,
+    worktree: Path, base_sha: str, path: str, allowed_paths: set[str], max_chars: int = 40000,
 ) -> dict[str, Any]:
     """Unified diff of one file from the summary's file list; never raises."""
     if not _is_safe_relative_path(path, allowed_paths):

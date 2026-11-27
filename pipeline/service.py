@@ -278,7 +278,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
     def resume_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
         result = _set_plan_paused(plan_name, False)
-        return wake.after(plan_name, "resume_plan", result)
+        return cast(dict[str, Any], wake.after(plan_name, "resume_plan", result))  # after() returns result unchanged
 
 
     def list_decisions(self, plan_name: str) -> list[dict]:
@@ -570,7 +570,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if err is not None:
             return err
         result = _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
-        return wake.after(plan_name, "ingest_plan", result)
+        return cast(dict[str, Any], wake.after(plan_name, "ingest_plan", result))  # after() returns result unchanged
 
     def request_decision(self,
         plan_name: str,
@@ -875,7 +875,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         if refusal is not None:
             return refusal
         result = _set_story_status_impl(self, plan_name, story_key, status)
-        return wake.after(plan_name, "set_story_status", result)
+        return cast(dict[str, Any], wake.after(plan_name, "set_story_status", result))  # after() returns result unchanged
     def patch_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
     ) -> dict[str, Any]:
@@ -892,7 +892,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
         set_story_status, not this tool.
         """
         result = _patch_story_impl(self, plan_name, story_key, fields)
-        return wake.after(plan_name, "patch_story", result)
+        return cast(dict[str, Any], wake.after(plan_name, "patch_story", result))  # after() returns result unchanged
 
     def patch_plan(self, plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """
@@ -992,7 +992,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
             return _advance_pipeline_locked(plan_name)
     def mark_story_done(self, plan_name: str, story_key: str) -> dict[str, Any]:
         result = _mark_story_done_impl(plan_name, story_key)
-        return wake.after(plan_name, "mark_story_done", result)
+        return cast(dict[str, Any], wake.after(plan_name, "mark_story_done", result))  # after() returns result unchanged
 
     def check_usage(self) -> dict[str, Any]:
         return _check_usage_impl()

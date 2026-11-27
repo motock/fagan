@@ -8,7 +8,7 @@ The names this module reads that are bound at module level in
 """
 
 import logging
-import os
+import os  # noqa: F401 - names stay importable from here
 import time
 from pathlib import Path
 from typing import Any
@@ -40,10 +40,10 @@ from .rebase_conflict_feedback import (  # re-exported: _conflict_rework_max etc
     _CI_FEEDBACK_MARKER,  # noqa: F401
     _PRIOR_FEEDBACK_HEADER,  # noqa: F401
     CONFLICT_REWORK_MAX_DEFAULT,  # noqa: F401
-    _conflict_rework_max,
-    _merge_ci_rework_feedback,
-    conflict_rework_feedback,
-    parse_conflict_files,
+    _conflict_rework_max,  # noqa: F401 - the gate-failure phase reads these through this module
+    _merge_ci_rework_feedback,  # noqa: F401
+    conflict_rework_feedback,  # noqa: F401
+    parse_conflict_files,  # noqa: F401
 )
 from .telemetry import record_merge_result
 
@@ -266,6 +266,7 @@ def _merge_reverify_gate(
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     # Phase modules read names back from this module, so import them lazily.
     from .advance_merge_ci_gate import run_ci_gate
+    from .advance_merge_gate_failure import handle_gate_failure
     from .advance_merge_hold import check_review_binding, evaluate_merge_hold
 
     # The merge gates this tick reads, resolved once from the plan manifest so
@@ -336,183 +337,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 continue
 
         if gate_error:
-            # RC-02: a merge-gate REBASE CONFLICT can never be fixed by
-            # retrying the identical merge - the branch still conflicts with
-            # the default branch, so the story retries until merge_attempts
-            # exhausts and parks (CL-12/CL-20). _try_auto_resolve_conflict only
-            # handles pure additive-import conflicts, so a real conflict needs
-            # the implementer told exactly what to do. Reuse the CI-rework
-            # machinery (ci_rework raises the agent's done-bar to
-            # full-suite-green; review_feedback carries the brief) but bound it
-            # with its own conflict_reworks counter so a conflict rework does
-            # NOT consume merge_attempts/rework_attempts: the agent commits new
-            # code and the story must be able to come back through
-            # tests -> review -> merge. Past the cap the ordinary
-            # retry-then-park path below applies unchanged.
-            conflict_max = _conflict_rework_max()
-            conflict_ok = (
-                gate_error.startswith("rebase:")
-                and "conflict" in gate_error.lower()
-                and os.environ.get("PIPELINE_REWORK_ON_CONFLICT", "1") != "0"
-                and story.get("conflict_reworks", 0) < conflict_max
+            handle_gate_failure(
+                plan_name, key, story, gate_error, ci_definitive_fail, settings, summary
             )
-            if conflict_ok:
-                conflict_attempt = story.get("conflict_reworks", 0) + 1
-                story["conflict_reworks"] = conflict_attempt
-                story["conflict_handoff"] = True
-                story["ci_rework"] = True
-                # Strip the gate's own "rebase: " label: git's output starts
-                # with the first "CONFLICT (...)" line, and the brief's parser
-                # anchors on that line start - leaving the prefix on would drop
-                # the FIRST conflicted file from the brief and the notice.
-                conflict_text = gate_error
-                if conflict_text.startswith("rebase:"):
-                    conflict_text = conflict_text[len("rebase:"):].lstrip()
-                story["review_feedback"] = _merge_ci_rework_feedback(
-                    story.get("review_feedback"),
-                    conflict_rework_feedback(
-                        conflict_text,
-                        conflict_attempt,
-                        conflict_max,
-                        _default_branch(),
-                    ),
-                )
-                # A detached re-verify may still be running; it must not
-                # outlive the story leaving pr_open.
-                _rv_job = story.pop("merge_reverify", None)
-                if _rv_job:
-                    cancel_merge_reverify(_rv_job)
-                story["status"] = "changes_requested"
-                files = parse_conflict_files(conflict_text)
-                named = ", ".join(files) if files else "the conflicted files"
-                _notify_user(
-                    plan_name,
-                    f"{key} merge-gate rebase conflict ({named}); "
-                    f"routed to rework ({conflict_attempt}/{conflict_max}).",
-                    event="merge_conflict_rework",
-                    story_key=key,
-                    **(
-                        {
-                            "correlation_id": story["correlation_id"],
-                            "attempt": story.get("dispatch_attempts", 0),
-                        }
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                summary["notify"].append(key)
-                continue
-
-            # Opt-in (the rework_on_ci_fail setting, per repo): a DEFINITIVE CI test
-            # failure - not a transient rebase/push error, not
-            # pending/cancelled - can be caused by the agent's own
-            # committed test file rather than the reviewed implementation
-            # (the reviewer is acceptance-scoped and never saw it). Retrying
-            # an unchanged branch identically MERGE_MAX_ATTEMPTS times can
-            # never fix that; hand the CI failure back to the implementer as
-            # rework feedback instead, bounded by the SAME rework budget
-            # review_story uses, so a story that never converges still
-            # parks/escalates rather than looping forever. See
-            # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
-            # token_bucket: ground-truth-correct code abandoned because the
-            # agent's own broken self-test tripped this gate).
-            rework_ok = ci_definitive_fail and bool(
-                settings.value("rework_on_ci_fail")
-            )
-            if rework_ok:
-                # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts
-                # counter, which PERSISTS across the rework -> review
-                # APPROVE -> merge-gate cycle. rework_attempts does NOT:
-                # the review APPROVE path pops it on every pass (the
-                # reviewer APPROVEs because it is acceptance-scoped and
-                # the oracle is green), so reusing rework_attempts here
-                # loops forever - each CI-fail re-increments 0->1 and the
-                # cap never exhausts (verified 2026-07-17 on token_bucket:
-                # four identical "routed to rework (1/3)" notifications,
-                # same broken assertion every round). merge_attempts is
-                # the merge gate's own counter and is not reset by review,
-                # so it bounds the loop: MERGE_MAX_ATTEMPTS rework rounds,
-                # then the fall-through below terminal-fails.
-                rework_ok = story.get("merge_attempts", 0) < MERGE_MAX_ATTEMPTS
-
-            if rework_ok:
-                attempts = story.get("merge_attempts", 0) + 1
-                story["merge_attempts"] = attempts
-                # L1 (REVIEWER_ESCALATION_PLAN.md): flag this rework as
-                # CI-triggered so the next dispatch_story raises the
-                # agent's done-bar to full-suite-green (env
-                # LOCAL_AGENT_REWORK_FULL_SUITE). Without it the rework
-                # keeps the oracle-green bar and re-fails CI on the same
-                # assertion every round (the agent's own broken test is
-                # invisible to the acceptance-scoped oracle/reviewer).
-                story["ci_rework"] = True
-                story["review_feedback"] = _merge_ci_rework_feedback(
-                    story.get("review_feedback"),
-                    _ci_rework_feedback(gate_error, attempts),
-                )
-                # A detached re-verify may still be running; it must not
-                # outlive the story leaving pr_open.
-                _rv_job = story.pop("merge_reverify", None)
-                if _rv_job:
-                    cancel_merge_reverify(_rv_job)
-                story["status"] = "changes_requested"
-                _notify_user(
-                    plan_name,
-                    f"{key} merge-gate CI failed ({gate_error}); "
-                    f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
-                    event="merge_ci_rework",
-                    story_key=key,
-                    **(
-                        {
-                            "correlation_id": story["correlation_id"],
-                            "attempt": story.get("dispatch_attempts", 0),
-                        }
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                summary["notify"].append(key)
-                continue
-
-            attempts = story.get("merge_attempts", 0) + 1
-            story["merge_attempts"] = attempts
-            if attempts >= MERGE_MAX_ATTEMPTS:
-                # A detached re-verify may still be running; it must not
-                # outlive the story leaving pr_open.
-                _rv_job = story.pop("merge_reverify", None)
-                if _rv_job:
-                    cancel_merge_reverify(_rv_job)
-                story["status"] = "failed"
-                story["merge_error"] = gate_error
-                _notify_user(
-                    plan_name,
-                    f"{key} merge gate failed {attempts}x "
-                    f"({gate_error}); giving up - needs human intervention.",
-                    event="merge_gate_failed",
-                    story_key=key,
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                summary["failed"].append(key)
-                record_merge_result("failed")
-            else:
-                # leave pr_open; the next tick retries within budget.
-                _notify_user(
-                    plan_name,
-                    f"{key} merge gate attempt {attempts}/"
-                    f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
-                    event="merge_gate_retry",
-                    story_key=key,
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-            summary["notify"].append(key)
             continue
 
         # Mergeability must be COMPUTED before `gh pr merge` will act. Right

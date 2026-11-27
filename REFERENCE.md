@@ -758,7 +758,7 @@ guard is the `<plan>.plan_completed` marker file in `PLAN_DIR`
 (`~/.claude/plans` by default). The marker is written only after the
 notification has been emitted, so a failed emission is retried by a later
 tick instead of being lost; once the marker exists the plan stays all-done
-but no second notification is ever emitted. The same summary is also written to `<plan>.report.md` in `PLAN_DIR` as a durable per-plan report (best effort: a write failure is logged and never blocks the notification).
+but no second notification is ever emitted. The same summary is also written to `<plan>.report.md` in `PLAN_DIR` as a durable per-plan report (best effort: a write failure is logged and never blocks the notification). The notification history and the plan-completion record (the once-only mark and the report) are kept in the plan's namespace: the one bound when the event is made, so a team namespace's plan reads and writes only its own rows.
 
 **Story links.** A story-level notification (`story_parked`, `dispatch_failed`,
 `tests_failed`, `agent_gave_up`, `story_stalled`, `merge_conflict_rework`)

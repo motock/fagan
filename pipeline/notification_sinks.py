@@ -38,11 +38,13 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from typing import Any
 
 from . import persistence
 from .access_hooks import admit
+from .actor import bind_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -71,56 +73,31 @@ def file_log_sink(event: dict[str, Any]) -> None:
         The function always returns ``None``; any error is logged but not
         raised.
     """
-    global _dropped_notifications
     try:
         plan = event.get("plan")
         if not plan:
             logger.error("Missing or falsy 'plan' in notification event: %s", event)
             return
 
-        # fail_open: if the hook cannot be consulted the alert is still sent.
-        # Losing an alert is worse than sending one, so only an explicit refusal
-        # drops a notification.
-        if not admit("notification", {}, fail_open=True):
-            with _dropped_lock:
-                _dropped_notifications += 1
-            return
-
-        payload = event.get("payload") or {}
-        ts = event.get("ts") or datetime.now(UTC).isoformat()
-
-        # One record, built by the same helper every notification writer in this
-        # family re-uses so the representations cannot drift. The optional
-        # correlation context keys are read with .get and forwarded ONLY when
-        # present so legacy payloads keep the exact legacy call shape (the
-        # helper is monkeypatched with the legacy signature in existing tests).
-        record_kwargs = {}
-        for name in ("correlation_id", "attempt", "role", "provider", "model"):
-            value = payload.get(name)
-            if value is not None:
-                record_kwargs[name] = value
-        record = persistence._notification_record(
-            plan_name=plan,
-            message=payload.get("message"),
-            story_key=payload.get("story_key"),
-            severity=payload.get("severity"),
-            event=payload.get("event"),
-            dedup_key=payload.get("dedup_key"),
-            ts=ts,
-            **record_kwargs,
-        )
-
-        # The store owns both on-disk representations (the free-text line and
-        # the JSONL sidecar), so the sink never composes a notifications path.
-        try:
-            persistence._append_notification(plan, record)
-        except TypeError:
-            # The store refuses a record that is not a notification record. A
-            # real writer's record always is one (the helper above supplies the
-            # ts and leaves message at "" at worst); the shape only goes wrong
-            # when the helper is replaced wholesale, so the legacy JSONL append
-            # keeps that caller's record visible instead of dropping it.
-            persistence._write_notification_record(plan, record)
+        # The event carries the namespace of the plan it is about. The bus
+        # delivers on a consumer thread with nothing bound, so the admission
+        # check and the append both run inside that namespace. Without one the
+        # notification is the default namespace's, as it always was.
+        if "namespace" in event:
+            namespace = event["namespace"]
+            if not isinstance(namespace, str) or not namespace:
+                # Never fall back to the default: that would file a team's
+                # notice under someone else's history. Logged by type only.
+                logger.error(
+                    "Refused notification with a malformed namespace (type %s)",
+                    type(namespace).__name__,
+                )
+                return
+            binding: AbstractContextManager[object] = bind_namespace(namespace)
+        else:
+            binding = nullcontext()
+        with binding:
+            _write_notification(event, plan)
     except Exception as exc:
         logger.exception(
             "Failed to write notification sink for event %s: %s",
@@ -129,3 +106,51 @@ def file_log_sink(event: dict[str, Any]) -> None:
             extra={"error_type": type(exc).__name__},
         )
         return
+
+
+def _write_notification(event: dict[str, Any], plan: str) -> None:
+    """Admit and append one notification in the namespace already bound."""
+    global _dropped_notifications
+    # fail_open: if the hook cannot be consulted the alert is still sent.
+    # Losing an alert is worse than sending one, so only an explicit refusal
+    # drops a notification.
+    if not admit("notification", {}, fail_open=True):
+        with _dropped_lock:
+            _dropped_notifications += 1
+        return
+
+    payload = event.get("payload") or {}
+    ts = event.get("ts") or datetime.now(UTC).isoformat()
+
+    # One record, built by the same helper every notification writer in this
+    # family re-uses so the representations cannot drift. The optional
+    # correlation context keys are read with .get and forwarded ONLY when
+    # present so legacy payloads keep the exact legacy call shape (the
+    # helper is monkeypatched with the legacy signature in existing tests).
+    record_kwargs = {}
+    for name in ("correlation_id", "attempt", "role", "provider", "model"):
+        value = payload.get(name)
+        if value is not None:
+            record_kwargs[name] = value
+    record = persistence._notification_record(
+        plan_name=plan,
+        message=payload.get("message"),
+        story_key=payload.get("story_key"),
+        severity=payload.get("severity"),
+        event=payload.get("event"),
+        dedup_key=payload.get("dedup_key"),
+        ts=ts,
+        **record_kwargs,
+    )
+
+    # The store owns both on-disk representations (the free-text line and
+    # the JSONL sidecar), so the sink never composes a notifications path.
+    try:
+        persistence._append_notification(plan, record)
+    except TypeError:
+        # The store refuses a record that is not a notification record. A
+        # real writer's record always is one (the helper above supplies the
+        # ts and leaves message at "" at worst); the shape only goes wrong
+        # when the helper is replaced wholesale, so the legacy JSONL append
+        # keeps that caller's record visible instead of dropping it.
+        persistence._write_notification_record(plan, record)

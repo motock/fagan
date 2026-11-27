@@ -24,14 +24,13 @@ import logging
 from typing import Any, cast
 
 from . import server as _server
+from .actor import current_namespace
 from .persistence import _notify_user
 from .plan_summary import format_plan_summary
 from .store import build_store
 from .store_records import InvalidRecordKeyError
 
 logger = logging.getLogger(__name__)
-
-_NAMESPACE = "default"
 
 
 def _with_journals(plan_name: str, manifest: dict) -> dict:
@@ -59,7 +58,7 @@ def _with_journals(plan_name: str, manifest: dict) -> dict:
     for key, story in manifest["stories"].items():
         story = dict(story)
         try:
-            entries = records.get_journal(_NAMESPACE, plan_name, key)
+            entries = records.get_journal(current_namespace(), plan_name, key)
         except InvalidRecordKeyError:
             logger.warning(
                 "journal read skipped for %s: rejected story key %r", plan_name, key
@@ -119,7 +118,7 @@ def notify_if_plan_completed(
     """
     try:
         records = cast(Any, _server._store).records()  # cast: Protocol omits records()
-        if records.is_plan_completed(_NAMESPACE, plan_name):
+        if records.is_plan_completed(current_namespace(), plan_name):
             return False
 
         stories = manifest.get("stories") or {}
@@ -136,7 +135,7 @@ def notify_if_plan_completed(
         history = _with_just_merged(
             plan_name,
             manifest,
-            records.get_notification_history(_NAMESPACE, plan_name)[0],
+            records.get_notification_history(current_namespace(), plan_name)[0],
             just_merged,
         )
         summary = format_plan_summary(
@@ -145,7 +144,7 @@ def notify_if_plan_completed(
         # A durable copy for retros; the notification is the delivery, this
         # record is the file. Never blocks the notification.
         try:
-            records.put_plan_report(_NAMESPACE, plan_name, summary + "\n")
+            records.put_plan_report(current_namespace(), plan_name, summary + "\n")
         except Exception:
             logger.warning("plan report write failed for %s", plan_name, exc_info=True)
         _notify_user(
@@ -157,7 +156,7 @@ def notify_if_plan_completed(
         )
         # Only after the notice: a failed emission must stay retryable, and the
         # atomic create is what makes exactly one caller announce the plan.
-        records.mark_plan_completed(_NAMESPACE, plan_name)
+        records.mark_plan_completed(current_namespace(), plan_name)
         return True
     except Exception:
         logger.exception("plan_completed check failed for %s", plan_name)

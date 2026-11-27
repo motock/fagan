@@ -51,7 +51,6 @@ ALLOWLIST: dict[str, int] = {
     "pipeline/audit_file.py": 3,
     # The ratchet counts lines, so the import line counts beside the use.
     "pipeline/bound_records.py": 2,
-    "pipeline/events_nats_consumer.py": 2,
     "pipeline/health_freshness.py": 2,
     "pipeline/ci.py": 3,
     "pipeline/metrics_exposition.py": 4,
@@ -107,7 +106,6 @@ ALLOWLIST_REASONS: dict[str, str] = {
     "pipeline/telemetry.py": "telemetry's own process-wide label for the default namespace, not a request scope",
     "pipeline/tools/backfill_plan_source.py": "backfill tool: moves file-layout plans into the default namespace",
     "pipeline/tools/import_file_store.py": "import tool: file-layout data is imported into the default namespace",
-    "pipeline/events_nats_consumer.py": "background consumer: reads the default partition; no request is bound",
     "pipeline/health_freshness.py": "background consumer: outbox probe reads the default partition; no request is bound",
     "pipeline/audit_contract.py": "audit contract definition: the contract names the default chain namespace",
 }

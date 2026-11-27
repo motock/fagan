@@ -59,9 +59,9 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from . import persistence
-from .events import JsonlEventBus
+from .actor import current_namespace
+from .events import JsonlEventBus, namespace_binding_for_event
 from .events_nats import NatsEventBus
-from .store_records import DEFAULT_NAMESPACE
 
 __all__ = [
     "consumer_status",
@@ -555,21 +555,22 @@ def _write_dead_letter_record(
     Written through the record store, never through ``_notify_user``: that path
     publishes on the event bus, and the bus is the component whose delivery
     failed. The idempotency check reads the same history back, so a redelivered
-    message is recorded once.
+    message is recorded once. Both happen in the event's namespace.
     """
-    if event_id is not None and _record_exists(plan, event_id):
-        return
-    record = persistence._notification_record(
-        plan,
-        f"Event {event_type} was dead-lettered after {attempts} delivery attempts",
-        event.get("story_key"),
-        "error",
-        DEAD_LETTER_RECORD_EVENT,
-        event_id,
-        datetime.datetime.now(datetime.UTC).isoformat(),
-        attempt=attempts,
-    )
-    persistence._append_notification(plan, record)
+    with namespace_binding_for_event(event):
+        if event_id is not None and _record_exists(plan, event_id):
+            return
+        record = persistence._notification_record(
+            plan,
+            f"Event {event_type} was dead-lettered after {attempts} delivery attempts",
+            event.get("story_key"),
+            "error",
+            DEAD_LETTER_RECORD_EVENT,
+            event_id,
+            datetime.datetime.now(datetime.UTC).isoformat(),
+            attempt=attempts,
+        )
+        persistence._append_notification(plan, record)
 
 
 def _record_exists(plan: str, event_id) -> bool:
@@ -585,7 +586,7 @@ def _record_exists(plan: str, event_id) -> bool:
     )
     if read is None:
         return False
-    records, _malformed = read(DEFAULT_NAMESPACE, plan)  # intentional: background consumer
+    records, _malformed = read(current_namespace(), plan)
     return any(
         isinstance(record, dict)
         and record.get("event") == DEAD_LETTER_RECORD_EVENT

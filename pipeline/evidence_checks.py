@@ -230,7 +230,7 @@ def check_scope(
             paths = [_violation_path(line) for line in violations]
             detail += ":" + ",".join(paths[:MAX_NAMED_PATHS])
         return _evidence(check, not violations, ref, detail)
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, ref, exc)
 
 
@@ -273,7 +273,7 @@ def check_ci_green(snapshot: Any, head_sha: str) -> dict[str, Any]:
             str(state) == PASS_STATE for state in states.values()
         )
         return _evidence(check, passed, head_sha, detail)
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, head_sha, exc)
 
 
@@ -310,7 +310,7 @@ def check_reviewer_approve(story: Any, head_sha: str) -> dict[str, Any]:
         same = "yes" if reviewed == head_sha else "no"
         detail = f"verdict={verdict};reviewed_sha_match={same}"
         return _evidence(check, passed, head_sha, detail, **extra)
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, head_sha, exc, **extra)
 
 
@@ -409,7 +409,7 @@ def check_no_test_deleted(
         entries = _name_status(worktree, base_sha, head_sha)
     except _GitError:
         return _evidence(check, False, ref, "diff_failed")
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, ref, exc)
 
     deleted = sorted(
@@ -472,7 +472,7 @@ def check_assertions_not_reduced(
         paths = _changed_test_files_present_at_base(worktree, base_sha, entries)
     except _GitError:
         return _evidence(check, False, ref, "diff_failed")
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, ref, exc)
 
     offenders: list[str] = []
@@ -569,7 +569,7 @@ def check_nothing_skipped(
         paths = _changed_test_files_present_at_base(worktree, base_sha, entries)
     except _GitError:
         return _evidence(check, False, ref, "diff_failed")
-    except Exception as exc:  # noqa: BLE001 - a check must never raise
+    except Exception as exc:  # noqa: BLE001 - a check must never raise; _failure() reports the class name in the evidence
         return _failure(check, ref, exc)
 
     offenders: list[str] = []

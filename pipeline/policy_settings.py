@@ -65,7 +65,7 @@ def policy_settings(namespace: str, team: str | None) -> dict:
         return {}
     try:
         raw = provider.policy_settings(namespace, team)
-    except Exception as exc:  # noqa: BLE001 - any provider failure fails closed
+    except Exception as exc:  # noqa: BLE001 - any provider failure fails closed; _fail_closed logs it
         return _fail_closed(type(exc).__name__)
     if not isinstance(raw, dict):
         return _fail_closed("non_dict_result")

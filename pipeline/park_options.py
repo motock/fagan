@@ -44,7 +44,11 @@ def option_menu(park_class: str) -> list[str]:
 def _option_count(manifest: dict) -> int:
     try:
         value = effective("park_option_count", DEFAULT_OPTION_COUNT, context_from_manifest(manifest))
-    except Exception:  # noqa: BLE001 - a settings read never blocks the options
+    except Exception as exc:  # noqa: BLE001 - a settings read never blocks the options
+        _log.warning(
+            "park option count unreadable; using default (%s)",
+            type(exc).__name__,
+        )
         return DEFAULT_OPTION_COUNT
     if isinstance(value, int) and not isinstance(value, bool) and 2 <= value <= 5:
         return value

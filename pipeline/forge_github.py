@@ -198,7 +198,11 @@ class GitHubForge(Forge):
             if proc is None or proc.returncode != 0:
                 return "pending"
             payload = json.loads(proc.stdout or "")
-        except Exception:  # noqa: BLE001 - this read must never raise
+        except Exception as exc:  # noqa: BLE001 - this read must never raise
+            _LOGGER.warning(
+                "merge readiness unreadable; reporting pending (%s)",
+                type(exc).__name__,
+            )
             return "pending"
         if not isinstance(payload, dict):
             return "pending"

@@ -140,8 +140,11 @@ def run_with_watchdog(daemon, fn, *, timeout_s, label):
         try:
             with bind_principal(SYSTEM_SCHEDULER):
                 box["result"] = fn()
-        except BaseException as exc:  # noqa: BLE001 - re-raised by caller
+        except Exception as exc:  # noqa: BLE001 - re-raised by caller
             box["error"] = exc
+        except BaseException as exc:
+            box["error"] = exc
+            raise  # SystemExit/KeyboardInterrupt: caller re-raises it too
 
     worker = threading.Thread(
         target=_worker, name=f"scheduler-{label}-worker", daemon=True

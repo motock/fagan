@@ -364,7 +364,7 @@ def spawn_local(
                                 ln if ln.endswith("\n") else ln + "\n"
                                 for ln in line_filter(text)
                             ]
-                        except Exception:  # noqa: BLE001 - fallback beats a dead drain thread
+                        except Exception:  # noqa: BLE001 - fallback beats a dead drain thread; per-line, so logging here would flood
                             out_lines = [text]
                     for out in out_lines:
                         log_file.write(out)

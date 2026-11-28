@@ -27,6 +27,7 @@ the caller can copy it back under the plan lock.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
@@ -51,6 +52,8 @@ from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
 
 from . import bound_records
+
+logger = logging.getLogger("pipeline")
 
 __all__ = [
     "cancel_merge_reverify",
@@ -315,7 +318,11 @@ def cancel_merge_reverify(job: dict) -> None:
         return
     try:
         alive = _pid_alive(pid)
-    except Exception:  # noqa: BLE001 - cancel is best-effort by contract
+    except Exception as exc:  # noqa: BLE001 - cancel is best-effort by contract
+        logger.debug(
+            "pid liveness probe failed; skipping cancel (%s)",
+            type(exc).__name__,
+        )
         return
     if not alive:
         return
@@ -446,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
                             result["checks"]["lint"] = "fail"
                         else:
                             result["checks"]["lint"] = "pass"
-    except Exception as exc:  # noqa: BLE001 - the job must always write a result
+    except Exception as exc:  # noqa: BLE001 - the job must always write a result; the class name is recorded in it
         # The class name alone: exception text can carry tokens, payloads and
         # paths, and this result is logged and surfaced to operators.
         result["state"] = "error"

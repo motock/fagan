@@ -33,6 +33,7 @@ scheduler and a stale outbox are both reported in the same payload.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from collections.abc import Callable, Mapping
@@ -49,6 +50,8 @@ from pipeline.host_state import HostState, build_host_state
 from pipeline.store import Store, build_store
 from pipeline.store_namespaces import outbox_summary_across_namespaces
 from pipeline.store_records import DEFAULT_NAMESPACE
+
+logger = logging.getLogger("pipeline")
 
 #: Env var carrying the scheduler staleness threshold, in seconds.
 STALE_ENV = "PIPELINE_HEALTH_STALE_SECONDS"
@@ -207,7 +210,7 @@ def health_extras(
     try:
         with open(host.scheduler_health_path(), "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-    except Exception:  # noqa: BLE001 (read-only probe: any failure means "absent")
+    except Exception:  # noqa: BLE001 - read-only probe: any failure means "absent", reported as not-reported by freshness()
         # Absent, unreadable (including a directory at that path), empty,
         # invalid-JSON or wrong-shaped snapshots all mean "not reported".
         payload = None
@@ -220,9 +223,13 @@ def health_extras(
     try:
         records = cast(Any, build_store() if store is None else store).records()  # cast: Protocol omits records()
         summary = outbox_summary_across_namespaces(records, DEFAULT_NAMESPACE)
-    except Exception:  # noqa: BLE001 (read-only probe: an unreadable store is "no outbox")
+    except Exception as exc:  # noqa: BLE001 - read-only probe: an unreadable store is "no outbox"
         # A rejected PIPELINE_STORE selection must not turn the health probe
         # into a 500; the runtime block reports it as "invalid" instead.
+        logger.warning(
+            "outbox summary unreadable; reporting an empty outbox (%s)",
+            type(exc).__name__,
+        )
         summary = {"files": 0, "records": 0, "oldest_age_s": None}
     outbox_health.apply_outbox_health(result, summary)
     # Additive and never degrading: a deployment without an external anchor is
@@ -360,7 +367,11 @@ def register_probes(app: FastAPI, host_state_fn: Callable[[], HostState]) -> Non
                 for reason in _freshness_reasons(host_state_fn())
                 if reason in LIVENESS_REASONS
             ]
-        except Exception:  # noqa: BLE001 - a probe never answers 500
+        except Exception as exc:  # noqa: BLE001 - a probe never answers 500
+            logger.warning(
+                "health probe failed; answering degraded (%s)",
+                type(exc).__name__,
+            )
             return _degraded("live", [REASON_PROBE_ERROR])
         if reasons:
             return _degraded("live", reasons)
@@ -373,7 +384,11 @@ def register_probes(app: FastAPI, host_state_fn: Callable[[], HostState]) -> Non
             reasons = _freshness_reasons(host_state_fn())
             if _broker_is_unreachable():
                 reasons.append(REASON_BROKER_UNREACHABLE)
-        except Exception:  # noqa: BLE001 - a probe never answers 500
+        except Exception as exc:  # noqa: BLE001 - a probe never answers 500
+            logger.warning(
+                "health probe failed; answering degraded (%s)",
+                type(exc).__name__,
+            )
             return _degraded("ready", [REASON_PROBE_ERROR])
         if reasons:
             return _degraded("ready", reasons)

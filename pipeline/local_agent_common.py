@@ -613,7 +613,7 @@ def _is_context_overflow_error(exc) -> bool:
         return False
     try:
         body = (response.text or "").lower()
-    except Exception:  # noqa: BLE001 (a streamed/unread body is simply unavailable here)
+    except Exception:  # noqa: BLE001 - a streamed/unread body is simply unavailable here, an expected case
         return False
     return any(marker in body for marker in _OVERFLOW_BODY_MARKERS)
 

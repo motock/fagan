@@ -178,7 +178,7 @@ def _clone_error_type(repo_url: str) -> str | None:
     """
     try:
         _, err = clone_root_for(repo_url, checked=True)
-    except Exception as exc:  # noqa: BLE001 - a clone failure must answer a missing clone
+    except Exception as exc:  # noqa: BLE001 - a clone failure must answer a missing clone; the class name is returned
         return type(exc).__name__
     if err is None:
         return None

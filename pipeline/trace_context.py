@@ -16,8 +16,11 @@ when the SDK is absent.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
+
+logger = logging.getLogger(__name__)
 
 TRACEPARENT_RE = re.compile(
     r"^00-(?P<trace_id>[0-9a-f]{32})-(?P<span_id>[0-9a-f]{16})-(?P<flags>[0-9a-f]{2})$"
@@ -84,7 +87,8 @@ def current_traceparent() -> str | None:
         trace_id = format(context.trace_id, "032x")
         span_id = format(context.span_id, "016x")
         flags = "01" if context.trace_flags.sampled else "00"
-    except Exception:  # noqa: BLE001 - a tracing lookup must never break a caller
+    except Exception as exc:  # noqa: BLE001 - a tracing lookup must never break a caller
+        logger.debug("trace context lookup failed", extra={"error_class": type(exc).__name__})
         return None
     return f"00-{trace_id}-{span_id}-{flags}"
 

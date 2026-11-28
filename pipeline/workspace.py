@@ -72,6 +72,7 @@ endpoint.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -79,6 +80,8 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from urllib.parse import unquote
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ALLOWED_CREATE_ROOTS",
@@ -172,7 +175,8 @@ def sanitize_error_message(value: object) -> str:
             name = Path(root_str).name
             if name and name != root_str:
                 text = text.replace(name, "[redacted]")
-    except Exception:  # noqa: BLE001 - REPO_ROOT may be monkeypatched to junk
+    except Exception as exc:  # noqa: BLE001 - REPO_ROOT may be monkeypatched to junk
+        logger.warning("repo root redaction failed", extra={"error_class": type(exc).__name__})
         text = "[redacted]"
 
     # Python source paths.
@@ -190,7 +194,8 @@ def sanitize_error_message(value: object) -> str:
 
     try:
         text = _PATH_TOKEN_RE.sub(_redact, text)
-    except Exception:  # noqa: BLE001 - the error path itself must never raise
+    except Exception as exc:  # noqa: BLE001 - the error path itself must never raise
+        logger.warning("path redaction failed", extra={"error_class": type(exc).__name__})
         return "[redacted error]"
     return text
 

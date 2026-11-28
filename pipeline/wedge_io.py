@@ -41,6 +41,7 @@ surface and supersedes it on merge.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
@@ -55,6 +56,8 @@ from . import bound_records, config
 # ~/.claude/plans path and the real notifier into every test run, so
 # monkeypatch.setattr(pipeline.server, "_notify_user", ...) would never land.
 from .concurrency import _ServerRef
+
+logger = logging.getLogger(__name__)
 
 _notify_user = _ServerRef("_notify_user")
 _store = _ServerRef("_store")
@@ -129,7 +132,8 @@ def _list_journal_keys(plan_name: str) -> list[str]:
     """
     try:
         return list(bound_records.list_journal_keys(_store, plan_name))
-    except Exception:  # noqa: BLE001 - fail open, this module never raises
+    except Exception as exc:  # noqa: BLE001 - fail open, this module never raises
+        logger.warning("journal key listing failed", extra={"error_class": type(exc).__name__})
         return []
 
 
@@ -145,7 +149,9 @@ def _journal_updated_at(plan_name: str, journal_key: str) -> float | None:
         return _store.records().get_journal_updated_at(
             "default", plan_name, journal_key
         )
-    except Exception:  # noqa: BLE001 - fail open, this module never raises
+    except Exception as exc:  # noqa: BLE001 - fail open, this module never raises
+        # DEBUG: runs once per story each scan, so a persistent fault must not flood.
+        logger.debug("journal activity read failed", extra={"error_class": type(exc).__name__})
         return None
 
 

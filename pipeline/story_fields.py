@@ -25,8 +25,11 @@ re-running the suite, keeping ``dispatch.py`` under its line budget.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # The baseline marker's NAME lives in ``pipeline/dispatch.py``, its only writer
 # (pinned by ``test_marker_name_is_the_one_dispatch_writes``): every helper
@@ -183,7 +186,10 @@ def record_dispatch_baseline(
     if rerun and not marker.exists():
         try:
             baseline = snapshot(worktree_path)
-        except Exception:  # noqa: BLE001 (observability hook, never a gate)
+        except Exception as exc:  # noqa: BLE001 (observability hook, never a gate)
+            logger.warning(
+                "baseline snapshot failed", extra={"error_class": type(exc).__name__}
+            )
             baseline = None
         _write_baseline_marker(marker, baseline)
         if baseline is not None and baseline.get("returncode") != 0:

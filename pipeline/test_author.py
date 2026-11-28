@@ -457,7 +457,7 @@ def _agent_has_exited(pid: int) -> bool:
             text=True,
             check=False,
         ).stdout.strip()
-    except Exception:  # noqa: BLE001 (ps missing/unusable must not raise past this probe)
+    except (OSError, subprocess.SubprocessError):  # ps missing/unusable: treat as still running
         return False
     return not state or state.startswith("Z")
 

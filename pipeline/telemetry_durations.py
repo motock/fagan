@@ -23,12 +23,15 @@ Invariants:
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at run time
     from opentelemetry.metrics import Meter
+
+logger = logging.getLogger(__name__)
 
 DISPATCH_TO_PR = "fagan.story.dispatch_to_pr.duration"
 PR_TO_CI = "fagan.story.pr_to_ci.duration"
@@ -67,7 +70,8 @@ def observe(event: dict) -> None:
     """Record a duration when *event* closes one of the three measured hops."""
     try:
         _observe(event)
-    except Exception:  # noqa: BLE001 - telemetry must never break the caller
+    except Exception as exc:  # noqa: BLE001 - telemetry must never break the caller
+        logger.warning("duration telemetry observe failed", extra={"error_class": type(exc).__name__})
         return
 
 

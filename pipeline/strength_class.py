@@ -174,7 +174,11 @@ def _load_registry() -> dict:
         from app.role_registry import load_registry
 
         return load_registry() or {}
-    except Exception:  # noqa: BLE001 - fail closed to the stricter class
+    except Exception as exc:  # noqa: BLE001 - fail closed to the stricter class
+        logger.warning(
+            "model registry unreadable; assuming the stricter class",
+            extra={"error_class": type(exc).__name__},
+        )
         return {}
 
 

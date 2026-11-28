@@ -21,6 +21,7 @@ is therefore the caller's ``still_valid`` re-check, which is mandatory, runs
 under the plan lock, and refuses on anything but exactly ``True``.
 """
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -37,6 +38,8 @@ from .plan_approval import (
     canonical_digest,
     digest_version_is_current,
 )
+
+logger = logging.getLogger(__name__)
 
 STANDING_ENV = "PIPELINE_STANDING_APPROVAL"
 
@@ -228,7 +231,11 @@ def _still_valid(still_valid: Callable[[], Any]) -> bool:
     """
     try:
         return still_valid() is True
-    except Exception:  # noqa: BLE001 - any failure of the re-check refuses
+    except Exception as exc:  # noqa: BLE001 - any failure of the re-check refuses
+        logger.warning(
+            "standing approval re-check raised; refusing",
+            extra={"error_class": type(exc).__name__},
+        )
         return False
 
 

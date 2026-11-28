@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import ast
 import difflib
+import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 PASS = "pass"
 FAIL = "fail"
@@ -63,6 +66,7 @@ def judge(base_ref: str, head_ref: str, repo_dir, *, name: str, brief: str = "")
     except _JudgeError as exc:
         return Verdict(outcome=FAIL, reasons=[str(exc)])
     except Exception as exc:  # noqa: BLE001 - the judge must never raise
+        logger.warning("test-edit judge failed", extra={"error_class": type(exc).__name__})
         return Verdict(outcome=FAIL, reasons=[f"could not judge the diff ({type(exc).__name__})"])
 
 

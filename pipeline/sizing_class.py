@@ -33,6 +33,7 @@ hook, so an unreadable registry degrades to the old backend-name behaviour.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from .strength_class import (
@@ -45,6 +46,8 @@ from .strength_class import (
 # The backend-name gate this decision replaced in
 # ``pipeline.ingest._story_sizing_warning``: a story on one of these backends
 # was sized, anything else (``claude`` in particular) was left alone.
+logger = logging.getLogger(__name__)
+
 OLD_SMALL_STORY_BACKENDS = frozenset(
     {"local", "ollama", "lmstudio", "mlx", "litellm", "auto"}
 )
@@ -166,7 +169,11 @@ def sizing_applies(story: dict, registry) -> bool:
         return backend in OLD_SMALL_STORY_BACKENDS
     try:
         provider = _effective_provider(story, _payload(registry))
-    except Exception:  # noqa: BLE001 - advisory hook: degrade, never gate
+    except Exception as exc:  # noqa: BLE001 - advisory hook: degrade, never gate
+        logger.warning(
+            "dispatch provider lookup failed; using the backend-name answer",
+            extra={"error_class": type(exc).__name__},
+        )
         return _old_backend(story)
     return provider in OLD_SMALL_STORY_BACKENDS
 
@@ -184,5 +191,9 @@ def needs_small_story_caps(story: dict, registry) -> bool:
     """
     try:
         return _needs_caps(story, _payload(registry))
-    except Exception:  # noqa: BLE001 - advisory hook: degrade, never gate
+    except Exception as exc:  # noqa: BLE001 - advisory hook: degrade, never gate
+        logger.warning(
+            "small-story cap decision failed; using the backend-name answer",
+            extra={"error_class": type(exc).__name__},
+        )
         return _old_backend(story)

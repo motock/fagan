@@ -18,11 +18,14 @@ dispatch forever.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pipeline.paths import USAGE_STATE_PATH
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_SECONDS = 600
 _COOLDOWN_FILENAME = "usage_cooldown.json"
@@ -87,8 +90,8 @@ def trip(seconds: int | None = None, credential: str | None = None) -> None:
         tmp.write_text(json.dumps({"until": until.isoformat()}))
         os.replace(tmp, path)
         tmp = None
-    except Exception:  # noqa: S110, BLE001 - never raise out of trip()
-        pass
+    except Exception as exc:  # noqa: BLE001 - never raise out of trip()
+        logger.warning("usage cooldown not recorded", extra={"error_class": type(exc).__name__})
     finally:
         if tmp is not None:
             try:
@@ -117,5 +120,5 @@ def active(credential: str | None = None) -> bool:
         if until.tzinfo is None:
             until = until.replace(tzinfo=UTC)
         return until > _utcnow()
-    except Exception:  # noqa: BLE001 - fail open on any unreadable state
+    except (OSError, ValueError, TypeError):  # missing/corrupt/unparsable latch: fail open
         return False

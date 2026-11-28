@@ -60,6 +60,7 @@ def _advance_namespace(server: Any, records: Any, namespace: str) -> tuple[dict,
             else:
                 plans[plan_name] = server.advance_pipeline(plan_name)
         except Exception as exc:  # noqa: BLE001 - reported by class name, one plan only
+            logger.warning("plan advance raised", extra={"error_class": type(exc).__name__})
             plans[plan_name] = {"ok": False, "error": f"advance raised {type(exc).__name__}"}
     return plans, refusals
 

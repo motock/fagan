@@ -129,7 +129,10 @@ def _gate_reason() -> str:
     """Why dispatch is not moving this story, as far as the gate can tell."""
     try:
         status = backend.get_backend("dispatch", name="claude").resource_status()
-    except Exception:  # noqa: BLE001 (a broken backend must not hide the stall)
+    except Exception as exc:  # noqa: BLE001 (a broken backend must not hide the stall)
+        logging.getLogger("pipeline").warning(
+            "dispatch gate status unavailable", extra={"error_class": type(exc).__name__}
+        )
         return "unknown"
     if not isinstance(status, dict) or status.get("ok", True):
         return "dispatch slots full"

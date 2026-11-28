@@ -15,9 +15,12 @@ only filters the file-count reason out of a *capable* target's warning.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from .strength_class import CAPABLE, dispatch_strength_class
+
+logger = logging.getLogger(__name__)
 
 _PREFIX = "story sizing risk (see .claude/rules/agent-dispatch-story-sizing.md): "
 _PRODUCTION_FILE_REASON = "production files ("
@@ -48,7 +51,11 @@ def class_aware_sizing_warning(
     try:
         if dispatch_strength_class(story, role_config) != CAPABLE:
             return warning
-    except Exception:  # noqa: BLE001 - observability hook, never a gate
+    except Exception as exc:  # noqa: BLE001 - observability hook, never a gate
+        logger.warning(
+            "strength class lookup failed; keeping the on-device warning",
+            extra={"error_class": type(exc).__name__},
+        )
         return warning
     if not warning.startswith(_PREFIX):
         # An unexpected message shape: leave it alone rather than mangling it.

@@ -16,6 +16,7 @@ from pipeline import review_logic as rl
 MODULES = [
     "scope_gate.py",
     "review.py",
+    "review_run.py",
     "review_orchestrator.py",
     "testfiles.py",
     "review_scope_gate.py",

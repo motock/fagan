@@ -872,12 +872,19 @@ def test_grading_pid_bookkeeping_confined_to_dead_pid_region():
     # verbatim into _detached_grade_lifecycle in pipeline/detached_grade.py, so
     # the bookkeeping now lives in that helper too.  The guard is unchanged --
     # same markers, same "nowhere else" assertion -- it just spans both regions.
+    # lfn-07 split the helper into phase functions (_GradeInputs, _grade_*)
+    # that sit beside it; the region is the lifecycle plus those phases.
     helper = next(
         n for n in tree.body
         if isinstance(n, ast.FunctionDef)
         and n.name == "_detached_grade_lifecycle"
     )
-    regions = ((lo, hi), (helper.lineno, helper.end_lineno))
+    phases = [
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("_grade_")
+    ]
+    regions = ((lo, hi), (helper.lineno, helper.end_lineno),
+               *((n.lineno, n.end_lineno) for n in phases))
     markers = ("grading_pid", "grading_started_at", "grading_result_path")
     offenders = []
     for node in ast.walk(tree):

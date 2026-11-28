@@ -125,7 +125,7 @@ def _await_merge_readiness(
     while True:
         try:
             state = read(worktree, branch, ci_gate_on=ci_gate_on)
-        except Exception:  # noqa: BLE001 - unreadable is pending, never ready
+        except Exception:  # noqa: BLE001 - unreadable is pending, never ready; poll loop, the deadline outcome is the signal
             state = "pending"
         if state == "ready":
             return "ready"

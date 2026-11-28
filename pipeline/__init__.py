@@ -78,7 +78,10 @@ def _load_env_file(repo_root: str | os.PathLike[str], environ: MutableMapping[st
         # setdefault / "real env wins".
         for key, value in parsed.items():
             environ[key] = value
-    except Exception:  # noqa: BLE001 - the import must never fail on env-file issues
+    except Exception as exc:  # noqa: BLE001 - the import must never fail on env-file issues
+        import logging
+
+        logging.getLogger("pipeline").warning("env file not loaded: %s", type(exc).__name__)
         return
 
 

@@ -10,6 +10,7 @@ The caller holds ``_plan_lock``; nothing here touches it. Names tests patch on
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -173,7 +174,8 @@ def _feedback_wording(transcript_path: Path, review_feedback: str) -> tuple[str,
             isinstance(m.get("content"), str) and review_feedback in m["content"]
             for m in prior_msgs
         )
-    except Exception:  # noqa: BLE001 (fail open to re-injection; a token optimization must never break dispatch)
+    except Exception as exc:  # noqa: BLE001 (fail open to re-injection; a token optimization must never break dispatch)
+        logging.getLogger("pipeline").debug("prior transcript unreadable: %s", type(exc).__name__)
         feedback_already_seeded = False
     if feedback_already_seeded:
         note = (

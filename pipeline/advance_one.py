@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 with bind_namespace(namespace):
                     result = cast(Any, pipeline.server).advance_pipeline(plan_name)
-            except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
+            except Exception as exc:  # noqa: BLE001 - reported to the parent by class name via the result file, exit 1
                 # Class name only: the message can carry filesystem paths.
                 _write_result(
                     result_path,

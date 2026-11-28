@@ -23,6 +23,7 @@ This module is PURE and ADDITIVE: nothing here is wired into a caller yet
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from pipeline.agent_log_format import format_boot, format_done, format_step
@@ -176,7 +177,7 @@ def translate_line(raw: str, state: dict) -> list[str]:
     state.setdefault("step", 0)
     try:
         obj = json.loads(raw)
-    except Exception:  # noqa: BLE001 - non-JSON passes through verbatim
+    except Exception:  # noqa: BLE001 - expected: a non-JSON line passes through verbatim, nothing failed
         return [raw]
     try:
         if not isinstance(obj, dict):
@@ -192,5 +193,6 @@ def translate_line(raw: str, state: dict) -> list[str]:
             state["result"] = obj
             return _done_line(obj, state)
         return []  # user, tool_result, unknown, missing, non-string type
-    except Exception:  # noqa: BLE001 - never raise inside the log-drain thread
+    except Exception as exc:  # noqa: BLE001 - never raise inside the log-drain thread
+        logging.getLogger("pipeline").warning("claude log event not translated: %s", type(exc).__name__)
         return []

@@ -70,7 +70,7 @@ def _last_log_line(worktree: Any) -> str | None:
             if line.strip():
                 return line[:_MAX_LOG_LINE]
         return None
-    except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception:  # noqa: BLE001 - expected: a missing or unreadable agent.log just omits the field; evidence never gates the watchdog
         return None
 
 
@@ -91,7 +91,8 @@ def _branch_commit_count(worktree: Any) -> int | None:
             check=True,
         )
         return int(result.stdout.strip())
-    except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception as exc:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+        logger.debug("watchdog commit count unavailable: %s", type(exc).__name__)
         return None
 
 
@@ -111,7 +112,7 @@ def _agent_done_marker(worktree: Any) -> bool | None:
             os.path.exists(os.path.join(str(worktree), ".agent_done"))
             or os.path.exists(os.path.join(str(worktree), ".agent_done.consumed"))
         )
-    except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception:  # noqa: BLE001 - expected: a missing marker probe reads as unknown; evidence never gates the watchdog
         return None
 
 
@@ -159,7 +160,8 @@ def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | 
         dest = build_host_state().story_log_root() / f"{plan_name}.{story_key}.watchdog-{stamp}.log"
         dest.write_bytes(tail)
         return str(dest)
-    except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception as exc:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+        logger.warning("watchdog log tail not saved: %s", type(exc).__name__)
         return None
 
 
@@ -181,7 +183,8 @@ def _pid_started_after_dispatch(pid: int, dispatched_at: str | None) -> bool:
         started = datetime.strptime(out, "%a %b %d %H:%M:%S %Y").astimezone(UTC)
         dispatched = datetime.fromisoformat(dispatched_at)
         return (started - dispatched).total_seconds() > 5
-    except Exception:  # noqa: BLE001 - unknown identity keeps today's kill behavior
+    except Exception as exc:  # noqa: BLE001 - unknown identity keeps today's kill behavior
+        logger.warning("pid start time unreadable: %s", type(exc).__name__)
         return False
 
 

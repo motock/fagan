@@ -81,7 +81,8 @@ def _load_manifest(plan_name: str) -> dict:
         from .store import build_store
 
         return build_store().get_manifest(plan_name)
-    except Exception:  # noqa: BLE001 - an unreadable manifest must not allow
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest must not allow
+        logger.warning("plan manifest unreadable for authorization: %s", type(exc).__name__)
         return {}
 
 

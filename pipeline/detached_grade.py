@@ -69,7 +69,8 @@ def _fresh_manifest(plan_name, story_key, story, manifest, keys_at_entry=()):
             manifest,
             drop=drop,
         )
-    except Exception:  # noqa: BLE001 - a merge failure must not fail the grade
+    except Exception as exc:  # noqa: BLE001 - a merge failure must not fail the grade
+        logger.warning("grade manifest merge failed: %s", type(exc).__name__)
         return manifest
     return manifest if merged is None else merged
 

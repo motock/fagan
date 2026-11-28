@@ -80,8 +80,8 @@ def mark_worker_abandoned(thread) -> None:
         with _ABANDONED_LOCK:
             _prune_dead_workers_locked()
             _ABANDONED_WORKERS[id(thread)] = thread
-    except Exception:  # noqa: BLE001 - pragma: no cover - never raise
-        return
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - never raise
+        _LOG.warning("worker not marked abandoned: %s", type(exc).__name__)
 
 
 def worker_is_abandoned(thread) -> bool:
@@ -90,7 +90,8 @@ def worker_is_abandoned(thread) -> bool:
         with _ABANDONED_LOCK:
             _prune_dead_workers_locked()
             return id(thread) in _ABANDONED_WORKERS
-    except Exception:  # noqa: BLE001 - pragma: no cover - never raise
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - never raise
+        _LOG.warning("abandoned-worker lookup failed: %s", type(exc).__name__)
         return False
 
 
@@ -138,7 +139,8 @@ def dispatch_side_effect_in_progress(worktree) -> bool:
         if (path / BASELINE_MARKER).exists():
             return True
         return _has_commits_beyond_base(path)
-    except Exception:  # noqa: BLE001 - fail safe, never raise
+    except Exception as exc:  # noqa: BLE001 - fail safe, never raise
+        _LOG.warning("dispatch side-effect probe failed: %s", type(exc).__name__)
         return False
 
 
@@ -160,7 +162,8 @@ def blocks_reclaim(story, worktree) -> bool:
         if lease_is_live(story):
             return False
         return dispatch_side_effect_in_progress(worktree)
-    except Exception:  # noqa: BLE001 - fail safe, never raise
+    except Exception as exc:  # noqa: BLE001 - fail safe, never raise
+        _LOG.warning("reclaim block probe failed: %s", type(exc).__name__)
         return False
 
 

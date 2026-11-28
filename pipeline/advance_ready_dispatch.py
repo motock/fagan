@@ -235,7 +235,7 @@ def _launch_claimed_story(plan_name: str, key: str, summary: dict[str, Any]) -> 
         # failed dispatch. Let the tick abort with this cause
         # instead; the next tick starts clean.
         raise
-    except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
+    except Exception as e:  # noqa: BLE001 - recorded by _record_dispatch_failure (git fetch/worktree/backend launch failure)
         _record_dispatch_failure(plan_name, key, e, summary)
         return False
     else:

@@ -92,7 +92,8 @@ def _detected_key_parts(worktree_path: Path) -> tuple[list[str], str] | None:
     """
     try:
         detected = detect_test_command(worktree_path)
-    except Exception:  # noqa: BLE001 - key derivation must never block a dispatch
+    except Exception as exc:  # noqa: BLE001 - key derivation must never block a dispatch
+        logger.warning("baseline cache key not derived: %s", type(exc).__name__)
         return None
     if not detected:
         return None

@@ -12,7 +12,6 @@ to fixed anchors - never the prompt's total contents or length.
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 
 import pytest
 
@@ -21,6 +20,11 @@ import pytest
 # tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.review as review_mod
 import pipeline.server  # noqa: F401
+from pipeline.review_run import (
+    ReviewPromptParts,
+    assemble_review_prompt,
+    build_prior_feedback_notes,
+)
 
 # ---------------------------------------------------------------------------
 # Fixed anchors / literals this story owns
@@ -81,10 +85,6 @@ def _capture_review_prompt(monkeypatch, **kwargs) -> str:
     prompt = captured["prompt"]
     assert isinstance(prompt, str) and prompt
     return prompt
-
-
-def _review_source_lines() -> list[str]:
-    return Path(review_mod.__file__).read_text(encoding="utf-8").splitlines()
 
 
 # ---------------------------------------------------------------------------
@@ -399,14 +399,26 @@ def test_story_context_is_documented_in_docstring():
 
 
 def test_story_context_note_is_built_after_prior_findings_note():
-    lines = _review_source_lines()
-    idx = next(
-        i for i, ln in enumerate(lines) if ln.strip() == 'prior_findings_note = ""'
-    )
-    assert "story_context_note" in lines[idx + 1]
+    prior, context = build_prior_feedback_notes("fix the thing", "story brief")
+    assert prior
+    assert context
+    _, blank_context = build_prior_feedback_notes("fix the thing", None)
+    assert blank_context == ""
+    _, whitespace_context = build_prior_feedback_notes("fix the thing", "   ")
+    assert whitespace_context == ""
 
 
 def test_story_context_note_is_inserted_after_prior_findings_note_in_prompt():
-    lines = _review_source_lines()
-    idx = next(i for i, ln in enumerate(lines) if 'f"{prior_findings_note}"' in ln)
-    assert 'f"{story_context_note}"' in lines[idx + 1]
+    prior = "<<PRIOR-FINDINGS-MARKER>>"
+    context = "<<STORY-CONTEXT-MARKER>>"
+    prompt = assemble_review_prompt(
+        ReviewPromptParts(
+            lead="LEAD ",
+            no_rerun_note="",
+            auto_fix_note="",
+            prior_findings_note=prior,
+            story_context_note=context,
+            large_diff_note="",
+        )
+    )
+    assert prompt.index(prior) + len(prior) == prompt.index(context)

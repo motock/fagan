@@ -32,6 +32,7 @@ REVIEW_LOGIC_FINGERPRINT_KEY = "last_reviewed_logic_fingerprint"
 _VERDICT_FORMING_MODULES = (
     "scope_gate.py",
     "review.py",
+    "review_run.py",
     "review_orchestrator.py",
     "testfiles.py",
     "review_scope_gate.py",

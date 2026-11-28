@@ -212,10 +212,11 @@ def test_claude_reviewer_prompt_mentions_diff_stat():
     import importlib
     p = importlib.import_module("app.pipeline_mcp_server")
     server_src = open(p.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
-    # The reviewer prompt now lives in pipeline/review.py; check both.
+    # The reviewer prompt now lives in pipeline/review_run.py; check all.
     review = importlib.import_module("pipeline.review")
     review_src = open(review.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
-    combined = server_src + review_src
+    run_src = open(importlib.import_module("pipeline.review_run").__file__).read()  # noqa: SIM115
+    combined = server_src + review_src + run_src
     assert "git diff --stat" in combined
     # And it should explicitly warn about the truncation.
     assert "3000 chars" in combined or "truncat" in combined.lower()

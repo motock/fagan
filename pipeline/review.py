@@ -7,8 +7,8 @@ sites use bare names -> re-export -> patch lands.
 """
 
 import hashlib
-import logging
-import os
+import logging  # noqa: F401  (re-exported name; phases live in review_run)
+import os  # noqa: F401
 import re
 import shlex
 import subprocess
@@ -18,18 +18,19 @@ from app import backend, role_registry
 from pipeline.review_base import resolve_review_base
 
 from . import context_sources as ctxsrc
+from . import review_run
 from .actor import current_namespace
 from .config import (
-    _LOCAL_BACKEND_NAMES,
+    _LOCAL_BACKEND_NAMES,  # noqa: F401  (read by review_run via this module)
     DEFAULT_MODEL,
-    REVIEWER_AUTO_FIX_MAX_FILES,
-    REVIEWER_AUTO_FIX_MAX_LINES,
+    REVIEWER_AUTO_FIX_MAX_FILES,  # noqa: F401
+    REVIEWER_AUTO_FIX_MAX_LINES,  # noqa: F401
     REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
 from .file_size_policy_dispatch import file_size_advisory_note
 from .live_ref import LiveRef
 from .persona import _persona_body, _persona_default_model
-from .review_rework_scope import scoped_rework_diff
+from .review_rework_scope import scoped_rework_diff  # noqa: F401
 from .store_records import (
     InvalidRecordKeyError,
     validate_context_digest,
@@ -295,312 +296,25 @@ def _run_reviewer(
     blank leaves the prompt unchanged.
     """
     body = _persona_body("code-reviewer")
-    # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
-    # a plan's role_config / model_registry.json's "review" entry), falling
-    # back to the persona's declared tier when none of those apply - so an
-    # unconfigured install resolves identically to before role_registry
-    # existed. backend_name (an explicit caller override, e.g. review_story's
-    # FM-B rate-limit fallback) always wins over the registry-resolved
-    # provider, exactly as it already won over the plain env lookup.
-    resolution = role_registry.resolve_role(
-        "review", plan_role_config=plan_role_config,
-        layer_routing=layer_routing,
-        model_fallback=lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+    route = review_run.resolve_reviewer_route(
+        backend_name, plan_role_config, layer_routing,
     )
-    model = resolution.model
-    # Asymmetric review: software-engineer.md and code-reviewer.md both
-    # declare `model: sonnet`, so without an override dispatch and review
-    # resolve to the identical concrete local model - a model reviewing its
-    # own work with identical weights. When the review backend is actually
-    # local, an explicit PIPELINE_LOCAL_REVIEW_MODEL overrides the tier so
-    # review can run on a different (e.g. stronger) local model - and stays
-    # the top-priority override even when the registry also configures a
-    # model, since it is the most specific, most recently-set knob. Gated on
-    # backend == "local" so a bare Ollama tag never leaks into a cloud
-    # review as a bogus --model value. backend_name may already be the
-    # explicit "local" (review_story's FM-B rate-limit fallback); otherwise
-    # fall back to the registry-resolved provider, mirroring how get_backend
-    # itself treats name=None.
-    resolved_backend = (backend_name or resolution.provider).strip().lower()
-    if resolved_backend in _LOCAL_BACKEND_NAMES:
-        review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
-        if review_model_override:
-            model = review_model_override
-    elif resolved_backend != resolution.provider:
-        # backend_name overrode the provider away from whichever provider
-        # resolution.model was actually paired with (e.g. an escalated
-        # review forcing "claude" while the registry's review role is
-        # ollama/glm) - resolution.model is a raw tag that belongs to the
-        # DISCARDED provider and must never be passed straight through as
-        # an invalid --model value to the new one.
-        model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
-    # Only pass an explicit resolved name to get_backend when a plan, layer
-    # or registry override actually named a provider - otherwise keep passing
-    # backend_name (None in the common case) unchanged, so an unconfigured
-    # install still relies on get_backend's own internal PIPELINE_BACKEND_
-    # REVIEW lookup exactly as before (behaviorally identical either way,
-    # but this preserves what a mocked get_backend observes). A layer
-    # (role_routing) provider counts the same as the other two: without it
-    # the driver fell back to claude while the model was an Ollama tag.
-    plan_cfg_review = (plan_role_config or {}).get("review", {})
-    layer_cfg_review = (layer_routing or {}).get("review")
-    layer_review_provider = (
-        layer_cfg_review.get("provider")
-        if isinstance(layer_cfg_review, dict) else None
+    lead, inline_diff = review_run.build_review_lead(worktree, branch, since_sha)
+    large_diff_note, no_rerun_note = review_run.build_diff_notes(inline_diff)
+    prior_findings_note, story_context_note = review_run.build_prior_feedback_notes(
+        prior_feedback, story_context,
     )
-    registry_review_provider = (
-        role_registry.load_registry().get("roles", {}).get("review", {}).get("provider")
-    )
-    name_for_get_backend = backend_name
-    if backend_name is None and (
-        plan_cfg_review.get("provider")
-        or (isinstance(layer_review_provider, str) and layer_review_provider)
-        or registry_review_provider
-    ):
-        name_for_get_backend = resolution.provider
-
-    # Diff-scoping lead. On a rework (since_sha set) the reviewer reviews
-    # ONLY the new commits since the last REQUEST_CHANGES; on a first review
-    # (None) it reviews the full branch diff. The substantive criteria block
-    # below is shared by both.
-    #
-    # Diff pre-materialization: fetch the diff here, server-side, and embed
-    # it directly rather than making the reviewer discover it turn-by-turn
-    # (git diff --stat -> per-file git diff -> view_file). On a backend with
-    # no prompt caching, each of those turns re-bills the whole growing
-    # transcript from scratch - see REVIEWER_INLINE_DIFF_MAX_CHARS's config.py
-    # comment for the measured cost this addresses. base_ref/inline_diff stay
-    # None on any failure (bad worktree, no common base, diff over budget),
-    # which falls through to the exact prior explore-yourself instructions.
-    # Rework review scoping (D-A): when the branch was rebased or had the
-    # trunk merged in since the last review, `git diff {since_sha}..HEAD`
-    # also contains the trunk's own changes, so the reviewer would flag work
-    # this story never touched. scoped_rework_diff narrows the diff to the
-    # story's own files against the merge-base with the trunk. It returns
-    # None on no drift (the prompt below stays byte-for-byte unchanged) and
-    # ("", "") when drift was detected but the story has no new files of its
-    # own (also today's prompt, plus the INFO notice below).
-    base_ref: str | None
-    inline_diff: str | None
-    scoped = scoped_rework_diff(worktree, since_sha, None) if since_sha else None
-    if scoped is not None:
-        logging.getLogger(__name__).info(
-            "review rework scope: drift detected", extra={"drift": True},
-        )
-    if scoped and scoped[1]:
-        base_ref, inline_diff = scoped
-        lead = (
-            f"Review ONLY the story's own changes since your last review. "
-            f"The branch was updated from the base branch since then; the "
-            f"base branch's own changes are NOT part of this review and must "
-            f"not be flagged. The story's own changed files since your last "
-            f"review are listed in the diff below.\n\n"
-            f"--- git diff {base_ref}..HEAD (story files only) ---\n"
-            f"{inline_diff}\n"
-            f"--- end diff ---\n\n"
-        )
-    else:
-        # No drift (or no scoped diff): today's exact behaviour, unchanged.
-        base_ref = since_sha or _first_review_base(worktree)
-        inline_diff = (
-            _materialize_review_diff(worktree, base_ref) if base_ref else None
-        )
-        if since_sha:
-            if inline_diff:
-                lead = (
-                    f"Review ONLY the new changes pushed since your last review "
-                    f"(commit {shlex.quote(since_sha)}). The implementer addressed "
-                    f"your prior feedback; do NOT re-review files that were already "
-                    f"approved and have not changed since. The full diff since your "
-                    f"last review is included below - do NOT re-run `git diff` to "
-                    f"fetch it again; Bash/view_file remain available for anything "
-                    f"not shown here (e.g. surrounding lines in a file, or a related "
-                    f"file the diff doesn't touch).\n\n"
-                    f"--- git diff {since_sha}..HEAD ---\n{inline_diff}\n"
-                    f"--- end diff ---\n\n"
-                )
-            else:
-                lead = (
-                    f"Review ONLY the new changes pushed since your last review "
-                    f"(commit {shlex.quote(since_sha)}). The implementer addressed "
-                    f"your prior feedback; do NOT re-review files that were already "
-                    f"approved and have not changed since. See the new diff with: "
-                    f"git diff {shlex.quote(since_sha)}..HEAD\n"
-                    f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
-                    f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
-                    f"<file>` per file, and `view_file` for surrounding context).\n\n"
-                )
-        elif inline_diff:
-            lead = (
-                f"Review the changes on branch {branch} in this worktree against "
-                f"our standards. The full diff against the branch's base is "
-                f"included below - do NOT re-run `git diff` to fetch it again; "
-                f"Bash/view_file remain available for anything not shown here "
-                f"(e.g. surrounding lines in a file, or a related file the diff "
-                f"doesn't touch).\n\n"
-                f"--- git diff {base_ref}..HEAD ---\n{inline_diff}\n"
-                f"--- end diff ---\n\n"
-            )
-        else:
-            lead = (
-                f"Review the changes on branch {branch} in this worktree against "
-                f"our standards.\n\n"
-            )
-    # Reviewer self-fix (2026-07-29): only ever offered for a low-risk story
-    # when the operator has explicitly opted in - never mentioned otherwise,
-    # so an unconfigured install's reviewer behaves exactly as before. Even
-    # when offered, this is advisory, not the only gate: review_story's
-    # _verify_reviewer_auto_fix mechanically re-checks risk, diff size, and
-    # the full test suite before an APPROVE_WITH_FIX is honored.
-    auto_fix_enabled = os.environ.get("PIPELINE_REVIEWER_AUTO_FIX", "0") == "1"
-    if auto_fix_enabled and risk == "low":
-        auto_fix_note = (
-            f"\n\nSelf-fix option: if the ONLY Blocking finding is a small, "
-            f"mechanical, single-concern fix you are highly confident is "
-            f"correct (e.g. a narrow logic/regex bug, an off-by-one, a "
-            f"missing null/negative-input check) - NOT a design change, NOT "
-            f"a multi-file change, NOT anything touching auth/secrets/"
-            f"payments/data-access - you may apply it directly (edit the "
-            f"file, run the tests, commit) and report `VERDICT: "
-            f"APPROVE_WITH_FIX` instead of REQUEST_CHANGES. Describe exactly "
-            f"what you changed and why you're confident it's correct and "
-            f"low-risk. The harness independently re-verifies this before "
-            f"trusting it: the fix must touch at most "
-            f"{REVIEWER_AUTO_FIX_MAX_FILES} file(s) and "
-            f"{REVIEWER_AUTO_FIX_MAX_LINES} changed lines, and the full "
-            f"test suite must still pass - if any of that fails, this "
-            f"downgrades to REQUEST_CHANGES automatically, so do not use "
-            f"this path to sneak through something you are not genuinely "
-            f"confident about. When in doubt, REQUEST_CHANGES instead."
-        )
-    else:
-        auto_fix_note = ""
-    # Mode 47: on a re-review, make the reviewer discharge its OWN prior
-    # findings one at a time. A green suite is not evidence a finding was
-    # resolved - the finding may name work no test grades at all, which is
-    # exactly how the live green-but-incomplete merge happened.
-    if prior_feedback and prior_feedback.strip():
-        prior_findings_note = (
-            f"\n\n--- Your prior Blocking findings on this branch ---\n"
-            f"{prior_feedback.strip()}\n\n"
-            f"Before any verdict, walk these one at a time and state for EACH "
-            f"whether it is now fully resolved, quoting the specific diff hunk "
-            f"that resolves it. Do not batch them into a single 'addressed' "
-            f"claim. A finding is resolved only when EVERYTHING it asked for "
-            f"landed - if it named two changes and only one was made, it is "
-            f"PARTIALLY addressed, which is NOT resolved: re-raise it as "
-            f"Blocking and REQUEST_CHANGES, naming the specific part still "
-            f"missing. The test suite being green does NOT prove a finding is "
-            f"resolved: a finding about a rename, a dead leftover name, or a "
-            f"docstring typically has no test grading it at all, so a passing "
-            f"suite says nothing about it. Verify against the diff itself, "
-            f"not against the test results.\n\n"
-        )
-    else:
-        prior_findings_note = ""
-    story_context_note = (
-        f"{story_context.strip()}\n\n" if story_context and story_context.strip() else ""
-    )
-    # Irrelevant once the full diff is already embedded in `lead` above -
-    # nothing was truncated, so there's nothing to warn about re-fetching.
-    large_diff_note = "" if inline_diff else (
-        "For large diffs: bash output is truncated to 3000 chars per call, "
-        "so a bare `git diff` may silently cut off. Start with "
-        "`git diff --stat` to see the scope, then use `git diff -- <file>` "
-        "per file (or `git diff <commit>` for a range), and `view_file` "
-        "for surrounding context. Do NOT rely on a single `git diff` for "
-        "a multi-file change. "
-    )
-    if inline_diff:
-        bash_purpose_note = (
-            "The diff has already been provided above - do not re-fetch it. "
-            "Bash/view_file are available only for context beyond it (e.g. "
-            "surrounding lines in a file, or a related file the diff doesn't "
-            "touch). Use them for nothing else.\n"
-        )
-    else:
-        bash_purpose_note = (
-            "Bash is provided ONLY for reading the diff: `git diff --stat`, "
-            "`git diff -- <file>`, `git diff <commit> HEAD`, and `view_file` "
-            "for context. Use it for nothing else.\n"
-        )
-    no_rerun_note = (
-        "The full test suite is ALREADY green (CI ran it; that is the "
-        "precondition for this review). Do NOT run the test suite, do NOT "
-        "run pytest, and do NOT build or install the project. Re-running it "
-        "is duplicate spend that risks exhausting your step budget without "
-        "reaching a verdict.\n"
-        f"{bash_purpose_note}"
-        "python is NOT on PATH in this worktree (the venv interpreter lives "
-        "in the venv's bin directory, not on PATH); any `python ...` command "
-        "will fail with 'command not found' and waste your step budget. "
-        "Do not attempt it.\n\n"
-    )
-    prompt = (
-        f"{lead}"
-        f"{no_rerun_note}"
-        f"{auto_fix_note}"
-        f"{prior_findings_note}"
-        f"{story_context_note}"
-        f"Report EVERY Blocking finding you notice in this single "
-        f"pass, not just the first one - the implementer is a weak local "
-        f"model and each REQUEST_CHANGES cycle is a full rework redispatch, "
-        f"which costs time and is itself a fresh opportunity to regress "
-        f"already-correct code. Do not hold a finding back to raise on a "
-        f"later cycle just because it's secondary to the first one you "
-        f"noticed. Specifically check: (1) any function "
-        f"taking a mutable argument (list, dict, set) does not mutate it in "
-        f"place unless that is the documented contract; (2) inputs are "
-        f"validated at system boundaries, including negative/out-of-range "
-        f"numeric arguments, not just the happy path; (3) documentation - "
-        f"but calibrate this to our Blocking-vs-Suggestion policy, don't "
-        f"treat every doc gap as a blocker. If this change alters behavior "
-        f"that EXISTING callers/users already depend on (a public API "
-        f"contract, configuration, CLI flag, or user-facing functionality "
-        f"that predates this change) and no documentation update accompanies "
-        f"it, that's a genuine problem: REQUEST_CHANGES and name the "
-        f"specific doc (a README or other in-repo doc) that needs updating. "
-        f"For a brand-new addition with no "
-        f"existing external callers yet (e.g. a new module/class/function "
-        f"nothing else in the repo calls), a missing doc update is a "
-        f"Suggestion, not a blocker - note it in your summary but don't "
-        f"REQUEST_CHANGES for that reason alone if the code itself is "
-        f"correct and tested; (4) if the change adds a module that other "
-        f"production files import from (a wrapper/adapter/binding shim), it "
-        f"must trace what that module actually calls and flag any module that "
-        f"reimplements logic it should delegate to as Blocking. For example, "
-        f"replacing a crypto/WASM/native binding with a pure-language no-op or "
-        f"a base64 round-trip placeholder is not sufficient evidence; a green "
-        f"test suite alone does not prove delegation is real.\n\n"
-        f"(5) the diff's file inventory is part of what you are signing "
-        f"off on: list every file the diff ADDS and ask whether the change "
-        f"needed it. A file that exists only because the work was carried "
-        f"out - a one-shot helper script, a scratch or dump file, a copy of "
-        f"an existing module, an edit artifact - is Blocking: name it on a "
-        f"`- Blocking: <relative/file/path>: <one-line description>` line so "
-        f"it is tracked. A new module, test, or doc the change's own code or "
-        f"tests depend on is expected, not a finding.\n\n"
-        f"{large_diff_note}"
-        f"End with your VERDICT line; if you APPROVE, "
-        f"also include a PR title and body."
-    )
-    # cell_dir points at the worktree's parent directory. In production
-    # that's ~/.claude/worktrees/; in the benchmark it's
-    # <cell>/worktrees/, which the harness preserves across all trials
-    # of a cell (worktrees/<story_key>/ is removed on merge, but the
-    # surrounding worktrees/ dir is not). The driver writes a per-call
-    # token-cost sidecar there so the data survives the worktree
-    # cleanup that wipes review.log. None for live (non-benchmark)
-    # reviews whose worktree lives somewhere we shouldn't be
-    # scribbling new files into: in that case the driver silently
-    # skips the sidecar.
-    if Path(worktree).parent.name == "worktrees":
-        cell_dir = str(Path(worktree).resolve().parent)
-    else:
-        cell_dir = None
-    return backend.get_backend("review", name=name_for_get_backend).complete(
-        prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
-        cell_dir=cell_dir,
+    prompt = review_run.assemble_review_prompt(review_run.ReviewPromptParts(
+        lead=lead,
+        no_rerun_note=no_rerun_note,
+        auto_fix_note=review_run.build_auto_fix_note(risk),
+        prior_findings_note=prior_findings_note,
+        story_context_note=story_context_note,
+        large_diff_note=large_diff_note,
+    ))
+    return backend.get_backend("review", name=route.name_for_get_backend).complete(
+        prompt, system=body, model=route.model, allowed_tools="Bash,Read", cwd=worktree,
+        cell_dir=review_run.review_cell_dir(worktree),
     )
 
 

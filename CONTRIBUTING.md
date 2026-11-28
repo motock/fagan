@@ -46,6 +46,8 @@ mypy checks `pipeline/` and `app/`. Every module in `pipeline` and `app` is chec
 
 Ruff enforces a function complexity ceiling of 30 (rule `C901`, `max-complexity` in `pyproject.toml`). The ceiling measures the function itself, so moving a large function into its own file does not satisfy it. Files that already exceed it are listed under `[tool.ruff.lint.per-file-ignores]`; refactor a listed file and remove it from that list once its functions are under 30, but never add a file to the list.
 
+No function in `pipeline/`, `app/` or `scripts/` may be longer than 150 lines; the functions already over that are a baseline in `tests/unit/test_function_length_ceiling.py` that may only shrink (remove an entry when you split its function, never add one). Check with `.venv/bin/python -m pytest -q tests/unit/test_function_length_ceiling.py`.
+
 The suite runs in parallel by default (pytest-xdist's `-n auto`, set in `pyproject.toml`'s
 `addopts`) — it fans out across your machine's cores automatically, no flag needed.
 

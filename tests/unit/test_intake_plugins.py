@@ -21,7 +21,7 @@ from pipeline import intake_plugins
 
 ENV = intake_plugins.PLUGINS_ENV
 ALLOWLIST = plugin_loader.ALLOWLIST_ENV
-SCHEDULER = Path(__file__).resolve().parents[2] / "pipeline" / "scheduler_daemon.py"
+SCHEDULER = Path(__file__).resolve().parents[2] / "pipeline" / "scheduler_tick.py"
 TICK_NOW = 1_700_000_000.5
 
 CALLS: list[tuple[str, float]] = []

@@ -42,7 +42,9 @@ def test_scheduler_daemon_exposes_the_same_resolver_object(name):
 
 @pytest.mark.parametrize("name", RESOLVER_NAMES)
 def test_scheduler_daemon_calls_the_resolver(name):
-    assert f"{name}()" in DAEMON_PATH.read_text(encoding="utf-8")
+    tick_path = DAEMON_PATH.with_name("scheduler_tick.py")
+    source = DAEMON_PATH.read_text(encoding="utf-8") + tick_path.read_text(encoding="utf-8")
+    assert f"{name}()" in source
 
 
 def test_scheduler_daemon_no_longer_defines_the_resolvers():

@@ -352,7 +352,7 @@ def _warn_on_concurrent_local_dispatch(
             loaded = _home.backend._ollama_loaded_models(
                 os.environ.get("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
             )
-        except Exception as exc:  # noqa: BLE001 (observability hook, never a gate)
+        except Exception as exc:  # noqa: BLE001 - observability hook, never a gate
             logging.getLogger("pipeline").debug("ollama loaded-models probe failed: %s", type(exc).__name__)
             loaded = set()
         if loaded and target_model and target_model not in loaded:
@@ -384,7 +384,7 @@ def _warn_on_concurrent_local_dispatch(
     ):
         try:
             detected_np = _home.backend._ollama_serving_parallelism()
-        except Exception as exc:  # noqa: BLE001 (observability hook, never a gate)
+        except Exception as exc:  # noqa: BLE001 - observability hook, never a gate
             logging.getLogger("pipeline").debug("ollama parallelism probe failed: %s", type(exc).__name__)
             detected_np = None
         if detected_np is not None and detected_np < _home.MAX_CONCURRENT_AGENTS:

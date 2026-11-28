@@ -429,7 +429,7 @@ def main() -> int:
     try:
         subprocess.run(["ollama", "run", GPTOSS_TAG, ""],
                        check=False, capture_output=True, text=True, timeout=120)
-    except Exception as e:  # noqa: BLE001 (deliberate fail-open: warm-up is an optional latency optimization, per the comment above)
+    except Exception as e:
         print(f"ollama warm-up skipped: {e}", flush=True)
 
     results = {}

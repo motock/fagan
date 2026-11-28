@@ -250,7 +250,7 @@ class PlaneTicketProvider:
             resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
                                   json={"name": summary})
             return resp["id"]
-        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; any failure falls back to no epic, warned below)
+        except Exception as e:  # noqa: BLE001 - Plane is optional/best-effort; any failure falls back to no epic, warned below
             print(f"Warning: Plane create_epic({summary!r}) failed, "
                   f"continuing without a Plane epic: {e}")
             return None
@@ -271,7 +271,7 @@ class PlaneTicketProvider:
                 "labels": [label_id],
             })
             issue_id = issue_resp["id"]
-        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; any failure falls back to a synthetic key, warned below)
+        except Exception as e:  # noqa: BLE001 - Plane is optional/best-effort; any failure falls back to a synthetic key, warned below
             print(f"Warning: Plane create_story({summary!r}) failed, "
                   f"falling back to a local/synthetic story key: {e}")
             return None
@@ -285,7 +285,7 @@ class PlaneTicketProvider:
             try:
                 plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
                               json={"issue_id": issue_id})
-            except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; a linking failure is warned below and does not undo the story creation)
+            except Exception as e:  # noqa: BLE001 - Plane is optional/best-effort; a linking failure is warned below and does not undo the story creation
                 print(f"Warning: Plane create_story({summary!r}) succeeded but "
                       f"linking issue {issue_id!r} to epic {epic_id!r} failed, "
                       f"continuing without the epic link: {e}")
@@ -421,7 +421,7 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
             # transition as a best-effort no-op (manifest is source of truth).
             _mark_plane_unreachable(e)
             return True
-        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; retried up to PLANE_MAX_ATTEMPTS, then reported below)
+        except Exception as e:  # noqa: BLE001 - Plane is optional/best-effort; retried up to PLANE_MAX_ATTEMPTS, then reported below
             last_err = e
     msg = (f"Plane sync for {story_key} → {state_group} failed after "
            f"{PLANE_MAX_ATTEMPTS} attempts: {last_err}")

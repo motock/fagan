@@ -531,7 +531,7 @@ def start_test_author_phase(
             log_path=log_path,
             append=False,
         )
-    except Exception:  # noqa: BLE001 (already logged below; dispatch/process-launch failures are unpredictable and must not raise past this function)
+    except Exception:  # noqa: BLE001 - already logged below; dispatch/process-launch failures are unpredictable and must not raise past this function
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to start for {story_key}; "
             "falling back to monolithic dispatch"
@@ -602,7 +602,7 @@ def collect_test_author_phase(
     try:
         has_commits = _worktree_has_non_wip_commits(
             worktree_path, story_key, _default_branch())
-    except Exception as exc:  # noqa: BLE001 (already logged below; git-detection failures are unpredictable and must not raise past this function)
+    except Exception as exc:  # noqa: BLE001 - already logged below; git-detection failures are unpredictable and must not raise past this function
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to detect commits for {story_key}: {exc}"
         )
@@ -748,7 +748,7 @@ def _run_rework_test_author_phase(
             log_path=log_path,
             append=False,
         )
-    except Exception:  # noqa: BLE001 (mirrors _run_test_author_phase's contract)
+    except Exception:  # noqa: BLE001 - mirrors _run_test_author_phase's contract
         logging.getLogger("pipeline").warning(
             f"rework test-author dispatch failed to start for {story_key}; "
             "falling back to monolithic rework dispatch"
@@ -773,7 +773,7 @@ def _run_rework_test_author_phase(
 
     try:
         return _worktree_has_non_wip_commits(worktree_path, story_key, _default_branch())
-    except Exception as exc:  # noqa: BLE001 (mirrors _run_test_author_phase's contract)
+    except Exception as exc:  # noqa: BLE001 - mirrors _run_test_author_phase's contract
         logging.getLogger("pipeline").warning(
             f"rework test-author dispatch failed to detect commits for {story_key}: {exc}"
         )

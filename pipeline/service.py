@@ -790,7 +790,7 @@ class PipelineService(PlanApprovalMixin, plan_export.PlanExportMixin):
                 continue
             try:
                 plans[plan_name] = advance_pipeline(plan_name)
-            except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)
+            except Exception as e:  # noqa: BLE001 - one plan's failure must not stop every other plan's tick, per the comment below
                 # One plan's failure (bad repo_root, missing tool, transient git
                 # error, ...) must not stop every other plan from getting its tick.
                 plans[plan_name] = {"ok": False, "error": str(e)}

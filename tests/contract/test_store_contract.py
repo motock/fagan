@@ -139,7 +139,7 @@ def test_transaction_mutual_exclusion_across_threads(store_factory):
     def _run(fn):
         try:
             fn()
-        except BaseException as exc:  # noqa: BLE001 - surfaced via failures
+        except BaseException as exc:
             failures.append(exc)
 
     def _set_status(status):

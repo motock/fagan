@@ -140,12 +140,12 @@ def _baseline_only_failures(origin, stdout: str) -> bool:
             )
         )
         baseline_ids = set(payload["failed_node_ids"])
-    except Exception:  # noqa: BLE001 (an unreadable baseline exempts nothing)
+    except Exception:  # noqa: BLE001 - an unreadable baseline exempts nothing
         return False
     if not baseline_ids:
         return False
     try:
         run_ids = origin["p"].failed_node_ids(stdout)
-    except Exception:  # noqa: BLE001 (an unparseable run exempts nothing)
+    except Exception:  # noqa: BLE001 - an unparseable run exempts nothing
         return False
     return bool(run_ids) and set(run_ids) <= baseline_ids

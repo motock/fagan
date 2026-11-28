@@ -254,7 +254,7 @@ def _transcript_ends_with_done(transcript_path: Path) -> bool:
     """
     try:
         msgs = json.loads(transcript_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 (a bad transcript must never break dispatch)
+    except Exception as exc:  # noqa: BLE001 - a bad transcript must never break dispatch
         logging.getLogger("pipeline").debug("transcript unreadable for resume check: %s", type(exc).__name__)
         return False
     if not isinstance(msgs, list) or not msgs:

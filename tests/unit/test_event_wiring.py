@@ -201,7 +201,7 @@ def test_unparseable_manifest_does_not_raise(patched_plan_dir, patched_advance):
     (patched_plan_dir / "p1.manifest.json").write_text("not json at all {{{")
     try:
         result = wake_handler(_event(plan="p1", story_key="S1"))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         pytest.fail(f"wake_handler raised on unparseable manifest: {e!r}")
     assert result == {"ok": False, "skipped": "no_manifest"}
 
@@ -336,7 +336,7 @@ def test_publish_unsubscribed_type_does_not_raise(monkeypatch, tmp_path):
     # 'story_ready' has no subscriber on the built bus.
     try:
         bus.publish(make_event("story_ready", "p1", story_key="S1"))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         pytest.fail(f"publishing unsubscribed type raised: {e!r}")
 
 

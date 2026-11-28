@@ -785,7 +785,7 @@ def consumer_status() -> dict:
         return _status_cache["value"]
     try:
         value = _collect_consumer_status()
-    except Exception as exc:  # noqa: BLE001 (deliberate: the marker replaces any cause)
+    except Exception as exc:  # noqa: BLE001 - deliberate: the marker replaces any cause
         logger.warning("nats consumer status unavailable: %s", type(exc).__name__)
         value = {"reachable": False}
     _status_cache["value"] = value

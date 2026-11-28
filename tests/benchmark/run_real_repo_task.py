@@ -190,7 +190,7 @@ def main() -> int:
             capture_output=True,
             check=True,
         ).stdout.strip()
-    except Exception:  # noqa: BLE001 (deliberate fail-open: the pinned ref may not exist, e.g. omitted from the spec or rewritten history)
+    except Exception:
         # Resolve to HEAD's *actual sha*, not the literal ref "HEAD" - the
         # downstream checkout must detach so the later `git branch --force
         # master HEAD` step is safe (it refuses to force-move a branch the
@@ -202,7 +202,7 @@ def main() -> int:
                 capture_output=True,
                 check=True,
             ).stdout.strip()
-        except Exception:  # noqa: BLE001 (last-resort fallback if PIPELINE_REPO itself is unusable)
+        except Exception:
             base_commit = "HEAD"
 
     cell = Path(args.workdir).resolve() / f"{args.task}__{args.model}__t{args.trial}"

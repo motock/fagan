@@ -267,7 +267,7 @@ def test_commit_story_is_reentrant_under_a_held_plan_lock(plan_dir, monkeypatch)
                 story_commit.commit_story(PLAN, "S1", {"status": "reviewed"})
                 # Reads the file again: must see the first commit's write.
                 story_commit.commit_story(PLAN, "S2", {"status": "reviewed"})
-        except BaseException as exc:  # noqa: BLE001 - surfaced to the parent
+        except BaseException as exc:
             errors.append(exc)
 
     worker = threading.Thread(target=body, daemon=True)

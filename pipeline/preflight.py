@@ -311,7 +311,7 @@ def _resolve_backend():
         from pipeline.dispatch import _resolve_dispatch_target
 
         backend = _resolve_dispatch_target({}, None)[0]
-    except Exception as exc:  # noqa: BLE001 -- a diagnostic must never crash
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must never crash
         # Only reachable when the shared resolver itself is unavailable
         # (e.g. a broken app.role_registry import). Degrade to dispatch's
         # own documented fail-open priority -- the env var, then "claude" --

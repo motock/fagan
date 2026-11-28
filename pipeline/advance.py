@@ -216,16 +216,16 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     """
     try:
         run_triage_sweep(plan_name)
-    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+    except Exception:  # noqa: BLE001 - fail-open by design; the tick must survive it
         logging.getLogger("pipeline").warning("triage sweep raised; tick continues")
     run_park_options_sweep(plan_name)  # never raises (see pipeline/park_options.py)
     try:
         run_wedge_scan(plan_name)
-    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+    except Exception:  # noqa: BLE001 - fail-open by design; the tick must survive it
         logging.getLogger("pipeline").warning("wedge scan raised; tick continues")
     try:
         run_stall_scan(plan_name)
-    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+    except Exception:  # noqa: BLE001 - fail-open by design; the tick must survive it
         logging.getLogger("pipeline").warning("stall scan raised; tick continues")
     return _impl_ref(plan_name)
 

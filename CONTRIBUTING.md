@@ -80,6 +80,10 @@ gate, so no coverage threshold applies and a drop never blocks a merge.
   contract, an environment variable, the dashboard's API, a CLI flag),
   update `README.md`/`REFERENCE.md` in the same PR.
 
+### Broad exception handlers
+
+Ruff selects `BLE001`, so a handler that catches `Exception` or `BaseException` without re-raising or logging the traceback fails lint. Where the broad catch is intended, write `# noqa: BLE001 - <reason>` with at least three words saying what must not be interrupted and where the failure is reported; `tests/unit/test_broad_except_reasons.py` rejects a bare or too-short reason in production code. Narrowing the handler to the exceptions that can actually occur is preferred over a `noqa`.
+
 ## Reporting bugs / requesting features
 
 Open a GitHub issue. For a suspected security vulnerability, see

@@ -186,7 +186,7 @@ def record_dispatch_baseline(
     if rerun and not marker.exists():
         try:
             baseline = snapshot(worktree_path)
-        except Exception as exc:  # noqa: BLE001 (observability hook, never a gate)
+        except Exception as exc:  # noqa: BLE001 - observability hook, never a gate
             logger.warning(
                 "baseline snapshot failed", extra={"error_class": type(exc).__name__}
             )

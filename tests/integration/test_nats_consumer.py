@@ -98,7 +98,7 @@ async def _jetstream_ready(url: str, timeout: float = 20.0) -> None:
             nc = await nats.connect(servers=[url])
             await nc.jetstream().account_info()
             return
-        except Exception:  # noqa: BLE001 - any client error means "not ready yet"
+        except Exception:
             await asyncio.sleep(0.1)
         finally:
             if nc is not None:

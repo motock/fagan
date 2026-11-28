@@ -166,7 +166,7 @@ def _run_on_thread(target, bound, what):
     def _target():
         try:
             holder["result"] = target()
-        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+        except BaseException as exc:
             holder["error"] = exc
 
     helper = threading.Thread(

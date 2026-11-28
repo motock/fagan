@@ -324,7 +324,7 @@ def test_failed_launch_still_persists_minted_id(
 
     try:
         p.dispatch_story(plan_name, "S1")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Dispatch may propagate or swallow the launch failure; either way
         # the id minted before launch must already be persisted.
         print(f"dispatch raised (acceptable): {exc!r}")

@@ -72,7 +72,7 @@ def is_inert(manifest: dict) -> bool:
             isinstance(story, dict) and story.get("status") == "done"
             for story in stories.values()
         )
-    except Exception:  # noqa: BLE001 (unknown manifests must be advanced, not fatal)
+    except Exception:  # noqa: BLE001 - unknown manifests must be advanced, not fatal
         # Only the class name and the plan are recorded: exception text can
         # carry filesystem paths and manifest payloads.
         logger.debug(

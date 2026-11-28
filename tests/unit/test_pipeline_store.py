@@ -169,7 +169,7 @@ def test_get_manifest_does_not_swallow_errors(plan_dir):
         p._store.get_manifest("nope")
     except FileNotFoundError:
         return
-    except Exception as exc:  # noqa: BLE001 - re-raise with a clear message
+    except Exception as exc:
         pytest.fail(f"get_manifest must raise FileNotFoundError, not {type(exc).__name__}")
     pytest.fail("get_manifest must raise FileNotFoundError for a missing manifest")
 

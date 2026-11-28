@@ -282,7 +282,7 @@ class _GuardedExporter:
     def shutdown(self) -> None:
         try:
             self._exporter.shutdown()
-        except Exception as exc:  # noqa: BLE001 - see export()
+        except Exception as exc:  # noqa: BLE001 - a trace must never break the caller; the failure is logged
             _log_export_failure(exc)
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
@@ -291,7 +291,7 @@ class _GuardedExporter:
             return True
         try:
             return bool(flush(timeout_millis))
-        except Exception as exc:  # noqa: BLE001 - see export()
+        except Exception as exc:  # noqa: BLE001 - a trace must never break the caller; the failure is logged
             _log_export_failure(exc)
             return False
 

@@ -735,7 +735,7 @@ def report_env_conflicts(benign_one_sided: frozenset[str]) -> None:
                 f"(this scheduler uses launchd_plist)",
                 file=sys.stderr,
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - an advisory conflict check must not stop the daemon; the failure type is warned on stderr
         print(
             f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
             file=sys.stderr,

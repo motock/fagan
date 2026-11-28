@@ -146,7 +146,7 @@ def run_once_bounded(daemon, bound=RUN_ONCE_BOUND_S):
     def _target():
         try:
             holder["result"] = daemon.run_once()
-        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+        except BaseException as exc:
             holder["error"] = exc
 
     helper = threading.Thread(target=_target, daemon=True, name="run-once-helper")

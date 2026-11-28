@@ -874,7 +874,7 @@ def test_an_abandoned_worker_launches_no_agent(plan_dir, worktree_root, monkeypa
     def _run():
         try:
             box["result"] = p.dispatch_story("fence-abandoned", "S1")
-        except BaseException as exc:  # noqa: BLE001 - re-raised below
+        except BaseException as exc:
             box["error"] = exc
 
     worker = threading.Thread(target=_run, daemon=True)

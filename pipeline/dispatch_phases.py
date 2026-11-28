@@ -82,7 +82,7 @@ def _apply_planner_checklist(
                     (path, _test_names_in_file(worktree_path, path))
                     for path in added
                 ]
-            except Exception as exc:  # noqa: BLE001 (best-effort grounding enrichment; a git hiccup here must degrade to the prohibition-only planner clause, not raise)
+            except Exception as exc:  # noqa: BLE001 - best-effort grounding enrichment; a git hiccup here must degrade to the prohibition-only planner clause, not raise
                 logging.getLogger("pipeline").warning("authored test files not listed: %s", type(exc).__name__)
                 authored_test_files = []
         plan_text = _run_planner(

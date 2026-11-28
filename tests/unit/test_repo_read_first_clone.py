@@ -319,7 +319,7 @@ def test_two_concurrent_first_reads_run_one_clone(repos_root, hook, fake_clone):
     def read() -> None:
         try:
             results.append(repo_read_access.read_root_kwargs(GRANTED_URL))
-        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+        except BaseException as exc:
             errors.append(exc)
 
     first = threading.Thread(target=read)

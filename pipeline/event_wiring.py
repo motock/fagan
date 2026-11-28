@@ -315,7 +315,7 @@ class DispatchingJsonlEventBus(JsonlEventBus):
         for handler in [] if event_type is None else self._handlers.get(event_type, []):
             try:
                 handler(event)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - one failing handler must not stop the others; the error type is logged
                 error_type = type(exc).__name__
                 logger.error(
                     "Event handler failed for event type %s (%s)",

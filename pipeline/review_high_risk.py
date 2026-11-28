@@ -39,7 +39,7 @@ def run_security_review(
         )
         _home.commit_story(plan_name, story_key, story)
         return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-    except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
+    except Exception as e:  # noqa: BLE001 - defense in depth, per the comment below
         if _home._is_transient_backend_exception(e):
             # A security-reviewer transport failure (timeout, refused or
             # reset connection) is infrastructure, not a review outcome:

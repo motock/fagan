@@ -43,7 +43,7 @@ from pathlib import Path
 import pytest
 
 import pipeline.server as p
-from pipeline import merge
+from pipeline import merge, merge_approve
 from pipeline import persistence as ppers
 
 PLAN = "mergeeventplan"
@@ -64,7 +64,9 @@ _EXPECTED_MESSAGE = (
 )
 # The unrelated third _notify_user call in _approve_merge_impl must not be
 # touched (story brief: "Do not touch any other call site ... in this file").
-_MCP_CALL = "_notify_user(plan_name, _mcp_restart_notice(mcp_touched))"
+_MCP_CALL = (
+    "_notify_user(ctx.plan_name, _mcp_restart_notice(outcome.mcp_touched))"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,10 @@ def test_approve_merge_impl_source_stamps_rebase_auto_resolved_event():
     must carry event="rebase_auto_resolved" (membership, not file totals),
     and the unrelated ``_mcp_restart_notice`` call site in the same
     function must remain byte-identical (no event= there)."""
-    src = inspect.getsource(merge._approve_merge_impl)
+    # The emit points moved into the phase functions _approve_merge_impl calls.
+    src = inspect.getsource(merge_approve._rebase) + inspect.getsource(
+        merge_approve.finish_merge
+    )
     assert _STAMP in src, (
         f"the inline merge-path emit must stamp {_STAMP}; source:\n{src}"
     )
@@ -241,7 +246,7 @@ def test_no_other_merge_notification_gained_event_kwarg():
     fine, but no differently-named event may appear), and at least the two
     known call sites must be stamped. The allowed set is
     {"rebase_auto_resolved", "story_merged"}."""
-    src = Path(merge.__file__).read_text()
+    src = Path(merge.__file__).read_text() + Path(merge_approve.__file__).read_text()
     matches = re.findall(r"\bevent\s*=\s*([\'\"])(.*?)\1", src)
     names = {name for _, name in matches}
     assert names == {EVENT_NAME, "story_merged"}, (

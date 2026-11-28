@@ -66,7 +66,9 @@ def plans(tmp_path, monkeypatch):
 
 
 def test_approve_merge_records_audit_after_status_done():
-    src = inspect.getsource(merge._approve_merge_impl)
+    from pipeline import merge_approve
+
+    src = inspect.getsource(merge_approve.record_merged)
     assert src.index("record_audit(") > src.index('story["status"] = "done"')
 
 

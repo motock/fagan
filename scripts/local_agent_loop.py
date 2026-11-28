@@ -198,7 +198,7 @@ def chat_turn_impl(origin: dict, st: LoopState, step: int) -> tuple[dict | None,
         m, rc = _recover_overflow(origin, st, step, e)
         if rc is not None:
             return None, rc
-    except Exception as e:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
+    except Exception as e:  # noqa: BLE001 - an LLM backend call can fail in unpredictable ways; must not crash the agent loop
         print(f"[step {step}] LLM call failed: {e}", flush=True)
         return None, _llm_error_exit(origin)
     st.messages.append(m)
@@ -219,7 +219,7 @@ def _recover_overflow(origin: dict, st: LoopState, step: int, e: Exception) -> t
     """
     try:
         m = origin["recover_from_oversized_5xx"](st.messages, origin["chat"], step=step)
-    except Exception as e2:  # noqa: BLE001 (an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop)
+    except Exception as e2:  # noqa: BLE001 - an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop
         print(f"[step {step}] LLM call failed during 5xx escalation: {e2}", flush=True)
         return None, _llm_error_exit(origin)
     if m is None:
@@ -269,7 +269,7 @@ def _decode_args(args: Any) -> Any:
     if isinstance(args, str):
         try:
             return json.loads(args)
-        except Exception:  # noqa: BLE001 (malformed tool-call args from the model fall back to empty args rather than crashing the loop)
+        except Exception:  # noqa: BLE001 - malformed tool-call args from the model fall back to empty args rather than crashing the loop
             return {}
     return args
 

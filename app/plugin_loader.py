@@ -167,7 +167,7 @@ def _resolve(env_name: str, spec: str, environ=None) -> Callable:
         module = importlib.import_module(module_name)
     # A plugin module is arbitrary third-party code: importing it can raise
     # anything, and every failure must fail closed as a PluginError.
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - a plugin is arbitrary third-party code; any import failure fails closed as PluginError
         raise PluginError(
             f"{env_name}: cannot import the plugin module ({type(exc).__name__})"
         ) from None

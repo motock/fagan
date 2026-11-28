@@ -382,7 +382,7 @@ def advance_all_plans_pooled() -> dict[str, Any]:
         for future, name in futures.items():
             try:
                 results[name] = future.result()
-            except Exception as exc:  # noqa: BLE001 (one plan must not sink the pass)
+            except Exception as exc:  # noqa: BLE001 - one plan must not sink the pass
                 # The exception text carries paths and payloads, so only the
                 # class name is recorded. ``str(exc)`` here would leak both
                 # into the result payload and into anything that logs it.

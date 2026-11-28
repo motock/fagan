@@ -108,7 +108,7 @@ def _venv_python_for(cwd: Path) -> Path | None:
             if not common_path.is_absolute():
                 common_path = (cwd / common_path).resolve()
             candidates.append(common_path.parent / ".venv" / "bin" / "python")
-    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: any git/path failure here just skips this candidate and falls through to the existing-candidates loop, per this function's docstring)
+    except Exception:  # noqa: S110, BLE001 - deliberate fail-open: any git/path failure here just skips this candidate and falls through to the existing-candidates loop, per this function's docstring
         pass
     for cand in candidates:
         if cand.exists():

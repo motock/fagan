@@ -292,7 +292,7 @@ def _log_startup_preflight() -> None:
         )
         level = logging.ERROR if fails else logging.WARNING if warns else logging.INFO
         logger.log(level, "startup preflight: %s", summary)
-    except Exception as exc:  # noqa: BLE001 (deliberate: read-only monitoring degrades, never dies)
+    except Exception as exc:  # noqa: BLE001 - deliberate: read-only monitoring degrades, never dies
         logger.warning("startup preflight unavailable: %s", exc)
 
 
@@ -350,7 +350,7 @@ def health() -> dict[str, Any]:
                 for field, dashboard_value in resolved.items()
                 if field in scheduler and scheduler[field] != dashboard_value
             ]
-    except Exception as exc:  # noqa: BLE001 (deliberate: read-only health degrades, never 500s)
+    except Exception as exc:  # noqa: BLE001 - deliberate: read-only health degrades, never 500s
         # Absent, unreadable (including a directory at that path), empty,
         # invalid-JSON or wrong-shaped fingerprints all degrade to "no
         # fingerprint" rather than turning a health check into a 500.
@@ -443,7 +443,7 @@ def usage() -> dict[str, Any]:
     change doesn't leave the cost gate quietly disabled."""
     try:
         backends = collect_backend_status()
-    except Exception as exc:  # noqa: BLE001 (deliberate: diagnostic banner degrades, never 500s)
+    except Exception as exc:  # noqa: BLE001 - deliberate: diagnostic banner degrades, never 500s
         logger.warning("backend status collection failed: %s", type(exc).__name__)
         backends = []
     if not USAGE_STATE_PATH.exists():

@@ -473,13 +473,13 @@ def _notify_user(
         if not will_deliver:
             try:
                 _write_directly()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - a notification write must not raise into the caller; the failure is logged
                 logger.error("Failed to write notification directly: %s", exc)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - a notification publish must not raise into the caller; falls back to a direct write and logs
         logger.error("Failed to publish notification event; falling back: %s", exc)
         try:
             _write_directly()
-        except Exception as exc2:  # noqa: BLE001
+        except Exception as exc2:  # noqa: BLE001 - a notification write must not raise into the caller; the failure is logged
             logger.error("Failed to write notification directly: %s", exc2)
 
 # -- per-channel outbox queues (ADR 0012 decision 3) ---------------------

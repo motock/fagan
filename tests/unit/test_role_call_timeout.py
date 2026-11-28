@@ -181,7 +181,7 @@ def _run_with_wall_clock_bound(fn, bound_s: float = HANG_BOUND_S):
     def _target() -> None:
         try:
             box["result"] = fn()
-        except BaseException as exc:  # noqa: BLE001 - re-inspected by callers
+        except BaseException as exc:
             box["error"] = exc
 
     thread = threading.Thread(target=_target, daemon=True)

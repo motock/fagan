@@ -120,7 +120,7 @@ def _notify_escalate_model(plan_name, story_key, story, message, event) -> None:
             event=event,
             **({"correlation_id": cid} if cid else {}),
         )
-    except Exception as exc:  # noqa: BLE001 - see docstring
+    except Exception as exc:  # noqa: BLE001 - a notification failure must not undo a completed escalation; it is logged
         logging.getLogger("pipeline").warning("triage escalate_model notification failed: %s", type(exc).__name__)
 
 

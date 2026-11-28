@@ -129,7 +129,7 @@ def get_plan(plan_name: str) -> dict[str, Any]:
                     "reasons": verdict["reasons"],
                     "measured": verdict["measured"],
                 }
-            except Exception as exc:  # noqa: BLE001 (deliberate: read-only monitoring degrades, never dies)
+            except Exception as exc:  # noqa: BLE001 - deliberate: read-only monitoring degrades, never dies
                 logger.debug(
                     "wedge signals unavailable for %s/%s: %s", plan_name, story_key, exc
                 )

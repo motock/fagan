@@ -672,7 +672,7 @@ def check_repo_root_allowed(path: str) -> None:
             raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR)
         try:
             expanded = Path(entry).expanduser()
-        except Exception:  # noqa: BLE001 (any expansion failure must deny)
+        except Exception:  # noqa: BLE001 - any expansion failure must deny
             raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
         # Check absoluteness AFTER expanduser() (so "~/repos" is accepted) and
         # BEFORE resolve() (so a relative entry is never silently anchored to
@@ -681,12 +681,12 @@ def check_repo_root_allowed(path: str) -> None:
             raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR)
         try:
             resolved_entries.append(expanded.resolve())
-        except Exception:  # noqa: BLE001 (any resolution failure must deny)
+        except Exception:  # noqa: BLE001 - any resolution failure must deny
             raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
 
     try:
         candidate = Path(path).expanduser().resolve()
-    except Exception:  # noqa: BLE001 (any resolution failure must deny)
+    except Exception:  # noqa: BLE001 - any resolution failure must deny
         raise WorkspaceSecurityError(_ALLOWED_REPO_ROOTS_ERROR) from None
 
     for resolved_entry in resolved_entries:

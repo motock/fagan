@@ -367,7 +367,7 @@ def test_tick_skips_locked_while_an_apply_holds_the_plan_lock(
                 pending_patch["patch_id"],
                 pending_patch["confirmation_token"],
             )
-        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertions
+        except BaseException as exc:
             outcome["error"] = exc
 
     thread = threading.Thread(target=_worker, daemon=True)

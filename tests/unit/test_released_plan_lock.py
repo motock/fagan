@@ -74,7 +74,7 @@ def _probe_acquire(plan_name, timeout=5.0):
         try:
             with concurrency._plan_lock(plan_name) as ok:
                 result["acquired"] = bool(ok)
-        except Exception as exc:  # noqa: BLE001 - recorded, classified below
+        except Exception as exc:
             result["error"] = exc
 
     thread = threading.Thread(target=run, daemon=True)
@@ -148,7 +148,7 @@ def _run_timeout_scenario(monkeypatch, tmp_path, plan, env_value):
                 # contender still holds the flock.
                 outcome["reacquired_without_raise"] = True
                 outcome["held_after_reacquire"] = plan in concurrency._held_plan_locks()
-        except Exception as exc:  # noqa: BLE001 - classified by the main thread
+        except Exception as exc:
             outcome["exc"] = exc
             outcome["held_after_exc"] = plan in concurrency._held_plan_locks()
         finally:

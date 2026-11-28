@@ -11,6 +11,7 @@ in practice.
 
 ### Added
 
+- Ruff now selects `BLE001` (broad `except`); a `# noqa: BLE001` must carry ` - <reason of three or more words>`, enforced for production code by `tests/unit/test_broad_except_reasons.py`.
 - `tests/unit/test_function_length_ceiling.py` fails when any function in `pipeline/`, `app/` or `scripts/` is over 150 lines and not in its baseline, or when a baseline entry is stale or has grown; the baseline may only shrink.
 - `pipeline.ingest` now passes the mypy gate and the baseline override list is removed, so every module in `pipeline` and `app` is checked; no behaviour change.
 - `scripts/install_checks.py` is split into one helper per check group and its last complexity-gate exemption is removed; output and exit codes are unchanged.

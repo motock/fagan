@@ -159,7 +159,7 @@ def _run_step(ctx: ReviewContext, state: ReviewState, messages: list[dict],
         return _run_tool_calls(ctx, state, messages, tcs, i)
     except RuntimeError:
         raise  # preserve the httpx.HTTPError -> RuntimeError contract
-    except Exception:  # noqa: BLE001 (deliberate: any other per-step failure must fail safe rather than crash the harness, per the comment below)
+    except Exception:  # noqa: BLE001 - deliberate: any other per-step failure must fail safe rather than crash the harness, per the comment below
         # Any other failure this step (malformed response shape, a bad
         # tool call, a read-only tool erroring) must not crash the
         # caller. Fail safe into the same "no verdict" path a

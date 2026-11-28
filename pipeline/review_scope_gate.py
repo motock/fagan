@@ -131,7 +131,7 @@ def run_reviewer_phase(
             {"ok": True, "status": story["status"], "deferred": "rate_limited"},
             "", prior_kw, _escalation_backend,
         )
-    except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
+    except Exception as e:  # noqa: BLE001 - defense in depth, per the comment below
         if _home._is_transient_backend_exception(e):
             # A reviewer transport failure (timeout, refused or reset
             # connection) is infrastructure, not a review outcome: defer

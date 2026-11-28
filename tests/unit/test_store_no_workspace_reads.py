@@ -306,7 +306,7 @@ def test_the_worktree_file_never_raises_on_any_bad_input(roots):
     for story, filename in cases:
         try:
             result = _reader().read_worktree_file(story, filename)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             pytest.fail(
                 f"read_worktree_file({story!r},{filename!r}) raised {exc!r}"
             )

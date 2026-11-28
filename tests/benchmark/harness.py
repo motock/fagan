@@ -83,7 +83,7 @@ def _resolve_pipeline_repo(bench_dir: Path) -> Path:
             if not common_path.is_absolute():
                 common_path = (bench_dir / common_path).resolve()
             return common_path.parent
-    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: any git/path failure here just falls back to bench_dir.parents[1], per this function's docstring)
+    except Exception:  # noqa: S110 (deliberate fail-open: any git/path failure here just falls back to bench_dir.parents[1], per this function's docstring)
         pass
     return bench_dir.parents[1]
 

@@ -158,7 +158,7 @@ class TestGetJournal:
         for plan, story in [("", ""), ("x", ""), ("", "y"), ("a", "b")]:
             try:
                 store.get_journal(plan, story)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 pytest.fail(f"get_journal({plan!r},{story!r}) raised {exc!r}")
 
 
@@ -222,7 +222,7 @@ class TestGetJournalFinalTs:
         for plan, story in [("", ""), ("x", ""), ("", "y"), ("a", "b")]:
             try:
                 store.get_journal_final_ts(plan, story)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 pytest.fail(f"get_journal_final_ts({plan!r},{story!r}) raised {exc!r}")
 
 

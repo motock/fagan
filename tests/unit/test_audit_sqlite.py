@@ -401,7 +401,7 @@ def test_an_append_that_hits_a_unique_constraint_raises_and_leaves_the_chain_alo
     def worker() -> None:
         try:
             log.append(DEFAULT_NAMESPACE, PLAN, dict(BODY))
-        except BaseException as error:  # noqa: BLE001 - reported below
+        except BaseException as error:
             outcome.append(error)
 
     thread = threading.Thread(target=worker, daemon=True)

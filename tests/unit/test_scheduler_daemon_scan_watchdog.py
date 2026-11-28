@@ -141,7 +141,7 @@ def run_once_bounded(daemon, bound=RUN_ONCE_BOUND_S):
     def _target():
         try:
             holder["result"] = daemon.run_once()
-        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+        except BaseException as exc:
             holder["error"] = exc
 
     helper = threading.Thread(target=_target, daemon=True, name="run-once-helper")
@@ -553,7 +553,7 @@ def test_run_forever_keeps_ticking_after_a_timeout_tick(monkeypatch):
     def _drive():
         try:
             f.daemon.run_forever(stop_event)
-        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+        except BaseException as exc:
             holder["error"] = exc
 
     helper = threading.Thread(target=_drive, daemon=True)

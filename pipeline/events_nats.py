@@ -541,13 +541,13 @@ class NatsEventBus(EventBus):
                     asyncio.run_coroutine_threadsafe(nc.close(), loop).result(
                         _CLOSE_TIMEOUT_S
                     )
-                except Exception:  # noqa: BLE001 - best-effort teardown
+                except Exception:  # noqa: BLE001 - teardown must run to completion; the failure is logged at debug
                     logger.debug("closing the NATS connection failed")
             try:
                 asyncio.run_coroutine_threadsafe(
                     _drain_pending_tasks(), loop
                 ).result(_CANCEL_SETTLE_S)
-            except Exception:  # noqa: BLE001 - best-effort teardown
+            except Exception:  # noqa: BLE001 - teardown must run to completion; the failure is logged at debug
                 logger.debug("draining the NATS loop's pending tasks failed")
             loop.call_soon_threadsafe(loop.stop)
         if thread is not None and thread.is_alive():

@@ -93,7 +93,7 @@ def _readjudicate_parked_merge_hold(
         current = _ci_status_once(
             branch, sha="", settings=settings_for_plan(plan_name)
         )
-    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+    except Exception:  # noqa: BLE001 - fail-open by design; the tick must survive it
         logging.getLogger("pipeline").warning(
             "%s merge-park re-adjudication: CI gather failed; keeping the "
             "recorded evidence",

@@ -174,7 +174,7 @@ def _feedback_wording(transcript_path: Path, review_feedback: str) -> tuple[str,
             isinstance(m.get("content"), str) and review_feedback in m["content"]
             for m in prior_msgs
         )
-    except Exception as exc:  # noqa: BLE001 (fail open to re-injection; a token optimization must never break dispatch)
+    except Exception as exc:  # noqa: BLE001 - fail open to re-injection; a token optimization must never break dispatch
         logging.getLogger("pipeline").debug("prior transcript unreadable: %s", type(exc).__name__)
         feedback_already_seeded = False
     if feedback_already_seeded:

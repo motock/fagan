@@ -564,7 +564,7 @@ def _checkpoint(origin, args) -> str:
             res = origin["p"]._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
                                      args.get("summary", ""), args.get("next_hint", ""))
         return f"checkpoint recorded: {json.dumps(res)[:200]}"
-    except Exception as e:  # noqa: BLE001 (checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised)
+    except Exception as e:  # noqa: BLE001 - checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised
         return f"ERROR checkpointing: {e}"
 
 
@@ -619,7 +619,7 @@ def safe_run_tool_impl(origin, fn, args) -> str:
     """
     try:
         return origin["run_tool"](fn, args)
-    except Exception as e:  # noqa: BLE001 (a tool call's own failure is reported back to the model as tool output, not raised - the agent loop must never crash on an unpredictable tool error)
+    except Exception as e:  # noqa: BLE001 - a tool call's own failure is reported back to the model as tool output, not raised - the agent loop must never crash on an unpredictable tool error
         msg = f"ERROR running {fn}: {type(e).__name__}: {e}"
         required = origin["_TOOL_SCHEMAS"].get(fn, {}).get("required", [])
         missing = [r for r in required if r not in args]

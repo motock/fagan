@@ -38,7 +38,7 @@ def _load_resume_transcript() -> list | None:
             print("[local_agent] RESUME FAILED: transcript shape invalid", flush=True)
             return None
         return data
-    except Exception as e:  # noqa: BLE001 (resume is best-effort; any failure falls back to a cold start)
+    except Exception as e:  # noqa: BLE001 - resume is best-effort; any failure falls back to a cold start
         print(f"[local_agent] RESUME FAILED: {e}", flush=True)
         return None
 
@@ -294,7 +294,7 @@ def _persist_messages(messages, path):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(messages, f, ensure_ascii=False)
         os.replace(tmp_path, path)
-    except Exception as e:  # noqa: BLE001 (transcript persistence is best-effort; a write failure must not crash the agent loop)
+    except Exception as e:  # noqa: BLE001 - transcript persistence is best-effort; a write failure must not crash the agent loop
         print(f"[local_agent] persistence error: {e}", flush=True)
 
 class PersistingList(list):

@@ -67,5 +67,5 @@ def safe_run_tool_impl(origin, fn, args) -> str:
         # Routed via origin (NOT a direct run_tool_impl call) so a test that
         # monkeypatches scripts.local_agent_oracle.run_tool is honored here.
         return origin["run_tool"](fn, args)
-    except Exception as e:  # noqa: BLE001 (a tool call's own failure is reported back to the model as tool output, not raised - the agent loop must never crash on an unpredictable tool error)
+    except Exception as e:  # noqa: BLE001 - a tool call's own failure is reported back to the model as tool output, not raised - the agent loop must never crash on an unpredictable tool error
         return f"ERROR running {fn}: {type(e).__name__}: {e}"

@@ -362,12 +362,12 @@ def collect_attempt_facts(worktree, story: dict[str, Any]) -> str:
     for collector in (_diff_facts, _log_facts):
         try:
             facts.extend(collector(worktree))
-        except Exception:  # noqa: BLE001 (fail-open by design; facts are never a gate)
+        except Exception:  # noqa: BLE001 - fail-open by design; facts are never a gate
             logging.getLogger("pipeline").warning(
                 f"attempt-fact collector {collector.__name__} failed; continuing")
     try:
         facts.extend(_rerun_failing_tests(worktree, story))
-    except Exception:  # noqa: BLE001 (fail-open by design)
+    except Exception:  # noqa: BLE001 - fail-open by design
         logging.getLogger("pipeline").warning("attempt-fact test re-run failed; continuing")
     if not facts:
         return ""
@@ -502,7 +502,7 @@ def diagnose_failure(
         return None
     try:
         diagnosis = _run_diagnosis_role(evidence, story, plan_role_config, layer_routing)
-    except Exception as exc:  # noqa: BLE001 (fail-open by design; log type only)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design; log type only
         logging.getLogger("pipeline").warning(
             f"diagnosis role failed with {type(exc).__name__}; "
             "falling back to an undiagnosed redispatch"

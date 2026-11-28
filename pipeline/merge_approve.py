@@ -268,7 +268,7 @@ def run_merge_gate(
     try:
         with _scoped_repo_root(ctx.plan_name):
             return _gate_steps(ctx)
-    except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
+    except Exception as e:  # noqa: BLE001 - surface the gh/git failure to the human, don't raise
         return None, {"ok": False, "error": str(e), "story_key": ctx.story_key}
 
 

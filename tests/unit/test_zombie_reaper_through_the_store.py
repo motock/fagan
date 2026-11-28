@@ -154,7 +154,7 @@ def test_should_skip_a_plan_whose_lock_is_busy_and_reap_it_next_call(
                 holds.append(acquired)
                 acquired_cm.set()
                 release_cm.wait(10)
-        except BaseException as exc:  # noqa: BLE001 - surfaced on the main thread
+        except BaseException as exc:
             failure.append(exc)
             acquired_cm.set()
 

@@ -422,7 +422,7 @@ def test_rewrite_is_atomic_original_survives_a_failed_replace(
 
     try:
         notification_outbox.drain_outbox("p1", sender)
-    except Exception as exc:  # noqa: BLE001 - the contract is "never raises"
+    except Exception as exc:
         pytest.fail(f"drain_outbox must never raise, but raised: {exc!r}")
 
     assert captured, "the drain must publish via os.replace"

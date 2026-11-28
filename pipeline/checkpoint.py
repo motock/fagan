@@ -91,7 +91,7 @@ def _branch_commit_count(worktree: Any) -> int | None:
             check=True,
         )
         return int(result.stdout.strip())
-    except Exception as exc:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design: evidence must never gate the watchdog
         logger.debug("watchdog commit count unavailable: %s", type(exc).__name__)
         return None
 
@@ -160,7 +160,7 @@ def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | 
         dest = build_host_state().story_log_root() / f"{plan_name}.{story_key}.watchdog-{stamp}.log"
         dest.write_bytes(tail)
         return str(dest)
-    except Exception as exc:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design: evidence must never gate the watchdog
         logger.warning("watchdog log tail not saved: %s", type(exc).__name__)
         return None
 

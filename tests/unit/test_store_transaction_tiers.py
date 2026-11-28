@@ -124,7 +124,7 @@ def _mixin_failures(mixin_class, make_store, serves_other_namespaces):
     for name in names:
         try:
             getattr(instance, name)()
-        except Exception:  # noqa: BLE001 - a failing check is the point
+        except Exception:
             failed.append(name)
     return names, failed
 

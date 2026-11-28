@@ -321,7 +321,7 @@ def test_acceptance_with_source_does_not_fabricate_a_source():
 
     try:
         result = triage._acceptance_with_source(entries, "NEW-SOURCE")
-    except Exception:  # noqa: BLE001 - raising a clear error is an acceptable contract
+    except Exception:
         return
 
     for entry in result:

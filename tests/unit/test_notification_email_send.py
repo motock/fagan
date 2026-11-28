@@ -219,7 +219,7 @@ def _body_of(message):
     """Extract the body text whether set via set_content or set_payload."""
     try:
         return message.get_content()
-    except Exception:  # noqa: BLE001 - probe of unknown payload style
+    except Exception:
         payload = message.get_payload(decode=True)
         if isinstance(payload, bytes):
             return payload.decode()

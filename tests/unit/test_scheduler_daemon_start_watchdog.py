@@ -74,7 +74,7 @@ def start_bounded(daemon, bound=START_BOUND_S):
     def _target():
         try:
             daemon.start()
-        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+        except BaseException as exc:
             holder["error"] = exc
 
     helper = threading.Thread(target=_target, daemon=True, name="start-helper")

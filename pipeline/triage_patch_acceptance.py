@@ -6,6 +6,7 @@ resolved at call time, so monkeypatch.setattr(pipeline.triage, NAME, ...)
 keeps landing on the moved code. pipeline.triage re-exports the moved names.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,7 +123,8 @@ def _build_rewrite_prompt(ctx, acceptance, checkout, rationale, baseline_detail)
     """Assemble the overlord prompt carrying the fixture, failure and evidence."""
     try:
         evidence = collect_triage_evidence(str(checkout), ctx.story) or ""
-    except Exception:  # noqa: BLE001 - evidence is best-effort, fail open
+    except Exception as exc:  # noqa: BLE001 - evidence is best-effort, fail open
+        logging.getLogger("pipeline").warning("patch_acceptance evidence unavailable: %s", type(exc).__name__)
         evidence = ""
     fixture_blocks = "\n".join(
         f"--- {entry.get('path') or 'fixture'} ---\n{entry.get('source') or ''}"
@@ -131,7 +133,8 @@ def _build_rewrite_prompt(ctx, acceptance, checkout, rationale, baseline_detail)
     )
     try:
         policy = _load_policy() or ""
-    except Exception:  # noqa: BLE001 - policy text is best-effort, fail open
+    except Exception as exc:  # noqa: BLE001 - policy text is best-effort, fail open
+        logging.getLogger("pipeline").warning("patch_acceptance policy unavailable: %s", type(exc).__name__)
         policy = ""
     return (
         f"{policy}\n\n"
@@ -161,7 +164,7 @@ def _request_rewrite(ctx, prompt):
     """
     try:
         raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(ctx.plan_name))
-    except Exception as exc:  # noqa: BLE001 - overlord failure fails closed
+    except Exception as exc:  # noqa: BLE001 - fails closed: parks and notifies via ctx.park, the reason names the class
         return None, ctx.park(
             f"patch_acceptance ruled but the overlord could not be "
             f"re-invoked: {type(exc).__name__}; parked for a human"
@@ -250,7 +253,7 @@ def _apply_rewrite(ctx, manifest, action, rewritten_source, diagnosis) -> str:
 
     try:
         from .server import PIPELINE_AUTONOMY as mode
-    except Exception:  # noqa: BLE001 - unresolved mode falls back to gated
+    except ImportError:  # unresolved mode falls back to gated
         mode = "gated"
     _record_execution(
         ctx.plan_name,

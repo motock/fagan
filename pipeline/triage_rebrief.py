@@ -16,13 +16,14 @@ fields only, so storing a diagnosis never changes plan approval, and
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from .branch_guard import remote_branch_exists
+from .branch_guard import BranchGuardError, remote_branch_exists
 from .forge import get_forge
 from .module_ref import _ModuleRef
 from .persistence import _notify_user
@@ -145,7 +146,8 @@ def _live_evidence_refusal(story: dict, repo_root: str) -> str | None:
         return "no PR is recorded for this story"
     try:
         state = _pr_state(repo_root, pr_url)
-    except Exception:  # noqa: BLE001 - fail closed on any forge failure
+    except Exception as exc:  # noqa: BLE001 - fail closed on any forge failure
+        logging.getLogger("pipeline").warning("retry_transient PR state read failed: %s", type(exc).__name__)
         return "the PR state could not be read"
     if state == "MERGED":
         return "the PR is MERGED"
@@ -156,7 +158,7 @@ def _live_evidence_refusal(story: dict, repo_root: str) -> str | None:
         return "no branch is recorded for this story"
     try:
         on_origin = _branch_on_origin(repo_root, branch)
-    except Exception:  # noqa: BLE001 - fail closed on any git failure
+    except (BranchGuardError, OSError, subprocess.SubprocessError):  # fail closed on a failed origin query
         return "origin could not be queried for the branch"
     if not on_origin:
         return f"branch {branch} is no longer on origin"

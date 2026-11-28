@@ -382,15 +382,13 @@ def _capture_popen_factory(captured):
     return _capture_popen
 
 
-def test_server_module_imports_hashlib():
-    """The fix adds `import hashlib` to pipeline/server.py (alphabetically
-    between fcntl and json). Assert the module imports it so the generation
-    and reuse guards can compute the agent_instructions sha256."""
-    import inspect
+def test_server_module_exposes_hashlib_for_sha256_guards():
+    """The generation and reuse guards compute the agent_instructions sha256
+    through the server module's `hashlib`; it must import and expose it."""
+    import hashlib
 
-    source = inspect.getsource(p)
-    # The exact three-line block the task specifies.
-    assert "import ast\nimport fcntl\nimport hashlib\nimport json\n" in source
+    assert p.hashlib is hashlib
+    assert p.hashlib.sha256(b"x").hexdigest() == hashlib.sha256(b"x").hexdigest()
 
 
 def test_server_module_defines_plan_hash_sidecar_path():

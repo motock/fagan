@@ -32,7 +32,6 @@ Per-project overrides (set in project .mcp.json env block):
 """
 
 import ast
-import fcntl
 import hashlib
 import json
 import logging

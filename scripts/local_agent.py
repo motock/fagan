@@ -52,7 +52,7 @@ import subprocess  # noqa: F401 (kept: tests patch la.subprocess.run; the moved 
 import sys
 import time  # noqa: F401 (kept: the moved loop phases read it via origin)
 from collections import deque  # noqa: F401 (kept: the moved loop phases read it via origin)
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx  # noqa: F401 (kept: the moved loop phases read it via origin)
@@ -409,7 +409,7 @@ def write_done_marker(rc: int) -> None:
         marker = {
             "reason": _DONE_REASONS.get(rc, "error"),
             "exit_code": rc,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
         }
         tmp = CWD / ".agent_done.tmp"
         tmp.write_text(json.dumps(marker) + "\n", encoding="utf-8")

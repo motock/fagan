@@ -17,7 +17,7 @@
     "tests/unit/test_advance_482_finding.py": 3,
     "tests/unit/test_advance_482_gate_convention_branch.py": 4,
     "tests/unit/test_advance_all_plans_migration.py": 5,
-    "tests/unit/test_always_on_planner_fallopen_negatives.py": 5,
+    "tests/unit/test_always_on_planner_fallopen_negatives.py": 4,
     "tests/unit/test_bench_cell_cost.py": 3,
     "tests/unit/test_bench_groundtruth_multifile.py": 2,
     "tests/unit/test_bench_scorecard_cost.py": 2,

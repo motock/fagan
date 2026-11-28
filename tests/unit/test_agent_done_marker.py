@@ -11,7 +11,7 @@ the marker lands in an isolated directory and never dirties the repo tree.
 import importlib.util
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -216,14 +216,17 @@ def test_wrapper_main_present_in_both_files():
 
 
 # ---------------------------------------------------------------------------
-# datetime import added to stdlib block
+# marker timestamp is timezone-aware UTC
 # ---------------------------------------------------------------------------
 
-def test_datetime_import_present_in_both_files():
-    for name in ("local_agent.py", "local_agent_oracle.py"):
-        src = (SCRIPTS / name).read_text()
-        assert "from datetime import datetime, timezone" in src, (
-            f"{name}: must import datetime, timezone")
+@pytest.mark.parametrize("mod", [la, oracle], ids=["local_agent", "local_agent_oracle"])
+def test_marker_ts_is_timezone_aware_utc(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "CWD", tmp_path)
+    monkeypatch.setattr(mod, "_main_impl", lambda: 0)
+    mod.main()
+    parsed = datetime.fromisoformat(_marker(tmp_path)["ts"])
+    assert parsed.tzinfo is not None, "marker ts must be tz-aware, not naive"
+    assert parsed.utcoffset() == timedelta(0), "marker ts must be UTC (zero offset)"
 
 
 # ---------------------------------------------------------------------------

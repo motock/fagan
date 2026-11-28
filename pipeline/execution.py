@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -174,14 +174,14 @@ def _tail_ts_sidecar(
         while True:
             line = log_file.readline()
             if line:
-                ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                ts_file.write(datetime.now(UTC).isoformat() + "\n")
                 ts_file.flush()
                 continue
             poll = getattr(proc, "poll", None)
             if callable(poll) and poll() is not None:
                 # Child exited: drain whatever landed after the last poll.
                 for line in log_file:
-                    ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                    ts_file.write(datetime.now(UTC).isoformat() + "\n")
                 ts_file.flush()
                 return
             stop.wait(0.05)
@@ -369,7 +369,7 @@ def spawn_local(
                     for out in out_lines:
                         log_file.write(out)
                         log_file.flush()
-                        ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                        ts_file.write(datetime.now(UTC).isoformat() + "\n")
                         ts_file.flush()
         finally:
             if stream is not None:

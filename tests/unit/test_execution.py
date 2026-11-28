@@ -414,17 +414,12 @@ class TestSpawnLocal:
         assert "daemon=True" in fn_src
         assert "subprocess.PIPE" in fn_src
         assert "stderr=subprocess.STDOUT" in fn_src
-        assert "datetime.now(timezone.utc)" in fn_src
         assert "stdout=log_file" not in fn_src
         assert "stderr=log_file" not in fn_src
 
-    def test_module_imports_threading_and_utc_datetime(self):
+    def test_module_imports_threading(self):
         source = Path(execution.__file__).read_text(encoding="utf-8")
         assert re.search(r"^import threading$", source, re.MULTILINE) is not None
-        assert (
-            re.search(r"^from datetime import datetime, timezone$", source, re.MULTILINE)
-            is not None
-        )
 
     def test_spawn_local_signature_unchanged(self):
         # LOG-04 deliberately extended the AGENTLOGTS-1 signature with the

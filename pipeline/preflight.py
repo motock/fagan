@@ -222,16 +222,6 @@ def _check_scheduler_revision(plan_path):
     }
 
 
-def _resolve_plan_path(plan_dir):
-    """Resolve PLAN_DIR exactly the way production does; explicit argument wins."""
-    if plan_dir is not None:
-        return Path(plan_dir).expanduser()
-    env_plan_dir = os.environ.get("PLAN_DIR")
-    if env_plan_dir:
-        return Path(env_plan_dir).expanduser()
-    return Path(paths.configured_plan_dir()).expanduser()
-
-
 def _check_plan_dir(plan_path):
     """Check a: PLAN_DIR exists (or can be created) and is writable."""
     if plan_path.exists():
@@ -507,16 +497,27 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
     The checks are read-only: nothing is created, written, or executed.
     """
 
-    plan_path = _resolve_plan_path(plan_dir)
+    if plan_dir is not None:
+        plan_path = Path(plan_dir).expanduser()
+    elif os.environ.get("PLAN_DIR"):
+        plan_path = Path(os.environ["PLAN_DIR"]).expanduser()
+    else:
+        plan_path = Path(paths.configured_plan_dir()).expanduser()
     # check f (_check_scheduler_revision): the scheduler's checkout revision.
     # The config check proves the running scheduler agrees about configuration;
     # this one proves the code it is executing is the merged code.
     return [
+        # -- check a: PLAN_DIR --
         _check_plan_dir(plan_path),
+        # -- check b: git (required) --
         _check_git(which),
+        # -- check c: dispatch backend --
         _check_dispatch_backend(which),
+        # -- check c2: merge CI gate --
         _check_merge_ci_gate(),
+        # -- check d: model registry --
         _check_model_registry(registry_loader),
+        # -- check e: scheduler config fingerprint --
         _check_scheduler_fingerprint(plan_path),
         _check_scheduler_revision(plan_path),
     ]

@@ -265,6 +265,15 @@ _BASELINE_MODULE_FUNCTIONS = {
     # create_patch_record, apply_patch and the dashboard GET route all share.
     "derive_confirmation_token",
     "confirmation_token_for",
+    # lfn-08: apply_patch split into phase functions (no behaviour change);
+    # the guard still forbids any other new module-level function.
+    "_refusal",
+    "_load_story",
+    "_check_patch_record",
+    "_story_worktree",
+    "_resolve_hunk_paths",
+    "_git_apply_phases",
+    "_audit_applied",
 }
 
 

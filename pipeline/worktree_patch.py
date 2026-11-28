@@ -536,6 +536,167 @@ def _run_git_apply(worktree: Path, diff_text: str, check_only: bool) -> subproce
     )
 
 
+class _Refused(Exception):
+    """A phase refused the apply; ``response`` is the dict to return."""
+
+    def __init__(self, response: dict) -> None:
+        super().__init__(response["error"])
+        self.response = response
+
+
+def _refusal(error: str, status_code: int) -> dict:
+    return {"ok": False, "error": error, "status_code": status_code}
+
+
+def _load_story(plan_name: str, story_key: str) -> dict | None:
+    """Phase 2: read the manifest store-first and return the story dict.
+
+    Manifest read through the ONE store-first read,
+    ``pipeline.manifest_source.read_plan_manifest`` (ADR 0012 stage B --
+    see its docstring), reading this host's plan root as the file source.
+    Under a store-backed deployment (``PIPELINE_STORE=sqlite``) a plan's
+    stories live in the database, so a patch proposed against that plan
+    must resolve its target worktree from the same source of truth instead
+    of this host's file.
+
+    ``fallback_on_error=False`` is load-bearing here: a store FAILURE
+    propagates instead of silently resolving the patch target from this
+    host's plan file, which would apply a diff to a stale worktree.  A
+    missing (or non-object) manifest in BOTH sources, an unknown story, or
+    a non-object story all return ``None`` (the caller fails closed to a
+    404, never a write).
+    """
+    manifest_source = importlib.import_module("pipeline.manifest_source")
+    manifest = manifest_source.read_plan_manifest(plan_name, fallback_on_error=False)
+    if not isinstance(manifest, dict):
+        return None
+    stories = manifest.get("stories")
+    if not isinstance(stories, dict) or story_key not in stories:
+        return None
+    story = stories[story_key]
+    if not isinstance(story, dict):
+        return None
+    return story
+
+
+def _check_patch_record(patch_id: str, confirmation_token: str) -> dict:
+    """Phase 4: record + HMAC token + single-use; raises _Refused."""
+    record = get_patch_record(patch_id)
+    if record is None:
+        raise _Refused(_refusal("unknown patch", 404))
+    expected = derive_confirmation_token(patch_id, record["diff_hash"])
+    if not hmac.compare_digest(str(confirmation_token), expected):
+        raise _Refused(_refusal("invalid confirmation token", 403))
+    if record.get("status") != "pending":
+        raise _Refused(_refusal("patch already applied", 409))
+    return record
+
+
+def _story_worktree(story: dict) -> Path:
+    """Phase 5: the worktree must exist as a directory; raises _Refused."""
+    worktree_raw = story.get("worktree")
+    if not isinstance(worktree_raw, str) or not worktree_raw:
+        raise _Refused(_refusal("worktree is not a directory", 409))
+    worktree = Path(worktree_raw)
+    if not worktree.is_dir():
+        raise _Refused(_refusal("worktree is not a directory", 409))
+    return worktree
+
+
+def _resolve_hunk_paths(diff_text: str, worktree: Path) -> list[str]:
+    """Phase 6: resolve EVERY hunk path -- NEW side AND OLD side -- BEFORE any write.
+
+    The deny list runs here, after parse and before git apply, on every
+    path: one denied hunk refuses the whole patch.  The old side matters
+    because a deletion-only block (``+++ /dev/null``) contributes NO
+    new-side path, yet ``git apply`` will still delete the old-side file:
+    without this check a deletion diff could remove a deny-listed file
+    (e.g. ``CLAUDE.md``).  Returns the new-side paths; raises _Refused.
+    """
+    workspace = importlib.import_module("pipeline.workspace")
+    resolved_paths: list[str] = []
+    try:
+        parsed = parse_unified_diff(diff_text)
+        for path in parsed.paths:
+            if path == "/dev/null":
+                continue
+            resolve_write_target(str(worktree), path)
+            resolved_paths.append(path)
+        for old_path in parsed.old_paths:
+            if old_path == "/dev/null":
+                continue
+            # Gate ONLY: the old side is checked against the deny list
+            # (a deletion-only block names its victim only here) but it
+            # is never reported as an applied path -- ``applied`` stays
+            # the new-side write set, as the WAP-7 contract pins it.
+            resolve_write_target(str(worktree), old_path)
+    except (PatchSecurityError, workspace.WorkspaceSecurityError):
+        raise _Refused(_refusal("patch target refused", 403)) from None
+    except PatchFormatError:
+        raise _Refused(_refusal("malformed diff", 400)) from None
+    return resolved_paths
+
+
+def _git_apply_phases(worktree: Path, diff_text: str) -> None:
+    """Phases 7-8: ``git apply --check`` then ``git apply``; raises _Refused."""
+    check = _run_git_apply(worktree, diff_text, check_only=True)
+    if check.returncode != 0:
+        refusal = _refusal("patch does not apply (context drift)", 409)
+        refusal["detail"] = (check.stderr or b"").decode("utf-8", "replace")[:400]
+        raise _Refused(refusal)
+    apply = _run_git_apply(worktree, diff_text, check_only=False)
+    if apply.returncode != 0:
+        raise _Refused(_refusal("apply failed", 409))
+
+
+def _audit_applied(
+    plan_name: str,
+    story_key: str,
+    patch_id: str,
+    record: dict,
+    resolved_paths: list[str],
+) -> None:
+    """Audit (WAP-8), success ONLY: journal + outbox notification.
+
+    Same rule as the propose audit: path list + diff hash, never the diff
+    body.  Collaborators are resolved via importlib so the stdlib-only
+    import purity of pipeline/worktree_patch.py is kept and a name patched
+    at call time (the store, ``event_wiring.get_bus``) is honoured.
+    """
+    importlib.import_module("pipeline.server")._store.records().append_journal(
+        "default",
+        plan_name,
+        story_key,
+        {
+            "action": "patch_applied",
+            "patch_id": patch_id,
+            "paths": list(resolved_paths),
+            "added_lines": record["added_lines"],
+            "diff_hash": record["diff_hash"],
+            "ts": record["applied_at"],
+            "applied_paths": list(resolved_paths),
+        },
+    )
+    # Event: the exact publish pattern of pipeline/dispatch.py.
+    event_wiring = importlib.import_module("pipeline.event_wiring")
+    events = importlib.import_module("pipeline.events")
+    event_wiring.get_bus().publish(
+        events.make_event(
+            "notification",
+            plan_name,
+            story_key=story_key,
+            payload={
+                "kind": "patch_applied",
+                "patch_id": patch_id,
+                "paths": list(resolved_paths),
+                "diff_hash": record["diff_hash"],
+                "applied_paths": list(resolved_paths),
+            },
+            correlation_id=patch_id,
+        )
+    )
+
+
 def apply_patch(
     plan_name: str, story_key: str, patch_id: str, confirmation_token: str
 ) -> dict:
@@ -574,165 +735,33 @@ def apply_patch(
        ``applied_at``.  A failed apply leaves the record pending
        (retryable); a successful apply is single-use forever.
     """
+
     concurrency = importlib.import_module("pipeline.concurrency")
 
     with concurrency._plan_lock(plan_name) as acquired:
         if not acquired:
-            return {"ok": False, "error": "plan busy", "status_code": 409}
+            return _refusal("plan busy", 409)
 
-        # 2. Manifest read through the ONE store-first read,
-        #    ``pipeline.manifest_source.read_plan_manifest`` (ADR 0012 stage B
-        #    -- see its docstring), reading this host's plan root as the file
-        #    source.  Under a store-backed deployment
-        #    (``PIPELINE_STORE=sqlite``) a plan's stories live in the database,
-        #    so a patch proposed against that plan must resolve its target
-        #    worktree from the same source of truth instead of this host's
-        #    file: a store-known story was otherwise refused as an unknown
-        #    plan.
-        #
-        #    ``fallback_on_error=False`` is load-bearing here: a store FAILURE
-        #    propagates instead of silently resolving the patch target from
-        #    this host's plan file, which would apply a diff to a stale
-        #    worktree.  A missing (or non-object) manifest in BOTH sources
-        #    fails closed to the same 404 as an unknown plan or story (never a
-        #    write).
-        manifest_source = importlib.import_module("pipeline.manifest_source")
-        manifest = manifest_source.read_plan_manifest(
-            plan_name, fallback_on_error=False
-        )
-        if not isinstance(manifest, dict):
-            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
-        stories = manifest.get("stories")
-        if not isinstance(stories, dict) or story_key not in stories:
-            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
-        story = stories[story_key]
-        if not isinstance(story, dict):
-            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
+        story = _load_story(plan_name, story_key)
+        if story is None:
+            return _refusal("unknown plan or story", 404)
 
         # 3. Stuck-only gate: direct repair targets stuck stories.
         if story.get("status") in {"in_progress", "running"}:
-            return {"ok": False, "error": "story is active", "status_code": 409}
+            return _refusal("story is active", 409)
 
-        # 4. Record + token + single-use.
-        record = get_patch_record(patch_id)
-        if record is None:
-            return {"ok": False, "error": "unknown patch", "status_code": 404}
-        expected = derive_confirmation_token(patch_id, record["diff_hash"])
-        if not hmac.compare_digest(str(confirmation_token), expected):
-            return {
-                "ok": False,
-                "error": "invalid confirmation token",
-                "status_code": 403,
-            }
-        if record.get("status") != "pending":
-            return {"ok": False, "error": "patch already applied", "status_code": 409}
-
-        # 5. The worktree must exist as a directory.
-        worktree_raw = story.get("worktree")
-        if not isinstance(worktree_raw, str) or not worktree_raw:
-            return {
-                "ok": False,
-                "error": "worktree is not a directory",
-                "status_code": 409,
-            }
-        worktree = Path(worktree_raw)
-        if not worktree.is_dir():
-            return {"ok": False, "error": "worktree is not a directory", "status_code": 409}
-
-        # 6. Resolve EVERY hunk path -- NEW side AND OLD side -- BEFORE any
-        #    write.  The deny list runs here, after parse and before git
-        #    apply, on every path: one denied hunk refuses the whole patch.
-        #    The old side matters because a deletion-only block (``+++ 
-        #    /dev/null``) contributes NO new-side path, yet ``git apply`` will
-        #    still delete the old-side file: without this check a deletion
-        #    diff could remove a deny-listed file (e.g. ``CLAUDE.md``).
-        workspace = importlib.import_module("pipeline.workspace")
         try:
-            parsed = parse_unified_diff(record["diff_text"])
-            resolved_paths: list[str] = []
-            for path in parsed.paths:
-                if path == "/dev/null":
-                    continue
-                resolve_write_target(str(worktree), path)
-                resolved_paths.append(path)
-            for old_path in parsed.old_paths:
-                if old_path == "/dev/null":
-                    continue
-                # Gate ONLY: the old side is checked against the deny list
-                # (a deletion-only block names its victim only here) but it
-                # is never reported as an applied path -- ``applied`` stays
-                # the new-side write set, as the WAP-7 contract pins it.
-                resolve_write_target(str(worktree), old_path)
-        except (PatchSecurityError, workspace.WorkspaceSecurityError):
-            return {"ok": False, "error": "patch target refused", "status_code": 403}
-        except PatchFormatError:
-            return {"ok": False, "error": "malformed diff", "status_code": 400}
-
-        # 7. git apply --check: the worktree is untouched on failure.
-        check = _run_git_apply(worktree, record["diff_text"], check_only=True)
-        if check.returncode != 0:
-            return {
-                "ok": False,
-                "error": "patch does not apply (context drift)",
-                "status_code": 409,
-                "detail": (check.stderr or b"").decode("utf-8", "replace")[:400],
-            }
-
-        # 8. git apply.
-        apply = _run_git_apply(worktree, record["diff_text"], check_only=False)
-        if apply.returncode != 0:
-            return {"ok": False, "error": "apply failed", "status_code": 409}
+            record = _check_patch_record(patch_id, confirmation_token)
+            worktree = _story_worktree(story)
+            resolved_paths = _resolve_hunk_paths(record["diff_text"], worktree)
+            _git_apply_phases(worktree, record["diff_text"])
+        except _Refused as refused:
+            return refused.response
 
         # 9. Success ONLY: flip the record (single-use forever).
         record["status"] = "applied"
         record["applied_at"] = datetime.now(UTC).isoformat()
 
-        # Audit (WAP-8), success ONLY: journal + outbox notification.  A
-        # refused or failed apply returns above and emits nothing new.
-        # Same rule as the propose audit: path list + diff hash, never
-        # the diff body.
-        # Journal: the record store every other stage-B writer uses (ADR
-        # 0012), resolved via importlib like the other collaborators in this
-        # module so the stdlib-only import purity of
-        # pipeline/worktree_patch.py is kept and a store patched at call time
-        # is honoured.
-        importlib.import_module("pipeline.server")._store.records().append_journal(
-            "default",
-            plan_name,
-            story_key,
-            {
-                "action": "patch_applied",
-                "patch_id": patch_id,
-                "paths": list(resolved_paths),
-                "added_lines": record["added_lines"],
-                "diff_hash": record["diff_hash"],
-                "ts": record["applied_at"],
-                "applied_paths": list(resolved_paths),
-            },
-        )
-        # Event: the exact publish pattern of pipeline/dispatch.py -- lazy
-        # ``from .event_wiring import get_bus`` then
-        # ``from .events import make_event`` -- resolved via importlib like
-        # the other collaborators in this module so the stdlib-only import
-        # purity of pipeline/worktree_patch.py is kept; a monkeypatched
-        # ``event_wiring.get_bus`` is honoured because the attribute is
-        # looked up on the module at call time.
-        event_wiring = importlib.import_module("pipeline.event_wiring")
-        events = importlib.import_module("pipeline.events")
-        event_wiring.get_bus().publish(
-            events.make_event(
-                "notification",
-                plan_name,
-                story_key=story_key,
-                payload={
-                    "kind": "patch_applied",
-                    "patch_id": patch_id,
-                    "paths": list(resolved_paths),
-                    "diff_hash": record["diff_hash"],
-                    "applied_paths": list(resolved_paths),
-                },
-                correlation_id=patch_id,
-            )
-        )
+        _audit_applied(plan_name, story_key, patch_id, record, resolved_paths)
 
         return {"ok": True, "patch_id": patch_id, "applied": resolved_paths}

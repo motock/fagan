@@ -12,6 +12,7 @@ in practice.
 ### Added
 
 - `pipeline.ingest` now passes the mypy gate and the baseline override list is removed, so every module in `pipeline` and `app` is checked; no behaviour change.
+- `scripts/install_checks.py` is split into one helper per check group and its last complexity-gate exemption is removed; output and exit codes are unchanged.
 - 26 more modules (`telemetry*`, `tenant_exec`, `test_*`, `testing.*_conformance`, `ticketing`, `triage*`, `view_scope`, `wedge_io` and others) now pass the mypy gate and are off its baseline; no behaviour change.
 - 11 more modules (`setup.*`, `store`, `store_records`, `store_sqlite_settings`, `story_*`, `strength_class`, `supervise`) now pass the mypy gate and are off its baseline; no behaviour change.
 - 15 more modules (`review*`, `scheduler_daemon*`, `service*`, `settings_*` and others) now pass the mypy gate and are off its baseline; no behaviour change.

@@ -159,162 +159,158 @@ _URLOPEN = None
 _REMOTE_URL = None
 
 
-def collect_checks(which=shutil.which, py_version=None):
-    """Return one status dict per check; ``which``/``py_version`` injectable.
+def _cli_auth_status(argv, runner):
+    """Probe a CLI's auth state; never raise, never hang.
 
-    ``py_version`` is a (major, minor) tuple defaulting to the running
-    interpreter's, resolved inside the body so tests can pass synthetic
-    versions. Every tool lookup goes through the ``which`` parameter (never
-    ``shutil.which`` directly) so stubs fully control the suite's
-    environment and no result is cached between calls.
-
-    Authorization is probed only through the module-level ``_RUNNER`` and
-    ``_URLOPEN`` seams; when they are unset (the default) the checks stay
-    presence-only. A probe never raises and never hangs: any failure
-    resolves to ``unknown``. The probe helpers are nested here so this
-    module keeps exactly two top-level functions (a base-suite guarantee).
+    ``runner(argv, timeout) -> (returncode, stdout, stderr)``. Returns
+    the raw result tuple so the caller can weigh the payload, or the
+    string "unknown" when the probe could not run at all (a timeout, a
+    missing binary, or any OSError is not proof of a signed-out state).
     """
-
-    def cli_auth_status(argv, runner):
-        """Probe a CLI's auth state; never raise, never hang.
-
-        ``runner(argv, timeout) -> (returncode, stdout, stderr)``. Returns
-        the raw result tuple so the caller can weigh the payload, or the
-        string "unknown" when the probe could not run at all (a timeout, a
-        missing binary, or any OSError is not proof of a signed-out state).
-        """
-        if runner is None:
-            return None
-        try:
-            return runner(argv, timeout=_PROBE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            return "unknown"
-        except OSError:
-            return "unknown"
-
-    def ollama_signed_in(urlopen):
-        """Probe the local daemon's ollama.com sign-in; never raise.
-
-        POST /api/me returns 200 with the signed-in identity and 401 (or
-        anything else) when not signed in; an unreachable daemon is
-        unknown. urllib raises URLError (an OSError subclass) and
-        TimeoutExpired (an OSError subclass since 3.10) - both degrade to
-        unknown here.
-        """
-        if urlopen is None:
-            return None
-        request = urllib.request.Request(_OLLAMA_ME_URL, method="POST", data=b"{}")
-        try:
-            with urlopen(request, timeout=_PROBE_TIMEOUT_SECONDS) as response:
-                return "ok" if response.status == 200 else "unauthorized"
-        except OSError:
-            return "unknown"
-
-    def probe_auth(name):
-        """Return (status, detail) for ``name``'s authorization, or None.
-
-        None means "no probe configured" (seams unset): the check stays
-        presence-only. The status vocabulary is ok/unauthorized/unknown and
-        every failure mode degrades to unknown. ``detail`` stays short and
-        static; the remedy lives in the hint tables at module level.
-        """
-        if name == "gh":
-            result = cli_auth_status(_GH_AUTH_ARGV, _RUNNER)
-            if result is None:
-                return None
-            if result == "unknown":
-                return "unknown", "auth probe failed"
-            # gh's exit code IS its auth verdict: 0 signed in, nonzero not.
-            return ("ok", "") if result[0] == 0 else ("unauthorized", "not signed in")
-        if name == "claude":
-            result = cli_auth_status(_CLAUDE_AUTH_ARGV, _RUNNER)
-            if result is None:
-                return None
-            if result == "unknown":
-                return "unknown", "auth probe failed"
-            # ``claude auth status --json`` prints {"loggedIn": bool}; the
-            # payload is the verdict, not the exit code (a CLI without the
-            # subcommand exits nonzero with no JSON, which is not proof of
-            # a signed-out state => unknown).
-            lowered = result[1].lower()
-            if '"loggedin": true' in lowered:
-                return "ok", ""
-            if '"loggedin": false' in lowered:
-                return "unauthorized", "not signed in"
-            return "unknown", "auth probe failed"
-        if name == "ollama":
-            result = ollama_signed_in(_URLOPEN)
-            if result is None:
-                return None
-            if result == "ok":
-                return "ok", ""
-            if result == "unauthorized":
-                return "unauthorized", "daemon not signed in to ollama.com"
-            return "unknown", "auth probe failed"
+    if runner is None:
         return None
+    try:
+        return runner(argv, timeout=_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "unknown"
+    except OSError:
+        return "unknown"
 
-    def resolve_forge():
-        """The active forge name and whether the host confidently named it.
 
-        Mirrors ``pipeline.forge.resolve_forge_name`` without importing it:
-        this module must stay stdlib-only so it runs on a bare interpreter
-        before any venv exists. An explicit ``github``/``gitlab`` wins and
-        never pays for a remote probe; ``auto`` maps the origin remote's
-        hostname and falls back to ``github`` when it is unrecognised. An
-        unknown value is a misconfiguration, so it raises rather than
-        silently picking a forge.
+def _ollama_signed_in(urlopen):
+    """Probe the local daemon's ollama.com sign-in; never raise.
 
-        The second element is True only when the origin host itself named a
-        forge. An unrecognised host (or an unreadable remote) is a fallback,
-        not a resolution: the repo may simply not be the pipeline's, so the
-        doctor must stay a report rather than fail on the fallback's CLI.
-        """
-        choice = os.environ.get(_FORGE_ENV, "auto").strip().lower()
-        if choice in _FORGE_CLI:
-            return choice, True
-        if choice != "auto":
-            raise ValueError(
-                f"Unknown {_FORGE_ENV}={choice!r}; expected one of 'auto', "
-                f"{sorted(_FORGE_CLI)}."
-            )
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if _REMOTE_URL is None:
-            # No probe installed (an in-process collect_checks call): the
-            # forge is unresolved, so the report keeps the base contract.
-            return "github", False
-        try:
-            url = _REMOTE_URL(repo_root) or ""
-        except (OSError, subprocess.TimeoutExpired):
-            return "github", False
-        match = _HOST_RE.match(url.strip())
-        host = match.group(1).lower() if match else ""
-        if "gitlab" in host:
-            return "gitlab", True
-        if "github" in host:
-            return "github", True
+    POST /api/me returns 200 with the signed-in identity and 401 (or
+    anything else) when not signed in; an unreachable daemon is
+    unknown. urllib raises URLError (an OSError subclass) and
+    TimeoutExpired (an OSError subclass since 3.10) - both degrade to
+    unknown here.
+    """
+    if urlopen is None:
+        return None
+    request = urllib.request.Request(_OLLAMA_ME_URL, method="POST", data=b"{}")
+    try:
+        with urlopen(request, timeout=_PROBE_TIMEOUT_SECONDS) as response:
+            return "ok" if response.status == 200 else "unauthorized"
+    except OSError:
+        return "unknown"
+
+
+def _probe_gh_auth():
+    result = _cli_auth_status(_GH_AUTH_ARGV, _RUNNER)
+    if result is None:
+        return None
+    if result == "unknown":
+        return "unknown", "auth probe failed"
+    # gh's exit code IS its auth verdict: 0 signed in, nonzero not.
+    return ("ok", "") if result[0] == 0 else ("unauthorized", "not signed in")
+
+
+def _probe_claude_auth():
+    result = _cli_auth_status(_CLAUDE_AUTH_ARGV, _RUNNER)
+    if result is None:
+        return None
+    if result == "unknown":
+        return "unknown", "auth probe failed"
+    # ``claude auth status --json`` prints {"loggedIn": bool}; the
+    # payload is the verdict, not the exit code (a CLI without the
+    # subcommand exits nonzero with no JSON, which is not proof of
+    # a signed-out state => unknown).
+    lowered = result[1].lower()
+    if '"loggedin": true' in lowered:
+        return "ok", ""
+    if '"loggedin": false' in lowered:
+        return "unauthorized", "not signed in"
+    return "unknown", "auth probe failed"
+
+
+def _probe_ollama_auth():
+    result = _ollama_signed_in(_URLOPEN)
+    if result is None:
+        return None
+    if result == "ok":
+        return "ok", ""
+    if result == "unauthorized":
+        return "unauthorized", "daemon not signed in to ollama.com"
+    return "unknown", "auth probe failed"
+
+
+_AUTH_PROBES = {
+    "gh": _probe_gh_auth,
+    "claude": _probe_claude_auth,
+    "ollama": _probe_ollama_auth,
+}
+
+
+def _probe_auth(name):
+    """Return (status, detail) for ``name``'s authorization, or None.
+
+    None means "no probe configured" (seams unset): the check stays
+    presence-only. The status vocabulary is ok/unauthorized/unknown and
+    every failure mode degrades to unknown. ``detail`` stays short and
+    static; the remedy lives in the hint tables at module level.
+    """
+    probe = _AUTH_PROBES.get(name)
+    return probe() if probe is not None else None
+
+
+def _resolve_forge():
+    """The active forge name and whether the host confidently named it.
+
+    Mirrors ``pipeline.forge.resolve_forge_name`` without importing it:
+    this module must stay stdlib-only so it runs on a bare interpreter
+    before any venv exists. An explicit ``github``/``gitlab`` wins and
+    never pays for a remote probe; ``auto`` maps the origin remote's
+    hostname and falls back to ``github`` when it is unrecognised. An
+    unknown value is a misconfiguration, so it raises rather than
+    silently picking a forge.
+
+    The second element is True only when the origin host itself named a
+    forge. An unrecognised host (or an unreadable remote) is a fallback,
+    not a resolution: the repo may simply not be the pipeline's, so the
+    doctor must stay a report rather than fail on the fallback's CLI.
+    """
+    choice = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+    if choice in _FORGE_CLI:
+        return choice, True
+    if choice != "auto":
+        raise ValueError(
+            f"Unknown {_FORGE_ENV}={choice!r}; expected one of 'auto', "
+            f"{sorted(_FORGE_CLI)}."
+        )
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _REMOTE_URL is None:
+        # No probe installed (an in-process collect_checks call): the
+        # forge is unresolved, so the report keeps the base contract.
         return "github", False
+    try:
+        url = _REMOTE_URL(repo_root) or ""
+    except (OSError, subprocess.TimeoutExpired):
+        return "github", False
+    match = _HOST_RE.match(url.strip())
+    host = match.group(1).lower() if match else ""
+    if "gitlab" in host:
+        return "gitlab", True
+    if "github" in host:
+        return "github", True
+    return "github", False
 
-    # The forge's own CLI replaces the hardcoded gh entry, so a GitLab repo
-    # requires glab and a GitHub repo requires gh - never both.
-    forge, confident = resolve_forge()
-    # Recorded for main(), which must fail loudly on a confidently resolved
-    # forge's missing CLI without probing the remote a second time. main()
-    # clears this first, so a stubbed collect_checks (the base suite's
-    # determinism seam) leaves it empty and main() stays report-only.
-    _RESOLUTION.clear()
-    _RESOLUTION.update(forge=forge, confident=confident)
-    forge_cli = _FORGE_CLI[forge]
-    tool_specs = tuple(
-        (forge_cli, required, _FORGE_HINTS[forge]) if name == "gh" else (name, required, hint)
-        for name, required, hint in _TOOL_SPECS
-    )
 
-    if py_version is None:
-        py_version = (sys.version_info.major, sys.version_info.minor)
-    checks = []
-    # The python check needs BOTH a locatable interpreter binary and a
-    # sufficient version: with an empty PATH no binary is found, so the
-    # check reports missing even when the running version is new enough.
+def _check_record(name, required, status, detail, hint):
+    return {
+        "name": name,
+        "required": required,
+        "status": status,
+        "detail": detail,
+        "hint": hint,
+    }
+
+
+def _python_check(which, py_version):
+    """The python check needs BOTH a locatable interpreter binary and a
+    sufficient version: with an empty PATH no binary is found, so the
+    check reports missing even when the running version is new enough.
+    """
     py_bin = which("python") or which("python3")
     if py_bin and py_version >= _PY_MIN:
         py_status = "ok"
@@ -327,42 +323,151 @@ def collect_checks(which=shutil.which, py_version=None):
     else:
         py_status = "missing"
         py_detail = "not found"
-    checks.append(
-        {
-            "name": "python",
-            "required": True,
-            "status": py_status,
-            "detail": py_detail,
-            "hint": _PYTHON_HINT,
-        }
+    return _check_record("python", True, py_status, py_detail, _PYTHON_HINT)
+
+
+def _tool_check(which, name, required, hint):
+    found = which(name)
+    status = "ok" if found else "missing"
+    detail = found if found else "not found"
+    if found:
+        auth = _probe_auth(name)
+        if auth is not None:
+            status, auth_detail = auth
+            if auth_detail:
+                detail = f"{found} - {auth_detail}"
+            # The remedy for a present-but-unauthorized (or unverifiable)
+            # tool is a login, not an install, so the hint is swapped for
+            # the static status-specific one - in both text and JSON mode.
+            if status == "unauthorized":
+                hint = _UNAUTHORIZED_HINTS.get(name, hint)
+            elif status == "unknown":
+                hint = _UNKNOWN_HINTS.get(name, hint)
+    return _check_record(name, required, status, detail, hint)
+
+
+def collect_checks(which=shutil.which, py_version=None):
+    """Return one status dict per check; ``which``/``py_version`` injectable.
+
+    ``py_version`` is a (major, minor) tuple defaulting to the running
+    interpreter's, resolved inside the body so tests can pass synthetic
+    versions. Every tool lookup goes through the ``which`` parameter (never
+    ``shutil.which`` directly) so stubs fully control the suite's
+    environment and no result is cached between calls.
+
+    Authorization is probed only through the module-level ``_RUNNER`` and
+    ``_URLOPEN`` seams; when they are unset (the default) the checks stay
+    presence-only. A probe never raises and never hangs: any failure
+    resolves to ``unknown``.
+    """
+    # The forge's own CLI replaces the hardcoded gh entry, so a GitLab repo
+    # requires glab and a GitHub repo requires gh - never both.
+    forge, confident = _resolve_forge()
+    # Recorded for main(), which must fail loudly on a confidently resolved
+    # forge's missing CLI without probing the remote a second time. main()
+    # clears this first, so a stubbed collect_checks (the base suite's
+    # determinism seam) leaves it empty and main() stays report-only.
+    _RESOLUTION.clear()
+    _RESOLUTION.update(forge=forge, confident=confident)
+    forge_cli = _FORGE_CLI[forge]
+    tool_specs = tuple(
+        (forge_cli, required, _FORGE_HINTS[forge]) if name == "gh" else (name, required, hint)
+        for name, required, hint in _TOOL_SPECS
     )
+    if py_version is None:
+        py_version = (sys.version_info.major, sys.version_info.minor)
+    checks = [_python_check(which, py_version)]
     for name, required, hint in tool_specs:
-        found = which(name)
-        status = "ok" if found else "missing"
-        detail = found if found else "not found"
-        if found:
-            auth = probe_auth(name)
-            if auth is not None:
-                status, auth_detail = auth
-                if auth_detail:
-                    detail = f"{found} - {auth_detail}"
-                # The remedy for a present-but-unauthorized (or unverifiable)
-                # tool is a login, not an install, so the hint is swapped for
-                # the static status-specific one - in both text and JSON mode.
-                if status == "unauthorized":
-                    hint = _UNAUTHORIZED_HINTS.get(name, hint)
-                elif status == "unknown":
-                    hint = _UNKNOWN_HINTS.get(name, hint)
-        checks.append(
-            {
-                "name": name,
-                "required": required,
-                "status": status,
-                "detail": detail,
-                "hint": hint,
-            }
-        )
+        checks.append(_tool_check(which, name, required, hint))
     return checks
+
+
+def _git_origin_url(repo_root):
+    """Default remote seam: the origin remote's URL, or "" if unreadable."""
+    proc = subprocess.run(
+        ["git", "-C", repo_root, "remote", "get-url", "origin"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_PROBE_TIMEOUT_SECONDS,
+    )
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
+
+
+def _subprocess_runner(argv, timeout):
+    """Default CLI runner: run argv, return (returncode, stdout, stderr)."""
+    proc = subprocess.run(
+        list(argv),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _urllib_urlopen(request, timeout=None):
+    """Default daemon HTTP seam: a thin urllib.request.urlopen alias."""
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def _install_real_seams():
+    """Point the unset module seams at the real subprocess/urllib/git wrappers.
+
+    A seam that is already set was injected (a test's stub), so it is left
+    alone: that is the injection point for the probe surfaces.
+    """
+    global _RUNNER, _URLOPEN, _REMOTE_URL
+    if _RUNNER is None:
+        _RUNNER = _subprocess_runner
+    if _URLOPEN is None:
+        _URLOPEN = _urllib_urlopen
+    if _REMOTE_URL is None:
+        _REMOTE_URL = _git_origin_url
+
+
+def _missing_required_cli(checks):
+    """The resolved forge's CLI when it is absent, else None.
+
+    A missing forge CLI is not graceful degradation: the pipeline cannot
+    open or merge a PR without it, so the doctor names both the resolved
+    forge and the CLI it requires and exits non-zero. An explicitly
+    configured forge always fails the run; under ``auto`` only a host that
+    confidently named a forge does, because an unrecognised host may
+    simply not be the pipeline's (the base report-only contract).
+    """
+    configured = os.environ.get(_FORGE_ENV, "auto").strip().lower()
+    if configured in _FORGE_CLI:
+        forge = configured
+    elif _RESOLUTION.get("confident"):
+        forge = _RESOLUTION["forge"]
+    else:
+        return None
+    required = _FORGE_CLI[forge]
+    for check in checks:
+        if check["name"] == required and check["status"] == "missing":
+            return forge, required
+    return None
+
+
+def _marker(check):
+    if check["status"] == "ok":
+        return "ok"
+    if check["status"] == "unauthorized":
+        return "AUTH"
+    if check["status"] == "unknown":
+        return "UNKNOWN"
+    if check["required"]:
+        return "MISS"
+    return "optional"
+
+
+def _print_report(checks, as_json):
+    if as_json:
+        print(json.dumps(checks, indent=2))
+        return
+    for check in checks:
+        print(f"[{_marker(check)}] {check['name']}: {check['detail']} - {check['hint']}")
 
 
 def main(argv=None):
@@ -375,48 +480,7 @@ def main(argv=None):
     ``PIPELINE_FORGE`` names an unknown forge. A missing or unauthorized
     OPTIONAL tool is still graceful degradation, not failure.
     """
-
-    def install_real_seams():
-        """Point the unset module seams at the real subprocess/urllib/git wrappers.
-
-        A seam that is already set was injected (a test's stub), so it is left
-        alone: that is the injection point for the probe surfaces.
-        """
-        global _RUNNER, _URLOPEN, _REMOTE_URL
-        if _RUNNER is None:
-            _RUNNER = subprocess_runner
-        if _URLOPEN is None:
-            _URLOPEN = urllib_urlopen
-        if _REMOTE_URL is None:
-            _REMOTE_URL = git_origin_url
-
-    def git_origin_url(repo_root):
-        """Default remote seam: the origin remote's URL, or "" if unreadable."""
-        proc = subprocess.run(
-            ["git", "-C", repo_root, "remote", "get-url", "origin"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_TIMEOUT_SECONDS,
-        )
-        return (proc.stdout or "").strip() if proc.returncode == 0 else ""
-
-    def subprocess_runner(argv, timeout):
-        """Default CLI runner: run argv, return (returncode, stdout, stderr)."""
-        proc = subprocess.run(
-            list(argv),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
-
-    def urllib_urlopen(request, timeout=None):
-        """Default daemon HTTP seam: a thin urllib.request.urlopen alias."""
-        return urllib.request.urlopen(request, timeout=timeout)
-
-    install_real_seams()
+    _install_real_seams()
     parser = argparse.ArgumentParser(
         description=(
             "Report prerequisite tools for this repo and require the resolved "
@@ -437,46 +501,8 @@ def main(argv=None):
         # doctor names it and exits non-zero instead of dumping a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return 2
-
-    def missing_required_cli():
-        """The resolved forge's CLI when it is absent, else None.
-
-        A missing forge CLI is not graceful degradation: the pipeline cannot
-        open or merge a PR without it, so the doctor names both the resolved
-        forge and the CLI it requires and exits non-zero. An explicitly
-        configured forge always fails the run; under ``auto`` only a host that
-        confidently named a forge does, because an unrecognised host may
-        simply not be the pipeline's (the base report-only contract).
-        """
-        configured = os.environ.get(_FORGE_ENV, "auto").strip().lower()
-        if configured in _FORGE_CLI:
-            forge = configured
-        elif _RESOLUTION.get("confident"):
-            forge = _RESOLUTION["forge"]
-        else:
-            return None
-        required = _FORGE_CLI[forge]
-        for check in checks:
-            if check["name"] == required and check["status"] == "missing":
-                return forge, required
-        return None
-
-    missing = missing_required_cli()
-    if args.json:
-        print(json.dumps(checks, indent=2))
-    else:
-        for check in checks:
-            if check["status"] == "ok":
-                marker = "ok"
-            elif check["status"] == "unauthorized":
-                marker = "AUTH"
-            elif check["status"] == "unknown":
-                marker = "UNKNOWN"
-            elif check["required"]:
-                marker = "MISS"
-            else:
-                marker = "optional"
-            print(f"[{marker}] {check['name']}: {check['detail']} - {check['hint']}")
+    missing = _missing_required_cli(checks)
+    _print_report(checks, args.json)
     if missing is not None:
         forge, cli = missing
         print(

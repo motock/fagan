@@ -222,117 +222,98 @@ def _check_scheduler_revision(plan_path):
     }
 
 
-def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
-    """Run the seven preflight checks; return one result dict per check.
-
-    plan_dir: explicit plan directory to check. None resolves the way
-        production does: the PLAN_DIR env var (read at call time), then
-        pipeline.paths.PLAN_DIR (default ~/.claude/plans).
-    which: shutil.which-compatible callable (injectable so tests never depend
-        on the live host's installed CLIs).
-    registry_loader: zero-arg callable returning the parsed model registry
-        (injectable so tests never depend on today's model_registry.json).
-        None uses the built-in loader, which json-parses model_registry.json
-        directly from the repo root.
-
-    The checks are read-only: nothing is created, written, or executed.
-    """
-
-    results = []
-
-    # -- check a: PLAN_DIR --------------------------------------------------
-    # Resolve exactly the way production does; explicit argument wins.
+def _resolve_plan_path(plan_dir):
+    """Resolve PLAN_DIR exactly the way production does; explicit argument wins."""
     if plan_dir is not None:
-        plan_path = Path(plan_dir).expanduser()
-    else:
-        env_plan_dir = os.environ.get("PLAN_DIR")
-        if env_plan_dir:
-            plan_path = Path(env_plan_dir).expanduser()
-        else:
-            plan_path = Path(paths.configured_plan_dir()).expanduser()
+        return Path(plan_dir).expanduser()
+    env_plan_dir = os.environ.get("PLAN_DIR")
+    if env_plan_dir:
+        return Path(env_plan_dir).expanduser()
+    return Path(paths.configured_plan_dir()).expanduser()
 
+
+def _check_plan_dir(plan_path):
+    """Check a: PLAN_DIR exists (or can be created) and is writable."""
     if plan_path.exists():
         if not plan_path.is_dir():
-            results.append({
+            return {
                 "name": "PLAN_DIR",
                 "status": "fail",
                 "message": (
                     f"PLAN_DIR exists but is not a directory: {plan_path} — "
                     "remove it or point PLAN_DIR at a directory"
                 ),
-            })
-        elif os.access(plan_path, os.W_OK):
-            results.append({
+            }
+        if os.access(plan_path, os.W_OK):
+            return {
                 "name": "PLAN_DIR",
                 "status": "ok",
                 "message": f"plan dir is writable: {plan_path}",
-            })
-        else:
-            results.append({
-                "name": "PLAN_DIR",
-                "status": "fail",
-                "message": (
-                    f"PLAN_DIR is not writable: {plan_path} — fix its "
-                    f"permissions (chmod u+w '{plan_path}') or point PLAN_DIR "
-                    "at a writable directory"
-                ),
-            })
-    else:
-        # Missing dir: warn only if its parent exists and is writable. Never
-        # create it here -- this check must stay side-effect-free.
-        parent = plan_path.parent
-        if parent.is_dir() and os.access(parent, os.W_OK):
-            results.append({
-                "name": "PLAN_DIR",
-                "status": "warn",
-                "message": (
-                    "PLAN_DIR does not exist yet (it will be created on "
-                    f"first use): {plan_path}"
-                ),
-            })
-        else:
-            results.append({
-                "name": "PLAN_DIR",
-                "status": "fail",
-                "message": (
-                    f"PLAN_DIR cannot be created: {plan_path} (parent "
-                    f"directory {parent} is missing or not writable) — create "
-                    "it or point PLAN_DIR at a writable location"
-                ),
-            })
+            }
+        return {
+            "name": "PLAN_DIR",
+            "status": "fail",
+            "message": (
+                f"PLAN_DIR is not writable: {plan_path} — fix its "
+                f"permissions (chmod u+w '{plan_path}') or point PLAN_DIR "
+                "at a writable directory"
+            ),
+        }
+    # Missing dir: warn only if its parent exists and is writable. Never
+    # create it here -- this check must stay side-effect-free.
+    parent = plan_path.parent
+    if parent.is_dir() and os.access(parent, os.W_OK):
+        return {
+            "name": "PLAN_DIR",
+            "status": "warn",
+            "message": (
+                "PLAN_DIR does not exist yet (it will be created on "
+                f"first use): {plan_path}"
+            ),
+        }
+    return {
+        "name": "PLAN_DIR",
+        "status": "fail",
+        "message": (
+            f"PLAN_DIR cannot be created: {plan_path} (parent "
+            f"directory {parent} is missing or not writable) — create "
+            "it or point PLAN_DIR at a writable location"
+        ),
+    }
 
-    # -- check b: git (required) --------------------------------------------
+
+def _check_git(which):
+    """Check b: git is required."""
     git_path = which("git")
     if git_path:
-        results.append({
+        return {
             "name": "git",
             "status": "ok",
             "message": f"git found: {git_path}",
-        })
-    else:
-        results.append({
-            "name": "git",
-            "status": "fail",
-            "message": (
-                "git is required but was not found on PATH — install git "
-                "(e.g. 'brew install git' on macOS or 'apt-get install git' "
-                "on Debian/Ubuntu) and re-run preflight"
-            ),
-        })
+        }
+    return {
+        "name": "git",
+        "status": "fail",
+        "message": (
+            "git is required but was not found on PATH — install git "
+            "(e.g. 'brew install git' on macOS or 'apt-get install git' "
+            "on Debian/Ubuntu) and re-run preflight"
+        ),
+    }
 
-    # -- check c: dispatch backend ------------------------------------------
-    # REG-3: resolve the backend the SAME way real per-story dispatch does --
-    # pipeline/dispatch.py's _resolve_dispatch_target, which since REG-1/REG-2
-    # resolves the dispatch role through app.role_registry.resolve_role
-    # (priority: plan role_config -> PIPELINE_BACKEND_DISPATCH -> registry
-    # roles.dispatch.provider -> "claude", with dispatch's own fail-open
-    # fallback when the registry cannot resolve the role). Reading the env
-    # var raw here -- the PP-02 review's resolution -- reported a backend
-    # real dispatch would never run on a registry-pinned host: the same
-    # false-green defect class this check exists to prevent, pointing the
-    # other way. The resolver is imported and called fresh at call time
-    # (never at import time, never cached, nothing written back to the env
-    # or the registry), so the two can never drift apart again.
+
+def _resolve_backend():
+    """Resolve the dispatch backend the SAME way real per-story dispatch does.
+
+    REG-3: pipeline/dispatch.py's _resolve_dispatch_target resolves the
+    dispatch role through app.role_registry.resolve_role (priority: plan
+    role_config -> PIPELINE_BACKEND_DISPATCH -> registry roles.dispatch.provider
+    -> "claude", with dispatch's own fail-open fallback). Reading the env var
+    raw here reported a backend real dispatch would never run on a
+    registry-pinned host: a false-green defect. The resolver is imported and
+    called fresh at call time (never at import time, never cached, nothing
+    written back to the env or the registry), so the two can never drift.
+    """
     try:
         from pipeline.dispatch import _resolve_dispatch_target
 
@@ -344,72 +325,77 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         # exactly what _dispatch_fallback_provider would resolve to.
         raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
         backend = (raw_backend or "claude").strip().lower() or "claude"
-    backend = (backend or "claude").strip().lower() or "claude"
+    return (backend or "claude").strip().lower() or "claude"
 
+
+def _check_dispatch_backend(which):
+    """Check c: the resolved dispatch backend's CLI is installed."""
+    backend = _resolve_backend()
     if backend == "claude":
         claude_path = which("claude")
         if claude_path:
-            results.append({
+            return {
                 "name": "dispatch backend",
                 "status": "ok",
                 "message": f"dispatch backend 'claude' found: {claude_path}",
-            })
-        else:
-            results.append({
-                "name": "dispatch backend",
-                "status": "fail",
-                "message": (
-                    "dispatch backend 'claude' requires the Claude Code CLI, "
-                    "which was not found on PATH — install the Claude Code "
-                    "CLI, or set PIPELINE_BACKEND_DISPATCH to an available "
-                    "backend"
-                ),
-            })
-    elif backend in _LOCAL_BACKENDS:
+            }
+        return {
+            "name": "dispatch backend",
+            "status": "fail",
+            "message": (
+                "dispatch backend 'claude' requires the Claude Code CLI, "
+                "which was not found on PATH — install the Claude Code "
+                "CLI, or set PIPELINE_BACKEND_DISPATCH to an available "
+                "backend"
+            ),
+        }
+    if backend in _LOCAL_BACKENDS:
         # Local family: graceful degradation. A missing provider CLI is a
         # warn (dispatch will fail until the provider is installed), never a
         # fail and never a crash.
         cli_name = "lms" if backend == "lmstudio" else backend
         cli_path = which(cli_name)
         if cli_path:
-            results.append({
+            return {
                 "name": "dispatch backend",
                 "status": "ok",
                 "message": f"dispatch backend '{backend}' found: {cli_path}",
-            })
-        else:
-            results.append({
-                "name": "dispatch backend",
-                "status": "warn",
-                "message": (
-                    f"dispatch backend '{backend}' selected but its CLI "
-                    f"('{cli_name}') was not found on PATH — dispatch will "
-                    f"fail until the provider is installed/configured "
-                    f"(install {cli_name}, or switch PIPELINE_BACKEND_DISPATCH)"
-                ),
-            })
-    else:
-        # Unrecognized value: never crash, never pass silently.
-        results.append({
+            }
+        return {
             "name": "dispatch backend",
             "status": "warn",
             "message": (
-                f"unknown dispatch backend '{backend}' "
-                "(PIPELINE_BACKEND_DISPATCH) — dispatch will fail until it "
-                "is set to a known backend (claude, ollama, lmstudio, mlx, "
-                "local, auto) or the provider is installed/configured"
+                f"dispatch backend '{backend}' selected but its CLI "
+                f"('{cli_name}') was not found on PATH — dispatch will "
+                f"fail until the provider is installed/configured "
+                f"(install {cli_name}, or switch PIPELINE_BACKEND_DISPATCH)"
             ),
-        })
+        }
+    # Unrecognized value: never crash, never pass silently.
+    return {
+        "name": "dispatch backend",
+        "status": "warn",
+        "message": (
+            f"unknown dispatch backend '{backend}' "
+            "(PIPELINE_BACKEND_DISPATCH) — dispatch will fail until it "
+            "is set to a known backend (claude, ollama, lmstudio, mlx, "
+            "local, auto) or the provider is installed/configured"
+        ),
+    }
 
-    # -- check c2: merge CI gate ---------------------------------------------
-    # Resolved at call time through the settings Store, in the request's
-    # namespace (the default when none is bound), with no repo layer, so a
-    # repo-level override is not reported here. Imported inside the
-    # check: the settings modules load the ``app`` package, which this module
-    # must not import at load time. Warn, never fail: disabling the gate is a
-    # legitimate operator choice during a genuine CI outage, and preflight
-    # failing hard would block work during exactly the outage the escape hatch
-    # exists for. It must be impossible to MISS, not impossible to DO.
+
+def _check_merge_ci_gate():
+    """Check c2: merge CI gate.
+
+    Resolved at call time through the settings Store, in the request's
+    namespace (the default when none is bound), with no repo layer, so a
+    repo-level override is not reported here. Imported inside the check: the
+    settings modules load the ``app`` package, which this module must not
+    import at load time. Warn, never fail: disabling the gate is a legitimate
+    operator choice during a genuine CI outage, and failing hard would block
+    work during exactly the outage the escape hatch exists for. It must be
+    impossible to MISS, not impossible to DO.
+    """
     from pipeline.actor import current_namespace
     from pipeline.authorization import DEFAULT_TEAM
     from pipeline.ci import SettingsContext
@@ -418,7 +404,7 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         namespace=current_namespace(), team=DEFAULT_TEAM, repo=""
     ).resolve("merge_ci_gate")
     if not gate["value"]:
-        results.append({
+        return {
             "name": "merge CI gate",
             "status": "warn",
             "message": (
@@ -429,15 +415,16 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
                 "workaround (e.g. a CI outage) and should be removed once CI "
                 "is green again."
             ),
-        })
-    else:
-        results.append({
-            "name": "merge CI gate",
-            "status": "ok",
-            "message": "merge gate requires green CI before merging",
-        })
+        }
+    return {
+        "name": "merge CI gate",
+        "status": "ok",
+        "message": "merge gate requires green CI before merging",
+    }
 
-    # -- check d: model registry --------------------------------------------
+
+def _check_model_registry(registry_loader):
+    """Check d: the model registry loads and is a JSON object."""
     try:
         if registry_loader is not None:
             registry_payload = registry_loader()
@@ -457,7 +444,7 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         # Non-leaking: report the error CLASS name only. Never embed str(exc)
         # / repr(exc) (they may carry env values or tokens), env values, or
         # file contents — just a static hint pointing at model_registry.json.
-        results.append({
+        return {
             "name": "model registry",
             "status": "fail",
             "message": (
@@ -465,48 +452,74 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
                 "check that model_registry.json exists, is valid JSON, and "
                 "is readable"
             ),
-        })
-    else:
-        if isinstance(registry_payload, dict):
-            results.append({
-                "name": "model registry",
-                "status": "ok",
-                "message": "model registry loaded and well-formed",
-            })
-        else:
-            results.append({
-                "name": "model registry",
-                "status": "fail",
-                "message": (
-                    "model registry at model_registry.json is malformed: "
-                    "expected a JSON object at the top level, got "
-                    f"{type(registry_payload).__name__}"
-                ),
-            })
+        }
+    if isinstance(registry_payload, dict):
+        return {
+            "name": "model registry",
+            "status": "ok",
+            "message": "model registry loaded and well-formed",
+        }
+    return {
+        "name": "model registry",
+        "status": "fail",
+        "message": (
+            "model registry at model_registry.json is malformed: "
+            "expected a JSON object at the top level, got "
+            f"{type(registry_payload).__name__}"
+        ),
+    }
 
-    # -- check e: scheduler config fingerprint --------------------------------
-    # CFG-B4: surface dashboard/scheduler config divergence at STARTUP, not
-    # only on demand (/api/health). Compares the fingerprint the scheduler
-    # daemon writes to <plan_dir>/.scheduler_health.json against the values
-    # resolved above (plan_path) and by this process. WORKTREE_ROOT is read
-    # at call time exactly the way PLAN_DIR is resolved above; when the
-    # operator has set it this is identical to pipeline.paths.WORKTREE_ROOT
-    # (env-or-default), and when it is unset the field is not compared (the
-    # built-in default is not a configured value a scheduler must agree with).
-    # A divergence is a warn, never a fail: it must not block startup
-    # (raise_on_failure() raises only on fail-status checks).
+
+def _check_scheduler_fingerprint(plan_path):
+    """Check e: scheduler config fingerprint.
+
+    CFG-B4: surface dashboard/scheduler config divergence at STARTUP, not only
+    on demand (/api/health). Compares the fingerprint the scheduler daemon
+    writes to <plan_dir>/.scheduler_health.json against the values resolved by
+    run_preflight (plan_path) and by this process. WORKTREE_ROOT is read at
+    call time exactly the way PLAN_DIR is resolved; when the operator has set
+    it this is identical to pipeline.paths.WORKTREE_ROOT (env-or-default), and
+    when it is unset the field is not compared (the built-in default is not a
+    configured value a scheduler must agree with). A divergence is a warn,
+    never a fail: it must not block startup (raise_on_failure() raises only on
+    fail-status checks).
+    """
     env_worktree_root = os.environ.get("WORKTREE_ROOT")
     worktree_root = (
         Path(env_worktree_root).expanduser() if env_worktree_root else None
     )
-    results.append(_check_scheduler_config(plan_path, worktree_root))
-    # check f: the scheduler's checkout revision. The config check above proves
-    # the running scheduler agrees about configuration; this one proves the code
-    # it is executing is the merged code (a restart alone does not advance the
-    # checkout, so an unrestarted daemon runs pre-merge modules indefinitely).
-    results.append(_check_scheduler_revision(plan_path))
+    return _check_scheduler_config(plan_path, worktree_root)
 
-    return results
+
+def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
+    """Run the seven preflight checks; return one result dict per check.
+
+    plan_dir: explicit plan directory to check. None resolves the way
+        production does: the PLAN_DIR env var (read at call time), then
+        pipeline.paths.PLAN_DIR (default ~/.claude/plans).
+    which: shutil.which-compatible callable (injectable so tests never depend
+        on the live host's installed CLIs).
+    registry_loader: zero-arg callable returning the parsed model registry
+        (injectable so tests never depend on today's model_registry.json).
+        None uses the built-in loader, which json-parses model_registry.json
+        directly from the repo root.
+
+    The checks are read-only: nothing is created, written, or executed.
+    """
+
+    plan_path = _resolve_plan_path(plan_dir)
+    # check f (_check_scheduler_revision): the scheduler's checkout revision.
+    # The config check proves the running scheduler agrees about configuration;
+    # this one proves the code it is executing is the merged code.
+    return [
+        _check_plan_dir(plan_path),
+        _check_git(which),
+        _check_dispatch_backend(which),
+        _check_merge_ci_gate(),
+        _check_model_registry(registry_loader),
+        _check_scheduler_fingerprint(plan_path),
+        _check_scheduler_revision(plan_path),
+    ]
 
 
 def summarize(results):

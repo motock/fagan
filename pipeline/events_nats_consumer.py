@@ -768,18 +768,16 @@ def consumer_status() -> dict:
 
     Returns ``{durable_name: {"pending": int, "redelivered": int,
     "dead_lettered": int, "subscribed": bool, "oldest_pending_age_s": int | None}}``
-    on success, or exactly ``{"reachable": False}``
-    when the broker cannot be queried — the health payload has one shape per
-    outcome, and a probe must never turn into a 500.
+    on success, or exactly ``{"reachable": False}`` when the broker cannot be
+    queried: the health payload has one shape per outcome, a probe never 500s.
 
     The answer is held for :data:`_STATUS_TTL_SECONDS` from the collection that
     produced it; a cache hit does not extend the deadline, so a 10-second
     poller still refreshes every 30 seconds. A failure is cached by the same
     rule so an unreachable broker is not redialled on every probe.
 
-    Nothing about the failure is returned and only its class name is logged — a
-    broker error can carry connection details — the marker alone says the
-    status is unavailable.
+    A failure returns and logs only its class name, as a broker error can
+    carry connection details; the marker alone says the status is unavailable.
     """
     now = time.monotonic()
     expires_at = _status_cache["expires_at"]

@@ -350,10 +350,11 @@ def health() -> dict[str, Any]:
                 for field, dashboard_value in resolved.items()
                 if field in scheduler and scheduler[field] != dashboard_value
             ]
-    except Exception:  # noqa: BLE001 (deliberate: read-only health degrades, never 500s)
+    except Exception as exc:  # noqa: BLE001 (deliberate: read-only health degrades, never 500s)
         # Absent, unreadable (including a directory at that path), empty,
         # invalid-JSON or wrong-shaped fingerprints all degrade to "no
         # fingerprint" rather than turning a health check into a 500.
+        logger.debug("scheduler health fingerprint unreadable: %s", type(exc).__name__)
         scheduler = None
         config_mismatch = []
     return {
@@ -442,7 +443,8 @@ def usage() -> dict[str, Any]:
     change doesn't leave the cost gate quietly disabled."""
     try:
         backends = collect_backend_status()
-    except Exception:  # noqa: BLE001 (deliberate: diagnostic banner degrades, never 500s)
+    except Exception as exc:  # noqa: BLE001 (deliberate: diagnostic banner degrades, never 500s)
+        logger.warning("backend status collection failed: %s", type(exc).__name__)
         backends = []
     if not USAGE_STATE_PATH.exists():
         return {"available": False, "backends": backends}

@@ -369,7 +369,7 @@ def _lint_acceptance_fixtures(
             )
     except subprocess.TimeoutExpired:
         return ("skipped", "acceptance-fixture lint validation skipped: ruff timed out")
-    except Exception as exc:  # noqa: BLE001 - must never crash ingest
+    except Exception as exc:  # noqa: BLE001 - surfaced: returned as the "skipped" detail; must never crash ingest
         return ("skipped", f"acceptance-fixture lint validation skipped: {exc}")
 
     if result.returncode == 0:
@@ -443,7 +443,7 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
             )
     except subprocess.TimeoutExpired:
         return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest timed out")
-    except Exception as exc:  # noqa: BLE001 - never crash ingest
+    except Exception as exc:  # noqa: BLE001 - surfaced: returned as the "skipped" detail; never crash ingest
         return ("skipped", f"acceptance-fixture pytest dry-run skipped: {exc}")
 
     if result.returncode == 0:

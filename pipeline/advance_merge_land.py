@@ -203,7 +203,7 @@ def land_story(
     mcp_touched = _mcp_self_source_touched(worktree, f"origin/{_default_branch()}")
     try:
         _merge_pr(story.get("worktree", ""), key)
-    except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
+    except Exception as e:  # noqa: BLE001 - recorded by _record_merge_failure (gh/git transient failure, see MERGE_MAX_ATTEMPTS)
         _record_merge_failure(plan_name, key, story, e, summary)
         return
     _record_merged(plan_name, key, story, manifest, mcp_touched, settings, summary)

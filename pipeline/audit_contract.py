@@ -424,7 +424,7 @@ class AuditConcurrencyContract:
             try:
                 for _ in range(APPENDS_PER_THREAD):
                     log.append(DEFAULT_NAMESPACE, _PLAN, {"action": "a", "outcome": "ok"})
-            except BaseException as error:  # noqa: BLE001 - reported below
+            except Exception as error:  # noqa: BLE001 - reported below
                 errors.append(error)
 
         threads = [threading.Thread(target=worker) for _ in range(THREADS)]
@@ -446,7 +446,7 @@ class AuditConcurrencyContract:
             try:
                 for _ in range(APPENDS_PER_THREAD):
                     log.append(DEFAULT_NAMESPACE, chain, {"action": "a", "outcome": "ok"})
-            except BaseException as error:  # noqa: BLE001 - reported below
+            except Exception as error:  # noqa: BLE001 - reported below
                 errors.append(error)
 
         threads = [

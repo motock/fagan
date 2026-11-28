@@ -451,7 +451,7 @@ def plan_list(include_archived: bool, repo: str | None) -> dict[str, Any]:
     for namespace in namespaces:
         try:
             names = records.list_plans(namespace)
-        except Exception:  # noqa: BLE001 - one unreadable namespace degrades only itself
+        except Exception:  # noqa: BLE001 - recorded in `degraded`; one unreadable namespace degrades only itself, per-namespace loop
             degraded.append("namespace_unavailable")
             continue
         for name in names:

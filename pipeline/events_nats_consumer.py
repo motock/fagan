@@ -209,7 +209,7 @@ def _start_missing(bus: NatsEventBus, loop) -> set[str] | None:
     """
     try:
         bus._ensure_connection(loop)
-    except Exception:  # noqa: BLE001 - an unreachable broker is not fatal here
+    except Exception:  # noqa: BLE001 - expected at boot: an unreachable broker is retried, deliberately not logged
         return None
 
     with _consumers_lock:
@@ -418,7 +418,7 @@ def _is_fetch_timeout(exc: BaseException) -> bool:
         from nats.errors import TimeoutError as nats_timeout_error
 
         nats_timeout: type[BaseException] = nats_timeout_error
-    except Exception:  # noqa: BLE001 - without nats-py only the builtin exists
+    except Exception:  # noqa: BLE001 - expected: without nats-py only the builtin timeout exists
         nats_timeout = TimeoutError
     return isinstance(exc, (TimeoutError, nats_timeout))
 
@@ -428,7 +428,7 @@ async def _deliver(consumer: _Consumer, message) -> None:
     attempts = _num_delivered(message)
     try:
         event = json.loads(message.data)
-    except Exception:  # noqa: BLE001 - a payload this module cannot read
+    except Exception:  # noqa: BLE001 - logged below as an unreadable message when no envelope results
         event = None
     if not isinstance(event, dict):
         # Nothing can be routed without an envelope, and no handler can act on
@@ -474,7 +474,7 @@ def _run_handlers(consumer: _Consumer, event: dict) -> tuple[str, str] | None:
     for handler in list(consumer.bus._handlers.get(consumer.event_type, ())):
         try:
             handler(event)
-        except Exception as exc:  # noqa: BLE001 - the broker redelivers the message
+        except Exception as exc:  # noqa: BLE001 - returned to the caller as (handler, class); the broker redelivers the message
             return _handler_name(handler), type(exc).__name__
     return None
 
@@ -599,7 +599,7 @@ def _num_delivered(message) -> int:
     """How many times the broker has delivered *message*, at least once."""
     try:
         return max(int(message.metadata.num_delivered), 1)
-    except Exception:  # noqa: BLE001 - a message without metadata is a first try
+    except Exception:  # noqa: BLE001 - expected: a message without metadata is a first try
         return 1
 
 
@@ -768,17 +768,16 @@ def consumer_status() -> dict:
 
     Returns ``{durable_name: {"pending": int, "redelivered": int,
     "dead_lettered": int, "subscribed": bool, "oldest_pending_age_s": int | None}}``
-    on success, or exactly ``{"reachable": False}``
-    when the broker cannot be queried — the health payload has one shape per
-    outcome, and a probe must never turn into a 500.
+    on success, or exactly ``{"reachable": False}`` when the broker cannot be
+    queried: the health payload has one shape per outcome, a probe never 500s.
 
     The answer is held for :data:`_STATUS_TTL_SECONDS` from the collection that
     produced it; a cache hit does not extend the deadline, so a 10-second
     poller still refreshes every 30 seconds. A failure is cached by the same
     rule so an unreachable broker is not redialled on every probe.
 
-    Nothing about the failure is returned or logged — a broker error can carry
-    connection details — the marker alone says the status is unavailable.
+    A failure returns and logs only its class name, as a broker error can
+    carry connection details; the marker alone says the status is unavailable.
     """
     now = time.monotonic()
     expires_at = _status_cache["expires_at"]
@@ -786,7 +785,8 @@ def consumer_status() -> dict:
         return _status_cache["value"]
     try:
         value = _collect_consumer_status()
-    except Exception:  # noqa: BLE001 (deliberate: the marker replaces any cause)
+    except Exception as exc:  # noqa: BLE001 (deliberate: the marker replaces any cause)
+        logger.warning("nats consumer status unavailable: %s", type(exc).__name__)
         value = {"reachable": False}
     _status_cache["value"] = value
     _status_cache["expires_at"] = now + _STATUS_TTL_SECONDS

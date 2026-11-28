@@ -618,7 +618,7 @@ def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict
         if message is None:
             return {"error": str(exc)}
         return {"error": message}
-    except Exception as exc:  # pragma: no cover - exercised via tests  # noqa: BLE001
+    except Exception as exc:  # pragma: no cover  # noqa: BLE001 - surfaced: the tool error is returned to the model
         return {"error": str(exc)}
     return {"result": result}
 

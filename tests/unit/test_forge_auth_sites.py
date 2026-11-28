@@ -14,6 +14,7 @@ import subprocess
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import authorization, concurrency, forge_auth, merge, rebase, server
 from pipeline.actor import bind_namespace, current_namespace
 from pipeline.store_memory import InMemoryRecordStore
@@ -179,13 +180,13 @@ def _merge_pushes_for(monkeypatch, tmp_path, namespace):
     monkeypatch.setattr(server, "_rebase_onto_master", _fake_rebase_onto_master)
     monkeypatch.setattr(server, "_default_branch", lambda: "master")
     monkeypatch.setattr(server, "_notify_user", lambda *a, **k: None)
-    monkeypatch.setattr(server, "_ci_status", lambda branch, *, sha, settings=None: {
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda branch, *, sha, settings=None: {
         "state": "success", "error": "",
     })
-    monkeypatch.setattr(server, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(server, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, key, settings=None: {"state": "pass"})
-    monkeypatch.setattr(server, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(server, "_mcp_self_source_touched", lambda wt, base: "")
     monkeypatch.setattr(server, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(server, "_mark_plane_done", lambda *a, **k: None)

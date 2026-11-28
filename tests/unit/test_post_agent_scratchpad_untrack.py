@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import git_ops
 
 # pipeline.story_status imports pipeline.server at module level and
@@ -237,7 +238,7 @@ def _install_grade_harness(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
     monkeypatch.setattr(p, "_run_lint_gate", lambda wt, env: None)
     monkeypatch.setattr(p, "_find_dead_new_functions", lambda wt, branch: [])
-    monkeypatch.setattr(p, "_acceptance_tampered", lambda story, wt: None)
+    monkeypatch.setattr(_pipeline_ci, "_acceptance_tampered", lambda story, wt: None)
     monkeypatch.setattr(p, "_added_pytest_test_paths", lambda wt, key, branch: [])
 
     def run_mock(cmd_, **kwargs):

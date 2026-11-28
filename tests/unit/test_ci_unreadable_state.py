@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.ci as pci
 import pipeline.server as p
 from pipeline import merge
@@ -140,10 +141,10 @@ def gate_boundaries(monkeypatch):
     merged = []
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k, **kw: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda w, **kw: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", lambda s, w, k, **kw: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda w, **kw: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key, **kw: merged.append(key) or "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master", lambda wt, br: {"ok": True, "error": ""})
@@ -158,7 +159,7 @@ def test_should_refuse_manual_merge_when_ci_unreadable(
     plan_dir, gate_boundaries, monkeypatch
 ):
     monkeypatch.setattr(
-        p, "_ci_status", lambda *a, **k: {"state": "unreadable", "error": "boom"}
+        _pipeline_ci, "_ci_status", lambda *a, **k: {"state": "unreadable", "error": "boom"}
     )
     _manifest(plan_dir, {"P1": _story(status="parked")})
 
@@ -171,7 +172,7 @@ def test_should_refuse_manual_merge_when_ci_unreadable(
 
 
 def test_should_merge_manually_when_ci_none(plan_dir, gate_boundaries, monkeypatch):
-    monkeypatch.setattr(p, "_ci_status", lambda *a, **k: {"state": "none", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda *a, **k: {"state": "none", "error": ""})
     _manifest(plan_dir, {"P1": _story(status="parked")})
 
     result = merge._approve_merge_impl("go", "P1")

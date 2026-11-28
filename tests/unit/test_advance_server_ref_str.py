@@ -20,6 +20,7 @@ import pipeline.advance_merge
 import pipeline.persistence as ppers
 import pipeline.usage as pusage
 from pipeline import server as p
+import pipeline.ci as _pipeline_ci
 
 # Every method the class had before this change; the two new renderers are added
 # after the last of them (__getitem__) and none of these may be removed.
@@ -134,7 +135,7 @@ def test_merge_gate_ci_fail_notice_renders_the_retry_cap(tmp_path, monkeypatch, 
         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""},
     )
     monkeypatch.setattr(
-        p, "_ci_status_once", lambda br, **_: {"state": "fail", "error": "boom"}
+        _pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "fail", "error": "boom"}
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
     notices = []

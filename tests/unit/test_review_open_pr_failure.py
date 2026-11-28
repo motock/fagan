@@ -14,6 +14,7 @@ import subprocess
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import persistence as ppers
 from pipeline import review_open_pr as rop
@@ -178,7 +179,7 @@ def test_successful_open_clears_the_failure_count(monkeypatch, tmp_path):
     (tmp_path / f"{PLAN}.manifest.json").write_text(json.dumps(manifest))
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: "https://example.test/pr/1")
     monkeypatch.setattr(p, "_post_pr_comment", lambda *a, **k: None)
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: False)
 
@@ -196,7 +197,7 @@ def test_two_consecutive_failed_opens_park_the_story_with_correlation_id(
     monkeypatch.setattr(ppers, "PLAN_DIR", tmp_path)
     monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: False)
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
 
     def _boom_pr(*a, **k):
         raise subprocess.CalledProcessError(1, "gh")

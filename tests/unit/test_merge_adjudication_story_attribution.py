@@ -53,6 +53,7 @@ from pipeline import persistence as persistence_mod
 # The module that owns the production context bindings guarded by the
 # integration-grade tests below.
 from pipeline import advance as advance_mod
+import pipeline.ci as _pipeline_ci
 
 
 @pytest.fixture(autouse=True)
@@ -204,7 +205,7 @@ def test_direct_call_without_binding_keeps_story_key_none(plan_dir, monkeypatch)
     _full_autonomy(monkeypatch)
     _stub_overlord(monkeypatch, PROCEED_REPLY)
     monkeypatch.setattr(
-        server_mod,
+        _pipeline_ci,
         "_ci_status_once",
         lambda branch, sha="", settings=None: {"state": "pass", "error": ""},
         raising=False,

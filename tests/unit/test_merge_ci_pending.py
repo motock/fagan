@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 
 # ---------------------------------------------------------------------------
@@ -64,21 +65,21 @@ def _patch_merge_boundaries(monkeypatch, ci_once):
     """
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "_ci_status_once", ci_once)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", ci_once)
     # The blocking variant must NEVER be called by the tick after this change.
     monkeypatch.setattr(
-        p, "_ci_status",
+        _pipeline_ci, "_ci_status",
         lambda *a, **k: pytest.fail("_ci_status (blocking) called by tick"),
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance",
+        _pipeline_ci, "_reverify_acceptance",
         lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
+        _pipeline_ci, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(
         p, "_mark_plane_done", lambda *a, **k: None,
@@ -91,24 +92,24 @@ def _patch_merge_boundaries(monkeypatch, ci_once):
 class TestCiPendingExpired:
     def test_returns_false_for_malformed_timestamp(self):
         # A malformed timestamp must never expire a story.
-        assert p._ci_pending_expired("not-a-timestamp", settings=_context({})) is False
+        assert _pipeline_ci._ci_pending_expired("not-a-timestamp", settings=_context({})) is False
 
     def test_returns_false_for_empty_string(self):
-        assert p._ci_pending_expired("", settings=_context({})) is False
+        assert _pipeline_ci._ci_pending_expired("", settings=_context({})) is False
 
     def test_returns_false_for_recent_timestamp(self):
         recent = datetime.now(UTC).isoformat()
-        assert p._ci_pending_expired(recent, settings=_context({})) is False
+        assert _pipeline_ci._ci_pending_expired(recent, settings=_context({})) is False
 
     def test_returns_true_when_older_than_bound(self):
         # Older than the total patience the blocking gate provided.
         bound = MERGE_MAX_ATTEMPTS * DEFAULT_CI_TIMEOUT_S
         old = (datetime.now(UTC) - timedelta(seconds=bound + 60)).isoformat()
-        assert p._ci_pending_expired(old, settings=_context({})) is True
+        assert _pipeline_ci._ci_pending_expired(old, settings=_context({})) is True
 
     def test_returns_false_for_none(self):
         # Missing timestamp must not raise.
-        assert p._ci_pending_expired(None, settings=_context({})) is False
+        assert _pipeline_ci._ci_pending_expired(None, settings=_context({})) is False
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +297,12 @@ class TestPendingCi:
 # ---------------------------------------------------------------------------
 class TestStructure:
     def test_ci_status_once_imported(self):
-        # _ci_status_once must be importable from pipeline.server.
-        assert hasattr(p, "_ci_status_once")
+        # _ci_status_once must exist on its owner, pipeline.ci.
+        assert hasattr(_pipeline_ci, "_ci_status_once")
 
     def test_ci_pending_expired_helper_exists(self):
-        assert hasattr(p, "_ci_pending_expired")
-        assert callable(p._ci_pending_expired)
+        assert hasattr(_pipeline_ci, "_ci_pending_expired")
+        assert callable(_pipeline_ci._ci_pending_expired)
 
     def test_ci_status_once_not_called_as_blocking_in_tick(self, plan_dir, monkeypatch):
         # The blocking _ci_status must not be invoked during a pending tick.

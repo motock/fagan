@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
+
 # pre-existing import cycle: pipeline.server must be imported first
 import pipeline.server  # noqa: F401
 from pipeline import advance_merge, merge_local_checks, merge_reverify
@@ -155,8 +157,8 @@ def seams(monkeypatch):
         monkeypatch.setattr(
             advance_merge, f"{name}_merge_reverify", s[name], raising=False
         )
-    monkeypatch.setattr(server_mod, "_reverify_acceptance", s["acceptance"])
-    monkeypatch.setattr(server_mod, "_reverify_build", s["build"])
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", s["acceptance"])
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", s["build"])
     monkeypatch.setattr(server_mod, "_run_lint_gate", s["lint"])
     monkeypatch.setattr(server_mod, "_notify_user", s["notify"])
     monkeypatch.setattr(overlord_mod, "_invoke_overlord", _overlord)
@@ -611,12 +613,12 @@ def _main_fixture(tmp_path, monkeypatch, *, lint, build_state="pass"):
         lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="cafe1234\n", stderr=""),
     )
     monkeypatch.setattr(
-        server_mod,
+        _pipeline_ci,
         "_reverify_acceptance",
         lambda story, path, key, settings=None: {"state": "pass", "error": ""},
     )
     monkeypatch.setattr(
-        server_mod,
+        _pipeline_ci,
         "_reverify_build",
         lambda path, settings=None: {"state": build_state, "error": "build broke"} if build_state == "fail" else {"state": "pass", "error": ""},
     )

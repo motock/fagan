@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import detached_grade, merge
 from pipeline.store_records import InvalidRecordKeyError, validate_plan_name
@@ -152,11 +153,11 @@ def _merge_seams(monkeypatch, ci_state="pass"):
         binding, "rebind_after_pipeline_push", lambda *a, **k: None
     )
     monkeypatch.setattr(
-        p,
+        _pipeline_ci,
         "_ci_status",
         lambda *a, **k: {"state": ci_state, "error": ""},
     )
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(
@@ -164,8 +165,8 @@ def _merge_seams(monkeypatch, ci_state="pass"):
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(p, "_scoped_repo_root", _null_scoped_root)
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: "")
     monkeypatch.setattr(merge, "record_audit", lambda *a, **k: None)
     # The gate force-pushes the story branch; ``Path("").is_dir()`` is the cwd,

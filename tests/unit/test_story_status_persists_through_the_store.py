@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline.store_records import InvalidRecordKeyError, validate_plan_name
 
@@ -330,7 +331,7 @@ def test_acceptance_tamper_is_written_through_the_store(plan_dir, monkeypatch):
     """A tampered acceptance fixture routes to `changes_requested` and refuses
     `tests_passed`, persisted through the store."""
     store, _wt = _install(monkeypatch, plan_dir, {PLAN: _manifest()})
-    monkeypatch.setattr(p, "_acceptance_tampered", lambda *a, **k: ["oracle.py"],
+    monkeypatch.setattr(_pipeline_ci, "_acceptance_tampered", lambda *a, **k: ["oracle.py"],
                         raising=False)
 
     result = p.check_story_status(PLAN, STORY)

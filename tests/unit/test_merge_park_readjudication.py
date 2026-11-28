@@ -57,6 +57,7 @@ from pipeline import pr as pr_mod
 
 # The module that owns the re-adjudication pass guarded by these tests.
 from pipeline import advance as advance_mod
+import pipeline.ci as _pipeline_ci
 
 HOLD_REASON = "high risk held for human review"
 PLAN = "PLAN-1"
@@ -135,7 +136,7 @@ class _Harness:
         self.plan_dir = plan_dir
         self.decisions = []  # _merge_decision invocations
         self.ci_calls = []  # pipeline.ci._ci_status_once invocations
-        self.server_ci_calls = []  # pipeline.server._ci_status_once invocations
+        self.server_ci_calls = []  # must stay empty: pipeline.server no longer owns _ci_status_once
         self.branch_calls = []  # _resolve_story_branch invocations
         self.rebase_calls = []  # _rebase_and_push_for_merge invocations
         self.merge_calls = []  # _merge_pr invocations
@@ -192,19 +193,6 @@ class _Harness:
             return copy.deepcopy(self.ci_result)
 
         monkeypatch.setattr(ci_mod, "_ci_status_once", fake_ci_status_once)
-        # ``pipeline.server`` re-exports the same function, so a
-        # ``from .server import _ci_status_once`` would silently bypass the stub
-        # above. This second stub records into its own list (and mirrors the
-        # failure mode) so the seam is assertable instead of shelling out to gh.
-        def server_seam_ci_status_once(branch, *, sha, settings=None):
-            self.server_ci_calls.append((branch, sha))
-            if self.ci_exc is not None:
-                raise self.ci_exc
-            return copy.deepcopy(self.ci_result)
-
-        monkeypatch.setattr(
-            server_mod, "_ci_status_once", server_seam_ci_status_once, raising=False
-        )
         monkeypatch.setattr(
             advance_mod, "_ci_status_once", fake_ci_status_once, raising=False
         )
@@ -217,7 +205,6 @@ class _Harness:
             )
 
         monkeypatch.setattr(ci_mod, "_ci_status", blocking_ci, raising=False)
-        monkeypatch.setattr(server_mod, "_ci_status", blocking_ci, raising=False)
 
         # --- branch resolution, exactly like the merge path ---
         def fake_resolve(worktree, key):
@@ -244,13 +231,13 @@ class _Harness:
             raising=False,
         )
         monkeypatch.setattr(
-            server_mod,
+            _pipeline_ci,
             "_reverify_acceptance",
             lambda story, wt, key, settings=None: {"state": "pass"},
             raising=False,
         )
         monkeypatch.setattr(
-            server_mod, "_reverify_build", lambda wt, settings=None: {"state": "pass"}, raising=False
+            _pipeline_ci, "_reverify_build", lambda wt, settings=None: {"state": "pass"}, raising=False
         )
         monkeypatch.setattr(
             server_mod, "_mcp_self_source_touched", lambda wt, base: "", raising=False
@@ -258,9 +245,9 @@ class _Harness:
         monkeypatch.setattr(
             server_mod, "_default_branch", lambda: "master", raising=False
         )
-        monkeypatch.setattr(server_mod, "_ci_rerun", lambda sha: None, raising=False)
+        monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None, raising=False)
         monkeypatch.setattr(
-            server_mod, "_ci_pending_expired", lambda since, settings=None: False, raising=False
+            _pipeline_ci, "_ci_pending_expired", lambda since, settings=None: False, raising=False
         )
         monkeypatch.setattr(
             server_mod, "_mark_plane_done", lambda *a, **k: None, raising=False
@@ -321,6 +308,7 @@ class _Harness:
         return manifest["stories"][key]
 
     def assert_gathered_from_ci_module(self):
+        assert not hasattr(server_mod, "_ci_status_once")
         assert self.server_ci_calls == [], (
             "the re-adjudication gather must lazy-import _ci_status_once from "
             "pipeline/ci.py; it was resolved through pipeline.server instead"

@@ -62,9 +62,9 @@ _BOUND_TO_SERVER = (
     "print(fn is s.check_story_status, fn.__globals__ is s.__dict__, "
     "p.mcp._tool_manager._tools['check_story_status'].fn is fn); "
     "print(p._mark_story_done_impl is c._mark_story_done_impl, p._mark_story_done_impl.__globals__ is c.__dict__); "
-    "print(p._record_retro_pending is c._record_retro_pending, p._record_retro_pending.__globals__ is c.__dict__)"
+    "print(c._record_retro_pending.__globals__ is c.__dict__, hasattr(p, '_record_retro_pending'))"
 )
-_EXPECTED_BOUND = "True True True\nTrue True\nTrue True"
+_EXPECTED_BOUND = "True True True\nTrue True\nTrue False"
 
 
 def test_server_first_binds_the_satellite_functions_onto_the_server():

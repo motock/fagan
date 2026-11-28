@@ -46,6 +46,7 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _write_manifest,
     plan_dir,
 )
+import pipeline.ci as _pipeline_ci
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +197,8 @@ def _stub_advance_merge_boundaries(monkeypatch):
         p, "_merge_gate_ci_status",
         lambda branch, *, sha, settings=None: {"state": "success", "error": ""},
     )
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(p, "_ci_pending_expired", lambda since, settings=None: False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_pending_expired", lambda since, settings=None: False)
     monkeypatch.setattr(
         p, "_ci_rework_feedback",
         lambda gate_error, attempts: "ci rework feedback",
@@ -267,14 +268,14 @@ def _stub_approve_merge_boundaries(monkeypatch):
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(
-        p, "_ci_status", lambda *a, **k: {"state": "success", "error": ""},
+        _pipeline_ci, "_ci_status", lambda *a, **k: {"state": "success", "error": ""},
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"},
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"},
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda *a, **k: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda *a, **k: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: [])
     monkeypatch.setattr(p, "_maybe_record_retro", lambda plan, manifest: None)

@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import ci as pci
 from pipeline import server as p
 from pipeline import ticketing as pt
@@ -46,7 +47,7 @@ def test_reverify_build_fails_when_build_command_exits_nonzero(monkeypatch, tmp_
             cmd, 1, stdout="", stderr="Error: Can't resolve 'crypto'"),
     )
 
-    result = p._reverify_build(str(tmp_path), settings=_context({}))
+    result = _pipeline_ci._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result["state"] == "fail"
     assert "crypto" in result["error"]
@@ -59,7 +60,7 @@ def test_reverify_build_passes_when_build_command_exits_zero(monkeypatch, tmp_pa
         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
     )
 
-    result = p._reverify_build(str(tmp_path), settings=_context({}))
+    result = _pipeline_ci._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "pass", "error": ""}
 
@@ -72,7 +73,7 @@ def test_reverify_build_skips_when_no_build_command_detected(monkeypatch, tmp_pa
     monkeypatch.setattr(pci, "detect_build_command", lambda wt: None)
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
 
-    result = p._reverify_build(str(tmp_path), settings=_context({}))
+    result = _pipeline_ci._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
@@ -82,7 +83,7 @@ def test_reverify_build_returns_none_for_missing_worktree(monkeypatch):
         raise AssertionError("must not attempt a build against a missing worktree")
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
 
-    result = p._reverify_build("/no/such/worktree", settings=_context({}))
+    result = _pipeline_ci._reverify_build("/no/such/worktree", settings=_context({}))
 
     assert result == {"state": "none", "error": ""}
 
@@ -98,7 +99,7 @@ def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path, seed_merge_
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
     seed_merge_gate(merge_build_gate=False)
 
-    result = p._reverify_build(str(tmp_path), settings=_context({}))
+    result = _pipeline_ci._reverify_build(str(tmp_path), settings=_context({}))
 
     assert result == {"state": "none", "error": "build gate disabled"}
 
@@ -115,10 +116,10 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_build",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build",
                         lambda wt, **kw: {"state": "fail", "error": "Error: Can't resolve 'crypto'"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -141,10 +142,10 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_build", lambda wt, **kw: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda wt, **kw: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key, **kw: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
@@ -164,10 +165,10 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_build",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build",
                         lambda wt, **kw: {"state": "fail", "error": "build broke"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -192,8 +193,8 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -226,8 +227,8 @@ def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkey
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "ModuleNotFoundError: shared"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -251,8 +252,8 @@ def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch)
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
@@ -274,8 +275,8 @@ def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypa
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -314,7 +315,7 @@ def test_approve_merge_ci_fail_returns_error(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(_pipeline_ci, "_ci_status",
                         lambda br, **_: {"state": "fail", "error": "ruff"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))

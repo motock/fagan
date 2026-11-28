@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline.server import (
     MERGE_MAX_ATTEMPTS,
@@ -88,10 +89,10 @@ def _patch_merge_boundaries(monkeypatch, ci_once, *, rebase_push=None):
     """
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "_ci_status_once", ci_once)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", ci_once)
     # The blocking variant must NEVER be called by the tick.
     monkeypatch.setattr(
-        p, "_ci_status",
+        _pipeline_ci, "_ci_status",
         lambda *a, **k: pytest.fail("_ci_status (blocking) called by tick"),
     )
     if rebase_push is None:
@@ -100,14 +101,14 @@ def _patch_merge_boundaries(monkeypatch, ci_once, *, rebase_push=None):
         rebase_push = _default_rp
     monkeypatch.setattr(p, "_rebase_and_push_for_merge", rebase_push)
     monkeypatch.setattr(
-        p, "_reverify_acceptance",
+        _pipeline_ci, "_reverify_acceptance",
         lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
+        _pipeline_ci, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(
         p, "_mark_plane_done", lambda *a, **k: None,
     )

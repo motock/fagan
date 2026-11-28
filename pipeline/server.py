@@ -86,26 +86,18 @@ from .checkpoint import (
 
 # CI status polling for the merge gate. The merge gates are tenant settings
 # resolved per (namespace, team, repo) by the caller (see pipeline.ci's
-# SettingsContext), so no gate value is re-exported from here. Tests patch
-# p.<name> for _ci_status / _ci_rerun (server call sites use bare names ->
-# re-export -> patch lands). _repo_has_ci_configured reads
+# SettingsContext), so no gate value is re-exported from here. The CI gate
+# helpers (_ci_status, _ci_rerun, ...) are owned by pipeline.ci; patch them
+# there. _repo_has_ci_configured reads
 # REPO_ROOT via a lazy import from this module (Option B - see
 # PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 from .ci import (  # noqa: F401
     _PATCHABLE_STORY_FIELDS,
     _VALID_STORY_STATUSES,
-    _acceptance_tampered,
-    _ci_pending_expired,
-    _ci_rerun,
-    _ci_status,
-    _ci_status_once,
     _get_effective_config_impl,
     _mark_story_done_impl,
     _parse_pytest_excerpt,
-    _record_retro_pending,
     _repo_has_ci_configured,
-    _reverify_acceptance,
-    _reverify_build,
 )
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.

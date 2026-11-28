@@ -717,8 +717,10 @@ def _get_effective_config_impl(
 # ``pipeline/server.py`` (behavior-preserving refactor). The functions below read
 # server-owned names (``_store``, ``_validate_key``, ``get_ticket_provider``,
 # ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``, ``RETRO_PENDING_PATH``,
-# ``_notify_user``, ``_record_retro_pending``) through ``server_bindings.server()``
+# ``_notify_user``) through ``server_bindings.server()``
 # at call time, so tests that monkeypatch them on ``pipeline.server`` take effect.
+# ``_record_retro_pending`` is a module-level call in this module; patch it on
+# ``pipeline.ci``.
 
 
 def _record_retro_pending(plan_name: str, story_count: int) -> None:
@@ -818,7 +820,7 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
         if all_done:
             if manifest.get("repo_root") == str(server.PIPELINE_SELF_REPO_ROOT):
-                server._record_retro_pending(plan_name, len(manifest["stories"]))
+                _record_retro_pending(plan_name, len(manifest["stories"]))
             result = {
                 "ok": True,
                 "plan_completed": True,

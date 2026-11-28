@@ -28,6 +28,7 @@ from pipeline import server
 import pipeline.merge_reverify as mr
 # isort: on
 
+import pipeline.ci as _pipeline_ci
 from pipeline.actor import bind_namespace
 from pipeline.namespace_guard import NAMESPACE_MALFORMED, NAMESPACE_MISMATCH
 
@@ -101,12 +102,12 @@ def _patch_head(monkeypatch, sha: str) -> None:
 
 def _pass_seams(monkeypatch) -> None:
     monkeypatch.setattr(
-        server,
+        _pipeline_ci,
         "_reverify_acceptance",
         lambda story, path, key, settings=None: {"state": "pass", "error": ""},
     )
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
 

@@ -25,6 +25,7 @@ import subprocess
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server  # noqa: F401 - pre-existing import cycle, import first
 from pipeline import review_merge_binding
 from pipeline.review_merge_binding import check
@@ -453,12 +454,12 @@ def _install_approve_merge_seams(monkeypatch, head, pushed="deadbeefcafe99"):
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: [])
     monkeypatch.setattr(merge, "_maybe_record_retro", lambda *a, **k: None)
-    monkeypatch.setattr(p, "_ci_status", lambda *a, **k: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda *a, **k: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
         review_merge_binding, "branch_head_sha", lambda branch, **kw: head
@@ -602,10 +603,10 @@ def _install_scheduler_seams(monkeypatch, head):
         p, "_merge_gate_ci_status", lambda *a, **k: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda *a, **k: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
         p, "_merge_decision", lambda story: {"action": "merge", "reason": ""}

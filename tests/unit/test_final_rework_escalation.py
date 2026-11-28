@@ -49,6 +49,7 @@ import json
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 import pipeline.ticketing as pt
 from pipeline import persistence as ppers
@@ -380,7 +381,7 @@ def test_final_rework_escalation_noop_on_oracle_cap_of_one(
     )
     # The acceptance-oracle re-verification path runs on REQUEST_CHANGES for
     # acceptance-bearing stories; stub it so no real subprocess is needed.
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda s, wt, sk="", settings=None: {"state": "fail", "error": ""})
 
     _force_request_changes(monkeypatch)

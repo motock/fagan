@@ -42,6 +42,7 @@ from pipeline import server as server_mod
 # The module that owns the manifest persistence and the real adjudication loop
 # these tests drive end to end.
 from pipeline import advance as advance_mod
+import pipeline.ci as _pipeline_ci
 
 PLAN = "PLAN-1"
 PROCEED_REPLY = "RULING: proceed\nRATIONALE: ok"
@@ -114,7 +115,7 @@ def _install(monkeypatch, tmp_path, branches, resolve_calls=None, ruling=PROCEED
         branches.append(branch)
         return dict(PASS_STATE)
 
-    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
 
     def fake_resolve(worktree, story_key):
         if resolve_calls is not None:

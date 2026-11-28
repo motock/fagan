@@ -31,6 +31,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import persistence as ppers
 
@@ -372,7 +373,7 @@ def test_comment_uses_raw_findings_not_feedback_preamble(
 
     # The oracle re-verification reports PASS, which triggers the preamble.
     monkeypatch.setattr(
-        p, "_reverify_acceptance",
+        _pipeline_ci, "_reverify_acceptance",
         lambda s, wt, sk="", settings=None: {"state": "pass", "error": ""},
     )
     # An acceptance-bearing story uses REWORK_MAX_ATTEMPTS_ORACLE as its

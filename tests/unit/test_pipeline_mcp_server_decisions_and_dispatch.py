@@ -9,6 +9,7 @@ import os
 import httpx
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import server as p
 from pipeline import ticketing as pt
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -816,8 +817,8 @@ def test_record_retro_pending_helper_writes_expected_line(tmp_path, monkeypatch)
     pending = self_root / "retros" / "PENDING.md"
     monkeypatch.setattr(p, "PIPELINE_SELF_REPO_ROOT", self_root, raising=False)
     monkeypatch.setattr(p, "RETRO_PENDING_PATH", pending, raising=False)
-    assert hasattr(p, "_record_retro_pending")
-    p._record_retro_pending("helperplan", 3)
+    assert hasattr(_pipeline_ci, "_record_retro_pending")
+    _pipeline_ci._record_retro_pending("helperplan", 3)
     assert pending.exists()
     line = pending.read_text()
     assert line.startswith("- helperplan ")

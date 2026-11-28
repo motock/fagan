@@ -34,6 +34,7 @@ import pipeline.server
 import pipeline
 from pipeline import server
 import pipeline.merge_reverify as mr
+import pipeline.ci as _pipeline_ci
 # isort: on
 # isort: on
 
@@ -679,9 +680,9 @@ def test_main_passes_and_keeps_the_manifest_untouched(tmp_path, monkeypatch):
         story["last_test_check"] = "2026-10-28T12:00:00Z"
         return {"state": "pass", "error": ""}
 
-    monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -709,7 +710,7 @@ def test_main_reports_an_acceptance_failure_without_running_the_build(tmp_path, 
     build_calls: list = []
 
     monkeypatch.setattr(
-        server,
+        _pipeline_ci,
         "_reverify_acceptance",
         lambda story, path, key, settings=None: {"state": "fail", "error": "2 failed"},
     )
@@ -718,7 +719,7 @@ def test_main_reports_an_acceptance_failure_without_running_the_build(tmp_path, 
         build_calls.append(path)
         return {"state": "pass", "error": ""}
 
-    monkeypatch.setattr(server, "_reverify_build", _build)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", _build)
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
 
@@ -740,10 +741,10 @@ def test_main_reports_a_build_failure(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     _patch_git(monkeypatch, sha="cafe1234")
     monkeypatch.setattr(
-        server, "_reverify_acceptance", lambda story, path, key, settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_acceptance", lambda story, path, key, settings=None: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path, settings=None: {"state": "fail", "error": "lint"}
+        _pipeline_ci, "_reverify_build", lambda path, settings=None: {"state": "fail", "error": "lint"}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -766,9 +767,9 @@ def test_main_reports_a_raising_acceptance_as_an_error(tmp_path, monkeypatch):
     def _acceptance(story, path, key, settings=None):
         raise RuntimeError("secret token abc")
 
-    monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
@@ -798,8 +799,8 @@ def test_main_reports_a_raising_build_as_an_error(tmp_path, monkeypatch):
     def _build(path, settings=None):
         raise ValueError("internal path /home/someone/secret")
 
-    monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
-    monkeypatch.setattr(server, "_reverify_build", _build)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", _acceptance)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", _build)
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])
 
@@ -868,9 +869,9 @@ def test_main_reads_the_story_from_the_record_store_without_a_manifest_file(
         story["last_test_check"] = "2026-10-28T12:00:00Z"
         return {"state": "pass", "error": ""}
 
-    monkeypatch.setattr(server, "_reverify_acceptance", _acceptance)
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", _acceptance)
     monkeypatch.setattr(
-        server, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_reverify_build", lambda path, settings=None: {"state": "pass", "error": ""}
     )
 
     rc = mr.main(["P", "S-1", str(worktree), str(result_path)])

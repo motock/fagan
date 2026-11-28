@@ -34,6 +34,7 @@ must actually take effect for the push to land in the right place.
 import json
 import subprocess
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import merge
 
@@ -139,13 +140,13 @@ class TestApproveMergePushesToScopedRepoNotDefaultRepoRoot:
         monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
         # _scoped_repo_root runs FOR REAL here (not stubbed to a no-op) so
         # the reassignment timing bug is actually exercised.
-        monkeypatch.setattr(p, "_ci_status", ci_status)
-        monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status", ci_status)
+        monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
         monkeypatch.setattr(
-            p, "_reverify_acceptance",
+            _pipeline_ci, "_reverify_acceptance",
             lambda story, wt, key, settings=None: {"state": "pass"},
         )
-        monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
+        monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
         monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
         monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
         monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)

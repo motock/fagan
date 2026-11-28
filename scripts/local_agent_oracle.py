@@ -48,12 +48,12 @@ import os
 import re  # noqa: F401 (re-exported: the moved chat/repair impls use their own; kept for parity with the moved cluster's module context)
 import subprocess
 import sys
-import time
-from collections import deque
+import time  # noqa: F401 (kept: the moved loop phases read it via origin)
+from collections import deque  # noqa: F401 (kept: asserted present by test_oracle_counter_import_removed_as_dead_code_but_deque_kept)
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
+import httpx  # noqa: F401 (kept: the moved loop phases read it via origin)
 
 # Calibrated at runtime from ollama's own measured prompt_eval_count. Ported
 # from local_agent.py - see that file's comment for the live incident
@@ -90,21 +90,21 @@ from app import pipeline_mcp_server as p
 from pipeline import edit_guards
 from pipeline.local_agent_common import (
     CWD,
-    PersistingList,
+    PersistingList,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _dropped_top_level_defs,
     _dropped_top_level_vars,
-    _is_context_overflow_error,
-    _load_resume_transcript,
+    _is_context_overflow_error,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _load_resume_transcript,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _message_char_len,  # noqa: F401 (re-exported: the moved calibration impls read it via origin)
-    _persist_messages,
+    _persist_messages,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _str_replace_not_found_diag,
-    _total_chars,
-    _trim_resumed_transcript,
+    _total_chars,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _trim_resumed_transcript,  # noqa: F401 (kept: the moved loop phases read it via origin)
     destructive_git_op,
 )
 from pipeline.worker_scope import worker_namespace
 from scripts.local_agent_oracle_done_marker import restore_tampered_oracle_files_impl
-from scripts.local_agent_oracle_guards import _no_tool_nudge
+from scripts.local_agent_oracle_guards import _no_tool_nudge  # noqa: F401 (kept: the moved loop phases read it via origin)
 from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_tool references these as bare names)
     _SYNTAX_REJECT_COUNTS,
     _function_name_scopes,
@@ -543,443 +543,42 @@ def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
 
 
 def _main_impl() -> int:
-    # A fresh dispatch has no calibration data yet - clear any value left
-    # over from a prior dispatch that shared this process (or, in-process, a
-    # prior test). Ported from local_agent.py; keep both copies in sync.
-    global _measured_chars_per_token, _last_prompt_eval_count
-    _measured_chars_per_token = None
-    _last_prompt_eval_count = None
-    print(
-        f"[boot] pid={os.getpid()} model={MODEL} endpoint={ENDPOINT} "
-        f"provider={PROVIDER} steps={MAX_STEPS} timeout={TIMEOUT}s",
-        flush=True,
+    """The agent step loop; phases live in scripts/local_agent_oracle_loop.py."""
+    from scripts.local_agent_oracle_loop import (
+        chat_turn_impl,
+        no_tool_turn_impl,
+        preflight_impl,
+        startup_impl,
+        step_cap_impl,
+        step_guards_impl,
+        tool_call_impl,
     )
-    system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
-    task = os.environ.get("LOCAL_AGENT_TASK", "")
-    # Initialize messages list with optional persistence support.
-    # Resume path: if LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid
-    # transcript, load it instead of building the fresh system/task pair (the
-    # loaded transcript already contains the original system+task prompt).
-    # Otherwise fall back to the fresh pair. LOCAL_AGENT_TRANSCRIPT_PATH
-    # (persistence) is independent of resume — a dispatch can persist without
-    # resuming, resume without persisting, or both. Ported from
-    # local_agent.py; keep both copies in sync.
-    transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
-    messages = PersistingList(transcript_path=transcript_path)
-    if resume := _load_resume_transcript():
-        # No live calibration exists yet this early (reset above, before any
-        # turn has run), so this always uses the fixed guess via
-        # _effective_chars_per_token()'s fallback.
-        budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
-        resume = _trim_resumed_transcript(resume, budget_chars)
-        messages.extend(resume)
-    else:
-        system_content = HARNESS_RULES + ("\n\n" + system if system else "")
-        messages.extend([{"role": "system", "content": system_content},
-                         {"role": "user", "content": task}])
-    # When resuming, optionally append exactly one new user turn as a
-    # continuation (e.g. reviewer feedback) instead of re-injecting the
-    # original system/task prompt.
-    resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
-    if resume and resume_append:
-        messages.append({"role": "user", "content": resume_append})
-
-    # A missing fixture means the oracle cannot grade this story at all. End the
-    # run before the first model call with exit 1 (LLM-call-failed path): it
-    # writes no commit, and the done marker grades the story as failed rather
-    # than parking or re-dispatching it (no step/infra retry can restore a file
-    # the checkout dropped). No new exit code.
-    missing = missing_acceptance_fixtures() if ACCEPTANCE_PATHS else []
-    if missing:
-        print(f"[boot] acceptance fixture missing from the working copy: {', '.join(missing)}",
-              flush=True)
-        return 1
-
-    if not ACCEPTANCE_PATHS:
-        print("[local_agent_oracle] WARNING: no LOCAL_AGENT_ACCEPTANCE; "
-              "this variant should not have been launched. Falling back to "
-              "no-oracle behavior — done is honored on clean worktree + model `done`.", flush=True)
-    else:
-        _capture_oracle_snapshot()
-
-    exclude_runtime_artifacts()
-
-    seen: dict = {}
-    nudged_repeat = False
-    nudged_read_heavy = False
-    recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
-    distinct_windows = 0
-    consecutive_no_tool = 0
-    # Mirror local_agent.py: cap full-suite done-rejections on a rework round so
-    # a model that cannot green the suite parks rather than burning the whole
-    # budget alternating `done` with narration. See REWORK_SUITE_REJECT_CAP.
-    suite_rejections = 0
-    _reset_suite_rejections()
-    # Failing-str_replace loop guard: str_replace is excluded from the
-    # per-target repetition guard (each old_str differs), so a no-match loop
-    # on one file runs uncaught. Track consecutive FAILED str_replace per
-    # path; after 2, steer to replace_lines. Reset on a successful str_replace
-    # to that path (and re-arm the nudge so a second stall is caught too).
-    failed_sr: dict[str, int] = {}
-    nudged_sr_fail: set[str] = set()
-    last_progress_step = 0
-    start_time = time.monotonic()
-
+    st = startup_impl(globals())
+    rc = preflight_impl(globals(), st)
+    if rc is not None:
+        return rc
     for step in range(MAX_STEPS):
-        if time.monotonic() - start_time > TIMEOUT:
-            print(f"[step {step}] wall-clock timeout ({TIMEOUT}s) reached; parking", flush=True)
-            if worktree_dirty():
-                auto_commit("WIP (wall-clock timeout)")
-            return 2
-        if step - last_progress_step >= NET_PROGRESS_MAX_STEPS:
-            print(f"[step {step}] no successful edit in {step - last_progress_step} steps "
-                  f"(last progress at step {last_progress_step}); parking", flush=True)
-            if worktree_dirty():
-                auto_commit("WIP (no net progress)")
-            if not PARK_ENABLED:
-                messages.append({"role": "user", "content": (
-                    f"You have made no successful file edit in the last "
-                    f"{step - last_progress_step} steps. Stop investigating "
-                    f"and make ONE concrete change now: str_replace/"
-                    f"replace_lines to fix something specific, restore_file "
-                    f"if a file's edits went wrong and you want to restart "
-                    f"it clean, or checkpoint if you need to save partial "
-                    f"progress before continuing.")})
-                last_progress_step = step
-            else:
-                return 3
-        try:
-            m = chat(messages)
-        except httpx.HTTPStatusError as e:
-            if not _is_context_overflow_error(e):
-                print(f"[step {step}] LLM call failed: {e}", flush=True)
-                if worktree_dirty():
-                    auto_commit("WIP (llm error)")
-                return 1
-            # Classified by BODY, not just status: LM Studio rejects an
-            # oversized prompt with a 400, which the old `status_code < 500`
-            # test treated as an unretryable bad request and died on - skipping
-            # the trim escalation that is the actual remedy. Ollama/llama.cpp
-            # 500s still route here exactly as before.
-            # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
-            # very likely a context-window overflow (Ollama/llama.cpp returns
-            # 500 rather than a clean 4xx for this), not a transient fault.
-            # Escalate: retry with a shrinking context budget before giving
-            # up - a single trim-retry can also 500 on a still-oversized
-            # payload (confirmed live 2026-07-22: a ~190K char / ~47.6K
-            # estimated-token transcript against a 32768-token NUM_CTX; and
-            # 2026-07-30: a single trim-retry also 500'd, killing a ~95%-
-            # complete converging run). Ported from local_agent.py - keep both
-            # copies in sync.
-            # The escalation helper only catches httpx.HTTPStatusError: a 4xx
-            # is re-raised, and a non-HTTP backend failure (httpx.TransportError,
-            # inference_providers.RateLimitedError, any other Exception chat()
-            # can raise) propagates out of the helper. A sibling except clause of
-            # this same try does NOT catch exceptions raised from inside another
-            # except handler, so the except-Exception backstop below would NOT
-            # catch what the helper lets escape - it would propagate out of
-            # main() and kill the run. The original trim-retry path this replaced
-            # wrapped its chat() in a try/except-Exception "must not crash the
-            # agent loop" guard; restore that guard here so ANY failure during
-            # escalation gives up gracefully (return 1) instead of crashing.
-            try:
-                m = recover_from_oversized_5xx(messages, chat, step=step)
-            except Exception as e2:  # noqa: BLE001 (an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop)
-                print(f"[step {step}] LLM call failed during 5xx escalation: {e2}", flush=True)
-                if worktree_dirty():
-                    auto_commit("WIP (llm error)")
-                return 1
-            if m is None:
-                print(f"[step {step}] LLM call failed after trim-retry: {e}", flush=True)
-                if worktree_dirty():
-                    auto_commit("WIP (llm error)")
-                return 1
-        except Exception as e:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
-            print(f"[step {step}] LLM call failed: {e}", flush=True)
-            if worktree_dirty():
-                auto_commit("WIP (llm error)")
-            return 1
-        messages.append(m)
-        # Proactive trim: once a turn's measured prompt_eval_count is already
-        # close to NUM_CTX, shrink the transcript now rather than waiting for
-        # the next turn to overflow and 500. Ported from local_agent.py; keep
-        # both copies in sync.
-        if (
-            _last_prompt_eval_count is not None
-            and _last_prompt_eval_count >= NUM_CTX * PROACTIVE_TRIM_THRESHOLD
-        ):
-            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
-            trimmed = _trim_resumed_transcript(messages, budget_chars)
-            if _total_chars(trimmed) < _total_chars(messages):
-                print(f"[step {step}] measured prompt_eval_count="
-                      f"{_last_prompt_eval_count} >= {PROACTIVE_TRIM_THRESHOLD:.0%} of "
-                      f"NUM_CTX={NUM_CTX}; trimming proactively", flush=True)
-                messages[:] = trimmed
-                _persist_messages(messages, transcript_path)
-                _last_prompt_eval_count = None
+        rc = step_guards_impl(globals(), st, step)
+        if rc is not None:
+            return rc
+        m, rc = chat_turn_impl(globals(), st, step)
+        if rc is not None:
+            return rc
         tcs = m.get("tool_calls") or recover_tool_calls(m.get("content", ""))
         if not tcs:
-            consecutive_no_tool += 1
-            print(f"[step {step}] no tool call ({consecutive_no_tool} consecutive): "
-                  f"{(m.get('content') or '')[:100]!r}", flush=True)
-            if consecutive_no_tool >= NO_TOOL_CAP:
-                print(f"[step {step}] narration cap ({NO_TOOL_CAP} consecutive "
-                      f"no-tool turns) reached; parking", flush=True)
-                if worktree_dirty():
-                    auto_commit("WIP (narration cap)")
-                return 2
-            messages.append({"role": "user", "content": _no_tool_nudge(
-                consecutive_no_tool, content=m.get("content", ""))})
+            rc = no_tool_turn_impl(globals(), st, step, m)
+            if rc is not None:
+                return rc
             continue
-        consecutive_no_tool = 0
+        st.consecutive_no_tool = 0
 
         for tc in tcs:
-            fn = tc["function"]["name"]
-            args = tc["function"]["arguments"]
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:  # noqa: BLE001 (malformed tool-call args from the model fall back to empty args rather than crashing the loop)
-                    args = {}
-
-            if fn == "done":
-                ok, tail = oracle_result()
-                if ok:
-                    # L1: on a CI-fail-rework round the model can dodge the
-                    # raised done-bar that finish_if_green enforces by calling
-                    # `done` directly (observed 2026-07-18: gpt-oss called done
-                    # on round 3 with its own pasted pytest showing 3 failed,
-                    # oracle green, done accepted - bypassed the gate). Close
-                    # the bypass: require the full suite green here too, else
-                    # feed the failing excerpt back and reject. Cold-start
-                    # dispatches skip this unless FULL_SUITE_DONE_BAR arms it.
-                    if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
-                        full_ok, full_tail, gate = _full_suite_result()
-                        if not full_ok:
-                            suite_rejections += 1
-                            if suite_rejections >= REWORK_SUITE_REJECT_CAP:
-                                if worktree_dirty():
-                                    auto_commit("wip: rework suite-reject cap")
-                                print(f"[step {step}] rework suite-reject cap "
-                                      f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
-                                      f"cannot green the full suite — parking", flush=True)
-                                return 2
-                            if gate == 'lint':
-                                print(f"[step {step}] done rejected — lint gate still "
-                                      f"fails (rework done-bar); asking agent to fix the "
-                                      f"lint failure", flush=True)
-                                messages.append({"role": "user", "content": (
-                                    f"Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{full_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full.")})
-                            else:
-                                print(f"[step {step}] done rejected — full test suite "
-                                      f"still fails (rework done-bar); asking agent to "
-                                      f"fix the failure", flush=True)
-                                messages.append({"role": "user", "content": (
-                                    "The acceptance oracle passes but the FULL test suite "
-                                    f"still fails. The merge-gate CI will reject this on "
-                                    f"the same failure:\n{full_tail}\n\nThe bug could be "
-                                    "in the implementation you just changed, or in a test "
-                                    "file - do not assume either side is correct. Re-read "
-                                    "the failing test and the code it exercises, identify "
-                                    "which one is actually wrong, and make ONE targeted "
-                                    "fix there. Do NOT call done until `pytest` passes in "
-                                    "full.")})
-                            break
-                    if worktree_dirty():
-                        auto_commit(GREEN_COMMIT_SUBJECT)
-                    print(f"[step {step}] DONE (oracle green): {args.get('summary', '')}", flush=True)
-                    return 0
-                print(f"[step {step}] done rejected — acceptance tests still failing", flush=True)
-                oracle_list = ", ".join(ACCEPTANCE_PATHS) or "(none)"
-                messages.append({"role": "user", "content": (
-                    "The acceptance tests are not passing yet:\n" + tail +
-                    "\nFix the implementation file and try again. Do not "
-                    f"modify the acceptance suite at: {oracle_list}.")})
+            outcome = tool_call_impl(globals(), st, step, tc)
+            if outcome == "break":
                 break
-
-            if fn == "view_file":
-                # Range-aware: different regions are not repetition; a one-sided
-                # read's single bound identifies its region exactly.
-                ls, le = args.get("line_start"), args.get("line_end")
-                if ls is None and le is None:
-                    sig = (fn, args.get("path"))
-                elif isinstance(ls, int) and isinstance(le, int):
-                    sig = (fn, args.get("path"), ls // 200, le // 200)
-                else:
-                    sig = (fn, args.get("path"), ls, le)
-            else:
-                sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
-            # str_replace calls are excluded from the per-target repetition
-            # guard: each one produces a *different* file state (the
-            # `old_str` next time will differ, or `run_tool` will reject
-            # it as "not found"), so a sequence of edits to the same file
-            # is a legitimate fix-build cycle, not a repetition. The
-            # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
-            # in a bad edit loop — str_replace calls reset that window.
-            #
-            above_threshold = False
-            if fn not in ("str_replace", "replace_lines"):
-                seen[sig] = seen.get(sig, 0) + 1
-                if seen[sig] >= 3:
-                    above_threshold = True
-            print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
-
-            if above_threshold:
-                if not nudged_repeat:
-                    nudged_repeat = True
-                    print("   [repetition nudge]", flush=True)
-                    oracle_list = ", ".join(ACCEPTANCE_PATHS) or "(none)"
-                    messages.append({"role": "user", "content": (
-                        "You have repeated the same action 3 times with no progress. STOP. "
-                        "Run `pytest " + " ".join(ACCEPTANCE_PATHS) + "` to see the real failure, "
-                        "view the actual file contents, and fix the ROOT cause in the implementation "
-                        f"file. Do not modify the acceptance suite at: {oracle_list}.")})
-                    break
-                print("   [parking: repeated action after nudge]", flush=True)
-                if worktree_dirty():
-                    auto_commit("WIP (parked on repetition)")
-                if not PARK_ENABLED:
-                    break
-                return 3
-
-            # A malformed tool call (e.g. a model that omits a required arg
-            # like old_str) must nudge the model with a recoverable error, not
-            # crash the whole unattended agent with an uncaught exception.
-            tool_result = safe_run_tool(fn, args)
-            messages.append({"role": "tool", "content": tool_result})
-
-            # A GENUINELY SUCCESSFUL mutation (str_replace/create_file)
-            # resets every OTHER signature's accumulated count: `seen` was a
-            # lifetime cumulative counter, so re-viewing a file 2x, editing
-            # it, then viewing it again to check the edit landed hit the >=3
-            # threshold from stale pre-edit reads, even though real progress
-            # happened in between (see local_agent.py's mirrored comment).
-            #
-            # Gated on SUCCESS (a result that isn't an "ERROR..." string),
-            # not merely on tool identity — a REJECTED create_file/str_replace
-            # changed nothing on disk and must not be treated as progress.
-            # Pre-fix, this clear ran unconditionally on every mutating call
-            # regardless of outcome: create_file's own repeated FAILURES
-            # wiped their own accumulating count before ever reaching the
-            # threshold, AND a failed str_replace interleaved between failed
-            # create_file attempts also wiped create_file's count - so even
-            # alternating the two tools indefinitely never tripped the guard
-            # (observed live 2026-07-15: create_file/str_replace/str_replace/
-            # bash on repeat, dozens of times, zero nudges).
-            if fn in MUTATING_TOOLS:
-                succeeded = isinstance(tool_result, str) and not tool_result.startswith("ERROR")
-                if succeeded:
-                    seen.clear()
-                    last_progress_step = step
-
-            # Failing-str_replace loop guard (mirrored from local_agent.py):
-            # str_replace is excluded from the per-target repetition guard
-            # above, so a no-match loop on one file runs uncaught. After 2
-            # consecutive FAILED str_replace on the same path, steer to
-            # replace_lines (line numbers, no byte-exact match). A successful
-            # str_replace resets the counter and re-arms the nudge.
-            if fn == "str_replace":
-                sr_path = args.get("path", "")
-                if isinstance(tool_result, str) and tool_result.startswith("ERROR"):
-                    failed_sr[sr_path] = failed_sr.get(sr_path, 0) + 1
-                    if failed_sr[sr_path] >= 2 and sr_path not in nudged_sr_fail:
-                        nudged_sr_fail.add(sr_path)
-                        print(f"   [str_replace-fail nudge: {failed_sr[sr_path]} "
-                              f"failed matches on {sr_path}]", flush=True)
-                        messages.append({"role": "user", "content": (
-                            f"Your last {failed_sr[sr_path]} str_replace calls on {sr_path} "
-                            f"did not match — you cannot construct a matching old_str (likely "
-                            f"a whitespace difference). STOP retrying str_replace on this file. "
-                            f"Run `nl -ba {sr_path} | sed -n '<start>,<end>p'` to get exact line "
-                            f"numbers, then use replace_lines(path, start, end, new_str) which "
-                            f"needs no byte-exact old_str.")})
-                else:
-                    failed_sr[sr_path] = 0
-                    nudged_sr_fail.discard(sr_path)
-
-            # Read-heavy-pattern guard. Tracked separately from the per-target
-            # repetition guard: the per-target one misses this case because
-            # every call hits a different file/command (every signature is
-            # unique). The model is still in a paralysis-by-analysis loop if
-            # the last READ_HEAVY_WINDOW tool calls were all non-mutating.
-            # Two-stage response: one corrective nudge, then park if the
-            # pattern persists.
-            recent_tools.append((fn, sig[1]))
-            if (len(recent_tools) == READ_HEAVY_WINDOW
-                    and all(f not in MUTATING_TOOLS for (f, _t) in recent_tools)):
-                distinct_targets = len({_t for (_f, _t) in recent_tools})
-                has_repetition = distinct_targets < READ_HEAVY_WINDOW
-                if not nudged_read_heavy:
-                    nudged_read_heavy = True
-                    print(f"   [read-heavy nudge: {READ_HEAVY_WINDOW} reads in a row]", flush=True)
-                    oracle_list = ", ".join(ACCEPTANCE_PATHS) or "(none)"
-                    messages.append({"role": "user", "content": (
-                        f"You've made {READ_HEAVY_WINDOW} tool calls in a row without writing "
-                        "or editing any file (only view_file / bash / checkpoint). "
-                        "STOP READING and make an edit. Either:\n"
-                        "1. create_file for a new module or test,\n"
-                        "2. str_replace to modify an existing file based on what you've "
-                        "already read, or\n"
-                        "3. checkpoint if you need to commit a work-in-progress before "
-                        "deciding the next concrete change.\n"
-                        f"Do not modify the acceptance suite at: {oracle_list}.\n"
-                        "Reading more files without acting is wasting your step budget.")})
-                    # Reset so the next detection needs another full window of reads
-                    # (not whatever happens to be left in the deque).
-                    recent_tools.clear()
-                    distinct_windows = 0
-                elif has_repetition:
-                    # Re-reading an already-seen target after being nudged to
-                    # act is wedging, not exploration. Park at the strict
-                    # 2 * READ_HEAVY_WINDOW (12) -- unchanged from the flat
-                    # cutoff for this signal.
-                    print("   [parking: read-heavy after nudge]", flush=True)
-                    if worktree_dirty():
-                        auto_commit("WIP (read-heavy parking)")
-                    if not PARK_ENABLED:
-                        recent_tools.clear()
-                        break
-                    return 3
-                else:
-                    # All-distinct reads after the nudge: the model is
-                    # exploring multiple files (each read once), not wedged
-                    # on one. A multi-file bug fix legitimately needs more
-                    # than READ_HEAVY_WINDOW reads to orient before its
-                    # first edit. Let it continue, bounded by
-                    # READ_HEAVY_DISTINCT_WINDOWS all-distinct windows -- so
-                    # exploration that reaches an edit is not cut off, but a
-                    # model that reads forever with no mutation is still
-                    # caught (bounded, not disabled). Ported from
-                    # local_agent.py per the Mode 3a lesson.
-                    distinct_windows += 1
-                    if distinct_windows >= READ_HEAVY_DISTINCT_WINDOWS:
-                        print(f"   [parking: read-heavy after {distinct_windows} distinct windows]",
-                              flush=True)
-                        if worktree_dirty():
-                            auto_commit("WIP (read-heavy parking)")
-                        if not PARK_ENABLED:
-                            recent_tools.clear()
-                            break
-                        return 3
-                    recent_tools.clear()
-
-            # Fix #1: the harness, not the model, decides done. The instant the
-            # independent oracle is green, auto-commit and exit. This fires
-            # *during* the model's iteration so a correct first attempt
-            # finishes in a single step.
-            if ACCEPTANCE_PATHS and fn in ("create_file", "str_replace", "bash"):
-                if finish_if_green(step, messages):
-                    return 0
-                # The automatic done-bar is unwinnable (oracle green, full
-                # suite red CAP times running). Park rather than spend the
-                # remaining steps re-running a suite that cannot go green.
-                if suite_reject_cap_reached():
-                    return 2
-
-    print("[ended without oracle green — step cap reached]", flush=True)
-    if worktree_dirty():
-        auto_commit("WIP (step cap reached)")
-    return 2
+            if outcome is not None:
+                return outcome
+    return step_cap_impl(globals())
 
 
 _DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}

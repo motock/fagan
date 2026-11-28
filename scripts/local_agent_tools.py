@@ -500,7 +500,10 @@ def _restore_file(origin, args) -> str:
               f"uncommitted changes to this file are gone. Other files are untouched.")
 
 
-def _bash(origin, args) -> str:
+def _bash(origin, args, after_run=None) -> str:
+    """Run a shell command. ``after_run`` (oracle variant) is called after the
+    command ran and its return value is appended to the output; it is not
+    called when the command is refused."""
     cmd = args.get("command", "")
     # Refuse destructive git ops before they reach the shell — they discard
     # the branch's WIP commits / working-tree changes (see
@@ -542,7 +545,8 @@ def _bash(origin, args) -> str:
             pr = subprocess.run(cmd, check=False, **run_kwargs)
     else:
         pr = subprocess.run(cmd, check=False, **run_kwargs)
-    return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+    result = (pr.stdout + pr.stderr)[:3000] or "(no output)"
+    return result + after_run() if after_run else result
 
 
 def _checkpoint(origin, args) -> str:

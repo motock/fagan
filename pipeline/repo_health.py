@@ -9,6 +9,7 @@ Additionally this module provides oracle and CI finding helpers.
 
 """
 
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -17,6 +18,8 @@ from pathlib import Path
 from . import tenant_exec
 from .build_detect import detect_lint_command, detect_test_command
 from .oracle_gate import validate_acceptance_fixtures
+
+logger = logging.getLogger("pipeline")
 
 __all__ = ["ci_finding", "classify_repo_health", "format_findings", "lint_baseline_finding", "oracle_finding", "suite_baseline_finding"]
 
@@ -137,7 +140,7 @@ def oracle_finding(story, checkout) -> dict | None:
     """
     try:
         result = validate_acceptance_fixtures(story, Path(checkout))
-    except Exception as exc:  # defensive guard  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - never raises; reported as an oracle_probe_failed finding
         return {
             "kind": "oracle_probe_failed",
             "detail": f"{type(exc).__name__}: {exc}",
@@ -212,29 +215,41 @@ def classify_repo_health(story, checkout, ci_status=None):
         result = lint_baseline_finding(checkout)
         if result is not None:
             findings.append(result)
-    except Exception:  # noqa: S110, BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - one failing probe must not hide the others
+        logger.warning(
+            "repo health probe failed; skipping its finding (%s)",
+            type(exc).__name__,
+        )
     # suite
     try:
         result = suite_baseline_finding(checkout)
         if result is not None:
             findings.append(result)
-    except Exception:  # noqa: S110, BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - one failing probe must not hide the others
+        logger.warning(
+            "repo health probe failed; skipping its finding (%s)",
+            type(exc).__name__,
+        )
     # oracle
     try:
         result = oracle_finding(story, checkout)
         if result is not None:
             findings.append(result)
-    except Exception:  # noqa: S110, BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - one failing probe must not hide the others
+        logger.warning(
+            "repo health probe failed; skipping its finding (%s)",
+            type(exc).__name__,
+        )
     # ci
     try:
         result = ci_finding(ci_status)
         if result is not None:
             findings.append(result)
-    except Exception:  # noqa: S110, BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - one failing probe must not hide the others
+        logger.warning(
+            "repo health probe failed; skipping its finding (%s)",
+            type(exc).__name__,
+        )
     return findings
 
 

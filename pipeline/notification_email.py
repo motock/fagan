@@ -592,7 +592,7 @@ class EmailChannelType:
                 if permanent
                 else DeliveryResult(DeliveryStatus.RETRY),
             )
-        except Exception as exc:  # noqa: BLE001 - connection/timeout/TLS: retry later
+        except Exception as exc:  # noqa: BLE001 - connection/timeout/TLS: retry later; _failed logs the class name
             return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY))
         log.info("email channel sent: channel=%s", self.name)
         return DeliveryResult(DeliveryStatus.DELIVERED)

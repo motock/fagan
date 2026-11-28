@@ -22,6 +22,7 @@ nothing is imported from app/.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -30,6 +31,8 @@ from pathlib import Path
 # modules), so its PLAN_DIR binding is reused as the repo's documented patch
 # surface for plan-dir resolution. It is read at call time, never cached here.
 from pipeline import host_state, paths
+
+logger = logging.getLogger("pipeline")
 
 __all__ = ["PreflightError", "raise_on_failure", "run_preflight", "summarize"]
 
@@ -308,11 +311,15 @@ def _resolve_backend():
         from pipeline.dispatch import _resolve_dispatch_target
 
         backend = _resolve_dispatch_target({}, None)[0]
-    except Exception:  # noqa: BLE001 -- a diagnostic must never crash
+    except Exception as exc:  # noqa: BLE001 -- a diagnostic must never crash
         # Only reachable when the shared resolver itself is unavailable
         # (e.g. a broken app.role_registry import). Degrade to dispatch's
         # own documented fail-open priority -- the env var, then "claude" --
         # exactly what _dispatch_fallback_provider would resolve to.
+        logger.debug(
+            "dispatch resolver unavailable; using env fallback (%s)",
+            type(exc).__name__,
+        )
         raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
         backend = (raw_backend or "claude").strip().lower() or "claude"
     return (backend or "claude").strip().lower() or "claude"
@@ -430,7 +437,7 @@ def _check_model_registry(registry_loader):
             registry_payload = json.loads(
                 registry_path.read_text(encoding="utf-8")
             )
-    except Exception as exc:  # noqa: BLE001 - any loader failure is a fail
+    except Exception as exc:  # noqa: BLE001 - any loader failure is a fail, reported in the check result
         # Non-leaking: report the error CLASS name only. Never embed str(exc)
         # / repr(exc) (they may carry env values or tokens), env values, or
         # file contents — just a static hint pointing at model_registry.json.

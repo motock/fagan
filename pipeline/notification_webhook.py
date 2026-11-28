@@ -221,7 +221,7 @@ class WebhookChannelType:
         try:
             with _client(url, address, self._timeout) as client:
                 response = client.post(url, content=body.encode(), headers=headers)
-        except Exception as exc:  # noqa: BLE001 - timeout/connection: retry later
+        except Exception as exc:  # noqa: BLE001 - timeout/connection: retry later; _failed logs the class name
             return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY))
         return self._http_status(response.status_code, response.headers)
 

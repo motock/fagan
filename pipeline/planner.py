@@ -345,10 +345,14 @@ def _run_planner(
             cell_dir=cell_dir,
             role="planner",
         )
-    except Exception:  # noqa: BLE001 (broad and intentional: this call must never be a gate, per the comment below)
+    except Exception as exc:  # noqa: BLE001 (broad and intentional: this call must never be a gate, per the comment below)
         # Broad and intentional: this call must never be a gate. Mirrors
         # the Gap-7 multi-model warning's "observability hook, never a
         # gate" except-Exception pattern elsewhere in dispatch_story.
+        logging.getLogger("pipeline").warning(
+            "planner call failed; dispatching without a checklist (%s)",
+            type(exc).__name__,
+        )
         return None
     text = (text or "").strip()
     return text or None
@@ -440,7 +444,11 @@ def _run_rework_planner(
             cell_dir=cell_dir,
             role="rework_planner",
         )
-    except Exception:  # noqa: BLE001 (deliberate fail-open-to-None contract, per this function's docstring)
+    except Exception as exc:  # noqa: BLE001 (deliberate fail-open-to-None contract, per this function's docstring)
+        logging.getLogger("pipeline").warning(
+            "rework planner call failed; dispatching without a checklist (%s)",
+            type(exc).__name__,
+        )
         return None
     text = (text or "").strip()
     return text or None
@@ -475,7 +483,11 @@ def _rework_requires_new_tests(
             system=_REWORK_NEEDS_NEW_TEST_SYSTEM,
             model=model,
         )
-    except Exception:  # noqa: BLE001 (fail-open, mirrors _run_rework_planner's contract)
+    except Exception as exc:  # noqa: BLE001 (fail-open, mirrors _run_rework_planner's contract)
+        logging.getLogger("pipeline").warning(
+            "rework test-need check failed; assuming no new test (%s)",
+            type(exc).__name__,
+        )
         return False
     return (text or "").strip().upper().startswith("YES")
 
@@ -661,7 +673,7 @@ def _run_decompose_detailed(
             model=resolution.model,
             allowed_tools="Read",
         )
-    except Exception as exc:  # noqa: BLE001 (deliberate fail-open, per contract above)
+    except Exception as exc:  # noqa: BLE001 - deliberate fail-open; the error is returned to the caller
         return None, f"{type(exc).__name__}: {exc}"
     text = (text or "").strip()
     return (text or None), None

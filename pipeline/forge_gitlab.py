@@ -33,6 +33,7 @@ local rebase and the force-push that publish the rewritten branch, so
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -50,6 +51,8 @@ from .forge import (
     CIStatusUnreadable,
     Forge,
 )
+
+logger = logging.getLogger("pipeline")
 
 # GitLab's merge-request states, mapped to the protocol's vocabulary.
 MERGED = "MERGED"
@@ -266,7 +269,11 @@ class GitLabForge(Forge):
             if proc is None or proc.returncode != 0:
                 return "pending"
             payload = json.loads(proc.stdout or "")
-        except Exception:  # noqa: BLE001 - this read must never raise
+        except Exception as exc:  # noqa: BLE001 - this read must never raise
+            logger.warning(
+                "merge readiness unreadable; reporting pending (%s)",
+                type(exc).__name__,
+            )
             return "pending"
         if not isinstance(payload, dict):
             return "pending"

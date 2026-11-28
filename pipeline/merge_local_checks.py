@@ -265,5 +265,5 @@ def _inline(plan_name: str, key: str, story: dict[str, Any], head: str) -> dict[
             return _record(head, "fail", checks, "lint reverify fail")
         checks["lint"] = "pass"
         return _record(head, "pass", checks, "")
-    except Exception as exc:  # noqa: BLE001 - a check that cannot run is never a pass
+    except Exception as exc:  # noqa: BLE001 - a check that cannot run is never a pass; class name is in the error record
         return _record(head, "error", {}, f"local checks raised {type(exc).__name__}")

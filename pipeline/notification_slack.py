@@ -250,7 +250,7 @@ class SlackChannelType:
                 status = response.status
         except urllib.error.HTTPError as exc:
             return self._http_status(exc.code, exc.headers, exc)
-        except Exception as exc:  # noqa: BLE001 - timeout/DNS/connection/redirect: retry later
+        except Exception as exc:  # noqa: BLE001 - timeout/DNS/connection/redirect: retry later; _failed logs the class name
             return self._failed(exc, DeliveryResult(DeliveryStatus.RETRY))
         return self._http_status(status, None, None)
 

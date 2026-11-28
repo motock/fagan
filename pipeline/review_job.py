@@ -27,6 +27,7 @@ lock.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -48,6 +49,8 @@ from pipeline.actor import (
 from pipeline.job_dirs import job_dir_under, make_job_dir
 from pipeline.namespace_guard import audit_refusal, read_plan_namespace
 from pipeline.parsers import _validate_key
+
+logger = logging.getLogger("pipeline")
 
 __all__ = [
     "cancel_review_job",
@@ -300,7 +303,11 @@ def cancel_review_job(job: dict) -> None:
         return
     try:
         alive = _pid_alive(pid)
-    except Exception:  # noqa: BLE001 - cancel is best-effort by contract
+    except Exception as exc:  # noqa: BLE001 - cancel is best-effort by contract
+        logger.debug(
+            "pid liveness probe failed; skipping cancel (%s)",
+            type(exc).__name__,
+        )
         return
     if not alive:
         return
@@ -370,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             with bind_namespace(namespace):
                 rv = pipeline.server.review_story(plan_name, story_key)  # type: ignore[attr-defined]  # injected into pipeline.server's globals from the lifecycle tool list
-    except Exception as exc:  # noqa: BLE001 - reported by class name, exit 1
+    except Exception as exc:  # noqa: BLE001 - reported by class name in the result file, exit 1
         # Class name only: the message can carry filesystem paths or a token.
         _write_result(
             result_path,

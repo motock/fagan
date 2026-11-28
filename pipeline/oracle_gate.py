@@ -143,7 +143,7 @@ def validate_acceptance_fixtures(story: dict[str, Any], checkout: Path) -> dict:
                     "implementation can satisfy it"
                 ),
             }
-    except Exception as exc:  # noqa: BLE001 (must never raise; report as broken)
+    except Exception as exc:  # noqa: BLE001 - must never raise; reported to the caller as a broken oracle
         return {"state": "errors", "detail": f"{type(exc).__name__}: {exc}", "paths": paths}
 
     return {**classified, "paths": paths}

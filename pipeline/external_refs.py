@@ -12,6 +12,7 @@ With no reference plugin selected every such entry is refused. Plain
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from typing import Any
@@ -19,6 +20,8 @@ from typing import Any
 from pipeline import access_hooks
 from pipeline.actor import current_namespace
 from pipeline.store_records import InvalidRecordKeyError, validate_namespace
+
+logger = logging.getLogger("pipeline")
 
 REF_PREFIX = "ref:"
 UNKNOWN_STATUS = "unknown"
@@ -106,7 +109,11 @@ def status_of(store: Any, namespace: str, plan: str, story_key: str) -> str:
         stories = (manifest or {}).get("stories")
         story = stories.get(story_key) if isinstance(stories, dict) else None
         status = story.get("status") if isinstance(story, dict) else None
-    except Exception:  # noqa: BLE001 - an unreadable reference holds, never releases
+    except Exception as exc:  # noqa: BLE001 - an unreadable reference holds, never releases
+        logger.warning(
+            "external reference unreadable; story holds as unknown (%s)",
+            type(exc).__name__,
+        )
         return UNKNOWN_STATUS
     return status if isinstance(status, str) else UNKNOWN_STATUS
 

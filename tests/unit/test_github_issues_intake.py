@@ -541,7 +541,7 @@ def test_issue_text_reaches_the_decomposer_only(intake_env, monkeypatch):
 # scheduler wiring
 # ---------------------------------------------------------------------------
 
-SCHEDULER = Path(__file__).resolve().parents[2] / "pipeline" / "scheduler_daemon.py"
+SCHEDULER = Path(__file__).resolve().parents[2] / "pipeline" / "scheduler_tick.py"
 
 
 def test_scheduler_runs_github_intake_directly_after_the_jira_block():

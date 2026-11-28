@@ -719,6 +719,8 @@ def _get_effective_config_impl(
 # ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``, ``RETRO_PENDING_PATH``,
 # ``_notify_user``) through ``server_bindings.server()``
 # at call time, so tests that monkeypatch them on ``pipeline.server`` take effect.
+# ``_record_retro_pending`` is a module-level call in this module; patch it on
+# ``pipeline.ci``.
 
 
 def _record_retro_pending(plan_name: str, story_count: int) -> None:

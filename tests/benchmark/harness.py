@@ -496,7 +496,7 @@ def install_merge_stubs(p, repo: Path) -> None:
     name out of `pipeline.server` into its own namespace at import time
     (`globals()[_name] = getattr(_server, _name)`). Assigning `p._ci_status =
     ...` only rebinds that copy - the real review/merge-gate code inside
-    pipeline/server.py resolves `_ci_status` etc. from ITS OWN module
+    pipeline/ci.py resolves `_ci_status` etc. from ITS OWN module
     globals, so the shim-only assignment silently never took effect (root-
     caused live 2026-07-25: every benchmark cell's merge gate was calling
     the REAL `_ci_status`/`_open_pr`/`_merge_pr` - which shell out to `gh` -

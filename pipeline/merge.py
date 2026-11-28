@@ -1,12 +1,12 @@
 """Merge adjudication helpers extracted from pipeline/server.py.
 
 These functions were moved verbatim from the server module. Tests monkeypatch
-module globals on ``pipeline.server`` (e.g. ``p._ci_status_once``,
+module globals (e.g. ``pipeline.ci._ci_status_once``,
 ``p.PIPELINE_AUTONOMY``), so every external name these functions read is
-resolved via a lazy ``from .server import ...`` inside the function body at
-call time - the same circular-avoidance pattern used by pipeline/rebase.py and
-pipeline/pr.py. This keeps the re-exported bindings on ``pipeline.server`` the
-single source of truth that monkeypatches land on.
+resolved at call time inside the function body - the same circular-avoidance
+pattern used by pipeline/rebase.py and pipeline/pr.py. The CI gate helpers
+are owned by ``pipeline.ci`` and read from it, so that is where tests patch
+them; other names still resolve through ``pipeline.server``.
 
 One deliberate exception: ``_merge_decision`` imports ``PIPELINE_AUTO_MERGE``
 from ``pipeline.config`` rather than ``pipeline.server``. ``server.py`` is at
@@ -304,8 +304,9 @@ def _populate_pr_checks_once(story, story_key: str | None = None):
     # below needs it (NameError raised from inside the swallow path).
     key = story_key or story.get("key") or story.get("story_key") or "?"
     try:
-        # The module-documented monkeypatch seam: pipeline.server re-exports
-        # the binding, so stubs land here exactly as they do for the sibling
+        # The module-documented monkeypatch seam: the helper is owned by
+        # pipeline.ci and read from it at call time, so stubs patched on
+        # pipeline.ci land here as they do for the sibling
         # _merge_gate_ci_status. Never the blocking _ci_status poller.
         from . import ci as _ci
         from .pr import _convention_branch, _resolve_story_branch

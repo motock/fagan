@@ -116,7 +116,6 @@ max-complexity = 30
 # Over the complexity ceiling when it was added (2026-11). Remove a file when its functions are under 30; never add one.
 "scripts/install_checks.py" = ["C901"]
 "scripts/local_agent_oracle_tools.py" = ["C901"]
-"scripts/local_agent_tools.py" = ["C901"]
 "tests/**" = ["C901", "S602", "S604"]
 
 [tool.mypy]

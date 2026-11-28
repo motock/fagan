@@ -107,440 +107,490 @@ def _omission_marker(content: str) -> str | None:
     return None
 
 
-def run_tool_impl(origin, fn, args) -> str:
-    if fn == "create_file":
-        path = origin["CWD"] / args["path"]
-        preexisting = path.exists() and path.read_text().strip()
-        if (preexisting
-                and args["path"] not in origin["_CREATED_THIS_RUN"]
-                and args["path"] not in origin["_VIEWED_THIS_RUN"]):
-            return (
-                f"ERROR: {args['path']} already exists and is non-empty. Use "
-                f"view_file to read it first, then create_file to overwrite it "
-                f"with the full corrected contents."
-            )
-        content = args.get("content", "")
-        err = origin["_python_syntax_error"](args["path"], content)
-        note = None
-        if err:
-            repair = origin["_try_repair_indentation"](content)
-            if repair is None:
-                return origin["_record_syntax_rejection"](args["path"], err)
-            content, note = repair
-        if preexisting:
-            dropped = origin["_dropped_top_level_defs"](path.read_text(), content)
-            if path.suffix == ".py":
-                dropped += origin["_dropped_top_level_vars"](path.read_text(), content)
-            if dropped and not args.get("confirm_removals"):
-                return (
-                    f"ERROR: this create_file overwrite of {args['path']} would "
-                    f"silently drop {len(dropped)} top-level def/class that exist "
-                    f"in the current file but not in your new content: "
-                    f"{', '.join(dropped)}. If this is unintentional, view_file "
-                    f"the current contents and include these definitions in your "
-                    f"rewrite (use str_replace/replace_lines for a small targeted "
-                    f"change instead of a full rewrite). If the removal is "
-                    f"intentional, repeat this exact call with "
-                    f"confirm_removals=true. The file was NOT overwritten."
-                )
-        if preexisting and path.suffix != ".py":
-            # Generic content-loss guard for non-Python files (Mode 22): a
-            # create_file rewrite reconstructs the file from the model's
-            # memory of having read it and can silently drop whole sections.
-            # _dropped_top_level_defs is AST-based and always returns [] for
-            # markdown/text, so compare lines instead. Small legitimate edits
-            # (a one-line fix) stay under the threshold; a dropped section or
-            # a full re-serialization does not.
-            old_lines = path.read_text().splitlines(keepends=True)
-            deletions, _rewrites = origin["edit_guards"].classify_removed_lines(
-                old_lines, content)
-            nonblank_old = sum(1 for line in old_lines if line.strip())
-            loss_threshold = max(2, round(nonblank_old * 0.10))
-            if len(deletions) >= loss_threshold and not args.get("confirm_removals"):
-                report = origin["edit_guards"].render_removal_report(deletions, [])
-                return (
-                    f"ERROR: this create_file overwrite of {args['path']} would drop "
-                    f"{len(deletions)} of {nonblank_old} non-blank line(s) that do not "
-                    f"survive (as-is or rewritten) in your new content:{report}\n\n"
-                    f"This looks like content dropped while reconstructing the file "
-                    f"from memory. Include the missing content, use "
-                    f"str_replace/replace_lines for a targeted change instead of a "
-                    f"full rewrite, or if the removal is intentional, repeat this "
-                    f"exact call with confirm_removals=true. The file was NOT overwritten."
-                )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        marker = _omission_marker(content)
-        if marker:
-            return (
-                f"ERROR: {args['path']} content ends with an omission marker "
-                f"({marker!r}) - the file was truncated, not written. Emit the "
-                f"complete content; an omission marker is not valid file content. "
-                f"The file was NOT written."
-            )
-        path.write_text(content)
-        origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
-        origin["_CREATED_THIS_RUN"].add(args["path"])
-        return (f"created {args['path']}" + (f" ({note})" if note else "")
-                + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
-    if fn == "str_replace":
-        path = origin["CWD"] / args["path"]
-        if not path.exists():
-            return f"ERROR: {args['path']} does not exist (use create_file for new files)."
-        text = path.read_text()
-        n = text.count(args["old_str"])
-        if n == 0:
-            return origin["_str_replace_not_found_diag"](args["path"], text, args["old_str"])
-        if n > 1:
-            return f"ERROR: old_str occurs {n} times in {args['path']}; include more context to make it unique."
-        new_text = text.replace(args["old_str"], args["new_str"])
-        err = origin["_python_syntax_error"](args["path"], new_text)
-        note = None
-        if err:
-            repair = origin["_try_repair_indentation"](new_text)
-            if repair is None:
-                return origin["_record_syntax_rejection"](args["path"], err, len(text.splitlines()))
-            new_text, note = repair
-        orphaned = origin["_newly_undefined_names"](args["path"], text, new_text)
-        if orphaned:
-            return (
-                f"ERROR: this edit to {args['path']} deletes the only assignment "
-                f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
-                f"this will raise NameError/UnboundLocalError at runtime. Keep the "
-                f"assignment, remove the surviving use too, or replace it with an "
-                f"equivalent. The edit was NOT applied."
-            )
-        # Top-level-symbol-loss check: name any def/class that this edit
-        # removes in its entirety, even when no same-file reference survives
-        # (the symbol may be consumed by OTHER files) - this half is
-        # unconditional. A dropped top-level var/constant is only added when
-        # it is a genuine unconfirmed loss per _var_drop_is_confirmed_loss:
-        # a rename (new_str itself assigns a top-level name) or a
-        # self-contained removal (the assignment and its only use both lived
-        # in old_str and neither survives) escapes the gate; a bare deletion
-        # with nothing replacing it does not. Gated by confirm_removals so
-        # an intentional removal still goes through when the flag is set.
-        dropped_defs = origin["_dropped_top_level_defs"](text, new_text)
+def _create_file(origin, args) -> str:
+    path = origin["CWD"] / args["path"]
+    preexisting = path.exists() and path.read_text().strip()
+    if (preexisting
+            and args["path"] not in origin["_CREATED_THIS_RUN"]
+            and args["path"] not in origin["_VIEWED_THIS_RUN"]):
+        return (
+            f"ERROR: {args['path']} already exists and is non-empty. Use "
+            f"view_file to read it first, then create_file to overwrite it "
+            f"with the full corrected contents."
+        )
+    content = args.get("content", "")
+    err = origin["_python_syntax_error"](args["path"], content)
+    note = None
+    if err:
+        repair = origin["_try_repair_indentation"](content)
+        if repair is None:
+            return origin["_record_syntax_rejection"](args["path"], err)
+        content, note = repair
+    if preexisting:
+        dropped = origin["_dropped_top_level_defs"](path.read_text(), content)
         if path.suffix == ".py":
-            dropped_vars = [
-                name for name in origin["_dropped_top_level_vars"](text, new_text)
-                if origin["_var_drop_is_confirmed_loss"](
-                    name, args["old_str"], args["new_str"], orphaned)
-            ]
-        else:
-            dropped_vars = []
-        dropped = dropped_defs + dropped_vars
+            dropped += origin["_dropped_top_level_vars"](path.read_text(), content)
         if dropped and not args.get("confirm_removals"):
             return (
-                f"ERROR: this edit to {args['path']} permanently removes these "
-                f"top-level symbols in their entirety: {', '.join(dropped)}. "
-                f"These may be public API consumed by other files. If this is "
-                f"unintentional, keep the definition in new_str. If the removal "
-                f"is intentional, repeat this exact call with "
-                f"confirm_removals=true. The edit was NOT applied."
+                f"ERROR: this create_file overwrite of {args['path']} would "
+                f"silently drop {len(dropped)} top-level def/class that exist "
+                f"in the current file but not in your new content: "
+                f"{', '.join(dropped)}. If this is unintentional, view_file "
+                f"the current contents and include these definitions in your "
+                f"rewrite (use str_replace/replace_lines for a small targeted "
+                f"change instead of a full rewrite). If the removal is "
+                f"intentional, repeat this exact call with "
+                f"confirm_removals=true. The file was NOT overwritten."
             )
-        marker = _omission_marker(new_text)
-        if marker:
+    if preexisting and path.suffix != ".py":
+        # Generic content-loss guard for non-Python files (Mode 22): a
+        # create_file rewrite reconstructs the file from the model's
+        # memory of having read it and can silently drop whole sections.
+        # _dropped_top_level_defs is AST-based and always returns [] for
+        # markdown/text, so compare lines instead. Small legitimate edits
+        # (a one-line fix) stay under the threshold; a dropped section or
+        # a full re-serialization does not.
+        old_lines = path.read_text().splitlines(keepends=True)
+        deletions, _rewrites = origin["edit_guards"].classify_removed_lines(
+            old_lines, content)
+        nonblank_old = sum(1 for line in old_lines if line.strip())
+        loss_threshold = max(2, round(nonblank_old * 0.10))
+        if len(deletions) >= loss_threshold and not args.get("confirm_removals"):
+            report = origin["edit_guards"].render_removal_report(deletions, [])
             return (
-                f"ERROR: {args['path']} content ends with an omission marker "
-                f"({marker!r}) - the file was truncated, not written. Emit the "
-                f"complete content; an omission marker is not valid file content. "
-                f"The file was NOT written."
+                f"ERROR: this create_file overwrite of {args['path']} would drop "
+                f"{len(deletions)} of {nonblank_old} non-blank line(s) that do not "
+                f"survive (as-is or rewritten) in your new content:{report}\n\n"
+                f"This looks like content dropped while reconstructing the file "
+                f"from memory. Include the missing content, use "
+                f"str_replace/replace_lines for a targeted change instead of a "
+                f"full rewrite, or if the removal is intentional, repeat this "
+                f"exact call with confirm_removals=true. The file was NOT overwritten."
             )
-        path.write_text(new_text)
-        origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
-        return (f"edited {args['path']}" + (f" ({note})" if note else "")
-                + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
-    if fn == "replace_lines":
-        path = origin["CWD"] / args["path"]
-        if not path.exists():
-            return f"ERROR: {args['path']} does not exist (use create_file for new files)."
-        start = args.get("start")
-        end = args.get("end")
-        if not isinstance(start, int) or not isinstance(end, int):
-            return (f"ERROR: replace_lines requires integer start and end "
-                    f"(got start={start!r}, end={end!r}).")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    marker = _omission_marker(content)
+    if marker:
+        return (
+            f"ERROR: {args['path']} content ends with an omission marker "
+            f"({marker!r}) - the file was truncated, not written. Emit the "
+            f"complete content; an omission marker is not valid file content. "
+            f"The file was NOT written."
+        )
+    path.write_text(content)
+    origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
+    origin["_CREATED_THIS_RUN"].add(args["path"])
+    return (f"created {args['path']}" + (f" ({note})" if note else "")
+            + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
+
+
+def _str_replace(origin, args) -> str:
+    path = origin["CWD"] / args["path"]
+    if not path.exists():
+        return f"ERROR: {args['path']} does not exist (use create_file for new files)."
+    text = path.read_text()
+    n = text.count(args["old_str"])
+    if n == 0:
+        return origin["_str_replace_not_found_diag"](args["path"], text, args["old_str"])
+    if n > 1:
+        return f"ERROR: old_str occurs {n} times in {args['path']}; include more context to make it unique."
+    new_text = text.replace(args["old_str"], args["new_str"])
+    err = origin["_python_syntax_error"](args["path"], new_text)
+    note = None
+    if err:
+        repair = origin["_try_repair_indentation"](new_text)
+        if repair is None:
+            return origin["_record_syntax_rejection"](args["path"], err, len(text.splitlines()))
+        new_text, note = repair
+    orphaned = origin["_newly_undefined_names"](args["path"], text, new_text)
+    if orphaned:
+        return (
+            f"ERROR: this edit to {args['path']} deletes the only assignment "
+            f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
+            f"this will raise NameError/UnboundLocalError at runtime. Keep the "
+            f"assignment, remove the surviving use too, or replace it with an "
+            f"equivalent. The edit was NOT applied."
+        )
+    # Top-level-symbol-loss check: name any def/class that this edit
+    # removes in its entirety, even when no same-file reference survives
+    # (the symbol may be consumed by OTHER files) - this half is
+    # unconditional. A dropped top-level var/constant is only added when
+    # it is a genuine unconfirmed loss per _var_drop_is_confirmed_loss:
+    # a rename (new_str itself assigns a top-level name) or a
+    # self-contained removal (the assignment and its only use both lived
+    # in old_str and neither survives) escapes the gate; a bare deletion
+    # with nothing replacing it does not. Gated by confirm_removals so
+    # an intentional removal still goes through when the flag is set.
+    dropped_defs = origin["_dropped_top_level_defs"](text, new_text)
+    if path.suffix == ".py":
+        dropped_vars = [
+            name for name in origin["_dropped_top_level_vars"](text, new_text)
+            if origin["_var_drop_is_confirmed_loss"](
+                name, args["old_str"], args["new_str"], orphaned)
+        ]
+    else:
+        dropped_vars = []
+    dropped = dropped_defs + dropped_vars
+    if dropped and not args.get("confirm_removals"):
+        return (
+            f"ERROR: this edit to {args['path']} permanently removes these "
+            f"top-level symbols in their entirety: {', '.join(dropped)}. "
+            f"These may be public API consumed by other files. If this is "
+            f"unintentional, keep the definition in new_str. If the removal "
+            f"is intentional, repeat this exact call with "
+            f"confirm_removals=true. The edit was NOT applied."
+        )
+    marker = _omission_marker(new_text)
+    if marker:
+        return (
+            f"ERROR: {args['path']} content ends with an omission marker "
+            f"({marker!r}) - the file was truncated, not written. Emit the "
+            f"complete content; an omission marker is not valid file content. "
+            f"The file was NOT written."
+        )
+    path.write_text(new_text)
+    origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
+    return (f"edited {args['path']}" + (f" ({note})" if note else "")
+            + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
+
+
+def _replace_lines_range_error(start, end) -> str | None:
+    if not isinstance(start, int) or not isinstance(end, int):
+        return (f"ERROR: replace_lines requires integer start and end "
+                f"(got start={start!r}, end={end!r}).")
+    if start < 1:
+        return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
+    if end < start:
+        return f"ERROR: line_end {end} is less than line_start {start}."
+    return None
+
+
+def _replace_lines_removal_error(origin, args, path, old_text, new_text,
+                                 lines, start, end, new_str):
+    """Return ``(error_or_None, rewrites)`` for the line/symbol-loss guards."""
+    deletions, rewrites = origin["edit_guards"].classify_removed_lines(lines[start - 1:end], new_str)
+    # Top-level-symbol-loss check: name any def/class/constant that this
+    # range removes in its entirety, even when no same-file reference
+    # survives (the symbol may be consumed by OTHER files). This runs
+    # UNCONDITIONALLY, before the confirm_removals gate below: a rename
+    # (def foo -> def foo_v2) classifies the old def lines as rewrites, so
+    # `deletions` is empty and a gate-first call would never fire, letting
+    # the write land with the original symbols silently gone. Only the
+    # REJECTION is gated, so confirm_removals=true still lets it through.
+    dropped = origin["_dropped_top_level_defs"](old_text, new_text)
+    if path.suffix == ".py":
+        dropped += origin["_dropped_top_level_vars"](old_text, new_text)
+    if not ((deletions or dropped) and not args.get("confirm_removals")):
+        return None, rewrites
+    report = (origin["edit_guards"].render_removal_report(deletions, rewrites)
+              if deletions else "")
+    if deletions and not dropped:
+        # Deletion-only message: byte-identical to the pre-fix wording.
+        return (
+            f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
+            f"that don't appear to survive (as-is or rewritten) in your replacement:"
+            f"{report}\n\nRevise new_str to preserve these lines, or if the deletion "
+            f"is intentional, repeat this exact call with confirm_removals=true. "
+            f"The edit was NOT applied."
+        ), rewrites
+    parts = []
+    if deletions:
+        parts.append(
+            f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
+            f"that don't appear to survive (as-is or rewritten) in your replacement:"
+        )
+        parts.append(report)
+    if dropped:
+        parts.append(
+            f"This edit also permanently removes these top-level symbols in their "
+            f"entirety: {', '.join(dropped)}. These may be public API consumed by "
+            f"other files."
+        )
+    parts.append(
+        "Revise new_str to preserve these lines/symbols, or if the removal is "
+        "intentional, repeat this exact call with confirm_removals=true. "
+        "The edit was NOT applied."
+    )
+    message = "\n".join(parts)
+    if not deletions:
+        message = "ERROR: " + message
+    return message, rewrites
+
+
+def _replace_lines(origin, args) -> str:
+    path = origin["CWD"] / args["path"]
+    if not path.exists():
+        return f"ERROR: {args['path']} does not exist (use create_file for new files)."
+    start = args.get("start")
+    end = args.get("end")
+    range_err = _replace_lines_range_error(start, end)
+    if range_err:
+        return range_err
+    old_text = path.read_text()
+    lines = old_text.splitlines(keepends=True)
+    if start > len(lines):
+        return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
+    # Optional stale-range anchors: verified when supplied, absent otherwise.
+    # MUST stay optional - _str_replace_not_found_diag steers the model to
+    # replace_lines when str_replace's old_str won't match; mandatory anchors
+    # would close that escape hatch and strand a weak model with no edit path.
+    anchor_err = origin["edit_guards"].verify_range_anchors(
+        lines, start, end, args.get("expect_first"), args.get("expect_last"))
+    if anchor_err:
+        return f"ERROR: {anchor_err}\nThe edit was NOT applied."
+    new_str = args.get("new_str", "")
+    # Keep the block newline-terminated so we don't fuse the next line on.
+    if new_str and not new_str.endswith("\n"):
+        new_str = new_str + "\n"
+    new_text = "".join(lines[:start - 1]) + new_str + "".join(lines[end:])
+    err = origin["_python_syntax_error"](args["path"], new_text)
+    note = None
+    if err:
+        repair = origin["_try_repair_indentation"](new_text)
+        if repair is None:
+            return origin["_record_syntax_rejection"](args["path"], err, len(old_text.splitlines()))
+        new_text, note = repair
+    orphaned = origin["_newly_undefined_names"](args["path"], old_text, new_text)
+    if orphaned:
+        return (
+            f"ERROR: this edit to {args['path']} deletes the only assignment "
+            f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
+            f"this will raise NameError/UnboundLocalError at runtime. Keep the "
+            f"assignment, remove the surviving use too, or replace it with an "
+            f"equivalent. The edit was NOT applied."
+        )
+    removal_err, rewrites = _replace_lines_removal_error(
+        origin, args, path, old_text, new_text, lines, start, end, new_str)
+    if removal_err:
+        return removal_err
+    marker = _omission_marker(new_text)
+    if marker:
+        return (
+            f"ERROR: {args['path']} content ends with an omission marker "
+            f"({marker!r}) - the file was truncated, not written. Emit the "
+            f"complete content; an omission marker is not valid file content. "
+            f"The file was NOT written."
+        )
+    path.write_text(new_text)
+    origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
+    removed_echo = origin["edit_guards"].render_removal_report([], rewrites)
+    # Advisory only: warn if new_str duplicates a block that still lives
+    # outside the replaced range. Computed from the ORIGINAL lines read
+    # before the write (prefix + suffix), so the range's own former
+    # content is not counted as a duplicate. Does not block - the write
+    # above has already landed.
+    surrounding_text = "".join(lines[:start - 1]) + "".join(lines[end:])
+    dup_warn = origin["edit_guards"].duplicated_block_warning(new_str, surrounding_text)
+    return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
+            + removed_echo + dup_warn + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
+
+
+def _view_file(origin, args) -> str:
+    path = origin["CWD"] / args["path"]
+    if not path.exists():
+        return f"ERROR: {args['path']} does not exist."
+    origin["_VIEWED_THIS_RUN"].add(args["path"])
+    lines = path.read_text().splitlines(keepends=True)
+    _key = (str(path), args.get("line_start"), args.get("line_end"))
+    _digest = hashlib.sha256("".join(lines).encode()).hexdigest()
+    if _VIEW_SEEN.get(_key) == _digest:
+        return (f"You already viewed {args['path']} with this exact range in this run, "
+                f"and the file has not changed since. Repeating this exact call cannot "
+                f"return anything new. Pass a NEW line_start/line_end range to read a "
+                f"different part, or make your edit with str_replace.")
+    _VIEW_SEEN[_key] = _digest
+    line_start, line_end = args.get("line_start"), args.get("line_end")
+    if line_start is not None or line_end is not None:
+        start = line_start if line_start is not None else 1
+        end = line_end if line_end is not None else len(lines)
         if start < 1:
             return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
-        if end < start:
-            return f"ERROR: line_end {end} is less than line_start {start}."
-        old_text = path.read_text()
-        lines = old_text.splitlines(keepends=True)
         if start > len(lines):
             return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
-        # Optional stale-range anchors: verified when supplied, absent otherwise.
-        # MUST stay optional - _str_replace_not_found_diag steers the model to
-        # replace_lines when str_replace's old_str won't match; mandatory anchors
-        # would close that escape hatch and strand a weak model with no edit path.
-        anchor_err = origin["edit_guards"].verify_range_anchors(
-            lines, start, end, args.get("expect_first"), args.get("expect_last"))
-        if anchor_err:
-            return f"ERROR: {anchor_err}\nThe edit was NOT applied."
-        new_str = args.get("new_str", "")
-        # Keep the block newline-terminated so we don't fuse the next line on.
-        if new_str and not new_str.endswith("\n"):
-            new_str = new_str + "\n"
-        new_text = "".join(lines[:start - 1]) + new_str + "".join(lines[end:])
-        err = origin["_python_syntax_error"](args["path"], new_text)
-        note = None
-        if err:
-            repair = origin["_try_repair_indentation"](new_text)
-            if repair is None:
-                return origin["_record_syntax_rejection"](args["path"], err, len(old_text.splitlines()))
-            new_text, note = repair
-        orphaned = origin["_newly_undefined_names"](args["path"], old_text, new_text)
-        if orphaned:
-            return (
-                f"ERROR: this edit to {args['path']} deletes the only assignment "
-                f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
-                f"this will raise NameError/UnboundLocalError at runtime. Keep the "
-                f"assignment, remove the surviving use too, or replace it with an "
-                f"equivalent. The edit was NOT applied."
-            )
-        deletions, rewrites = origin["edit_guards"].classify_removed_lines(lines[start - 1:end], new_str)
-        # Top-level-symbol-loss check: name any def/class/constant that this
-        # range removes in its entirety, even when no same-file reference
-        # survives (the symbol may be consumed by OTHER files). This runs
-        # UNCONDITIONALLY, before the confirm_removals gate below: a rename
-        # (def foo -> def foo_v2) classifies the old def lines as rewrites, so
-        # `deletions` is empty and a gate-first call would never fire, letting
-        # the write land with the original symbols silently gone. Only the
-        # REJECTION is gated, so confirm_removals=true still lets it through.
-        dropped = origin["_dropped_top_level_defs"](old_text, new_text)
-        if path.suffix == ".py":
-            dropped += origin["_dropped_top_level_vars"](old_text, new_text)
-        if (deletions or dropped) and not args.get("confirm_removals"):
-            report = (origin["edit_guards"].render_removal_report(deletions, rewrites)
-                      if deletions else "")
-            if deletions and not dropped:
-                # Deletion-only message: byte-identical to the pre-fix wording.
-                return (
-                    f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
-                    f"that don't appear to survive (as-is or rewritten) in your replacement:"
-                    f"{report}\n\nRevise new_str to preserve these lines, or if the deletion "
-                    f"is intentional, repeat this exact call with confirm_removals=true. "
-                    f"The edit was NOT applied."
-                )
-            parts = []
-            if deletions:
-                parts.append(
-                    f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
-                    f"that don't appear to survive (as-is or rewritten) in your replacement:"
-                )
-                parts.append(report)
-            if dropped:
-                parts.append(
-                    f"This edit also permanently removes these top-level symbols in their "
-                    f"entirety: {', '.join(dropped)}. These may be public API consumed by "
-                    f"other files."
-                )
-            parts.append(
-                "Revise new_str to preserve these lines/symbols, or if the removal is "
-                "intentional, repeat this exact call with confirm_removals=true. "
-                "The edit was NOT applied."
-            )
-            message = "\n".join(parts)
-            if not deletions:
-                message = "ERROR: " + message
-            return message
-        marker = _omission_marker(new_text)
-        if marker:
-            return (
-                f"ERROR: {args['path']} content ends with an omission marker "
-                f"({marker!r}) - the file was truncated, not written. Emit the "
-                f"complete content; an omission marker is not valid file content. "
-                f"The file was NOT written."
-            )
-        path.write_text(new_text)
-        origin["_SYNTAX_REJECT_COUNTS"].pop(args["path"], None)
-        removed_echo = origin["edit_guards"].render_removal_report([], rewrites)
-        # Advisory only: warn if new_str duplicates a block that still lives
-        # outside the replaced range. Computed from the ORIGINAL lines read
-        # before the write (prefix + suffix), so the range's own former
-        # content is not counted as a duplicate. Does not block - the write
-        # above has already landed.
-        surrounding_text = "".join(lines[:start - 1]) + "".join(lines[end:])
-        dup_warn = origin["edit_guards"].duplicated_block_warning(new_str, surrounding_text)
-        return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
-                + removed_echo + dup_warn + origin["_lint_feedback_for"](args['path'], origin["CWD"]))
-    if fn == "view_file":
-        path = origin["CWD"] / args["path"]
-        if not path.exists():
-            return f"ERROR: {args['path']} does not exist."
-        origin["_VIEWED_THIS_RUN"].add(args["path"])
-        lines = path.read_text().splitlines(keepends=True)
-        _key = (str(path), args.get("line_start"), args.get("line_end"))
-        _digest = hashlib.sha256("".join(lines).encode()).hexdigest()
-        if _VIEW_SEEN.get(_key) == _digest:
-            return (f"You already viewed {args['path']} with this exact range in this run, "
-                    f"and the file has not changed since. Repeating this exact call cannot "
-                    f"return anything new. Pass a NEW line_start/line_end range to read a "
-                    f"different part, or make your edit with str_replace.")
-        _VIEW_SEEN[_key] = _digest
-        line_start, line_end = args.get("line_start"), args.get("line_end")
-        if line_start is not None or line_end is not None:
-            start = line_start if line_start is not None else 1
-            end = line_end if line_end is not None else len(lines)
-            if start < 1:
-                return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
-            if start > len(lines):
-                return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
-            if end < start:
-                return f"ERROR: line_end {end} is less than line_start {start}."
-            selected = lines[start - 1:end]
-            # Cap the ranged path too — a wide range on a large file is the
-            # same context-blowout the whole-file cap exists for (measured:
-            # one ranged call returned 21K chars into a transcript).
-            formatted = "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
-            if len(formatted) <= 3000:
-                return formatted
-            kept, shown = _cut_view_at_line_boundary(formatted)
-            if shown == 0:
-                return (
-                    kept
-                    + f"\n... [truncated inside line {start}, which is longer than the view cap; "
-                      f"the file itself is intact - call view_file again with a narrower line_start/line_end range]"
-                )
-            return (
-                kept
-                + f"... [truncated after line {start + shown - 1} of the requested {start}-{end}; "
-                  f"the file itself is intact - call view_file again with line_start={start + shown} to continue]"
-            )
-        formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
+        if end < start:
+            return f"ERROR: line_end {end} is less than line_start {start}."
+        selected = lines[start - 1:end]
+        # Cap the ranged path too — a wide range on a large file is the
+        # same context-blowout the whole-file cap exists for (measured:
+        # one ranged call returned 21K chars into a transcript).
+        formatted = "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
         if len(formatted) <= 3000:
             return formatted
         kept, shown = _cut_view_at_line_boundary(formatted)
         if shown == 0:
             return (
                 kept
-                + f"\n... [truncated inside line 1, which is longer than the view cap; the file itself is intact "
-                  f"({len(lines)} lines) - call view_file again with line_start/line_end to narrow the view]"
+                + f"\n... [truncated inside line {start}, which is longer than the view cap; "
+                  f"the file itself is intact - call view_file again with a narrower line_start/line_end range]"
             )
         return (
             kept
-            + f"... [truncated after line {shown} of {len(lines)}; the file itself is intact - "
-              f"call view_file again with line_start={shown + 1} (and line_end) to continue]"
+            + f"... [truncated after line {start + shown - 1} of the requested {start}-{end}; "
+              f"the file itself is intact - call view_file again with line_start={start + shown} to continue]"
         )
-    if fn == "restore_file":
-        path_str = args.get("path", "")
-        if not path_str:
-            return "ERROR: restore_file requires a path."
-        # A run that keeps restoring the same file is undoing its own work
-        # (live: ASB-2 and the board.js story each restored 3x and ended
-        # with nothing landed). Two restores per path is enough for a real
-        # clean slate; refuse the third and point at anchored edits.
-        restores = origin.setdefault("_RESTORES_THIS_RUN", {})
-        if restores.get(path_str, 0) >= RESTORE_FILE_MAX_PER_PATH:
+    formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
+    if len(formatted) <= 3000:
+        return formatted
+    kept, shown = _cut_view_at_line_boundary(formatted)
+    if shown == 0:
+        return (
+            kept
+            + f"\n... [truncated inside line 1, which is longer than the view cap; the file itself is intact "
+              f"({len(lines)} lines) - call view_file again with line_start/line_end to narrow the view]"
+        )
+    return (
+        kept
+        + f"... [truncated after line {shown} of {len(lines)}; the file itself is intact - "
+          f"call view_file again with line_start={shown + 1} (and line_end) to continue]"
+    )
+
+
+def _restore_file(origin, args) -> str:
+    path_str = args.get("path", "")
+    if not path_str:
+        return "ERROR: restore_file requires a path."
+    # A run that keeps restoring the same file is undoing its own work
+    # (live: ASB-2 and the board.js story each restored 3x and ended
+    # with nothing landed). Two restores per path is enough for a real
+    # clean slate; refuse the third and point at anchored edits.
+    restores = origin.setdefault("_RESTORES_THIS_RUN", {})
+    if restores.get(path_str, 0) >= RESTORE_FILE_MAX_PER_PATH:
+        return (
+            f"ERROR: restore_file refused - {path_str} has already been "
+            f"restored {RESTORE_FILE_MAX_PER_PATH} times this run, which "
+            f"undoes your own progress. Do not restore it again. Read the "
+            f"exact lines you need and fix them with a small anchored "
+            f"str_replace instead."
+        )
+    if args.get("from_base"):
+        # Base-scoped restore (Mode 49b): the agent's own commits already
+        # capture the bad change, so `git checkout HEAD -- <path>` would
+        # keep it. Restore the version committed on origin's default branch
+        # instead - the destructive-git block refuses `git checkout <base>
+        # -- <path>`, so this is the only safe way back to the base.
+        base_ref = _base_ref_for_restore(origin["CWD"])
+        if base_ref is None:
             return (
-                f"ERROR: restore_file refused - {path_str} has already been "
-                f"restored {RESTORE_FILE_MAX_PER_PATH} times this run, which "
-                f"undoes your own progress. Do not restore it again. Read the "
-                f"exact lines you need and fix them with a small anchored "
-                f"str_replace instead."
+                f"ERROR: from_base restore of {path_str} failed - no origin "
+                f"default branch could be resolved (tried "
+                f"refs/remotes/origin/HEAD, origin/master, origin/main)."
             )
-        if args.get("from_base"):
-            # Base-scoped restore (Mode 49b): the agent's own commits already
-            # capture the bad change, so `git checkout HEAD -- <path>` would
-            # keep it. Restore the version committed on origin's default branch
-            # instead - the destructive-git block refuses `git checkout <base>
-            # -- <path>`, so this is the only safe way back to the base.
-            base_ref = _base_ref_for_restore(origin["CWD"])
-            if base_ref is None:
-                return (
-                    f"ERROR: from_base restore of {path_str} failed - no origin "
-                    f"default branch could be resolved (tried "
-                    f"refs/remotes/origin/HEAD, origin/master, origin/main)."
-                )
-            shown = subprocess.run(
-                ["git", "show", f"{base_ref}:{path_str}"],
-                check=False, cwd=origin["CWD"], capture_output=True, text=True,
-            )
-            if shown.returncode != 0:
-                return (f"ERROR: could not restore {path_str} from {base_ref}: "
-                        f"{shown.stderr.strip()[:300]}")
-            target = origin["CWD"] / path_str
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(shown.stdout)
-            restores[path_str] = restores.get(path_str, 0) + 1
-            return (f"restored {path_str} from {base_ref} (the base branch's "
-                    f"committed version); your branch commits and uncommitted "
-                    f"changes to this file are superseded. Other files are untouched.")
-        result = subprocess.run(
-            ["git", "checkout", "HEAD", "--", path_str],
+        shown = subprocess.run(
+            ["git", "show", f"{base_ref}:{path_str}"],
             check=False, cwd=origin["CWD"], capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            return (f"ERROR: could not restore {path_str} to HEAD: "
-                     f"{result.stderr.strip()[:300]}")
+        if shown.returncode != 0:
+            return (f"ERROR: could not restore {path_str} from {base_ref}: "
+                    f"{shown.stderr.strip()[:300]}")
+        target = origin["CWD"] / path_str
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(shown.stdout)
         restores[path_str] = restores.get(path_str, 0) + 1
-        return (f"restored {path_str} to its last commit (HEAD) — any "
-                  f"uncommitted changes to this file are gone. Other files are untouched.")
-    if fn == "bash":
-        cmd = args.get("command", "")
-        # Refuse destructive git ops before they reach the shell — they discard
-        # the branch's WIP commits / working-tree changes (see
-        # DESTRUCTIVE_GIT_PATTERNS). Tell the model to use str_replace to change
-        # files instead, so a confused rework can't destroy its own work.
-        bad = origin["destructive_git_op"](cmd)
-        if bad:
-            return (
-                f"ERROR: '{bad}' is blocked — it would discard your work (WIP "
-                f"commits or uncommitted changes). To change a file, use "
-                f"str_replace; to unstage, use `git reset HEAD <path>` (no "
-                f"--hard). To undo a recent commit but keep the changes, use "
-                f"`git reset HEAD~1` (default --mixed, keeps the working tree). "
-                f"To throw away your OWN uncommitted edits to one specific file "
-                f"and start it clean from the last commit, use the restore_file "
-                f"tool on that path — it does exactly this, safely, without "
-                f"touching any other file. If your own commits already contain "
-                f"the bad change, call restore_file with from_base=true to get "
-                f"the base branch's committed version instead."
-            )
-        # Acquire the cross-dispatch heavy-build lock for any command whose
-        # first token is a known build/test executable (cargo, npm, mvn,
-        # etc.). The lock lives at PLAN_DIR/heavy.lock; see _heavy_lock
-        # docstring for the rationale (one cold build at a time keeps
-        # memory bounded across concurrent agents).
-        # We shlex-split because the model passes a string; argv[0] of the
-        # split gives us the executable. shlex.split raises on malformed
-        # shell — fall through to the no-lock path in that case so a
-        # weird command doesn't take the agent down.
-        try:
-            argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
-        except ValueError:
-            argv0 = ""
-        is_heavy = bool(argv0) and origin["p"]._is_heavy([argv0])
-        run_kwargs = {"shell": True, "cwd": origin["CWD"], "capture_output": True, "text": True,
-                          "timeout": origin["BASH_TIMEOUT"]}
-        if is_heavy:
-            with origin["p"]._heavy_lock():
-                pr = subprocess.run(cmd, check=False, **run_kwargs)
-        else:
-            pr = subprocess.run(cmd, check=False, **run_kwargs)
-        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
-    if fn == "checkpoint":
-        try:
-            from pipeline import checkpoint_drop, git_ops
+        return (f"restored {path_str} from {base_ref} (the base branch's "
+                f"committed version); your branch commits and uncommitted "
+                f"changes to this file are superseded. Other files are untouched.")
+    result = subprocess.run(
+        ["git", "checkout", "HEAD", "--", path_str],
+        check=False, cwd=origin["CWD"], capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return (f"ERROR: could not restore {path_str} to HEAD: "
+                 f"{result.stderr.strip()[:300]}")
+    restores[path_str] = restores.get(path_str, 0) + 1
+    return (f"restored {path_str} to its last commit (HEAD) — any "
+              f"uncommitted changes to this file are gone. Other files are untouched.")
 
-            if checkpoint_drop.is_file_mode():
-                # File mode: no store access, so commit the work and drop the
-                # checkpoint file for the control plane to journal.
-                sha = git_ops._commit_wip(origin["CWD"], args["story_key"], args["step"])
-                checkpoint_drop.write(origin["CWD"], args["step"], args.get("summary", ""),
-                                      args.get("next_hint", ""), commit=sha)
-                res = {"step": args["step"], "commit": sha}
-            else:
-                res = origin["p"]._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
-                                         args.get("summary", ""), args.get("next_hint", ""))
-            return f"checkpoint recorded: {json.dumps(res)[:200]}"
-        except Exception as e:  # noqa: BLE001 (checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised)
-            return f"ERROR checkpointing: {e}"
-    if fn == "search":
+
+def _bash(origin, args) -> str:
+    cmd = args.get("command", "")
+    # Refuse destructive git ops before they reach the shell — they discard
+    # the branch's WIP commits / working-tree changes (see
+    # DESTRUCTIVE_GIT_PATTERNS). Tell the model to use str_replace to change
+    # files instead, so a confused rework can't destroy its own work.
+    bad = origin["destructive_git_op"](cmd)
+    if bad:
         return (
-            "unknown tool search — there is no search tool. Use bash with "
-            "grep or rg to find code (e.g. `grep -n \"def foo\" -R .`), then "
-            "view_file with line_start/line_end on the line number it reports."
+            f"ERROR: '{bad}' is blocked — it would discard your work (WIP "
+            f"commits or uncommitted changes). To change a file, use "
+            f"str_replace; to unstage, use `git reset HEAD <path>` (no "
+            f"--hard). To undo a recent commit but keep the changes, use "
+            f"`git reset HEAD~1` (default --mixed, keeps the working tree). "
+            f"To throw away your OWN uncommitted edits to one specific file "
+            f"and start it clean from the last commit, use the restore_file "
+            f"tool on that path — it does exactly this, safely, without "
+            f"touching any other file. If your own commits already contain "
+            f"the bad change, call restore_file with from_base=true to get "
+            f"the base branch's committed version instead."
         )
-    return f"unknown tool {fn}"
+    # Acquire the cross-dispatch heavy-build lock for any command whose
+    # first token is a known build/test executable (cargo, npm, mvn,
+    # etc.). The lock lives at PLAN_DIR/heavy.lock; see _heavy_lock
+    # docstring for the rationale (one cold build at a time keeps
+    # memory bounded across concurrent agents).
+    # We shlex-split because the model passes a string; argv[0] of the
+    # split gives us the executable. shlex.split raises on malformed
+    # shell — fall through to the no-lock path in that case so a
+    # weird command doesn't take the agent down.
+    try:
+        argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
+    except ValueError:
+        argv0 = ""
+    is_heavy = bool(argv0) and origin["p"]._is_heavy([argv0])
+    run_kwargs = {"shell": True, "cwd": origin["CWD"], "capture_output": True, "text": True,
+                      "timeout": origin["BASH_TIMEOUT"]}
+    if is_heavy:
+        with origin["p"]._heavy_lock():
+            pr = subprocess.run(cmd, check=False, **run_kwargs)
+    else:
+        pr = subprocess.run(cmd, check=False, **run_kwargs)
+    return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+
+
+def _checkpoint(origin, args) -> str:
+    try:
+        from pipeline import checkpoint_drop, git_ops
+
+        if checkpoint_drop.is_file_mode():
+            # File mode: no store access, so commit the work and drop the
+            # checkpoint file for the control plane to journal.
+            sha = git_ops._commit_wip(origin["CWD"], args["story_key"], args["step"])
+            checkpoint_drop.write(origin["CWD"], args["step"], args.get("summary", ""),
+                                  args.get("next_hint", ""), commit=sha)
+            res = {"step": args["step"], "commit": sha}
+        else:
+            res = origin["p"]._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
+                                     args.get("summary", ""), args.get("next_hint", ""))
+        return f"checkpoint recorded: {json.dumps(res)[:200]}"
+    except Exception as e:  # noqa: BLE001 (checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised)
+        return f"ERROR checkpointing: {e}"
+
+
+
+def _search(origin, args) -> str:
+    return (
+        "unknown tool search — there is no search tool. Use bash with "
+        "grep or rg to find code (e.g. `grep -n \"def foo\" -R .`), then "
+        "view_file with line_start/line_end on the line number it reports."
+    )
+
+
+_TOOL_HANDLERS = {
+    "create_file": _create_file,
+    "str_replace": _str_replace,
+    "replace_lines": _replace_lines,
+    "view_file": _view_file,
+    "restore_file": _restore_file,
+    "bash": _bash,
+    "checkpoint": _checkpoint,
+    "search": _search,
+}
+
+
+def run_tool_impl(origin, fn, args) -> str:
+    handler = _TOOL_HANDLERS.get(fn)
+    if handler is None:
+        return f"unknown tool {fn}"
+    return handler(origin, args)
+
 
 
 def safe_run_tool_impl(origin, fn, args) -> str:

@@ -15,6 +15,7 @@ PROTECTED = [
     "pipeline/no_progress.py",
     "pipeline/branch_guard.py",
     "pipeline/triage.py",
+    "pipeline/triage_sweep_helpers.py",
     "pipeline/triage_scope_actions.py",
     "pipeline/overlord.py",
     "pipeline/review_orchestrator.py",

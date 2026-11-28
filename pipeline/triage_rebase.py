@@ -17,6 +17,7 @@ evidence always yields identical text.
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -173,7 +174,8 @@ def _pr_blocks_unpark(story: dict, repo_root: str) -> str | None:
         return None
     try:
         state = triage_rebrief._pr_state(repo_root, pr_url)
-    except Exception:  # noqa: BLE001 - fail closed on any forge failure
+    except Exception as exc:  # noqa: BLE001 - fail closed on any forge failure
+        logging.getLogger("pipeline").warning("rebase PR state read failed: %s", type(exc).__name__)
         return "the PR state could not be read"
     if state == "MERGED":
         return "the PR is MERGED, so mark_done owns this story"
@@ -227,7 +229,7 @@ def execute_resolve_rebase(plan_name, story_key, story, ruling, manifest) -> str
     base = repo.default_branch
     try:
         live = _observe(repo.root, base, branch)
-    except Exception:  # noqa: BLE001 - fail closed on any git or config failure
+    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):  # fail closed on a failed git call
         return _park(
             plan_name, story_key, story,
             "resolve_rebase declined: live git evidence could not be read; parked for a human",

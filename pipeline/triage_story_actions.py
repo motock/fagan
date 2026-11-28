@@ -7,6 +7,7 @@ resolved at call time, so monkeypatch.setattr(pipeline.triage, NAME, ...)
 keeps landing on the moved code. pipeline.triage re-exports the moved names.
 """
 
+import logging
 import subprocess
 
 from .forge import get_forge
@@ -62,8 +63,8 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest) -> str:
                 story_key=story_key,
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - the notice must never undo the park
+            logging.getLogger("pipeline").warning("triage ruling notification failed: %s", type(exc).__name__)
         return result
 
     # Guard 2: the plan's triage-created-story budget.
@@ -79,8 +80,8 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest) -> str:
                 story_key=story_key,
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - the notice must never undo the park
+            logging.getLogger("pipeline").warning("triage ruling notification failed: %s", type(exc).__name__)
         return result
 
     child1_key = f"{story_key}-split-1"
@@ -205,8 +206,8 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest) -> str:
                 story_key=story_key,
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
-        except Exception:  # pragma: no cover – notification failures are ignored
-            pass
+        except Exception as exc:  # noqa: BLE001 - the notice must never undo the park
+            logging.getLogger("pipeline").warning("triage ruling notification failed: %s", type(exc).__name__)
         return result
 
     # (c) Corroborated -> correct the record. No execution record here: the

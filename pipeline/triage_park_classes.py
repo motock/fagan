@@ -10,6 +10,7 @@ class. A ruling outside that set is replaced with ``park_for_human`` by the
 caller (see ``pipeline.triage.rule_on_story``).
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,7 +77,8 @@ def classify_park(story: dict, evidence: dict) -> ParkClass:
     """Name the park by the live signal it carries; ``unknown`` if none match."""
     try:
         return _classify(_merged_view(story, evidence))
-    except Exception:  # noqa: BLE001 - classification must never raise
+    except Exception as exc:  # noqa: BLE001 - classification must never raise
+        logging.getLogger("pipeline").warning("park classification failed: %s", type(exc).__name__)
         return ParkClass(name="unknown", facts={})
 
 

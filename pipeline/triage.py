@@ -42,6 +42,7 @@ from .triage_executors import EXECUTORS
 from .triage_rebrief import parse_diagnosis
 from .git_ops import _worktree_has_new_commits, _worktree_new_commits, _resolve_base_branch
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
+from .triage_sweep_helpers import _exception_type_chain, _merge_hold_is_stale, _merge_sweep_changes  # noqa: E402,F401
 from .triage_repo_issue import _execute_repo_issue  # noqa: E402
 from .triage_scope_actions import _execute_amend_scope  # noqa: E402,F401
 from .triage_patch_acceptance import _FIXTURE_END_MARKER, _FIXTURE_START_MARKER, _acceptance_with_source, _execute_patch_acceptance, _parse_fixture_rewrite, _story_checkout  # noqa: E402,F401
@@ -99,8 +100,8 @@ def _park(plan_name, story_key, story, reason) -> str:
             story_key=story_key,
             **({"correlation_id": cid} if cid else {}),
         )
-    except Exception:  # pragma: no cover – notification failures are ignored
-        pass
+    except Exception as exc:  # pragma: no cover - notification failures never block a park
+        logging.getLogger("pipeline").warning("triage park notification failed: %s", type(exc).__name__)
     return "park_for_human"
 
 
@@ -119,8 +120,8 @@ def _notify_escalate_model(plan_name, story_key, story, message, event) -> None:
             event=event,
             **({"correlation_id": cid} if cid else {}),
         )
-    except Exception:  # noqa: BLE001 - see docstring
-        pass
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logging.getLogger("pipeline").warning("triage escalate_model notification failed: %s", type(exc).__name__)
 
 
 def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
@@ -163,8 +164,8 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
                         else {}
                     ),
                 )
-            except Exception:  # pragma: no cover – notification failures are ignored
-                pass
+            except Exception as exc:  # pragma: no cover - notification failures never block a park
+                logging.getLogger("pipeline").warning("triage park notification failed: %s", type(exc).__name__)
             return "park_for_human"
         return _park(plan_name, story_key, story, f"parked for human: {rationale}")
     if action in DEFERRED_ACTIONS:
@@ -179,8 +180,8 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
                 story_key=story_key,
                 **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - notification must never block the park
+            logging.getLogger("pipeline").warning("triage ruling notification failed: %s", type(exc).__name__)
         return "park_for_human"
     if action == "escalate_model":
         try:
@@ -216,7 +217,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest) -> str:
                     "escalated",
                 )
                 return "escalate_model"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - parks and notifies via _park, reason names the class
             reason = (
                 f"escalate_model ruled but ladder exhausted: "
                 f"{type(exc).__name__}: {str(exc)[:300]}"
@@ -402,32 +403,6 @@ __all__ = [
     "triage_candidates",
     "DEFERRED_ACTIONS",
     ]
-def _merge_sweep_changes(on_disk: dict, initial: dict, current: dict) -> dict:
-    """Apply only the sweep's own mutations (initial -> current) onto *on_disk*.
-
-    The sweep holds its snapshot across minutes-long LLM rulings, so writing
-    it wholesale would revert anything written to the file meanwhile. A story
-    absent from disk (dropped by a concurrent re-ingest) is not resurrected.
-    """
-    for field, value in current.items():
-        if field != "stories" and initial.get(field) != value:
-            on_disk[field] = value
-    disk_stories = on_disk.setdefault("stories", {})
-    initial_stories = initial.get("stories", {})
-    for key, story in current.get("stories", {}).items():
-        if key not in initial_stories:
-            disk_stories[key] = story
-            continue
-        if key not in disk_stories or initial_stories[key] == story:
-            continue
-        for field, value in story.items():
-            if initial_stories[key].get(field) != value:
-                disk_stories[key][field] = value
-        for field in initial_stories[key].keys() - story.keys():
-            disk_stories[key].pop(field, None)
-    return on_disk
-
-
 def run_triage_sweep(plan_name: str) -> dict:
     if not _auto_triage_enabled():
         return {"ok": True, "skipped": "disabled"}
@@ -477,7 +452,7 @@ def run_triage_sweep(plan_name: str) -> dict:
                 continue
             try:
                 findings = classify_repo_health(story, story.get("worktree") or ".")
-            except Exception:
+            except Exception:  # noqa: BLE001 - classify_repo_health isolates each probe; no findings is the documented absence
                 findings = []
             evidence = collect_triage_evidence(story.get("worktree", ""), story, findings)
             if (
@@ -529,7 +504,8 @@ def run_triage_sweep(plan_name: str) -> dict:
             "actions": actions,
             "skipped_cap": skipped_cap,
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the sweep never raises into the scheduler
+        logging.getLogger("pipeline").warning("triage sweep failed: %s", type(exc).__name__)
         return {"ok": False, "error": type(exc).__name__}
 
 def _auto_triage_enabled() -> bool:
@@ -556,32 +532,6 @@ def _auto_triage_enabled() -> bool:
     if override in ("0", "false", "no", "off"):
         return False
     return False
-
-
-def _merge_hold_is_stale(story: dict) -> bool:
-    """True once a merge-gate hold is older than the triage grace window.
-
-    Fail-secure: a missing, unparseable, or future ``merge_parked_at`` is
-    never stale, so a legacy park keeps today's exclusion exactly.
-    """
-    ts = story.get("merge_parked_at")
-    if not isinstance(ts, str):
-        return False
-    try:
-        parked_at = datetime.fromisoformat(ts)
-    except ValueError:
-        return False
-    try:
-        grace = int(os.environ.get("PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS", "86400"))
-    except ValueError:
-        grace = 86400
-    if grace < 0:
-        grace = 86400
-    try:
-        age = (datetime.now(timezone.utc) - parked_at).total_seconds()
-    except TypeError:
-        return False
-    return age > grace
 
 
 def triage_candidates(stories: dict) -> list[str]:
@@ -692,7 +642,8 @@ def _current_suite_state(worktree: str, story: dict | None = None) -> str:
         if r.returncode == 5:
             return ""
         return f"CURRENT STATE: {label} {fail_verb} at the worktree's current HEAD (rc={r.returncode}):\n{(r.stdout + r.stderr)[-500:]}"
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - fail open to silence
+        logging.getLogger("pipeline").warning("triage suite state unavailable: %s", type(exc).__name__)
         return ""
 
 def _current_git_state(worktree: str, story: dict) -> str:
@@ -726,7 +677,8 @@ def _current_git_state(worktree: str, story: dict) -> str:
         from .server import _default_branch
 
         hint = _default_branch()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - the hint is optional
+        logging.getLogger("pipeline").debug("triage default branch hint unavailable: %s", type(exc).__name__)
         hint = ""
     # Resolve in the worktree's own repo: the server's answer need not describe
     # it, and a base that does not exist here makes the diff unavailable.
@@ -752,7 +704,8 @@ def _current_git_state(worktree: str, story: dict) -> str:
         if len(entries) > 50:
             section.append(f"... and {len(entries) - 50} more")
         return block + "\n" + "\n".join(section)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - fail open to an "(unavailable)" section
+        logging.getLogger("pipeline").warning("triage changed-files diff unavailable: %s", type(exc).__name__)
         return block + "\n" + header + "\n(unavailable)"
 
 
@@ -798,7 +751,8 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
             from .server import _default_branch
 
             base = _default_branch()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - an unresolved base is reported below
+            logging.getLogger("pipeline").debug("triage default branch unavailable: %s", type(exc).__name__)
             base = ""
         if base:
             state, resolved = _worktree_new_commits(
@@ -821,7 +775,8 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
         if pr_url:
             lines.append(f"PR: {pr_url}")
         return "\n".join(lines)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - fail open to silence
+        logging.getLogger("pipeline").warning("triage git state unavailable: %s", type(exc).__name__)
         return ""
 
 
@@ -869,7 +824,8 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     current_state_section = ""
     try:
         current_state_section = _current_suite_state(worktree, story)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - evidence section is best-effort
+        logging.getLogger("pipeline").warning("triage suite state section failed: %s", type(exc).__name__)
         current_state_section = ""
     # Section (b3) – live git state: HEAD sha, new-commits-vs-base and the
     # story's pr_url. 21 of 34 historical parked stories were parked on a
@@ -879,14 +835,16 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     git_state_section = ""
     try:
         git_state_section = _current_git_state(worktree, story)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - evidence section is best-effort
+        logging.getLogger("pipeline").warning("triage git state section failed: %s", type(exc).__name__)
         git_state_section = ""
     # Section (c) – repo‑health findings
     findings_section = ""
     if findings:
         try:
             findings_section = format_findings(findings)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - evidence section is best-effort
+            logging.getLogger("pipeline").warning("triage findings section failed: %s", type(exc).__name__)
             findings_section = ""
     # Compute the length of the fixed sections
     fixed_parts = [triage_question, "STORY STATE:\n" + story_state]
@@ -900,7 +858,8 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     remaining = max(0, limit - len(fixed_text))
     try:
         failure_evidence = collect_failure_evidence(worktree, story, limit=remaining)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - evidence section is best-effort
+        logging.getLogger("pipeline").warning("triage failure evidence failed: %s", type(exc).__name__)
         failure_evidence = ""
     if failure_evidence:
         result = (fixed_text + "\n" + failure_evidence)[:limit]
@@ -911,21 +870,6 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
 # ---------------------------------------------------------------------------
 # Rule on story – the core triage decision logic
 # ---------------------------------------------------------------------------
-
-def _exception_type_chain(exc: BaseException) -> str:
-    """Return the class names along ``exc``'s cause/context chain, outermost
-    first, joined by ``" <- "`` (at most 5 links). Names only - never the
-    exception message, which can carry tokens, paths or payload data."""
-    names: list[str] = []
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen and len(names) < 5:
-        seen.add(id(current))
-        names.append(type(current).__name__)
-        current = current.__cause__ or current.__context__
-    return " <- ".join(names)
-
-
 
 def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) -> dict:
     """Return a ruling for a terminal story.

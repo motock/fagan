@@ -17,7 +17,9 @@ the prior story state for every executed ruling.
 
 from __future__ import annotations
 
+import logging
 import re
+import subprocess
 from datetime import UTC, datetime
 
 from . import test_edit_judge
@@ -41,7 +43,8 @@ def resolve_tier() -> str:
     """The effective ``existing_test_edit`` tier. An unreadable matrix is ``human``."""
     try:
         return tier_for(FileLayerSource().resolve(), EXISTING_TEST_EDIT_CLASS)
-    except Exception:  # noqa: BLE001 - an unreadable matrix fails closed
+    except Exception as exc:  # noqa: BLE001 - an unreadable matrix fails closed
+        logging.getLogger("pipeline").warning("existing_test_edit tier unreadable, using human: %s", type(exc).__name__)
         return HUMAN_TIER
 
 
@@ -113,7 +116,7 @@ def execute_approve_test_edit(plan_name, story_key, story, ruling, manifest) -> 
         )
     try:
         base_sha, head_sha, diff = _live_evidence(repo.root, repo.default_branch, branch)
-    except Exception:  # noqa: BLE001 - fail closed on any git or config failure
+    except (RuntimeError, OSError, subprocess.SubprocessError):  # fail closed on a failed git call
         return _park(
             plan_name, story_key, story,
             "approve_test_edit declined: live git evidence could not be read; parked for a human",

@@ -7,6 +7,7 @@ keeps landing on the moved code. pipeline.triage re-exports the moved names.
 """
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .module_ref import _ModuleRef
@@ -90,6 +91,186 @@ def _acceptance_with_source(acceptance, source) -> list:
     return rewritten
 
 
+@dataclass(frozen=True)
+class _PatchContext:
+    """The identifiers every patch_acceptance phase parks against."""
+
+    plan_name: str
+    story_key: str
+    story: dict
+
+    def park(self, reason: str) -> str:
+        return _park(self.plan_name, self.story_key, self.story, reason)
+
+
+def _baseline_park_reason(story, checkout):
+    """Return ``(park_reason or None, baseline_detail)`` for the born-broken gate."""
+    baseline = validate_acceptance_fixtures(story, checkout)
+    baseline_state = baseline.get("state")
+    baseline_detail = str(baseline.get("detail") or "")
+    if baseline_state != "errors":
+        return (
+            f"patch_acceptance ruled but the acceptance fixture is not "
+            f"born-broken at a clean baseline (state={baseline_state!r}: "
+            f"{baseline_detail}); parked for a human",
+            baseline_detail,
+        )
+    return None, baseline_detail
+
+
+def _build_rewrite_prompt(ctx, acceptance, checkout, rationale, baseline_detail) -> str:
+    """Assemble the overlord prompt carrying the fixture, failure and evidence."""
+    try:
+        evidence = collect_triage_evidence(str(checkout), ctx.story) or ""
+    except Exception:  # noqa: BLE001 - evidence is best-effort, fail open
+        evidence = ""
+    fixture_blocks = "\n".join(
+        f"--- {entry.get('path') or 'fixture'} ---\n{entry.get('source') or ''}"
+        for entry in acceptance
+        if isinstance(entry, dict) and entry.get("source") is not None
+    )
+    try:
+        policy = _load_policy() or ""
+    except Exception:  # noqa: BLE001 - policy text is best-effort, fail open
+        policy = ""
+    return (
+        f"{policy}\n\n"
+        "TRIAGE QUESTION: this story's acceptance fixture is demonstrably "
+        "born-broken at a clean baseline - it cannot pass no matter what an "
+        "implementer writes, so the fixture itself is the defect. Rewrite the "
+        "fixture so it tests the story's acceptance criteria correctly.\n"
+        f"STORY: {ctx.story_key}\n"
+        f"RATIONALE: {rationale}\n"
+        f"BROKEN FIXTURE SOURCE:\n{fixture_blocks or '(no fixture source recorded)'}\n"
+        f"CLEAN-BASELINE FAILURE OUTPUT:\n{baseline_detail}\n"
+        f"TRIAGE EVIDENCE:\n{evidence}\n"
+        "Respond with a one-line diagnosis and the COMPLETE corrected fixture "
+        "source in this exact format:\n"
+        "DIAGNOSIS: <one line naming the defect that makes the fixture born-broken>\n"
+        f"{_FIXTURE_START_MARKER}\n"
+        "<complete corrected fixture source>\n"
+        f"{_FIXTURE_END_MARKER}\n"
+    )
+
+
+def _request_rewrite(ctx, prompt):
+    """Invoke the overlord and parse its reply: ``(parsed, park_result)``.
+
+    Exactly one is not ``None``: a park result when the overlord fails or its
+    reply is unparseable.
+    """
+    try:
+        raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(ctx.plan_name))
+    except Exception as exc:  # noqa: BLE001 - overlord failure fails closed
+        return None, ctx.park(
+            f"patch_acceptance ruled but the overlord could not be "
+            f"re-invoked: {type(exc).__name__}; parked for a human"
+        )
+    parsed = _parse_fixture_rewrite(raw or "")
+    if parsed is None:
+        return None, ctx.park(
+            "patch_acceptance ruled but the overlord's rewrite was "
+            "unparseable (expected a DIAGNOSIS: line and the corrected source "
+            f"between {_FIXTURE_START_MARKER} and {_FIXTURE_END_MARKER}); "
+            "parked for a human"
+        )
+    return parsed, None
+
+
+def _rewrite_rejection_reason(candidate, checkout):
+    """Validate the rewrite; return a park reason, or ``None`` when it passes."""
+    lint_kind, lint_msg = _lint_acceptance_fixtures(candidate, repo_root=str(checkout))
+    if lint_kind == "finding":
+        return (
+            f"patch_acceptance rejected the rewrite: ingest lint findings: "
+            f"{lint_msg}; the manifest acceptance source is untouched; "
+            "parked for a human"
+        )
+    collect_kind, collect_msg = _pytest_acceptance_fixtures(
+        candidate, repo_root=str(checkout)
+    )
+    if collect_kind == "finding":
+        return (
+            f"patch_acceptance rejected the rewrite: fixture collection "
+            f"findings: {collect_msg}; the manifest acceptance source is "
+            "untouched; parked for a human"
+        )
+    recheck = validate_acceptance_fixtures(candidate, checkout)
+    recheck_state = recheck.get("state")
+    recheck_detail = str(recheck.get("detail") or "")
+    if recheck_state == "passes":
+        return (
+            "patch_acceptance rejected the rewrite: it PASSES at a clean "
+            "baseline (isolation-only - the fixture no longer tests the "
+            "feature); the manifest acceptance source is untouched; "
+            "parked for a human"
+        )
+    if recheck_state != "fails_correctly":
+        return (
+            f"patch_acceptance rejected the rewrite: expected it to still "
+            f"FAIL at a clean baseline, got state={recheck_state!r}: "
+            f"{recheck_detail}; the manifest acceptance source is untouched; "
+            "parked for a human"
+        )
+    return None
+
+
+def _apply_rewrite(ctx, manifest, action, rewritten_source, diagnosis) -> str:
+    """Success path: snapshot digests, write the rewrite, record the execution."""
+    story = ctx.story
+    story_key = ctx.story_key
+    manifest_story = story
+    stories = manifest.get("stories") if isinstance(manifest, dict) else None
+    if isinstance(stories, dict) and isinstance(stories.get(story_key), dict):
+        manifest_story = stories[story_key]
+    prior_digests = acceptance_digests(manifest_story)
+    prior_status = story.get("status")
+    prior_parked_reason = story.get("parked_reason")
+
+    new_acceptance = _acceptance_with_source(
+        manifest_story.get("acceptance"), rewritten_source
+    )
+    manifest_story["acceptance"] = new_acceptance
+    if story is not manifest_story:
+        story["acceptance"] = [e for e in new_acceptance]
+    story["status"] = "todo"
+    # The story is being re-dispatched: a stale parked_reason would mislead the
+    # next triage pass and the parked-story matrix.
+    story.pop("parked_reason", None)
+    if story is not manifest_story:
+        manifest_story.pop("parked_reason", None)
+    # The recovery is a fresh start: clear the triage loop-breaker counter so a
+    # story that relapses later re-qualifies for the full triage budget instead
+    # of staying permanently capped by the attempts it burned before recovery.
+    # Only the SUCCESS path resets it -- a failed patch_acceptance must keep the
+    # counter, or a story that keeps failing would get unlimited triage.
+    story["triage_attempts"] = 0
+    if story is not manifest_story:
+        manifest_story["triage_attempts"] = 0
+
+    try:
+        from .server import PIPELINE_AUTONOMY as mode
+    except Exception:  # noqa: BLE001 - unresolved mode falls back to gated
+        mode = "gated"
+    _record_execution(
+        ctx.plan_name,
+        story_key,
+        action,
+        "patch_acceptance",
+        mode,
+        prior_status,
+        prior_parked_reason,
+        prior_acceptance_digests=prior_digests,
+        diagnosis=diagnosis,
+    )
+    # The executor owns the record on the SUCCESS path only: set the sentinel
+    # here (after the record is actually written) so _apply_ruling_for_mode
+    # does not append a second one. Park outcomes leave the sentinel unset, so
+    # _apply_ruling_for_mode records them itself.
+    story["_patch_acceptance_recorded"] = True
+    return "patch_acceptance"
+
+
 def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest) -> str:
     """Execute a ``patch_acceptance`` ruling by rewriting a born-broken
     acceptance fixture through validation.
@@ -129,185 +310,35 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest) -> 
     """
     action = ruling.get("action", "patch_acceptance")
     rationale = ruling.get("rationale", "")[:300]
+    ctx = _PatchContext(plan_name, story_key, story)
 
     acceptance = story.get("acceptance")
     if not acceptance:
-        return _park(
-            plan_name,
-            story_key,
-            story,
+        return ctx.park(
             "patch_acceptance ruled but the story has no acceptance fixtures "
-            "to rewrite; parked for a human",
+            "to rewrite; parked for a human"
         )
 
     # (1) Born-broken gate: reuse oracle_gate's classification, never
     # re-derive the broken-ness test here.
     checkout = _story_checkout(story)
-    baseline = validate_acceptance_fixtures(story, checkout)
-    baseline_state = baseline.get("state")
-    baseline_detail = str(baseline.get("detail") or "")
-    if baseline_state != "errors":
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            f"patch_acceptance ruled but the acceptance fixture is not "
-            f"born-broken at a clean baseline (state={baseline_state!r}: "
-            f"{baseline_detail}); parked for a human",
-        )
+    park_reason, baseline_detail = _baseline_park_reason(story, checkout)
+    if park_reason is not None:
+        return ctx.park(park_reason)
 
     # (2) Re-invoke the overlord for a corrected fixture.
-    try:
-        evidence = collect_triage_evidence(str(checkout), story) or ""
-    except Exception:  # noqa: BLE001 - evidence is best-effort, fail open
-        evidence = ""
-    fixture_blocks = "\n".join(
-        f"--- {entry.get('path') or 'fixture'} ---\n{entry.get('source') or ''}"
-        for entry in acceptance
-        if isinstance(entry, dict) and entry.get("source") is not None
-    )
-    try:
-        policy = _load_policy() or ""
-    except Exception:  # noqa: BLE001 - policy text is best-effort, fail open
-        policy = ""
-    prompt = (
-        f"{policy}\n\n"
-        "TRIAGE QUESTION: this story's acceptance fixture is demonstrably "
-        "born-broken at a clean baseline - it cannot pass no matter what an "
-        "implementer writes, so the fixture itself is the defect. Rewrite the "
-        "fixture so it tests the story's acceptance criteria correctly.\n"
-        f"STORY: {story_key}\n"
-        f"RATIONALE: {rationale}\n"
-        f"BROKEN FIXTURE SOURCE:\n{fixture_blocks or '(no fixture source recorded)'}\n"
-        f"CLEAN-BASELINE FAILURE OUTPUT:\n{baseline_detail}\n"
-        f"TRIAGE EVIDENCE:\n{evidence}\n"
-        "Respond with a one-line diagnosis and the COMPLETE corrected fixture "
-        "source in this exact format:\n"
-        "DIAGNOSIS: <one line naming the defect that makes the fixture born-broken>\n"
-        f"{_FIXTURE_START_MARKER}\n"
-        "<complete corrected fixture source>\n"
-        f"{_FIXTURE_END_MARKER}\n"
-    )
-    try:
-        raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
-    except Exception as exc:  # noqa: BLE001 - overlord failure fails closed
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            f"patch_acceptance ruled but the overlord could not be "
-            f"re-invoked: {type(exc).__name__}; parked for a human",
-        )
-    parsed = _parse_fixture_rewrite(raw or "")
+    prompt = _build_rewrite_prompt(ctx, acceptance, checkout, rationale, baseline_detail)
+    parsed, park_result = _request_rewrite(ctx, prompt)
     if parsed is None:
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            "patch_acceptance ruled but the overlord's rewrite was "
-            "unparseable (expected a DIAGNOSIS: line and the corrected source "
-            f"between {_FIXTURE_START_MARKER} and {_FIXTURE_END_MARKER}); "
-            "parked for a human",
-        )
+        return park_result
     diagnosis, rewritten_source = parsed
 
     # (3) VALIDATE BEFORE WRITING - the manifest is untouched until both
     # checks pass.
     candidate = {"acceptance": _acceptance_with_source(acceptance, rewritten_source)}
-    lint_kind, lint_msg = _lint_acceptance_fixtures(candidate, repo_root=str(checkout))
-    if lint_kind == "finding":
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            f"patch_acceptance rejected the rewrite: ingest lint findings: "
-            f"{lint_msg}; the manifest acceptance source is untouched; "
-            "parked for a human",
-        )
-    collect_kind, collect_msg = _pytest_acceptance_fixtures(
-        candidate, repo_root=str(checkout)
-    )
-    if collect_kind == "finding":
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            f"patch_acceptance rejected the rewrite: fixture collection "
-            f"findings: {collect_msg}; the manifest acceptance source is "
-            "untouched; parked for a human",
-        )
-    recheck = validate_acceptance_fixtures(candidate, checkout)
-    recheck_state = recheck.get("state")
-    recheck_detail = str(recheck.get("detail") or "")
-    if recheck_state == "passes":
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            "patch_acceptance rejected the rewrite: it PASSES at a clean "
-            "baseline (isolation-only - the fixture no longer tests the "
-            "feature); the manifest acceptance source is untouched; "
-            "parked for a human",
-        )
-    if recheck_state != "fails_correctly":
-        return _park(
-            plan_name,
-            story_key,
-            story,
-            f"patch_acceptance rejected the rewrite: expected it to still "
-            f"FAIL at a clean baseline, got state={recheck_state!r}: "
-            f"{recheck_detail}; the manifest acceptance source is untouched; "
-            "parked for a human",
-        )
+    rejection = _rewrite_rejection_reason(candidate, checkout)
+    if rejection is not None:
+        return ctx.park(rejection)
 
     # (4) Success - snapshot BEFORE the write so the change is undoable.
-    manifest_story = story
-    stories = manifest.get("stories") if isinstance(manifest, dict) else None
-    if isinstance(stories, dict) and isinstance(stories.get(story_key), dict):
-        manifest_story = stories[story_key]
-    prior_digests = acceptance_digests(manifest_story)
-    prior_status = story.get("status")
-    prior_parked_reason = story.get("parked_reason")
-
-    new_acceptance = _acceptance_with_source(
-        manifest_story.get("acceptance"), rewritten_source
-    )
-    manifest_story["acceptance"] = new_acceptance
-    if story is not manifest_story:
-        story["acceptance"] = [e for e in new_acceptance]
-    story["status"] = "todo"
-    # The story is being re-dispatched: a stale parked_reason would mislead the
-    # next triage pass and the parked-story matrix.
-    story.pop("parked_reason", None)
-    if story is not manifest_story:
-        manifest_story.pop("parked_reason", None)
-    # The recovery is a fresh start: clear the triage loop-breaker counter so a
-    # story that relapses later re-qualifies for the full triage budget instead
-    # of staying permanently capped by the attempts it burned before recovery.
-    # Only the SUCCESS path resets it -- a failed patch_acceptance must keep the
-    # counter, or a story that keeps failing would get unlimited triage.
-    story["triage_attempts"] = 0
-    if story is not manifest_story:
-        manifest_story["triage_attempts"] = 0
-
-    try:
-        from .server import PIPELINE_AUTONOMY as mode
-    except Exception:  # noqa: BLE001 - unresolved mode falls back to gated
-        mode = "gated"
-    _record_execution(
-        plan_name,
-        story_key,
-        action,
-        "patch_acceptance",
-        mode,
-        prior_status,
-        prior_parked_reason,
-        prior_acceptance_digests=prior_digests,
-        diagnosis=diagnosis,
-    )
-    # The executor owns the record on the SUCCESS path only: set the sentinel
-    # here (after the record is actually written) so _apply_ruling_for_mode
-    # does not append a second one. Park outcomes leave the sentinel unset, so
-    # _apply_ruling_for_mode records them itself.
-    story["_patch_acceptance_recorded"] = True
-    return "patch_acceptance"
+    return _apply_rewrite(ctx, manifest, action, rewritten_source, diagnosis)

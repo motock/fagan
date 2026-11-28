@@ -51,6 +51,7 @@ MODULES = (
     "pipeline/advance_merge.py",
     "pipeline/advance_review.py",
     "pipeline/merge.py",
+    "pipeline/merge_approve.py",
     "pipeline/merge_reverify.py",
     "pipeline/story_commit.py",
 )

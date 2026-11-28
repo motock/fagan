@@ -19,21 +19,21 @@ import fcntl
 import inspect
 import logging
 import os
-import subprocess
+import subprocess  # noqa: F401 (tests patch it here; phases read it via this module)
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from . import bound_records, forge_auth
-from .actor import actor_id
+from . import bound_records, forge_auth  # noqa: F401
+from .actor import actor_id  # noqa: F401
 from .audit import record_audit
-from .branch_names import story_branch
+from .branch_names import story_branch  # noqa: F401
 from .ci import (
     SettingsContext,
-    context_from_manifest,
-    gate_record,
+    context_from_manifest,  # noqa: F401
+    gate_record,  # noqa: F401
     settings_for_plan,
 )
 from .concurrency import _plan_lock, command_lock_wait_seconds
@@ -47,7 +47,7 @@ from .merge_local_checks import render_local_checks_line
 from .overlord_class_mode import class_mode, matrix_tier
 from .overlord_context import overlord_context
 from .ruling_snapshot import ruling_input
-from .triage_outcomes import record_resolution_if_ruled
+from .triage_outcomes import record_resolution_if_ruled  # noqa: F401
 
 _lock_state: dict[str, int] = {}
 
@@ -685,261 +685,30 @@ def _merge_decision(
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
-    from .authorization import authorize
-    from .pr import _resolve_story_branch
-    from .review_merge_binding import (
-        branch_head_sha,
-        check_with_worktree,
-        rebind_after_pipeline_push,
-        refuse,
-    )
-    from .server import (
-        _ci_rerun,
-        _ci_status,
-        _default_branch,
-        _mark_plane_done,
-        _mcp_restart_notice,
-        _mcp_self_source_touched,
-        _merge_pr,
-        _notify_user,
-        _rebase_onto_master,
-        _reverify_acceptance,
-        _reverify_build,
-        _scoped_repo_root,
-        _store,
-        _validate_key,
+    from .merge_approve import (
+        finish_merge,
+        load_context,
+        plan_busy_refusal,
+        preflight_refusal,
+        record_merged,
+        run_merge_gate,
     )
 
-    # The file layout holds only the default partition end to end, so a bound
-    # request is refused up front; a record store proceeds in the bound
-    # namespace through bound_records.
-    if bound_records.refuses_bound_namespace(_store):
-        return {"ok": False, "error": "unknown namespace"}
-
-    # Validate the caller-supplied keys BEFORE anything reads or writes a path
-    # built from them. ``authorize`` is not inert on bad input: it reads the
-    # manifest and, on denial, appends to the plan's notification sidecar, so a
-    # traversal in ``plan_name`` must be rejected before it gets that far.
-    _validate_key(plan_name)
-    _validate_key(story_key)
-
-    refusal = authorize("story:merge", plan_name=plan_name, story_key=story_key)
+    refusal = preflight_refusal(plan_name, story_key)
     if refusal is not None:
         return refusal
 
     with _plan_lock(plan_name, wait_seconds=command_lock_wait_seconds()) as acquired:
         if not acquired:
-            return {
-                "ok": False,
-                "error": "plan busy (scheduler tick in progress); retry",
-                "retriable": True,
-            }
-        # Re-read the manifest from disk INSIDE the lock so we merge against
-        # the freshest on-disk state, not a pre-lock stale copy. A scheduler
-        # tick may have changed the story's status or verdict while we waited
-        # to acquire the lock.
-        manifest = _store.get_manifest(plan_name)
-        story = manifest["stories"].get(story_key)
-        if not story:
-            return {"ok": False, "error": f"No such story {story_key}"}
-        if story["status"] not in ("parked", "pr_open"):
-            return {
-                "ok": False,
-                "error": f"Story is {story['status']}, not parked/pr_open",
-            }
-        if story.get("review_verdict") != "APPROVE":
-            return {"ok": False, "error": "Story was never reviewer-approved"}
-        from . import access_hooks
-
-        # The repo access hook is consulted before any rebase, push or merge.
-        refusal = access_hooks.merge_refusal(plan_name, story)
-        if refusal is not None:
-            return refusal
-
-        try:
-            with _scoped_repo_root(plan_name):
-                # Mode 9 gate applies here too: even an explicit human merge must
-                # not land a conflicting or CI-red PR. The merge_ci_gate setting
-                # (resolved per namespace, team and repo) turns it off, and only
-                # if you intentionally accept that.
-                worktree = story.get("worktree", "")
-                # Resolve the worktree's ACTUAL HEAD branch (a rework round can
-                # leave it on an alias agent/<key>-<suffix>) so rebase -> push
-                # -> CI -> _merge_pr all operate on the one branch _merge_pr
-                # merges. The hardcoded convention name previously pushed a
-                # branch a prior _merge_pr had already deleted ("src refspec
-                # does not match any") or a stale twin, and CI-polled a SHA
-                # that was never pushed to it. Resolve only when there is a
-                # worktree to probe; a missing/anomalous worktree degrades to
-                # the convention branch without paying a subprocess.
-                branch = story_branch(story_key)
-                if worktree and Path(worktree).is_dir():
-                    branch = _resolve_story_branch(worktree, story_key)
-                # The approval must cover the commit being merged: probe the
-                # remote tip AFTER fetch and BEFORE the merge-time rebase, and
-                # refuse here so nothing is rebased or pushed first.
-                head = branch_head_sha(branch)
-                binding = check_with_worktree(story, head, worktree)
-                if not binding["ok"]:
-                    return refuse(plan_name, story_key, story, head, binding)
-                rb = _rebase_onto_master(worktree, branch)
-                if rb.get("auto_resolved"):
-                    # W4L-04: stamp the story's persisted correlation_id
-                    # (omitted entirely for older manifests - absent, not
-                    # null).
-                    _cid = story.get("correlation_id")
-                    _notify_user(
-                        plan_name,
-                        f"{story_key} rebase auto-resolved an "
-                        f"additive-import conflict against "
-                        f"origin/{_default_branch()}.",
-                        **({"correlation_id": _cid} if _cid else {}),
-                        event="rebase_auto_resolved",
-                    )
-                if not rb["ok"]:
-                    return {
-                        "ok": False,
-                        "error": f"rebase failed: {rb['error']}",
-                        "story_key": story_key,
-                    }
-                pushed_sha = ""
-                if Path(worktree).is_dir():
-                    push = subprocess.run(
-                        ["git", "push", "--force-with-lease", "origin", branch],
-                        check=False,
-                        cwd=worktree,
-                        capture_output=True,
-                        text=True,
-                        **forge_auth.env_kw(),
-                    )
-                    if push.returncode != 0:
-                        return {
-                            "ok": False,
-                            "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
-                            "story_key": story_key,
-                        }
-                    # Mode 26: pin to the exact commit that was just pushed,
-                    # not the branch name - see the matching comment in
-                    # advance_pipeline's own merge adjudication above.
-                    rev = subprocess.run(
-                        ["git", "rev-parse", "HEAD"],
-                        check=False,
-                        cwd=worktree,
-                        capture_output=True,
-                        text=True,
-                    )
-                    pushed_sha = rev.stdout.strip()
-                    # The checkpoint/rebase/force-push above move the head after
-                    # the review by design: re-bind at the pipeline's own commit
-                    # point so a later retry does not deny known-good work.
-                    rebind_after_pipeline_push(story, pushed_sha)
-                settings = context_from_manifest(manifest)
-                ci = _ci_status(branch, sha=pushed_sha, settings=settings)
-                if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
-                    # Same one-shot auto-rerun as the scheduler's merge gate:
-                    # a queue-delay cancellation carries no code-quality
-                    # signal, so give it one automatic retry before failing.
-                    story["ci_rerun_attempted"] = True
-                    _ci_rerun(pushed_sha)
-                    ci = _ci_status(branch, sha=pushed_sha, settings=settings)
-                # Record the gate's final result for every risk level; persisted
-                # now because the blocking returns below skip the final write.
-                story["pr_checks"] = ci
-                story.pop("pr_checks_error", None)
-                bound_records.put_manifest(_store, plan_name, manifest)
-                if ci["state"] in ("fail", "cancelled"):
-                    return {
-                        "ok": False,
-                        "error": f"CI failing: {ci['error']}",
-                        "story_key": story_key,
-                    }
-                if ci["state"] == "pending":
-                    return {
-                        "ok": False,
-                        "error": f"CI still pending: {ci['error']}",
-                        "story_key": story_key,
-                    }
-                if ci["state"] == "unreadable":
-                    return {
-                        "ok": False,
-                        "error": f"ci unreadable: {ci['error']}",
-                        "story_key": story_key,
-                    }
-                acc = _reverify_acceptance(
-                    story, worktree, story_key, settings=settings
-                )
-                if acc["state"] == "fail":
-                    return {
-                        "ok": False,
-                        "error": f"acceptance reverify fail: {acc['error']}",
-                        "story_key": story_key,
-                    }
-                build = _reverify_build(worktree, settings=settings)
-                if build["state"] == "fail":
-                    return {
-                        "ok": False,
-                        "error": f"build reverify fail: {build['error']}",
-                        "story_key": story_key,
-                    }
-                # _merge_pr removes the worktree and deletes the branch, so the
-                # self-source diff must be taken BEFORE the merge, not after.
-                mcp_touched = _mcp_self_source_touched(
-                    worktree, f"origin/{_default_branch()}"
-                )
-                _merge_pr(story.get("worktree", ""), story_key)
-        except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
-            return {"ok": False, "error": str(e), "story_key": story_key}
-        # Final write INSIDE the lock, using the manifest re-read inside the
-        # lock (not a pre-lock copy). Clear parked_reason on leaving 'parked'.
-        story["status"] = "done"
-        story.pop("parked_reason", None)
-        story.pop("ci_rerun_attempted", None)
-        bound_records.put_manifest(_store, plan_name, manifest)
-        record_audit(
-            plan_name,
-            action="story.merge",
-            outcome="allowed",
-            target={"plan": plan_name, "story": story_key},
-            detail={
-                "branch": story_branch(story_key),
-                "gates": gate_record(settings),
-            },
-        )
-
-        _notify_user(
-            plan_name,
-            f"{story_key} merged",
-            story_key=story_key,
-            event="story_merged",
-            **(
-                {"correlation_id": story["correlation_id"]}
-                if story.get("correlation_id")
-                else {}
-            ),
-        )
-
-        from .plan_completion import notify_if_plan_completed
-
-        try:
-            notify_if_plan_completed(
-                plan_name, manifest, just_merged=story_key
-            )
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "notify_if_plan_completed failed for %s", plan_name
-            )
-        _maybe_record_retro(plan_name, manifest)
-    record_resolution_if_ruled(
-        plan_name,
-        story_key,
-        human_action="merge_held",
-        new_status="done",
-        principal=actor_id(),
-    )
-    _mark_plane_done(story_key, plan_name)
-    if mcp_touched:
-        _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
-    return {"ok": True, "story_key": story_key, "status": "done"}
+            return plan_busy_refusal()
+        ctx, refusal = load_context(plan_name, story_key)
+        if ctx is None:
+            return cast(dict[str, Any], refusal)
+        outcome, refusal = run_merge_gate(ctx)
+        if outcome is None:
+            return cast(dict[str, Any], refusal)
+        record_merged(ctx, outcome)
+    return finish_merge(ctx, outcome)
 
 
 def _maybe_record_retro(plan_name: str, manifest: dict) -> None:

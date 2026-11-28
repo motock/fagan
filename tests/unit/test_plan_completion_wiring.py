@@ -35,6 +35,7 @@ import pipeline.advance_merge as adv_merge
 import pipeline.advance_merge_land as adv_merge_land
 import pipeline.ci as pci
 import pipeline.merge as pmerge
+import pipeline.merge_approve as pmerge_approve
 import pipeline.plan_completion as ppc
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _hermetic_ollama_seams,
@@ -57,6 +58,9 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
 )
 def test_notify_if_plan_completed_referenced_in_module_source(module):
     src = inspect.getsource(module)
+    if module is pmerge:
+        # The approve_merge phases live in pipeline/merge_approve.py.
+        src += "\n" + inspect.getsource(pmerge_approve)
     if module is adv:
         # The mark-done notify call for the advance path lives in
         # advance_merge.py; scan both so this guard keeps covering it.

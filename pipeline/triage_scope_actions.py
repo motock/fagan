@@ -50,6 +50,7 @@ PROTECTED_MODULES = frozenset(
         "pipeline/overlord.py",
         "pipeline/review_orchestrator.py",
         "pipeline/merge.py",
+        "pipeline/merge_approve.py",
         "pipeline/advance_merge.py",
         "pipeline/advance_merge_hold.py",
         "pipeline/advance_merge_ci_gate.py",

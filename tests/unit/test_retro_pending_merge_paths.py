@@ -100,8 +100,11 @@ def test_approve_merge_impl_calls_maybe_record_retro():
     # Structural wiring assertion: a full _approve_merge_impl call needs the
     # plan lock + CI/PR mocks; the unit tests above cover _maybe_record_retro's
     # behavior, so here we pin the call-site wiring via source inspection.
-    src = inspect.getsource(pipeline.merge._approve_merge_impl)
-    assert "_maybe_record_retro(plan_name, manifest)" in src
+    # The call now lives in the phase function _approve_merge_impl delegates to.
+    import pipeline.merge_approve
+
+    src = inspect.getsource(pipeline.merge_approve.record_merged)
+    assert "_maybe_record_retro(plan_name, ctx.manifest)" in src
 
 
 def test_advance_pipeline_locked_impl_calls_maybe_record_retro():

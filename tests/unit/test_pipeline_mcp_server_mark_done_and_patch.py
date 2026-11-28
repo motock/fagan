@@ -5,6 +5,7 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 import json
 import subprocess
 
+import pipeline.ci as _pipeline_ci
 from app import (
     role_registry,
 )
@@ -493,7 +494,7 @@ def test_review_story_request_changes_warns_rework_when_acceptance_oracle_curren
     })
     reviewer_output = "Some unrelated nit.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
 
     p.review_story("rvoracle", "S1")
@@ -518,7 +519,7 @@ def test_review_story_request_changes_no_oracle_warning_when_oracle_fails(
     })
     reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
 
     p.review_story("rvoraclefail", "S1")
@@ -541,7 +542,7 @@ def test_review_story_request_changes_no_oracle_check_without_acceptance_block(
     reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
     calls = []
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: calls.append(1) or {"state": "pass", "error": ""})
 
     p.review_story("rvnoacc", "S1")
@@ -586,7 +587,7 @@ def test_review_story_leaves_transcript_on_first_review_with_failing_oracle(
     })
     monkeypatch.setattr(p, "_run_reviewer",
                         lambda wt, br, **k: "Incomplete.\nVERDICT: REQUEST_CHANGES")
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
 
     p.review_story("rvfirstfail", "S1")
@@ -615,7 +616,7 @@ def test_review_story_deletes_transcript_when_oracle_regresses(
     })
     reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
 
     p.review_story("rvregress", "S1")
@@ -647,7 +648,7 @@ def test_review_story_leaves_transcript_when_oracle_still_passing(
     })
     reviewer_output = "Some unrelated nit.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
-    monkeypatch.setattr(p, "_reverify_acceptance",
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
 
     p.review_story("rvnoregress", "S1")

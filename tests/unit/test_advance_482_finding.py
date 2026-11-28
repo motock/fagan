@@ -47,6 +47,7 @@ import subprocess
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline.server import _advance_pipeline_locked
 
@@ -205,23 +206,23 @@ def test_advance_tick_clears_merge_gate_on_alias_head_across_calls(
 
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "_ci_status_once", ci_once)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", ci_once)
     monkeypatch.setattr(
-        p, "_ci_status",
+        _pipeline_ci, "_ci_status",
         lambda *a, **k: pytest.fail(
             "_ci_status (blocking) called by advance tick"
         ),
     )
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "REPO_ROOT", repo)
     monkeypatch.setattr(p, "_rebase_onto_master", _fake_rebase_onto_master)
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
     monkeypatch.setattr(
-        p, "_reverify_acceptance",
+        _pipeline_ci, "_reverify_acceptance",
         lambda story, wt, key, settings=None: {"state": "pass"},
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)

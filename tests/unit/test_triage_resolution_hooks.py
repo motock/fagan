@@ -31,6 +31,7 @@ import logging
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import persistence as ppers
 from pipeline import review_merge_binding
@@ -538,12 +539,12 @@ def merge_boundary(monkeypatch):
     monkeypatch.setattr(p, "_rebase_onto_master", lambda wt, branch: {"ok": True})
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
-    monkeypatch.setattr(p, "_ci_status", lambda *a, **k: {"state": "success", "error": ""})
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda *a, **k: {"state": "success", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda story, wt, key, settings=None: {"state": "pass"}
+        _pipeline_ci, "_reverify_acceptance", lambda story, wt, key, settings=None: {"state": "pass"}
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda wt, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)

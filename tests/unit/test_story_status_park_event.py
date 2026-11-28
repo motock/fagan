@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import persistence as ppers
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -208,7 +209,7 @@ def test_non_park_notification_does_not_carry_story_parked(plan_dir, monkeypatch
     stamp landed on the right call."""
     _park_setup(plan_dir, monkeypatch, rework_attempts=0,
                 last_reviewed_sha=None, head_sha="any")
-    monkeypatch.setattr(p, "_acceptance_tampered", lambda story, wt: ["t.py"])
+    monkeypatch.setattr(_pipeline_ci, "_acceptance_tampered", lambda story, wt: ["t.py"])
     spy = _NotifySpy()
     monkeypatch.setattr(p, "_notify_user", spy)
 

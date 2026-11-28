@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.merge as merge_mod
 import pipeline.rebase as rebase_mod
 import pipeline.server as p
@@ -189,7 +190,7 @@ def test_merge_gate_counts_a_failed_fetch_as_a_merge_attempt_without_pushing(
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "REPO_ROOT", repo)
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
-    monkeypatch.setattr(p, "_ci_status_once", lambda *a, **k: pytest.fail("CI polled after failed fetch"))
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda *a, **k: pytest.fail("CI polled after failed fetch"))
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda wt, base: "")
     story = {

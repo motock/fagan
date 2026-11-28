@@ -36,7 +36,7 @@ The contract these tests pin down:
 body through the module-documented monkeypatch seam (``from .server import
 ...`` - the same seam the sibling ``_merge_gate_ci_status`` uses), so the stub
 is installed on the re-exported binding on ``pipeline.server``
-(``pipeline.server._ci_status_once``) rather than on a ``pipeline.merge`` name.
+(``pipeline.ci._ci_status_once``) rather than on a ``pipeline.merge`` name.
 """
 
 # ruff: noqa: I001
@@ -57,6 +57,7 @@ from pipeline import pr as pr_mod
 # The module that owns the manifest persistence guarded by the end-to-end test
 # at the bottom of this file.
 from pipeline import advance as advance_mod
+import pipeline.ci as _pipeline_ci
 
 
 @pytest.fixture(autouse=True)
@@ -166,8 +167,8 @@ class _Harness:
             self.blocking_calls.append((args, kwargs))
             return _boom_blocking(*args, **kwargs)
 
-        monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
-        monkeypatch.setattr(server_mod, "_ci_status", fake_blocking, raising=False)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status", fake_blocking, raising=False)
 
         def fake_resolve(worktree, story_key):
             self.branch_calls.append((worktree, story_key))
@@ -429,7 +430,7 @@ def test_ci_status_once_is_imported_lazily(monkeypatch):
 def test_gather_resolves_ci_status_once_from_pipeline_server(monkeypatch):
     """The single-poll helper must come from ``pipeline.server`` at call time.
 
-    Only ``pipeline.server._ci_status_once`` is stubbed here (``pipeline.ci``
+    Only ``pipeline.ci._ci_status_once`` is stubbed here (``pipeline.ci``
     and ``pipeline.merge`` are left alone), so this fails if the gather binds
     the helper from anywhere else - the module-documented seam is the
     re-exported binding on ``pipeline.server``.
@@ -453,8 +454,8 @@ def test_gather_resolves_ci_status_once_from_pipeline_server(monkeypatch):
         calls.append({"branch": branch, "sha": sha})
         return dict(PASS_STATE)
 
-    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
-    monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", _boom_blocking, raising=False)
     story = _story()
 
     with merge_mod.merge_adjudication_plan("PLAN-1"):
@@ -560,8 +561,8 @@ def test_gathered_pr_checks_land_in_the_persisted_manifest(plan_dir, monkeypatch
     def fake_once(branch, *, sha, settings=None):
         return dict(PASS_STATE)
 
-    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
-    monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", _boom_blocking, raising=False)
     (plan_dir / f"{PLAN}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": {E2E_KEY: _e2e_story()}}, indent=2)
     )

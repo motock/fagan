@@ -19,6 +19,7 @@ import logging
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import ci as ci_mod
 from pipeline import merge as merge_mod
 from pipeline import merge_adjudication_evidence as evidence
@@ -67,7 +68,7 @@ class _Forge:
                 raise self.exc
             return self.value
 
-        monkeypatch.setattr(server_mod, "_ci_status_once", fake_ci_status_once)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_ci_status_once)
         monkeypatch.setattr(ci_mod, "_ci_status_once", fake_ci_status_once)
 
     def answer(self, value):

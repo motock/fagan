@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import merge
 from pipeline.server import _advance_pipeline_locked
@@ -42,10 +43,10 @@ def boundaries(monkeypatch):
     merged = []
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "medium")
-    monkeypatch.setattr(p, "_reverify_acceptance", lambda s, w, k, settings=None: {"state": "pass"})
-    monkeypatch.setattr(p, "_reverify_build", lambda w, settings=None: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", lambda s, w, k, settings=None: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda w, settings=None: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master", lambda wt, br: {"ok": True, "error": ""})
@@ -58,8 +59,8 @@ def boundaries(monkeypatch):
 
 def _stub_ci(monkeypatch, state, error=""):
     result = {"state": state, "error": error}
-    monkeypatch.setattr(p, "_ci_status_once", lambda *a, **k: dict(result))
-    monkeypatch.setattr(p, "_ci_status", lambda *a, **k: dict(result))
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda *a, **k: dict(result))
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda *a, **k: dict(result))
 
 
 def test_should_record_pass_pr_checks_for_medium_risk_scheduler_merge(
@@ -148,7 +149,7 @@ def test_should_record_pending_pr_checks_and_block_manual_merge(
 
 def test_should_not_overwrite_existing_pr_checks_in_high_risk_populate(monkeypatch):
     monkeypatch.setattr(
-        p,
+        _pipeline_ci,
         "_ci_status_once",
         lambda *a, **k: pytest.fail("populate must skip when pr_checks is set"),
     )

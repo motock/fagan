@@ -64,6 +64,8 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
+
 # pipeline.story_status imports pipeline.server at module level and
 # pipeline.server imports check_story_status back from story_status, so
 # pipeline.server must be imported FIRST or collection dies on the cycle.
@@ -292,7 +294,7 @@ def _base_setup(plan_dir, monkeypatch, *, story_overrides=None,
     # Hermetic pass-path helpers (each has its own dedicated test files).
     monkeypatch.setattr(p, "_run_lint_gate", lambda wt, env: None)
     monkeypatch.setattr(p, "_find_dead_new_functions", lambda wt, branch: [])
-    monkeypatch.setattr(p, "_acceptance_tampered", lambda story, wt: None)
+    monkeypatch.setattr(_pipeline_ci, "_acceptance_tampered", lambda story, wt: None)
     monkeypatch.setattr(p, "_added_pytest_test_paths",
                         lambda wt, key, branch: [])
     monkeypatch.setattr(p, "_default_branch", lambda: "main")

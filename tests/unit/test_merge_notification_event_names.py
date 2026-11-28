@@ -42,6 +42,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server as p
 from pipeline import merge, merge_approve
 from pipeline import persistence as ppers
@@ -169,14 +170,14 @@ def _patch_merge_boundaries(monkeypatch):
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(
-        p, "_ci_status", lambda *a, **k: {"state": "success", "error": ""}
+        _pipeline_ci, "_ci_status", lambda *a, **k: {"state": "success", "error": ""}
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda *a, **k: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda *a, **k: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: [])
 

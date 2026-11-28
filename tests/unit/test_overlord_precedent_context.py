@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server  # noqa: F401  (pre-existing import cycle: load server first)
 from pipeline import merge as merge_mod
 from pipeline import overlord as overlord_mod
@@ -120,7 +121,7 @@ def test_high_risk_merge_prompt_shows_paired_merge_answers_as_precedent(store, m
     monkeypatch.setattr(overlord_mod, "_invoke_overlord", fake_invoke)
     # Pin the CI read: unstubbed, the gather asks the host's gh, and a pending
     # or unreadable read defers the ruling before the overlord is called.
-    monkeypatch.setattr(server, "_ci_status_once", lambda branch, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", lambda branch, **_: {"state": "pass", "error": ""})
     merge_mod._adjudicate_high_risk_merge(dict(MERGE_STORY), PLAN)
     assert "the rollback note was missing" in captured["prompt"]
     assert "PRECEDENT" in captured["prompt"]

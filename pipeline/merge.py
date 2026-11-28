@@ -63,9 +63,9 @@ def _merge_gate_ci_status(
     longer used by the merge gate, so the S5 non-blocking CI-pending behaviour
     is the production default rather than a test-only code path.
     """
-    from .server import _ci_status_once
+    from . import ci as _ci
 
-    return _ci_status_once(branch, sha=sha, settings=settings)
+    return _ci._ci_status_once(branch, sha=sha, settings=settings)
 
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
@@ -307,15 +307,15 @@ def _populate_pr_checks_once(story, story_key: str | None = None):
         # The module-documented monkeypatch seam: pipeline.server re-exports
         # the binding, so stubs land here exactly as they do for the sibling
         # _merge_gate_ci_status. Never the blocking _ci_status poller.
+        from . import ci as _ci
         from .pr import _convention_branch, _resolve_story_branch
-        from .server import _ci_status_once
 
         plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
         branch = _convention_branch(key)
         worktree = story.get("worktree")
         if worktree and Path(worktree).is_dir():
             branch = _resolve_story_branch(worktree, key)
-        checks = _ci_status_once(
+        checks = _ci._ci_status_once(
             branch, sha="", settings=settings_for_plan(plan_name)
         )
         if checks is not None:
@@ -712,14 +712,15 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
-    from .server import PIPELINE_SELF_REPO_ROOT, _record_retro_pending
+    from . import ci as _ci
+    from .server import PIPELINE_SELF_REPO_ROOT
 
     stories = manifest.get("stories", {})
     if not stories or not all(s.get("status") == "done" for s in stories.values()):
         return
     if manifest.get("repo_root") != str(PIPELINE_SELF_REPO_ROOT):
         return
-    _record_retro_pending(plan_name, len(stories))
+    _ci._record_retro_pending(plan_name, len(stories))
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:

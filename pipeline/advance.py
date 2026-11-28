@@ -41,6 +41,7 @@ from .dispatch import _resolve_dispatch_target
 from .dispatch_fence import blocks_reclaim  # noqa: F401  (re-exported for existing readers)
 from .dispatch_hold import dispatch_held, filter_ready, pause_reason
 from .dispatch_lease import claim_dispatch_lease  # noqa: F401  (re-exported for existing readers)
+from .module_ref import _ModuleRef
 from .park_options import run_park_options_sweep
 from .rebrief import (
     collect_failure_evidence,  # noqa: F401  (re-exported for existing readers)
@@ -143,8 +144,8 @@ MERGE_MAX_ATTEMPTS = _ServerRef("MERGE_MAX_ATTEMPTS")
 PIPELINE_AUTONOMY = _ServerRef("PIPELINE_AUTONOMY")
 _atomic_write_json = _ServerRef("_atomic_write_json")
 _auto_escalation_enabled = _ServerRef("_auto_escalation_enabled")
-_ci_pending_expired = _ServerRef("_ci_pending_expired")
-_ci_rerun = _ServerRef("_ci_rerun")
+_ci_pending_expired = _ModuleRef("pipeline.ci", "_ci_pending_expired")
+_ci_rerun = _ModuleRef("pipeline.ci", "_ci_rerun")
 _ci_rework_feedback = _ServerRef("_ci_rework_feedback")
 _completed_dep_ids = _ServerRef("_completed_dep_ids")
 _count_in_progress_agents = _ServerRef("_count_in_progress_agents")
@@ -190,8 +191,8 @@ _rebase_and_push_for_merge = _ServerRef("_rebase_and_push_for_merge")
 # monkeypatches advance._resolve_dispatch_backend; the gate no longer calls it, so
 # that stub is inert - its owner must update it (see the PR reply).
 _resolve_dispatch_backend = _ServerRef("_resolve_dispatch_backend")
-_reverify_acceptance = _ServerRef("_reverify_acceptance")
-_reverify_build = _ServerRef("_reverify_build")
+_reverify_acceptance = _ModuleRef("pipeline.ci", "_reverify_acceptance")
+_reverify_build = _ModuleRef("pipeline.ci", "_reverify_build")
 _role_resource_ok = _ServerRef("_role_resource_ok")
 _scoped_repo_root = _ServerRef("_scoped_repo_root")
 _store = _ServerRef("_store")

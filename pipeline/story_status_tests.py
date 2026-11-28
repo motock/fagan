@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import bound_records, server_bindings, tenant_exec
+from . import ci as _ci
 from .build_detect import _acceptance_rel_paths, _is_pytest_cmd
 from .detached_grade import _baseline_exempted_failures
 from .story_status_records import _record_test_check
@@ -213,7 +214,7 @@ def check_acceptance_tampered(
     # acceptance fixture no longer matches its dispatch-time digest, so a
     # rewritten grader is caught at the done-bar rather than only much later
     # at the merge gate (see pipeline.ci._acceptance_tampered).
-    tampered = server_bindings.server()._acceptance_tampered(story, str(worktree))
+    tampered = _ci._acceptance_tampered(story, str(worktree))
     if not tampered:
         return None
     story["status"] = "changes_requested"

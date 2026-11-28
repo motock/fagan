@@ -504,6 +504,7 @@ def install_merge_stubs(p, repo: Path) -> None:
     stubs). Patch the actual `pipeline.server` module directly; also patch
     the shim for API-surface consistency with anything still reading `p.X`.
     """
+    import pipeline.ci as _pci
     import pipeline.server as _pserver
 
     def _ci_status_stub(branch, *, sha=None, timeout_s=None, settings=None):
@@ -549,7 +550,7 @@ def install_merge_stubs(p, repo: Path) -> None:
         """Non-polling sibling of _ci_status; same worktree test run.
 
         The merge gate and the overlord's CI-evidence gather both resolve
-        ``pipeline.server._ci_status_once`` (single query, no sleep-poll), not
+        ``pipeline.ci._ci_status_once`` (single query, no sleep-poll), not
         the blocking ``_ci_status`` above. Leaving it unpatched sent the query
         to the real GitHub forge - the cell's origin is a local bare repo - so
         every merge gate returned ``unreadable`` and the cell never left
@@ -557,9 +558,11 @@ def install_merge_stubs(p, repo: Path) -> None:
         """
         return _ci_status_stub(branch, sha=sha, settings=settings)
 
+    # The CI helpers are owned by pipeline.ci; every merge-gate caller reads
+    # them from that module at call time.
+    _pci._ci_status = _ci_status_stub
+    _pci._ci_status_once = _ci_status_once_stub
     for target in (p, _pserver):
-        target._ci_status = _ci_status_stub
-        target._ci_status_once = _ci_status_once_stub
         target._open_pr = _open_pr_stub
         target._merge_pr = _merge_pr_stub
 

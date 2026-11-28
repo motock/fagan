@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pipeline.advance as adv
 import pipeline.advance_merge as adv_merge
+import pipeline.ci as _pipeline_ci
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _hermetic_ollama_seams,
@@ -140,8 +141,8 @@ def _stub_tick(monkeypatch, seed_merge_gate):
             "error": "ci fail: Lint (ruff): failure",
         },
     )
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
-    monkeypatch.setattr(p, "_ci_pending_expired", lambda since, settings=None: False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_pending_expired", lambda since, settings=None: False)
     monkeypatch.setattr(
         p, "_ci_rework_feedback", lambda gate_error, attempts: CI_TEXT,
     )

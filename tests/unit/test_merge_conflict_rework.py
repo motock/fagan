@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import pipeline.advance as adv
+import pipeline.ci as _pipeline_ci
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _hermetic_ollama_seams,
@@ -90,9 +91,9 @@ def _stub_tick(monkeypatch, *, gate_error=CONFLICT_ERROR, notify_spy=None):
         p, "_merge_gate_ci_status",
         lambda branch, *, sha: {"state": "none", "error": ""},
     )
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
-    monkeypatch.setattr(p, "_ci_pending_expired", lambda since: False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_pending_expired", lambda since: False)
     monkeypatch.setattr(
         p, "_ci_rework_feedback", lambda gate_error, attempts: "CI TEXT",
     )

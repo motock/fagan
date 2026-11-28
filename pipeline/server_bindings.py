@@ -33,7 +33,6 @@ class ServerBindings(Protocol):
     _store: Store
     _validate_key: Callable[[str], None]
     _notify_user: Callable[..., None]
-    _record_retro_pending: Callable[[str, int], None]
     get_ticket_provider: Callable[[], TicketProvider]
 
     # pipeline.story_status / pipeline.detached_grade (check_story_status path)
@@ -44,7 +43,6 @@ class ServerBindings(Protocol):
     DISPATCH_WATCHDOG_SECONDS: int
     REWORK_MAX_ATTEMPTS_NO_COMMIT: int
     _LOCAL_BACKEND_NAMES: frozenset[str]
-    _acceptance_tampered: Callable[[dict[str, Any], str], list[str]]
     _added_pytest_test_paths: Callable[..., list[str]]
     _auto_escalation_enabled: Callable[[], bool]
     _default_branch: Callable[[], str]

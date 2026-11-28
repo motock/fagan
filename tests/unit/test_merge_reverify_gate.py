@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.server  # noqa: F401 - pre-existing import cycle, import first
 from pipeline import advance_merge, merge_reverify
 
@@ -150,8 +151,8 @@ def _install_seams(monkeypatch, *, detached=True, decision=None, ci_state="pass"
         "_merge_gate_ci_status",
         lambda *a, **k: {"state": ci_state, "error": "checks failed"},
     )
-    monkeypatch.setattr(p, "_reverify_acceptance", seams["acceptance"])
-    monkeypatch.setattr(p, "_reverify_build", seams["build"])
+    monkeypatch.setattr(_pipeline_ci, "_reverify_acceptance", seams["acceptance"])
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", seams["build"])
     monkeypatch.setattr(p, "_notify_user", seams["notify"])
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: [])

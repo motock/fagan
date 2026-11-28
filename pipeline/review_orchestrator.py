@@ -37,6 +37,7 @@ from .branch_names import story_branch
 # review_approve_path) read them back through this module at call time, so a
 # test that patches one of them on `pipeline.review_orchestrator` still lands.
 from .ci import settings_for_plan  # noqa: F401
+from .module_ref import _ModuleRef
 from .parsers import _is_transient_backend_exception  # noqa: F401
 from .pr import _pr_title_mismatch_message, _resolve_story_branch
 from .review import _first_review_base, build_review_story_context  # noqa: F401
@@ -105,7 +106,7 @@ def _warn_on_pr_title_mismatch(plan_name, story_key, story, worktree, **kwargs):
     except Exception:  # noqa: BLE001 - advisory check must not affect the gate
         logging.getLogger("pipeline").debug("pr_title_mismatch warning failed", exc_info=True)
 
-_reverify_acceptance = _ServerRef("_reverify_acceptance")
+_reverify_acceptance = _ModuleRef("pipeline.ci", "_reverify_acceptance")
 _extract_blocking_finding_files = _ServerRef("_extract_blocking_finding_files")
 _extract_suggested_commit_message = _ServerRef("_extract_suggested_commit_message")
 _post_pr_comment = _ServerRef("_post_pr_comment")

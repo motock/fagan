@@ -52,6 +52,7 @@ from pipeline import pr as pr_mod
 # The module that owns the manifest persistence guarded by the end-to-end test
 # at the bottom of this file.
 from pipeline import advance as advance_mod
+import pipeline.ci as _pipeline_ci
 
 HOLD_REASON = "high risk held for human review"
 PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin"
@@ -149,8 +150,8 @@ class _Harness:
                 raise gather_exc
             return dict(gather) if gather is not None else None
 
-        monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
-        monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
+        monkeypatch.setattr(_pipeline_ci, "_ci_status", _boom_blocking, raising=False)
 
         monkeypatch.setattr(
             pr_mod,
@@ -488,8 +489,8 @@ def test_merge_park_evidence_key_set_is_unchanged_by_a_gather_failure(
     def fake_once(branch, *, sha, settings=None):
         raise RuntimeError("gh exploded")
 
-    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
-    monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", _boom_blocking, raising=False)
     (plan_dir / f"{PLAN}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": {E2E_KEY: _e2e_story()}}, indent=2)
     )

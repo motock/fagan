@@ -55,6 +55,7 @@ import subprocess
 import pytest
 
 import pipeline.advance as adv
+import pipeline.ci as _pipeline_ci
 import pipeline.escalation as esc
 import pipeline.server as p
 from pipeline import persistence as ppers
@@ -164,7 +165,7 @@ def _patch_review_boundaries(monkeypatch, reviewer_output, *, open_pr_raises):
         )
     monkeypatch.setattr(p, "_post_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
     )
 
 
@@ -181,14 +182,14 @@ def _patch_merge_boundaries(monkeypatch):
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(
-        p, "_ci_status", lambda *a, **k: {"state": "success", "error": ""}
+        _pipeline_ci, "_ci_status", lambda *a, **k: {"state": "success", "error": ""}
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"}
     )
-    monkeypatch.setattr(p, "_reverify_build", lambda *a, **k: {"state": "pass"})
+    monkeypatch.setattr(_pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda *a, **k: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda *a, **k: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None)
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda *a, **k: [])
 
@@ -200,7 +201,7 @@ def _patch_advance_boundaries(monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated", raising=False)
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
     monkeypatch.setattr(
-        p,
+        _pipeline_ci,
         "_ci_status_once",
         lambda *a, **k: {"state": "success", "error": ""},
         raising=False,
@@ -212,14 +213,14 @@ def _patch_advance_boundaries(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(
-        p, "_reverify_acceptance", lambda *a, **k: {"state": "pass"},
+        _pipeline_ci, "_reverify_acceptance", lambda *a, **k: {"state": "pass"},
         raising=False,
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda *a, **k: {"state": "pass"}, raising=False
+        _pipeline_ci, "_reverify_build", lambda *a, **k: {"state": "pass"}, raising=False
     )
     monkeypatch.setattr(p, "_merge_pr", lambda *a, **k: "merged", raising=False)
-    monkeypatch.setattr(p, "_ci_rerun", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(p, "_mark_plane_done", lambda *a, **k: None, raising=False)
 
     def _park(story, *a, **k):

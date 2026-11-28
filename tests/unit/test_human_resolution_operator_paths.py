@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import persistence as ppers
 from pipeline import server as p
 from pipeline import unpark as unpark_mod
@@ -265,7 +266,7 @@ def test_dispatch_of_an_unknown_plan_keeps_its_refusal(plan_dir, monkeypatch) ->
 
 def _approve_mocks(monkeypatch) -> None:
     monkeypatch.setattr(p, "_rebase_onto_master", lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(_pipeline_ci, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 

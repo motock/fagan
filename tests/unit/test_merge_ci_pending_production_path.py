@@ -5,7 +5,7 @@ CI-pending behaviour by ``monkeypatch.setattr(server, "_ci_status_once", ...)``.
 That monkeypatching is exactly what flips the
 ``_ci_status_once is not _original_ci_status_once`` identity check in
 ``pipeline/server.py`` and *activates* the non-blocking code path. In production
-nothing ever reassigns ``pipeline.server._ci_status_once``, so the identity
+nothing ever reassigns ``pipeline.ci._ci_status_once``, so the identity
 check is always ``True`` (the two names refer to the same object) and the merge
 gate always takes the *blocking* ``return _ci_status(branch, sha=sha, settings=_context({}))`` branch.
 The non-blocking pending branch (``ci_pending_since`` / ``ci_wait = True``) is
@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 import pipeline.ci as pci
 import pipeline.server as p
 
@@ -87,19 +88,19 @@ def _patch_merge_boundaries_production(monkeypatch, ci_state="pending"):
     # The blocking variant must NEVER be called on the production path once the
     # fix lands. We fail loudly if it is, which also documents the contract.
     monkeypatch.setattr(
-        p, "_ci_status",
+        _pipeline_ci, "_ci_status",
         lambda *a, **k: pytest.fail("_ci_status (blocking) called on production path"),
     )
 
     monkeypatch.setattr(
-        p, "_reverify_acceptance",
+        _pipeline_ci, "_reverify_acceptance",
         lambda story, worktree, key, **k: {"state": "pass"},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree, **k: {"state": "pass"},
+        _pipeline_ci, "_reverify_build", lambda worktree, **k: {"state": "pass"},
     )
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_ci_rerun", lambda sha: None)
+    monkeypatch.setattr(_pipeline_ci, "_ci_rerun", lambda sha: None)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(
         p, "_mark_plane_done", lambda *a, **k: None,
@@ -141,12 +142,12 @@ def _assert_no_ci_status_once_monkeypatch(monkeypatch):
     non-blocking path; the whole point of this file is to exercise the path
     WITHOUT that trick. If a future edit reintroduces it, fail loudly.
     """
-    original = p._ci_status_once
+    original = _pipeline_ci._ci_status_once
     yield
     # After the test, the module attribute must still be the exact object that
     # was bound at import time (i.e. the production binding).
-    assert p._ci_status_once is original, (
-        "test illegally replaced pipeline.server._ci_status_once - this file "
+    assert _pipeline_ci._ci_status_once is original, (
+        "test illegally replaced pipeline.ci._ci_status_once - this file "
         "exercises the PRODUCTION path and must not monkeypatch it"
     )
 

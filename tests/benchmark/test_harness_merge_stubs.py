@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline.ci import context_from_manifest as _context
 
 BENCH = Path(__file__).resolve().parent
@@ -49,10 +50,12 @@ def _restore_patched_seams():
     after."""
     import pipeline.advance_merge as _advance_merge
 
-    seam_names = ("_ci_status", "_ci_status_once", "_open_pr", "_merge_pr")
+    seam_names = ("_open_pr", "_merge_pr")
+    ci_seam_names = ("_ci_status", "_ci_status_once")
     originals = {
         "p": {name: getattr(p, name) for name in seam_names},
         "server": {name: getattr(_pserver, name) for name in seam_names},
+        "ci": {name: getattr(_pipeline_ci, name) for name in ci_seam_names},
     }
     readiness_original = _advance_merge._merge_readiness_forge
     yield
@@ -60,6 +63,8 @@ def _restore_patched_seams():
         setattr(p, name, orig)
     for name, orig in originals["server"].items():
         setattr(_pserver, name, orig)
+    for name, orig in originals["ci"].items():
+        setattr(_pipeline_ci, name, orig)
     _advance_merge._merge_readiness_forge = readiness_original
 
 
@@ -80,7 +85,7 @@ def test_ci_status_stub_fails_when_worktree_tests_fail(tmp_path, monkeypatch):
     _seed_worktree(tmp_path, "SOME-KEY", "def test_fail():\n    assert False\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/some-key", settings=_context({}))
+    result = _pipeline_ci._ci_status("agent/some-key", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"]
@@ -91,7 +96,7 @@ def test_ci_status_stub_passes_when_worktree_tests_pass(tmp_path, monkeypatch):
     _seed_worktree(tmp_path, "SOME-KEY", "def test_ok():\n    assert True\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/some-key", settings=_context({}))
+    result = _pipeline_ci._ci_status("agent/some-key", settings=_context({}))
 
     assert result["state"] == "pass"
 
@@ -111,7 +116,7 @@ def test_ci_status_stub_catches_missing_method_like_the_rli3_incident(tmp_path, 
     (worktree / "thing.py").write_text("class Widget:\n    pass\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/rli-3", settings=_context({}))
+    result = _pipeline_ci._ci_status("agent/rli-3", settings=_context({}))
 
     assert result["state"] == "fail"
 
@@ -124,7 +129,7 @@ def test_ci_status_once_stub_passes_when_worktree_tests_pass(tmp_path, monkeypat
     _seed_worktree(tmp_path, "SOME-KEY", "def test_ok():\n    assert True\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status_once("agent/some-key", sha="", settings=_context({}))
+    result = _pipeline_ci._ci_status_once("agent/some-key", sha="", settings=_context({}))
 
     assert result["state"] == "pass"
 
@@ -134,7 +139,7 @@ def test_ci_status_once_stub_fails_when_worktree_tests_fail(tmp_path, monkeypatc
     _seed_worktree(tmp_path, "SOME-KEY", "def test_fail():\n    assert False\n")
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status_once("agent/some-key", sha="", settings=_context({}))
+    result = _pipeline_ci._ci_status_once("agent/some-key", sha="", settings=_context({}))
 
     assert result["state"] == "fail"
     assert result["error"]
@@ -168,8 +173,8 @@ def test_stubs_actually_patch_pipeline_server_not_just_the_compat_shim(tmp_path)
     BOTH pipeline.server (what the real code actually calls) and the shim."""
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    assert _pserver._ci_status is p._ci_status
-    assert _pserver._ci_status_once is p._ci_status_once
+    assert _pipeline_ci._ci_status.__name__ == "_ci_status_stub"
+    assert _pipeline_ci._ci_status_once.__name__ == "_ci_status_once_stub"
     assert _pserver._open_pr is p._open_pr
     assert _pserver._merge_pr is p._merge_pr
 
@@ -181,6 +186,6 @@ def test_ci_status_stub_passes_when_worktree_directory_is_missing(tmp_path, monk
     monkeypatch.setattr(p, "WORKTREE_ROOT", tmp_path)
     harness.install_merge_stubs(p, tmp_path / "repo_unused")
 
-    result = p._ci_status("agent/does-not-exist", settings=_context({}))
+    result = _pipeline_ci._ci_status("agent/does-not-exist", settings=_context({}))
 
     assert result["state"] == "pass"

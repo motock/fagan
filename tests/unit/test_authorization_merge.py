@@ -38,6 +38,7 @@ import subprocess
 import pytest
 
 from app.identity import LOCAL_OPERATOR
+from pipeline import ci as ci_mod
 from pipeline import merge as merge_mod
 from pipeline import server as server_mod
 from pipeline.actor import ANONYMOUS, bind_principal
@@ -167,11 +168,7 @@ def test_anonymous_merge_is_refused_without_running_git_or_ci(plan_dir, monkeypa
 
     for name in (
         "_merge_pr",
-        "_ci_status",
-        "_ci_rerun",
         "_rebase_onto_master",
-        "_reverify_acceptance",
-        "_reverify_build",
         "_mark_plane_done",
         "_mcp_restart_notice",
         "_mcp_self_source_touched",
@@ -180,6 +177,8 @@ def test_anonymous_merge_is_refused_without_running_git_or_ci(plan_dir, monkeypa
         "_atomic_write_json",
     ):
         monkeypatch.setattr(server_mod, name, _must_not_run)
+    for name in ("_ci_status", "_ci_rerun", "_reverify_acceptance", "_reverify_build"):
+        monkeypatch.setattr(ci_mod, name, _must_not_run)
 
     with bind_principal(ANONYMOUS):
         result = merge_mod._approve_merge_impl(PLAN, STORY)

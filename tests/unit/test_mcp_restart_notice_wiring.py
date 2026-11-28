@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+import pipeline.ci as _pipeline_ci
 from pipeline import persistence as ppers
 from pipeline import self_modification as sm
 from pipeline import server as p
@@ -157,7 +158,7 @@ def test_detection_not_invoked_when_ci_check_fails(plan_dir, monkeypatch):
         p, "_mcp_self_source_touched", lambda wt, br: calls.append((wt, br)) or []
     )
     monkeypatch.setattr(
-        p, "_ci_status", lambda branch, sha="", settings=None: {"state": "fail", "error": "red"}
+        _pipeline_ci, "_ci_status", lambda branch, sha="", settings=None: {"state": "fail", "error": "red"}
     )
     merge_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merge_calls.append(key))
@@ -177,10 +178,10 @@ def test_detection_not_invoked_when_acceptance_reverify_fails(plan_dir, monkeypa
         p, "_mcp_self_source_touched", lambda wt, br: calls.append((wt, br)) or []
     )
     monkeypatch.setattr(
-        p, "_ci_status", lambda branch, sha="", settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_ci_status", lambda branch, sha="", settings=None: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        p,
+        _pipeline_ci,
         "_reverify_acceptance",
         lambda story, worktree, story_key="", settings=None: {"state": "fail", "error": "broke"},
     )
@@ -202,15 +203,15 @@ def test_detection_not_invoked_when_build_reverify_fails(plan_dir, monkeypatch):
         p, "_mcp_self_source_touched", lambda wt, br: calls.append((wt, br)) or []
     )
     monkeypatch.setattr(
-        p, "_ci_status", lambda branch, sha="", settings=None: {"state": "pass", "error": ""}
+        _pipeline_ci, "_ci_status", lambda branch, sha="", settings=None: {"state": "pass", "error": ""}
     )
     monkeypatch.setattr(
-        p,
+        _pipeline_ci,
         "_reverify_acceptance",
         lambda story, worktree, story_key="", settings=None: {"state": "pass", "error": ""},
     )
     monkeypatch.setattr(
-        p, "_reverify_build", lambda worktree, settings=None: {"state": "fail", "error": "broke"}
+        _pipeline_ci, "_reverify_build", lambda worktree, settings=None: {"state": "fail", "error": "broke"}
     )
     merge_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merge_calls.append(key))

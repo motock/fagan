@@ -392,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # Imported inside the function: pipeline.server pulls in this package's
         # heavy modules, and this module must stay importable on its own.
+        from pipeline import ci as _ci
         from pipeline import server
         from pipeline.ci import context_from_manifest
 
@@ -419,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
                     ).stdout.strip()
 
                     settings = context_from_manifest(manifest)
-                    acc = server._reverify_acceptance(
+                    acc = _ci._reverify_acceptance(
                         story, worktree, story_key, settings=settings
                     )
                     # Read AFTER the call: _reverify_acceptance refreshes this field on its
@@ -434,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
                         result["checks"]["tests"] = (
                             "pass" if acc.get("state") == "pass" else "skipped"
                         )
-                        build = server._reverify_build(worktree, settings=settings)
+                        build = _ci._reverify_build(worktree, settings=settings)
                         if build.get("state") == "fail":
                             result["state"] = "fail"
                             result["error"] = "build reverify fail: " + build.get("error", "")

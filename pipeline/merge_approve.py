@@ -190,18 +190,19 @@ def _ci_gate(
     ctx: MergeContext, branch: str, pushed_sha: str
 ) -> tuple[Any, dict[str, Any] | None]:
     """Poll CI (with the one-shot cancelled rerun) and persist the result."""
-    from .server import _ci_rerun, _ci_status, _store
+    from . import ci as _ci
+    from .server import _store
 
     story = ctx.story
     settings = _home.context_from_manifest(ctx.manifest)
-    ci = _ci_status(branch, sha=pushed_sha, settings=settings)
+    ci = _ci._ci_status(branch, sha=pushed_sha, settings=settings)
     if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
         # Same one-shot auto-rerun as the scheduler's merge gate:
         # a queue-delay cancellation carries no code-quality
         # signal, so give it one automatic retry before failing.
         story["ci_rerun_attempted"] = True
-        _ci_rerun(pushed_sha)
-        ci = _ci_status(branch, sha=pushed_sha, settings=settings)
+        _ci._ci_rerun(pushed_sha)
+        ci = _ci._ci_status(branch, sha=pushed_sha, settings=settings)
     # Record the gate's final result for every risk level; persisted
     # now because the blocking returns below skip the final write.
     story["pr_checks"] = ci
@@ -217,13 +218,13 @@ def _ci_gate(
 
 
 def _reverify(ctx: MergeContext, settings: Any) -> dict[str, Any] | None:
-    from .server import _reverify_acceptance, _reverify_build
+    from . import ci as _ci
 
     worktree = ctx.story.get("worktree", "")
-    acc = _reverify_acceptance(ctx.story, worktree, ctx.story_key, settings=settings)
+    acc = _ci._reverify_acceptance(ctx.story, worktree, ctx.story_key, settings=settings)
     if acc["state"] == "fail":
         return _gate_refusal(ctx, f"acceptance reverify fail: {acc['error']}")
-    build = _reverify_build(worktree, settings=settings)
+    build = _ci._reverify_build(worktree, settings=settings)
     if build["state"] == "fail":
         return _gate_refusal(ctx, f"build reverify fail: {build['error']}")
     return None

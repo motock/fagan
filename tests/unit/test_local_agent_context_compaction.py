@@ -352,9 +352,11 @@ def test_main_routes_overflow_400_to_escalation_not_death():
     400 straight to `return 1`. Asserted against the production source so a
     future edit that reverts the call site fails here, not silently in a
     dispatch."""
-    for name in ("local_agent.py", "local_agent_oracle.py"):
+    # ART-03 moved local_agent.py's step loop into local_agent_loop.py.
+    for name, chat_call in (("local_agent_loop.py", "m = chat(st.messages)"),
+                            ("local_agent_oracle.py", "            m = chat(messages)")):
         src = (Path(__file__).parent.parent.parent / "scripts" / name).read_text()
-        branch = src[src.index("            m = chat(messages)"):]
+        branch = src[src.index(chat_call):]
         branch = branch[:branch.index("recover_from_oversized_5xx")]
         # Comments in this span legitimately quote the old test; judge code only.
         code = "\n".join(line for line in branch.splitlines()

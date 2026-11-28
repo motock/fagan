@@ -206,7 +206,8 @@ def test_wrapper_body_mirrors_full_suite_result_shape():
 
 
 def test_main_impl_commits_then_checks_before_printing_step_cap_line():
-    src = _LOCAL_AGENT_SRC.read_text(encoding="utf-8")
+    # ART-03 moved the step-cap block into scripts/local_agent_loop.py.
+    src = (_ROOT / "scripts" / "local_agent_loop.py").read_text(encoding="utf-8")
     i_commit = src.index('auto_wip_commit("step cap reached")')
     i_check = src.index("if _step_cap_auto_done():")
     i_print = src.index('print("[ended without done — step cap reached]", flush=True)')

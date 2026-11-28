@@ -50,12 +50,12 @@ import os
 import re  # noqa: F401 (kept: tests patch module attrs on la; moved chat cluster owned the only re.* use)
 import subprocess  # noqa: F401 (kept: tests patch la.subprocess.run; the moved run_tool_impl's own stdlib import binds the same module object, so those patches propagate)
 import sys
-import time
-from collections import deque
+import time  # noqa: F401 (kept: the moved loop phases read it via origin)
+from collections import deque  # noqa: F401 (kept: the moved loop phases read it via origin)
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
+import httpx  # noqa: F401 (kept: the moved loop phases read it via origin)
 
 # Calibrated at runtime from ollama's measured prompt_eval_count; the fixed
 # 4.0 chars/token guess was ~28% over NUM_CTX live (2026-07-29, gpt-oss).
@@ -87,19 +87,19 @@ from pipeline import (
 from pipeline.agent_log_format import format_step
 from pipeline.local_agent_common import (
     CWD,
-    PersistingList,
-    _answer_orphaned_calls,
+    PersistingList,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _answer_orphaned_calls,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _dropped_span_digest,  # noqa: F401 (unused here; re-exported for test_local_agent_context_compaction.py)
     _dropped_top_level_defs,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_dropped_top_level_defs"])
     _dropped_top_level_vars,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_dropped_top_level_vars"])
-    _is_context_overflow_error,
-    _load_resume_transcript,
+    _is_context_overflow_error,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _load_resume_transcript,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _message_char_len,  # noqa: F401 (kept: moved chat cluster reads it via origin["_message_char_len"])
-    _persist_messages,
-    _repetition_nudge,
+    _persist_messages,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _repetition_nudge,  # noqa: F401 (kept: the moved loop phases read it via origin)
     _str_replace_not_found_diag,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_str_replace_not_found_diag"])
-    _total_chars,
-    _trim_resumed_transcript,
+    _total_chars,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    _trim_resumed_transcript,  # noqa: F401 (kept: the moved loop phases read it via origin)
     destructive_git_op,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["destructive_git_op"])
 )
 from pipeline.local_agent_common import (  # noqa: F401 (kept: moved recover_tool_calls_impl reads it via origin["_recover_tool_calls_shared"])
@@ -137,29 +137,29 @@ from scripts.local_agent_config import (
     CHAT_MAX_ATTEMPTS,  # noqa: F401 (kept: moved recover_from_oversized_5xx_impl reads it via origin["CHAT_MAX_ATTEMPTS"])
     CHAT_RETRY_BACKOFF,  # noqa: F401 (kept: moved chat_impl reads it via origin["CHAT_RETRY_BACKOFF"])
     CONNECT_TIMEOUT_SECONDS,  # noqa: F401 (kept: moved _stream_one_turn_impl reads it via origin)
-    ENDPOINT,
-    FULL_SUITE_DONE_BAR,
-    HARNESS_RULES,
+    ENDPOINT,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    FULL_SUITE_DONE_BAR,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    HARNESS_RULES,  # noqa: F401 (kept: the moved loop phases read it via origin)
     MAX_STEPS,
-    MODEL,
-    MUTATING_TOOLS,
-    NET_PROGRESS_MAX_STEPS,
-    NO_TOOL_CAP,
-    NUM_CTX,
-    PARK_ENABLED,
-    PROACTIVE_TRIM_THRESHOLD,
-    PROVIDER,
-    READ_HEAVY_DISTINCT_WINDOWS,
-    READ_HEAVY_WINDOW,
+    MODEL,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    MUTATING_TOOLS,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    NET_PROGRESS_MAX_STEPS,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    NO_TOOL_CAP,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    NUM_CTX,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    PARK_ENABLED,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    PROACTIVE_TRIM_THRESHOLD,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    PROVIDER,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    READ_HEAVY_DISTINCT_WINDOWS,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    READ_HEAVY_WINDOW,  # noqa: F401 (kept: the moved loop phases read it via origin)
     READ_SILENCE_SECONDS,  # noqa: F401 (kept: moved _stream_one_turn_impl reads it via origin["READ_SILENCE_SECONDS"])
-    REWORK_FULL_SUITE,
-    REWORK_SUITE_REJECT_CAP,
-    SCRATCHPAD_NUDGE_STEPS,
-    SCRATCHPAD_ON,
-    STR_REPLACE_FAIL_ESCALATE_AFTER,
+    REWORK_FULL_SUITE,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    REWORK_SUITE_REJECT_CAP,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    SCRATCHPAD_NUDGE_STEPS,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    SCRATCHPAD_ON,  # noqa: F401 (kept: the moved loop phases read it via origin)
+    STR_REPLACE_FAIL_ESCALATE_AFTER,  # noqa: F401 (kept: the moved loop phases read it via origin)
     TEMPERATURE,  # noqa: F401 (kept: moved _ollama_payload_impl/_provider_chat_turn_impl read it via origin)
     THINK,  # noqa: F401 (kept: moved _ollama_payload_impl reads it via origin["THINK"])
-    TIMEOUT,
+    TIMEOUT,  # noqa: F401 (kept: the moved loop phases read it via origin)
     TOOLS,
 )
 from scripts.local_agent_guards import (  # noqa: F401 (re-exported: the step loop references these as bare names)
@@ -345,613 +345,38 @@ def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
 
 
 def _main_impl() -> int:
-    # A fresh dispatch has no calibration data yet - clear any value left
-    # over from a prior dispatch that shared this process (or, in-process,
-    # a prior test) so it never leaks in.
-    global _measured_chars_per_token, _last_prompt_eval_count
-    _measured_chars_per_token = None
-    _last_prompt_eval_count = None
-    # Startup heartbeat. flush=True is load-bearing: stdout is block-buffered
-    # to a non-tty file (the worktree's agent.log, redirected by Popen), so
-    # without flush the line wouldn't hit disk until the buffer fills or the
-    # process exits. With it, check_story_status's "empty agent.log = failed
-    # launch" check has a precise signal: a 0-byte log means the process
-    # never reached main() (a genuine failed launch), while a log with [boot]
-    # and no further output means the agent is alive and queued (e.g. on
-    # Ollama's -np 1 worker waiting for an inference slot).
-    print(
-        f"[boot] pid={os.getpid()} model={MODEL} endpoint={ENDPOINT} "
-        f"provider={PROVIDER} steps={MAX_STEPS} timeout={TIMEOUT}s",
-        flush=True,
+    """The agent step loop; phases live in scripts/local_agent_loop.py."""
+    from scripts.local_agent_loop import (
+        chat_turn_impl,
+        no_tool_turn_impl,
+        startup_impl,
+        step_cap_impl,
+        step_guards_impl,
+        tool_call_impl,
     )
-    system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
-    task = os.environ.get("LOCAL_AGENT_TASK", "")
-    expected_paths = _expected_task_paths(task)
-    # Initialize messages list with optional persistence support.
-    # Resume path: if LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid
-    # transcript, load it instead of building the fresh system/task pair (the
-    # loaded transcript already contains the original system+task prompt).
-    # Otherwise fall back to the fresh pair. LOCAL_AGENT_TRANSCRIPT_PATH
-    # (persistence) is independent of resume — a dispatch can persist without
-    # resuming, resume without persisting, or both.
-    transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
-    messages = PersistingList(transcript_path=transcript_path)
-    if resume := _load_resume_transcript():
-        # Reserve headroom below NUM_CTX for the resume-append content (e.g.
-        # reviewer feedback), the model's own generation, and the rough
-        # imprecision of the chars/token estimate - trimming to the exact
-        # limit would still overflow once more content is added below. No
-        # live calibration exists yet this early (reset below, before any
-        # turn has run), so this always uses the fixed guess via
-        # _effective_chars_per_token()'s fallback.
-        budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
-        resume = _trim_resumed_transcript(resume, budget_chars)
-        messages.extend(resume)
-    else:
-        system_content = HARNESS_RULES + ("\n\n" + system if system else "")
-        messages.extend([{"role": "system", "content": system_content},
-                         {"role": "user", "content": task}])
-    # When resuming, optionally append exactly one new user turn as a
-    # continuation (e.g. reviewer feedback) instead of re-injecting the
-    # original system/task prompt.
-    resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
-    if resume and resume_append:
-        messages.append({"role": "user", "content": resume_append})
-
-    exclude_runtime_artifacts()
-
-    seen: dict = {}
-    nudged_repeat = False
-    nudged_read_heavy = False
-    recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
-    distinct_windows = 0
-    done_rejections = 0
-    # L1: separate counter for full-suite done-rejections on a CI-fail-rework
-    # round. Kept distinct from done_rejections so it cannot trip the dirty-
-    # tree auto-accept-at-2 logic (a failing suite must NEVER be auto-
-    # accepted). Bounded by REWORK_SUITE_REJECT_CAP: once the agent has failed
-    # to green the suite that many times the run parks (return 2) rather than
-    # burning the rest of the step/wall-clock budget re-prompting a model that
-    # cannot make progress.
-    suite_rejections = 0
-    consecutive_no_tool = 0
-    # Failing-str_replace loop guard: str_replace is excluded from the
-    # per-target repetition guard (each old_str differs), so a no-match loop
-    # on one file runs uncaught. Track consecutive FAILED str_replace per
-    # path; after 2, steer to replace_lines. Reset on a successful str_replace
-    # to that path (and re-arm the nudge so a second stall is caught too).
-    # sr_fail_since_nudge counts further failures AFTER the nudge so a model
-    # that ignores it and keeps retrying str_replace on the same path parks
-    # instead of getting the one nudge for the rest of the run (Mode 31
-    # follow-up: this guard previously had no escalation at all).
-    failed_sr: dict[str, int] = {}
-    nudged_sr_fail: set[str] = set()
-    sr_fail_since_nudge: dict[str, int] = {}
-    last_progress_step = 0
-    last_scratchpad_step = 0
-    start_time = time.monotonic()
-    # Off-task-drift guard (Mode 31): a dispatched agent once abandoned its
-    # assigned task and spent 20+ steps of real, coherent tool calls on a
-    # completely unrelated subject. off_task_targets tracks every distinct
-    # mutated path that _is_off_task_path flags (informational — see
-    # _off_task_step for the actual escalation rule, which no longer
-    # requires distinctness).
-    off_task_targets: set[str] = set()
-    nudged_off_task = False
-    # Same-path edit-churn guard state (see _churn_step above main()).
-    churn_state = {"path": "", "count": 0, "nudged": False}
-
+    st = startup_impl(globals())
     for step in range(MAX_STEPS):
-        if time.monotonic() - start_time > TIMEOUT:
-            print(f"[step {step}] wall-clock timeout ({TIMEOUT}s) reached; parking", flush=True)
-            if worktree_dirty():
-                auto_wip_commit("wall-clock timeout")
-            return 2
-        if step - last_progress_step >= NET_PROGRESS_MAX_STEPS:
-            print(f"[step {step}] no successful edit in {step - last_progress_step} steps "
-                  f"(last progress at step {last_progress_step}); parking", flush=True)
-            if worktree_dirty():
-                auto_wip_commit("no net progress")
-            if not PARK_ENABLED:
-                messages.append({"role": "user", "content": (
-                    f"You have made no successful file edit in the last "
-                    f"{step - last_progress_step} steps. Stop investigating "
-                    f"and make ONE concrete change now: str_replace/"
-                    f"replace_lines to fix something specific, restore_file "
-                    f"if a file's edits went wrong and you want to restart "
-                    f"it clean, or checkpoint if you need to save partial "
-                    f"progress before continuing.")})
-                last_progress_step = step
-            else:
-                return 3
-        if SCRATCHPAD_ON and step - last_scratchpad_step >= SCRATCHPAD_NUDGE_STEPS:
-            print(f"[step {step}] no scratchpad update in "
-                  f"{step - last_scratchpad_step} steps; nudging", flush=True)
-            messages.append({"role": "user", "content": (
-                "You haven't updated .agent_scratchpad.md in a while. "
-                "Before your next tool call, str_replace it with a short "
-                "running summary of what you've done and what's next "
-                "(create_file first if it doesn't exist yet).")})
-            last_scratchpad_step = step
-        try:
-            m = chat(messages)
-        except httpx.HTTPStatusError as e:
-            if not _is_context_overflow_error(e):
-                print(f"[step {step}] LLM call failed: {e}", flush=True)
-                if worktree_dirty():
-                    auto_wip_commit("llm error")
-                return 1
-            # Classified by BODY, not just status: LM Studio rejects an
-            # oversized prompt with a 400, which the old `status_code < 500`
-            # test treated as an unretryable bad request and died on - skipping
-            # the trim escalation that is the actual remedy. Ollama/llama.cpp
-            # 500s still route here exactly as before.
-            # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
-            # very likely a context-window overflow (Ollama/llama.cpp returns
-            # 500 rather than a clean 4xx for this), not a transient fault.
-            # Escalate: retry with a shrinking context budget before giving
-            # up - a single trim-retry can also 500 on a still-oversized
-            # payload (confirmed live 2026-07-22: a ~190K char / ~47.6K
-            # estimated-token transcript against a 32768-token NUM_CTX; and
-            # 2026-07-30: a single trim-retry also 500'd, killing a ~95%-
-            # complete converging run).
-            # The escalation helper only catches httpx.HTTPStatusError: a 4xx
-            # is re-raised, and a non-HTTP backend failure (httpx.TransportError,
-            # inference_providers.RateLimitedError, any other Exception chat()
-            # can raise) propagates out of the helper. A sibling except clause of
-            # this same try does NOT catch exceptions raised from inside another
-            # except handler, so the except-Exception backstop below would NOT
-            # catch what the helper lets escape - it would propagate out of
-            # main() and kill the run. The original trim-retry path this replaced
-            # wrapped its chat() in a try/except-Exception "must not crash the
-            # agent loop" guard; restore that guard here so ANY failure during
-            # escalation gives up gracefully (return 1) instead of crashing.
-            try:
-                m = recover_from_oversized_5xx(messages, chat, step=step)
-            except Exception as e2:  # noqa: BLE001 (an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop)
-                print(f"[step {step}] LLM call failed during 5xx escalation: {e2}", flush=True)
-                if worktree_dirty():
-                    auto_wip_commit("llm error")
-                return 1
-            if m is None:
-                print(f"[step {step}] LLM call failed after trim-retry: {e}", flush=True)
-                if worktree_dirty():
-                    auto_wip_commit("llm error")
-                return 1
-        except Exception as e:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
-            print(f"[step {step}] LLM call failed: {e}", flush=True)
-            if worktree_dirty():
-                auto_wip_commit("llm error")
-            return 1
-        messages.append(m)
-        # Proactive trim: once a turn's measured prompt_eval_count is already
-        # close to NUM_CTX, shrink the transcript now rather than waiting for
-        # the next turn to overflow and 500 - the reactive path above is the
-        # backstop for when no measurement exists yet, not the primary
-        # defense. No-ops when _trim_resumed_transcript finds nothing to drop
-        # (e.g. only one block of post-head content so far).
-        if (
-            _last_prompt_eval_count is not None
-            and _last_prompt_eval_count >= NUM_CTX * PROACTIVE_TRIM_THRESHOLD
-        ):
-            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
-            trimmed = _trim_resumed_transcript(messages, budget_chars)
-            if _total_chars(trimmed) < _total_chars(messages):
-                print(f"[step {step}] measured prompt_eval_count="
-                      f"{_last_prompt_eval_count} >= {PROACTIVE_TRIM_THRESHOLD:.0%} of "
-                      f"NUM_CTX={NUM_CTX}; trimming proactively", flush=True)
-                messages[:] = trimmed
-                _persist_messages(messages, transcript_path)
-                _last_prompt_eval_count = None
+        rc = step_guards_impl(globals(), st, step)
+        if rc is not None:
+            return rc
+        m, rc = chat_turn_impl(globals(), st, step)
+        if rc is not None:
+            return rc
         tcs = m.get("tool_calls") or recover_tool_calls(m.get("content", ""))
         if not tcs:
-            consecutive_no_tool += 1
-            print(f"[step {step}] no tool call ({consecutive_no_tool} consecutive): "
-                  f"{(m.get('content') or '')[:100]!r}", flush=True)
-            if consecutive_no_tool >= NO_TOOL_CAP:
-                print(f"[step {step}] narration cap ({NO_TOOL_CAP} consecutive "
-                      f"no-tool turns) reached; parking", flush=True)
-                if worktree_dirty():
-                    auto_wip_commit("narration cap")
-                return 2
-            messages.append({"role": "user", "content": _no_tool_nudge(
-                consecutive_no_tool, content=m.get("content", ""))})
+            rc = no_tool_turn_impl(globals(), st, step, m)
+            if rc is not None:
+                return rc
             continue
-        consecutive_no_tool = 0
+        st.consecutive_no_tool = 0
 
         for tc_idx, tc in enumerate(tcs):
-            fn = tc["function"]["name"]
-            args = tc["function"]["arguments"]
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:  # noqa: BLE001 (malformed tool-call args from the model fall back to empty args rather than crashing the loop)
-                    args = {}
-
-            if fn == "done":
-                if worktree_dirty():
-                    done_rejections += 1
-                    if done_rejections >= 2:
-                        # L1: the dirty-tree auto-accept escape must not bypass
-                        # the raised rework done-bar. Without this gate an agent
-                        # could dodge it by interleaving dirty/clean done calls
-                        # (dirty->reject, commit, clean+failing-suite->reject,
-                        # dirty->reject->auto-accept with the suite never
-                        # checked). The merge-gate backstop would still catch a
-                        # broken merge (bounded by MERGE_MAX_ATTEMPTS), but the
-                        # bar should hold in the agent loop too. On a rework
-                        # round, check the suite first; a failure WIP-commits
-                        # (so the next attempt starts clean) and rejects instead
-                        # of auto-accepting. Bounded by MAX_STEPS.
-                        if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
-                            suite_ok, suite_tail, gate = _full_suite_result()
-                            if not suite_ok:
-                                suite_rejections += 1
-                                auto_wip_commit("commit enforcement")
-                                if suite_rejections >= REWORK_SUITE_REJECT_CAP:
-                                    print(f"[step {step}] rework suite-reject cap "
-                                          f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
-                                          f"cannot green the full suite — parking", flush=True)
-                                    return 2
-                                _reject_done_for_suite(messages, step, suite_tail, gate)
-                                _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                                break
-                        auto_wip_commit("commit enforcement")
-                        print(f"[step {step}] DONE with auto-WIP-commit (agent left tree dirty): "
-                              f"{args.get('summary', '')}", flush=True)
-                        return 0
-                    print(f"[step {step}] done rejected — worktree dirty, asking agent to commit", flush=True)
-                    messages.append({"role": "user", "content": (
-                        "You have uncommitted changes. Commit your work with git "
-                        "(git add -A && git commit -m ...) before calling done.")})
-                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                    break
-                # L1: on a CI-fail-rework round, the reviewer was acceptance-
-                # scoped and never saw the agent's own test - so a clean
-                # worktree + `done` is not sufficient. Require the FULL suite
-                # green; otherwise feed the failing excerpt back and reject
-                # done so the agent fixes its own broken assertion (or the step
-                # cap binds). Non-rework dispatches skip this gate entirely.
-                if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
-                    suite_ok, suite_tail, gate = _full_suite_result()
-                    if not suite_ok:
-                        suite_rejections += 1
-                        if suite_rejections >= REWORK_SUITE_REJECT_CAP:
-                            if worktree_dirty():
-                                auto_wip_commit("rework suite-reject cap")
-                            print(f"[step {step}] rework suite-reject cap "
-                                  f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
-                                  f"cannot green the full suite — parking", flush=True)
-                            return 2
-                        _reject_done_for_suite(messages, step, suite_tail, gate)
-                        _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                        break
-                emit_step_line(
-                    step,
-                    f"DONE: {args.get('summary', '')}",
-                    correlation_id=read_correlation_id(),
-                )
-                return 0
-
-            if fn == "view_file":
-                # Range-aware: different regions of one large file are not
-                # repetition. Both bounds given bucket into the 200-line window (an
-                # off-by-one retry still counts as the same target); a one-sided read
-                # is unbounded (to EOF, or from line 1), so its one bound identifies
-                # the region exactly; a bare call keeps the path-only key, since
-                # re-issuing it is always a true repeat.
-                ls, le = args.get("line_start"), args.get("line_end")
-                if ls is None and le is None:
-                    sig = (fn, args.get("path"))
-                elif isinstance(ls, int) and isinstance(le, int):
-                    sig = (fn, args.get("path"), ls // 200, le // 200)
-                else:
-                    sig = (fn, args.get("path"), ls, le)
-            else:
-                sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
-            # str_replace and replace_lines calls are excluded from the
-            # per-target repetition guard: each one produces a *different*
-            # file state (the `old_str`/line-range next time will differ, or
-            # `run_tool` will reject it as "not found"), so a sequence of
-            # edits to the same file is a legitimate fix-build cycle, not a
-            # repetition. The read-heavy guard (MUTATING_TOOLS) still catches
-            # a model stuck in a bad edit loop — mutating calls reset that
-            # window. The failing-str_replace guard below catches the no-match
-            # loop str_replace's exclusion would otherwise hide.
-            #
-            above_threshold = False
-            if fn not in ("str_replace", "replace_lines"):
-                seen[sig] = seen.get(sig, 0) + 1
-                if seen[sig] >= 3:
-                    above_threshold = True
-            print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
-
-            if above_threshold:
-                first_trip = not nudged_repeat
-                nudged_repeat = True
-                print("   [repetition nudge]" if first_trip
-                      else "   [parking: repeated action after nudge]", flush=True)
-                # Every trip answers the triggering tool_calls entry with a
-                # `tool`-role message, not just the first: leaving a later
-                # trip's call unanswered orphans it for the rest of the run
-                # (no tool_call ever goes without a reply), which live
-                # (Mode 33, 2026-07-22) correlated directly with gpt-oss:20b's
-                # Harmony-format output degrading into leaked special tokens
-                # a few turns after the first orphaned call. Re-delivering the
-                # guidance every time also gives the model a fresh chance to
-                # self-correct instead of going silent after one warning.
-                messages.append({"role": "tool", "content": _repetition_nudge()})
-                if first_trip:
-                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                    break
-                if worktree_dirty():
-                    auto_wip_commit("parked on repetition")
-                if not PARK_ENABLED:
-                    # Suppressed: let the nudge steer and continue to the next
-                    # step instead of terminating. The step cap bounds the run.
-                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                    break
-                return 3
-
-            # A malformed tool call (e.g. a model that omits a required arg
-            # like str_replace without old_str) must nudge the model with a
-            # recoverable error, not crash the whole unattended agent with an
-            # uncaught exception.
-            tool_result = safe_run_tool(fn, args)
-            messages.append({"role": "tool", "content": tool_result})
-
-            # A GENUINELY SUCCESSFUL mutation (str_replace/create_file)
-            # resets every OTHER signature's accumulated count: `seen` was a
-            # lifetime cumulative counter, so re-viewing a file 2x, editing
-            # it, then viewing it again to check the edit landed hit the >=3
-            # threshold from stale pre-edit reads, even though real progress
-            # happened in between. That false-triggered on gpt-oss's
-            # ratelimiter_inspect RLI-2 runs on 2026-07-04: view, view, edit,
-            # view (3rd cumulative view -> nudge), view (park) -- despite the
-            # edit and a test run in between. A real edit invalidates prior
-            # reads' staleness, so the count for everything else should start
-            # over.
-            #
-            # Gated on SUCCESS (a result that isn't an "ERROR..." string),
-            # not merely on tool identity — a REJECTED create_file/str_replace
-            # changed nothing on disk and must not be treated as progress.
-            # Pre-fix, this clear ran unconditionally on every mutating call
-            # regardless of outcome, which broke it two ways: (1) create_file
-            # is itself one of MUTATING_TOOLS, so its own repeated FAILURES
-            # wiped their own accumulating count before ever reaching the
-            # threshold (34 consecutive rejected create_file calls, live
-            # 2026-07-15, zero nudges); (2) a failed str_replace interleaved
-            # between failed create_file attempts also wiped create_file's
-            # count, so even alternating the two tools indefinitely never
-            # tripped the guard (same incident - the actual failure pattern
-            # observed was create_file/str_replace/str_replace/bash on
-            # repeat, not pure consecutive create_file).
-            if fn in MUTATING_TOOLS:
-                succeeded = isinstance(tool_result, str) and not tool_result.startswith("ERROR")
-                if succeeded:
-                    seen.clear()
-                    last_progress_step = step
-                    if str(args.get("path", "")) .endswith(".agent_scratchpad.md"):
-                        last_scratchpad_step = step
-                    # A genuinely successful mutation invalidates the staleness
-                    # that armed these guards too, not just `seen` — without
-                    # this, a run that already made real progress since its
-                    # first repetition/read-heavy nudge would skip straight to
-                    # parking on its NEXT trip instead of getting a fresh
-                    # nudge, even though the underlying `seen`/`recent_tools`
-                    # signal it's reacting to has already been invalidated by
-                    # that same progress.
-                    nudged_repeat = False
-                    nudged_read_heavy = False
-                    distinct_windows = 0
-
-                    path_arg = args.get("path", "")
-                    if path_arg:
-                        off_action, nudged_off_task = _off_task_step(
-                            path_arg, expected_paths, off_task_targets, nudged_off_task)
-                        if off_action != "none":
-                            escalated = _apply_off_task_action(off_action, path_arg, messages)
-                            if escalated:
-                                if PARK_ENABLED:
-                                    return 3
-                                messages.append({"role": "user", "content": (
-                                    f"You are still touching {path_arg}, outside your "
-                                    f"assigned scope, after already being told to stop. "
-                                    f"Refocus on the files named in your instructions "
-                                    f"now.")})
-
-                        churn_action = _churn_step(path_arg, churn_state)
-                        if churn_action == "nudge":
-                            print(f"   [churn nudge: {CHURN_SAME_PATH_MAX_EDITS}+ edits to "
-                                  f"{path_arg} with no test run]", flush=True)
-                            messages.append({"role": "user", "content": (
-                                f"You've made {CHURN_SAME_PATH_MAX_EDITS} edits to "
-                                f"{path_arg} in a row without running its tests. Run "
-                                f"`pytest -q <the test file for {path_arg}>` (or the "
-                                f"project's full test command) now to check whether "
-                                f"your changes actually work, before making another "
-                                f"edit.")})
-                        elif churn_action == "escalate":
-                            print(f"   [parking: churn on {path_arg} continues with "
-                                  f"no test run]", flush=True)
-                            if worktree_dirty():
-                                auto_wip_commit("parked on edit churn")
-                            if PARK_ENABLED:
-                                return 3
-                            messages.append({"role": "user", "content": (
-                                f"You are still editing {path_arg} without running its "
-                                f"tests. STOP editing and run the tests now — if they "
-                                f"fail, read the failure and fix the ROOT cause; if "
-                                f"they pass, call done.")})
-
-            # Failing-str_replace loop guard. str_replace is excluded from the
-            # per-target repetition guard above, so a no-match loop on one file
-            # (the 2026-07-20 server.py wall: gpt-oss retried slightly-different
-            # old_str values that never matched the file's whitespace) runs
-            # uncaught. After 2 consecutive FAILED str_replace on the same path,
-            # steer to replace_lines (line numbers, no byte-exact match). A
-            # successful str_replace resets the counter and re-arms the nudge.
-            # If the model ignores the nudge and keeps failing on the same
-            # path, escalate to a park after STR_REPLACE_FAIL_ESCALATE_AFTER
-            # more failures (Mode 31 follow-up: this guard previously had no
-            # escalation at all past the one nudge — a model that kept
-            # retrying str_replace forever after being told to switch to
-            # replace_lines got no further guard action for the rest of the
-            # run).
-            if fn == "str_replace":
-                sr_path = args.get("path", "")
-                if isinstance(tool_result, str) and tool_result.startswith("ERROR"):
-                    failed_sr[sr_path] = failed_sr.get(sr_path, 0) + 1
-                    if failed_sr[sr_path] >= 2:
-                        if sr_path not in nudged_sr_fail:
-                            nudged_sr_fail.add(sr_path)
-                            print(f"   [str_replace-fail nudge: {failed_sr[sr_path]} "
-                                  f"failed matches on {sr_path}]", flush=True)
-                            messages.append({"role": "user", "content": (
-                                f"Your last {failed_sr[sr_path]} str_replace calls on {sr_path} "
-                                f"did not match — you cannot construct a matching old_str (likely "
-                                f"a whitespace difference). STOP retrying str_replace on this file. "
-                                f"Run `nl -ba {sr_path} | sed -n '<start>,<end>p'` to get exact line "
-                                f"numbers, then use replace_lines(path, start, end, new_str) which "
-                                f"needs no byte-exact old_str.")})
-                        else:
-                            sr_fail_since_nudge[sr_path] = sr_fail_since_nudge.get(sr_path, 0) + 1
-                            if sr_fail_since_nudge[sr_path] >= STR_REPLACE_FAIL_ESCALATE_AFTER:
-                                sr_fail_since_nudge[sr_path] = 0
-                                print(f"   [parking: str_replace still failing on {sr_path} "
-                                      f"after nudge]", flush=True)
-                                if worktree_dirty():
-                                    auto_wip_commit("parked on failing str_replace")
-                                if PARK_ENABLED:
-                                    return 3
-                                messages.append({"role": "user", "content": (
-                                    f"You are still retrying str_replace on {sr_path} after "
-                                    f"being told to switch. Use replace_lines(path, start, "
-                                    f"end, new_str) now — do not attempt str_replace on this "
-                                    f"file again.")})
-                else:
-                    failed_sr[sr_path] = 0
-                    nudged_sr_fail.discard(sr_path)
-                    sr_fail_since_nudge.pop(sr_path, None)
-
-            # Bash-mutation off-task detection (Mode 31 follow-up): a
-            # formatter/linter --fix, sed/perl -i, or shell redirection can
-            # mutate a file directly through `bash`, bypassing the
-            # create_file/str_replace/replace_lines path the guard above
-            # watches. Route any detected off-task write through the same
-            # escalation as a direct file-tool edit. Also: a `pytest` bash
-            # call is the churn guard's own "the model IS checking its work"
-            # signal, independent of whether this call named an off-task path.
-            if fn == "bash":
-                cmd = args.get("command", "")
-                _churn_note_test_run(cmd, churn_state)
-                off_path = _bash_off_task_path(cmd, expected_paths)
-                if off_path:
-                    off_action, nudged_off_task = _off_task_step(
-                        off_path, expected_paths, off_task_targets, nudged_off_task)
-                    if off_action != "none":
-                        escalated = _apply_off_task_action(off_action, off_path, messages)
-                        if escalated:
-                            if PARK_ENABLED:
-                                return 3
-                            messages.append({"role": "user", "content": (
-                                f"You are still touching {off_path}, outside your "
-                                f"assigned scope, after already being told to stop. "
-                                f"Refocus on the files named in your instructions "
-                                f"now.")})
-
-            # Read-heavy-pattern guard. Tracked separately from the per-target
-            # repetition guard: the per-target one misses this case because
-            # every call hits a different file/command (every signature is
-            # unique). The model is still in a paralysis-by-analysis loop if
-            # the last READ_HEAVY_WINDOW tool calls were all non-mutating.
-            # Two-stage response: one corrective nudge, then park if the
-            # pattern persists.
-            recent_tools.append((fn, sig[1]))
-            if (len(recent_tools) == READ_HEAVY_WINDOW
-                    and all(f not in MUTATING_TOOLS for (f, _t) in recent_tools)):
-                distinct_targets = len({_t for (_f, _t) in recent_tools})
-                has_repetition = distinct_targets < READ_HEAVY_WINDOW
-                if not nudged_read_heavy:
-                    nudged_read_heavy = True
-                    print(f"   [read-heavy nudge: {READ_HEAVY_WINDOW} reads in a row]", flush=True)
-                    messages.append({"role": "user", "content": (
-                        f"You've made {READ_HEAVY_WINDOW} tool calls in a row without writing "
-                        "or editing any file (only view_file / bash / checkpoint). "
-                        "STOP READING and make an edit. Either:\n"
-                        "1. create_file for a new module or test,\n"
-                        "2. str_replace to modify an existing file based on what you've "
-                        "already read, or\n"
-                        "3. checkpoint if you need to commit a work-in-progress before "
-                        "deciding the next concrete change.\n"
-                        "Reading more files without acting is wasting your step budget.")})
-                    # Reset so the next detection needs another full window of reads
-                    # (not whatever happens to be left in the deque).
-                    recent_tools.clear()
-                    distinct_windows = 0
-                elif has_repetition:
-                    # Re-reading an already-seen target after being nudged to
-                    # act is wedging, not exploration. Park at the strict
-                    # 2 * READ_HEAVY_WINDOW (12) -- unchanged from the flat
-                    # cutoff for this signal.
-                    print("   [parking: read-heavy after nudge]", flush=True)
-                    if worktree_dirty():
-                        auto_wip_commit("read-heavy parking")
-                    if not PARK_ENABLED:
-                        # Same class of bug as the per-target guard (Mode 33):
-                        # a silent break here means the model gets no renewed
-                        # feedback on any window after the first nudge.
-                        messages.append({"role": "user", "content": (
-                            "You're still re-reading targets you've already "
-                            "seen instead of acting. STOP READING and make an "
-                            "edit (create_file, str_replace, or checkpoint) "
-                            "now.")})
-                        recent_tools.clear()
-                        _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                        break
-                    return 3
-                else:
-                    # All-distinct reads after the nudge: the model is
-                    # exploring multiple files (each read once), not wedged
-                    # on one. A multi-file bug fix legitimately needs more
-                    # than READ_HEAVY_WINDOW reads to orient before its
-                    # first edit. Let it continue, bounded by
-                    # READ_HEAVY_DISTINCT_WINDOWS all-distinct windows -- so
-                    # exploration that reaches an edit is not cut off, but a
-                    # model that reads forever with no mutation is still
-                    # caught (bounded, not disabled).
-                    distinct_windows += 1
-                    if distinct_windows >= READ_HEAVY_DISTINCT_WINDOWS:
-                        print(f"   [parking: read-heavy after {distinct_windows} distinct windows]",
-                              flush=True)
-                        if worktree_dirty():
-                            auto_wip_commit("read-heavy parking")
-                        if not PARK_ENABLED:
-                            messages.append({"role": "user", "content": (
-                                "You've read many distinct files without "
-                                "making an edit. STOP READING and make an "
-                                "edit (create_file, str_replace, or "
-                                "checkpoint) now.")})
-                            recent_tools.clear()
-                            _answer_orphaned_calls(tcs, tc_idx + 1, messages)
-                            break
-                        return 3
-                    recent_tools.clear()
-
-    # Commit first: the auto-done check diffs HEAD against the default
-    # branch, so uncommitted work must be in HEAD before it is measured.
-    if worktree_dirty():
-        auto_wip_commit("step cap reached")
-    if _step_cap_auto_done():
-        emit_step_line(
-            MAX_STEPS,
-            "DONE: step cap reached with the work already landed - "
-            "production changes present and the full suite and lint pass",
-            correlation_id=read_correlation_id(),
-        )
-        return 0
-    print("[ended without done — step cap reached]", flush=True)
-    return 2
+            outcome = tool_call_impl(globals(), st, step, tcs, tc_idx, tc)
+            if outcome == "break":
+                break
+            if outcome is not None:
+                return outcome
+    return step_cap_impl(globals())
 
 
 

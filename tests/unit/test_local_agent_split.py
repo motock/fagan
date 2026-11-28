@@ -27,6 +27,7 @@ _BASELINE_SCRIPTS = frozenset({
     "install_checks.py",
     "install_global_rules.py", "local_agent.py", "local_agent_chat.py",
     "local_agent_config.py", "local_agent_git.py", "local_agent_guards.py",
+    "local_agent_loop.py",
     "local_agent_oracle.py", "local_agent_oracle_chat.py",
     "local_agent_oracle_config.py", "local_agent_oracle_git.py",
     "local_agent_oracle_done_marker.py", "local_agent_oracle_guards.py",

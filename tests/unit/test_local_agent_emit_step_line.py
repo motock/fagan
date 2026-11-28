@@ -321,17 +321,15 @@ def test_emit_step_line_body_keeps_single_print_with_flush():
 
 
 def test_other_inline_step_prints_are_untouched():
-    src = _source()
+    # ART-03 moved the step loop's inline prints into local_agent_loop.py.
+    src = (_SCRIPTS / "local_agent_loop.py").read_text()
     tree = ast.parse(src)
-    node = _emit_step_line_node(tree)
-    start, end = node.lineno, node.end_lineno
     outside = [
         n
         for n in ast.walk(tree)
         if isinstance(n, ast.Call)
         and isinstance(n.func, ast.Name)
         and n.func.id == "print"
-        and not (start <= n.lineno <= end)
         and "[step" in (ast.get_source_segment(src, n) or "")
     ]
     assert len(outside) >= _MIN_OTHER_STEP_PRINTS, (
@@ -343,8 +341,9 @@ def test_other_inline_step_prints_are_untouched():
 
 
 def test_emit_step_line_call_site_survives():
-    src = _source()
-    assert src.count("emit_step_line(") >= 2  # the def + the DONE call site
+    # the def (local_agent.py) + the DONE call site (moved to local_agent_loop.py)
+    src = _source() + (_SCRIPTS / "local_agent_loop.py").read_text()
+    assert src.count("emit_step_line(") >= 2
 
 
 def test_no_other_local_agent_sibling_file_touched():

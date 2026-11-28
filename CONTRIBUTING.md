@@ -84,6 +84,14 @@ gate, so no coverage threshold applies and a drop never blocks a merge.
 
 Ruff selects `BLE001`, so a handler that catches `Exception` or `BaseException` without re-raising or logging the traceback fails lint. Where the broad catch is intended, write `# noqa: BLE001 - <reason>` with at least three words saying what must not be interrupted and where the failure is reported; `tests/unit/test_broad_except_reasons.py` rejects a bare or too-short reason in production code. Narrowing the handler to the exceptions that can actually occur is preferred over a `noqa`.
 
+## Test seams
+
+Tests reach production code through shortcuts that make refactors expensive: patching names on `pipeline.server`, production code routing reads back through that module so the patches land, and `inspect.getsource` assertions on source text.
+
+- Patch a name on the module that owns it, never on `pipeline.server`.
+- Assert behaviour, not source text.
+- The baseline only shrinks: `tests/unit/test_seam_baseline.py` fails when a count grows or a new key appears, and when a count drops without the baseline being updated. Inspect with `python scripts/test_seam_inventory.py`; after removing seams, run it with `--write` and commit the new `tests/unit/test_seam_baseline.json`.
+
 ## Reporting bugs / requesting features
 
 Open a GitHub issue. For a suspected security vulnerability, see

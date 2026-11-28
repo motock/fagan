@@ -7,8 +7,8 @@ import json
 import pytest
 
 from app import backend as b
-from app import backend_ollama as bo
 from app import ollama_prompt_utils as bo_tuning
+from app import ollama_review_loop as bo_review_loop
 from tests.unit._backend_helpers import (  # noqa: F401
     _REAL_LLAMA_SERVER_LINE,
     _TRANSPORT_VARS,
@@ -187,7 +187,7 @@ def test_review_loop_preamble_mentions_diff_stat():
     guidance and a multi-file change can be silently cut off. Assert by
     inspecting the module source directly (the preamble is a multi-line
     string built inside _review_loop)."""
-    module_src = open(bo.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
+    module_src = open(bo_review_loop.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
     assert "git diff --stat" in module_src, (
         "reviewer preamble must mention `git diff --stat` so the model "
         "scopes large diffs before reading them"
